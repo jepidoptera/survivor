@@ -242,7 +242,7 @@
         const targetLevel = normalizeLevel(level);
         const preferred = options.preferredStyle || null;
         const style = {
-            nodeBaseZ: Number.isFinite(preferred && preferred.nodeBaseZ) ? Number(preferred.nodeBaseZ) : targetLevel * 3,
+            nodeBaseZ: Number.isFinite(preferred && preferred.nodeBaseZ) ? Number(preferred.nodeBaseZ) : null,
             nodeBaseZOffset: Number.isFinite(preferred && preferred.nodeBaseZOffset) ? Number(preferred.nodeBaseZOffset) : 0,
             texturePath: preferred && typeof preferred.texturePath === "string" ? preferred.texturePath : ""
         };
@@ -260,6 +260,9 @@
             break;
         }
         if (!style.texturePath && typeof options.defaultTexture === "string") style.texturePath = options.defaultTexture;
+        if (!Number.isFinite(style.nodeBaseZ)) {
+            throw new Error(`floor fragment level ${targetLevel} requires preferred style or reusable floor nodeBaseZ`);
+        }
         return style;
     }
 

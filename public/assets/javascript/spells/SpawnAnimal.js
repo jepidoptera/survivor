@@ -176,9 +176,13 @@ class SpawnAnimal extends globalThis.Spell {
         } else {
             animal.traversalLayer = targetLayer;
             animal.currentLayer = targetLayer;
-            animal.currentLayerBaseZ = Number.isFinite(targetNode.baseZ)
+            const targetBaseZ = Number.isFinite(targetNode.baseZ)
                 ? Number(targetNode.baseZ)
-                : (Number.isFinite(layerPoint && layerPoint.baseZ) ? Number(layerPoint.baseZ) : targetLayer * 3);
+                : (Number.isFinite(layerPoint && layerPoint.baseZ) ? Number(layerPoint.baseZ) : null);
+            if (!Number.isFinite(targetBaseZ)) {
+                throw new Error(`spawn animal requires target node baseZ for layer ${targetLayer}`);
+            }
+            animal.currentLayerBaseZ = targetBaseZ;
         }
         const naturalSize = SpawnAnimal.getPendingPlacementNaturalSize(wizard);
         SpawnAnimal.clearPendingPlacementState(wizard);

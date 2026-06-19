@@ -89,7 +89,10 @@
                     ? Number(support.baseZ)
                     : (Number.isFinite(wizard.currentLayerBaseZ)
                         ? Number(wizard.currentLayerBaseZ)
-                        : wizardLayer * 3);
+                        : null);
+                if (!Number.isFinite(wizardBaseZ)) {
+                    throw new Error(`camera follow for wizard layer ${wizardLayer} requires support baseZ or currentLayerBaseZ`);
+                }
                 let wizardCameraZ = wizardBaseZ;
                 if (support && support.type === "stair") {
                     if (Number.isFinite(support.continuousLocalZ)) {

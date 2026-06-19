@@ -227,7 +227,7 @@
         const targetLevel = normalizeLevel(level);
         const floors = Array.isArray(asset && asset.floors) ? asset.floors : [];
         const style = {
-            nodeBaseZ: Number.isFinite(preferred && preferred.nodeBaseZ) ? Number(preferred.nodeBaseZ) : targetLevel * 3,
+            nodeBaseZ: Number.isFinite(preferred && preferred.nodeBaseZ) ? Number(preferred.nodeBaseZ) : null,
             nodeBaseZOffset: Number.isFinite(preferred && preferred.nodeBaseZOffset)
                 ? Number(preferred.nodeBaseZOffset)
                 : 0,
@@ -242,6 +242,9 @@
                 style.texturePath = floor.texturePath;
             }
             break;
+        }
+        if (!Number.isFinite(style.nodeBaseZ)) {
+            throw new Error(`stair floor level ${targetLevel} requires preferred style or existing floor nodeBaseZ`);
         }
         return style;
     }
@@ -270,7 +273,6 @@
                     surfaceId,
                     ownerSectionKey: asset.key,
                     level: targetLevel,
-                    nodeBaseZOffset: style.nodeBaseZ - (targetLevel * 3),
                     nodeBaseZ: style.nodeBaseZ,
                     outerPolygon: outer,
                     holes,

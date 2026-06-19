@@ -265,7 +265,10 @@ class Character {
         this.traversalLayer = layer;
         this.currentLayer = layer;
         const baseZ = this.getNodeStandingZ(node);
-        this.currentLayerBaseZ = Number.isFinite(baseZ) ? Number(baseZ) : layer * 3;
+        if (!Number.isFinite(baseZ)) {
+            throw new Error(`character ${this.id || this.name || this.type || "(unknown)"} traversal layer sync requires node standing Z`);
+        }
+        this.currentLayerBaseZ = Number(baseZ);
         if (node && typeof node.surfaceId === "string") {
             this.surfaceId = node.surfaceId;
         }
@@ -650,6 +653,212 @@ class Character {
         this.travelZ = 0;
     }
 
+    _describeMovementNode(node) {
+        if (!node || typeof node !== "object") return null;
+        let active = null;
+        if (this.map && typeof this.map.isPrototypeNodeActive === "function") {
+            try {
+                active = this.map.isPrototypeNodeActive(node);
+            } catch (_err) {
+                active = "error";
+            }
+        }
+        return {
+            id: typeof node.id === "string" ? node.id : "",
+            xindex: Number.isFinite(node.xindex) ? Number(node.xindex) : null,
+            yindex: Number.isFinite(node.yindex) ? Number(node.yindex) : null,
+            x: Number.isFinite(node.x) ? Number(node.x) : null,
+            y: Number.isFinite(node.y) ? Number(node.y) : null,
+            traversalLayer: Number.isFinite(node.traversalLayer) ? Math.round(Number(node.traversalLayer)) : null,
+            level: Number.isFinite(node.level) ? Math.round(Number(node.level)) : null,
+            baseZ: Number.isFinite(node.baseZ) ? Number(node.baseZ) : null,
+            fragmentId: typeof node.fragmentId === "string" ? node.fragmentId : "",
+            surfaceId: typeof node.surfaceId === "string" ? node.surfaceId : "",
+            ownerSectionKey: typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "",
+            sectionKey: this.map && typeof this.map.getNodeSectionKey === "function"
+                ? this.map.getNodeSectionKey(node)
+                : (typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : ""),
+            active,
+            blocked: !!node.blocked,
+            blockedByObjects: Number.isFinite(node.blockedByObjects) ? Number(node.blockedByObjects) : null,
+            objects: Array.isArray(node.objects) ? node.objects.length : null,
+            neighbors: Array.isArray(node.neighbors) ? node.neighbors.filter(Boolean).length : null
+        };
+    }
+
+    _describeMovementSupport(support = null) {
+        const value = support || (this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null);
+        if (!value || typeof value !== "object") return null;
+        return {
+            type: typeof value.type === "string" ? value.type : "",
+            layer: Number.isFinite(value.layer) ? Math.round(Number(value.layer)) : null,
+            baseZ: Number.isFinite(value.baseZ) ? Number(value.baseZ) : null,
+            fragmentId: typeof value.fragmentId === "string" ? value.fragmentId : "",
+            surfaceId: typeof value.surfaceId === "string" ? value.surfaceId : "",
+            ownerType: typeof value.ownerType === "string" ? value.ownerType : "",
+            ownerId: typeof value.ownerId === "string" ? value.ownerId : "",
+            sectionKey: typeof value.sectionKey === "string" ? value.sectionKey : "",
+            stairId: typeof value.stairId === "string" ? value.stairId : "",
+            localZ: Number.isFinite(value.localZ) ? Number(value.localZ) : null,
+            continuousLocalZ: Number.isFinite(value.continuousLocalZ) ? Number(value.continuousLocalZ) : null
+        };
+    }
+
+    _describeMovementPathItem(pathItem) {
+        if (!pathItem) return null;
+        const toNode = this.getPathItemDestinationNode(pathItem);
+        return {
+            type: typeof pathItem.type === "string" ? pathItem.type : (pathItem.toNode ? "step" : "node"),
+            directionIndex: Number.isInteger(pathItem.directionIndex) ? Number(pathItem.directionIndex) : null,
+            toNode: this._describeMovementNode(toNode)
+        };
+    }
+
+    _getMovementDiagnosticSnapshot(extra = {}) {
+        const nodeLayer = this.getNodeTraversalLayer(this.node);
+        const support = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        return {
+            type: this.type || (this.constructor && this.constructor.name) || "character",
+            name: typeof this.scriptingName === "string" ? this.scriptingName : (typeof this.name === "string" ? this.name : ""),
+            x: Number.isFinite(this.x) ? Number(this.x) : null,
+            y: Number.isFinite(this.y) ? Number(this.y) : null,
+            z: Number.isFinite(this.z) ? Number(this.z) : null,
+            prevX: Number.isFinite(this.prevX) ? Number(this.prevX) : null,
+            prevY: Number.isFinite(this.prevY) ? Number(this.prevY) : null,
+            prevZ: Number.isFinite(this.prevZ) ? Number(this.prevZ) : null,
+            currentLayer: Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : null,
+            traversalLayer: Number.isFinite(this.traversalLayer) ? Math.round(Number(this.traversalLayer)) : null,
+            nodeTraversalLayer: Number.isFinite(nodeLayer) ? Math.round(Number(nodeLayer)) : null,
+            currentLayerBaseZ: Number.isFinite(this.currentLayerBaseZ) ? Number(this.currentLayerBaseZ) : null,
+            moving: !!this.moving,
+            destination: this._describeMovementNode(this.destination),
+            pathLength: Array.isArray(this.path) ? this.path.length : null,
+            nextNode: this._describeMovementNode(this.nextNode),
+            currentPathStep: this._describeMovementPathItem(this.currentPathStep),
+            travelFrames: Number.isFinite(this.travelFrames) ? Number(this.travelFrames) : null,
+            travelX: Number.isFinite(this.travelX) ? Number(this.travelX) : null,
+            travelY: Number.isFinite(this.travelY) ? Number(this.travelY) : null,
+            travelZ: Number.isFinite(this.travelZ) ? Number(this.travelZ) : null,
+            speed: Number.isFinite(this.speed) ? Number(this.speed) : null,
+            node: this._describeMovementNode(this.node),
+            support: this._describeMovementSupport(support),
+            floorMembership: this._floorMembership && typeof this._floorMembership === "object"
+                ? { ...this._floorMembership }
+                : (this.floorMembership && typeof this.floorMembership === "object" ? { ...this.floorMembership } : null),
+            ...extra
+        };
+    }
+
+    _recordMovementDiagnostic(event, details = {}, options = {}) {
+        if (typeof event !== "string" || event.length === 0) return null;
+        const capture = typeof globalThis !== "undefined" ? globalThis.animalMovementDiagnosticCapture : null;
+        const captureMatches = !!(
+            capture &&
+            capture.active === true &&
+            capture.animal === this &&
+            (!capture.eventSet || capture.eventSet.has(event))
+        );
+        const passiveEnabled = !!(
+            typeof globalThis !== "undefined" &&
+            globalThis.animalMovementDiagnosticsPassive === true
+        );
+        if (!captureMatches && !passiveEnabled && options.force !== true) {
+            return null;
+        }
+        if (!Array.isArray(this.movementDiagnosticLog)) {
+            this.movementDiagnosticLog = [];
+        }
+        const now = Date.now();
+        const dedupeKey = typeof options.dedupeKey === "string" ? options.dedupeKey : "";
+        if (dedupeKey) {
+            const last = this._lastMovementDiagnosticByKey && this._lastMovementDiagnosticByKey[dedupeKey];
+            const minIntervalMs = Number.isFinite(options.minIntervalMs)
+                ? Math.max(0, Number(options.minIntervalMs))
+                : 500;
+            if (last && last.event === event && (now - last.time) < minIntervalMs) {
+                return last.entry || null;
+            }
+            if (!this._lastMovementDiagnosticByKey || typeof this._lastMovementDiagnosticByKey !== "object") {
+                this._lastMovementDiagnosticByKey = {};
+            }
+        }
+        const entry = {
+            time: now,
+            event,
+            ...this._getMovementDiagnosticSnapshot(details)
+        };
+        this.movementDiagnosticLog.push(entry);
+        const limit = Number.isFinite(this.movementDiagnosticLogLimit)
+            ? Math.max(1, Math.floor(this.movementDiagnosticLogLimit))
+            : 300;
+        if (this.movementDiagnosticLog.length > limit) {
+            this.movementDiagnosticLog.splice(0, this.movementDiagnosticLog.length - limit);
+        }
+        if (dedupeKey) {
+            this._lastMovementDiagnosticByKey[dedupeKey] = { event, time: now, entry };
+        }
+        if (captureMatches) {
+            if (!Array.isArray(capture.entries)) {
+                capture.entries = [];
+            }
+            const captureLimit = Number.isFinite(capture.limit) ? Math.max(1, Math.floor(capture.limit)) : 100;
+            if (capture.entries.length < captureLimit) {
+                capture.entries.push(entry);
+            } else {
+                capture.truncated = (Number.isFinite(capture.truncated) ? capture.truncated : 0) + 1;
+            }
+        }
+        return entry;
+    }
+
+    _checkMovementLayerDiagnostics(context = "movement") {
+        const nodeLayer = this.getNodeTraversalLayer(this.node);
+        const currentLayer = Number.isFinite(this.currentLayer)
+            ? Math.round(Number(this.currentLayer))
+            : (Number.isFinite(this.traversalLayer) ? Math.round(Number(this.traversalLayer)) : null);
+        if (Number.isFinite(nodeLayer) && Number.isFinite(currentLayer) && nodeLayer !== currentLayer) {
+            this._recordMovementDiagnostic("layer-node-mismatch", {
+                context,
+                expectedLayer: currentLayer,
+                nodeLayer
+            }, {
+                dedupeKey: `layer-node-mismatch:${currentLayer}:${nodeLayer}`,
+                minIntervalMs: 1000
+            });
+        }
+        const support = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        const supportLayer = Number.isFinite(support && support.layer) ? Math.round(Number(support.layer)) : null;
+        if (Number.isFinite(supportLayer) && Number.isFinite(currentLayer) && supportLayer !== currentLayer) {
+            this._recordMovementDiagnostic("support-layer-mismatch", {
+                context,
+                expectedLayer: currentLayer,
+                supportLayer
+            }, {
+                dedupeKey: `support-layer-mismatch:${currentLayer}:${supportLayer}`,
+                minIntervalMs: 1000
+            });
+        }
+    }
+
+    getMovementDiagnostics() {
+        return Array.isArray(this.movementDiagnosticLog)
+            ? this.movementDiagnosticLog.map(entry => ({ ...entry }))
+            : [];
+    }
+
+    clearMovementDiagnostics(reason = "reset") {
+        this.movementDiagnosticLog = [];
+        this._lastMovementDiagnosticByKey = {};
+        this._recordMovementDiagnostic("diagnostics-cleared", { reason }, { force: true });
+        return this.getMovementDiagnostics();
+    }
+
     getNodeStandingZ(node) {
         if (this.map && typeof this.map.getNodeBaseZ === "function") {
             return this.map.getNodeBaseZ(node);
@@ -954,19 +1163,11 @@ class Character {
             ? Math.round(Number(node.traversalLayer))
             : (Number.isFinite(node.level) ? Math.round(Number(node.level)) : 0);
         if (nodeLayer === layer) return node;
-        const sourceNode = (node.sourceNode && typeof node.sourceNode === "object") ? node.sourceNode : node;
-        const xindex = Number(sourceNode.xindex);
-        const yindex = Number(sourceNode.yindex);
+        const xindex = Number(node.xindex);
+        const yindex = Number(node.yindex);
         if (!Number.isFinite(xindex) || !Number.isFinite(yindex)) return null;
-        const sectionKey = typeof sourceNode._prototypeSectionKey === "string"
-            ? sourceNode._prototypeSectionKey
-            : (typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
-        if (typeof this.map.getFloorNodeAtLayer === "function") {
-            const floorNode = this.map.getFloorNodeAtLayer(xindex, yindex, layer, { sectionKey, allowScan: false });
-            if (floorNode) return floorNode;
-        }
-        if (layer === 0 && typeof this.map.getNode === "function") {
-            return this.map.getNode(xindex, yindex, layer) || null;
+        if (typeof this.map.resolveNodeAtLayer === "function") {
+            return this.map.resolveNodeAtLayer(node, layer, { allowScan: false });
         }
         return null;
     }
@@ -3006,7 +3207,13 @@ class Character {
         const startLayer = this.getNodeTraversalLayer();
         const resolvedStartNode = this.resolveNodeForTraversalLayer(this.x, this.y, this.getFloorNodeResolutionOptions());
         this.node = resolvedStartNode || (startLayer === 0 ? this.map.worldToNode(this.x, this.y) : null);
+        this._checkMovementLayerDiagnostics("goto");
         if (!this.node) {
+            this._recordMovementDiagnostic("goto-no-start-node", {
+                requestedDestination: this._describeMovementNode(destinationNode),
+                startLayer,
+                resolvedStartNode: this._describeMovementNode(resolvedStartNode)
+            });
             this.destination = null;
             this.path = [];
             this.travelFrames = 0;
@@ -3028,6 +3235,17 @@ class Character {
         if (!Array.isArray(this.path)) {
             this.path = [];
         }
+        this._recordMovementDiagnostic("goto-path", {
+            startNode: this._describeMovementNode(this.node),
+            requestedDestination: this._describeMovementNode(destinationNode),
+            pathLength: this.path.length,
+            pathBlockedCount: Array.isArray(this.path.blockers) ? this.path.blockers.length : 0,
+            pathOptions: {
+                clearance: Number.isFinite(pathOptions.clearance) ? Number(pathOptions.clearance) : 0,
+                returnPathSteps: pathOptions.returnPathSteps === true,
+                aStar: !!(this.useAStarPathfinding && typeof this.map.findPathAStar === "function")
+            }
+        });
         this.travelFrames = 0;
         this.travelZ = 0;
         this.nextNode = null;
@@ -3065,6 +3283,7 @@ class Character {
             this.updateCloseCombat();
             return;
         }
+        this._checkMovementLayerDiagnostics("move");
 
         // Check if we have a destination to move toward
         if (!this.destination) {
@@ -3080,13 +3299,30 @@ class Character {
             ? this.map.isPrototypeNodeActive(this.node)
             : !!this.node;
         if (!currentNodeIsActive) {
+            this._recordMovementDiagnostic("current-node-inactive", {
+                beforeResolveNode: this._describeMovementNode(this.node)
+            }, {
+                dedupeKey: "current-node-inactive",
+                minIntervalMs: 1000
+            });
             if (this.map && typeof this.map.worldToNode === "function") {
                 const layer = this.getNodeTraversalLayer();
                 const resolvedNode = this.resolveNodeForTraversalLayer(this.x, this.y, this.getFloorNodeResolutionOptions());
                 this.node = resolvedNode || (layer === 0 ? this.map.worldToNode(this.x, this.y) : null);
+                this._recordMovementDiagnostic("current-node-resolved", {
+                    layer,
+                    resolvedNode: this._describeMovementNode(resolvedNode),
+                    nextNode: this._describeMovementNode(this.node)
+                }, {
+                    dedupeKey: "current-node-resolved",
+                    minIntervalMs: 1000
+                });
             }
         }
         if (!this.node) {
+            this._recordMovementDiagnostic("movement-suspended-no-node", {
+                destinationBeforeClear: this._describeMovementNode(this.destination)
+            });
             this._movementSuspendedByStreaming = true;
             this.destination = null;
             this.path = [];
@@ -3120,9 +3356,18 @@ class Character {
             
             // Get next step from path
             const nextPathItem = this.path.shift();
+            if (!nextPathItem) {
+                this._recordMovementDiagnostic("path-empty-before-step", {
+                    destinationBeforeClear: this._describeMovementNode(this.destination)
+                });
+            }
             this.currentPathStep = this.resolvePathStep(nextPathItem, this.node);
             this.nextNode = this.getPathItemDestinationNode(this.currentPathStep);
             if (!this.nextNode) {
+                this._recordMovementDiagnostic("path-step-missing-next-node", {
+                    nextPathItem: this._describeMovementPathItem(nextPathItem),
+                    destinationBeforeClear: this._describeMovementNode(this.destination)
+                });
                 // Reached destination
                 this.destination = null;
                 this.moving = false;
@@ -3133,6 +3378,10 @@ class Character {
                 typeof this.map.isPrototypeNodeActive === "function" &&
                 !this.map.isPrototypeNodeActive(this.nextNode)
             ) {
+                this._recordMovementDiagnostic("next-node-inactive", {
+                    rejectedNextNode: this._describeMovementNode(this.nextNode),
+                    destinationBeforeClear: this._describeMovementNode(this.destination)
+                });
                 this._movementSuspendedByStreaming = true;
                 this.destination = null;
                 this.path = [];
@@ -3171,6 +3420,16 @@ class Character {
             this.travelY = ydist / this.travelFrames;
             this.travelZ = zdist / this.travelFrames;
             this.direction = {x: xdist, y: ydist};
+            this._recordMovementDiagnostic("movement-step-start", {
+                targetPosition,
+                xdist,
+                ydist,
+                zdist,
+                directionDistance: direction_distance,
+                effectiveSpeed,
+                frameRate: Number(this.frameRate) || null,
+                stepFrames: this.travelFrames
+            });
         }
         
         this.travelFrames--;
@@ -3434,6 +3693,33 @@ function resolveHitboxDebugTarget(target = 0) {
     return collection[0] || null;
 }
 
+function summarizeAnimalMovementDiagnosticsLog(log, startedAt = null) {
+    return (Array.isArray(log) ? log : []).map(entry => ({
+        elapsedMs: Number.isFinite(startedAt) && Number.isFinite(entry.time) ? entry.time - startedAt : null,
+        time: entry.time,
+        event: entry.event,
+        type: entry.type,
+        name: entry.name,
+        layer: entry.currentLayer,
+        traversalLayer: entry.traversalLayer,
+        nodeLayer: entry.nodeTraversalLayer,
+        supportLayer: entry.support && Number.isFinite(entry.support.layer) ? entry.support.layer : null,
+        moving: entry.moving,
+        pathLength: entry.pathLength,
+        pathBlockedCount: Number.isFinite(entry.pathBlockedCount) ? entry.pathBlockedCount : null,
+        startActive: entry.startNode ? entry.startNode.active : null,
+        destActive: entry.requestedDestination ? entry.requestedDestination.active : null,
+        destLayer: entry.requestedDestination && Number.isFinite(entry.requestedDestination.traversalLayer)
+            ? entry.requestedDestination.traversalLayer
+            : null,
+        nextNodeLayer: entry.nextNode && Number.isFinite(entry.nextNode.traversalLayer) ? entry.nextNode.traversalLayer : null,
+        reason: entry.reason || "",
+        context: entry.context || "",
+        source: entry.source || entry.routeSource || "",
+        routePathLength: Number.isFinite(entry.routePathLength) ? entry.routePathLength : null
+    }));
+}
+
 if (typeof globalThis !== "undefined") {
     globalThis.dumpAnimalMoveLog = function(target = 0) {
         const animal = resolveAnimalMoveLogTarget(target);
@@ -3453,6 +3739,130 @@ if (typeof globalThis !== "undefined") {
             return [];
         }
         return animal.clearNodeVisitLog();
+    };
+
+    globalThis.dumpAnimalMovementDiagnostics = function(target = 0) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal.getMovementDiagnostics !== "function") {
+            console.warn("No animal movement diagnostics target found.");
+            return [];
+        }
+        const log = animal.getMovementDiagnostics();
+        console.table(summarizeAnimalMovementDiagnosticsLog(log));
+        return log;
+    };
+
+    globalThis.clearAnimalMovementDiagnostics = function(target = 0) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal.clearMovementDiagnostics !== "function") {
+            console.warn("No animal movement diagnostics target found.");
+            return [];
+        }
+        return animal.clearMovementDiagnostics("console");
+    };
+
+    globalThis.diagnoseAnimalMovement = function(target = 0) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal._getMovementDiagnosticSnapshot !== "function") {
+            console.warn("No animal movement diagnostics target found.");
+            return null;
+        }
+        const snapshot = animal._getMovementDiagnosticSnapshot({
+            target: typeof target === "string" || typeof target === "number" ? target : "",
+            activeSimObject: typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set
+                ? globalThis.activeSimObjects.has(animal)
+                : null,
+            onScreen: typeof animal._onScreen === "boolean" ? animal._onScreen : null
+        });
+        console.log("Animal movement diagnostic snapshot:", snapshot);
+        return snapshot;
+    };
+
+    globalThis.stopAnimalMovementDiagnostics = function() {
+        const capture = globalThis.animalMovementDiagnosticCapture;
+        if (!capture || capture.active !== true) {
+            console.warn("No animal movement diagnostic capture is active.");
+            return [];
+        }
+        capture.active = false;
+        if (capture.timerId) {
+            clearTimeout(capture.timerId);
+            capture.timerId = null;
+        }
+        const entries = Array.isArray(capture.entries) ? capture.entries.slice() : [];
+        const label = capture.animal && (capture.animal.scriptingName || capture.animal.name || capture.animal.type) || "animal";
+        console.log(
+            `Animal movement capture for ${label}: ${entries.length} event(s)` +
+            `${capture.truncated ? `, ${capture.truncated} truncated` : ""}.`
+        );
+        console.table(summarizeAnimalMovementDiagnosticsLog(entries, capture.startedAt));
+        globalThis.animalMovementDiagnosticCapture = null;
+        return entries;
+    };
+
+    globalThis.captureAnimalMovementDiagnostics = function(target = 0, durationMs = 1000, options = {}) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal.getMovementDiagnostics !== "function") {
+            console.warn("No animal movement diagnostics target found.");
+            return null;
+        }
+        const normalizedOptions = options && typeof options === "object" ? options : {};
+        const duration = Number.isFinite(durationMs)
+            ? Math.max(1, Math.min(10000, Math.floor(durationMs)))
+            : 1000;
+        const limit = Number.isFinite(normalizedOptions.limit)
+            ? Math.max(1, Math.min(1000, Math.floor(normalizedOptions.limit)))
+            : 150;
+        const eventSet = Array.isArray(normalizedOptions.events) && normalizedOptions.events.length > 0
+            ? new Set(normalizedOptions.events.filter(eventName => typeof eventName === "string" && eventName.length > 0))
+            : null;
+
+        const previousCapture = globalThis.animalMovementDiagnosticCapture;
+        if (previousCapture && previousCapture.timerId) {
+            clearTimeout(previousCapture.timerId);
+        }
+        if (normalizedOptions.clear !== false && typeof animal.clearMovementDiagnostics === "function") {
+            animal.clearMovementDiagnostics("capture-start");
+        }
+
+        const capture = {
+            active: true,
+            animal,
+            entries: [],
+            startedAt: Date.now(),
+            durationMs: duration,
+            limit,
+            eventSet,
+            truncated: 0,
+            timerId: null
+        };
+        globalThis.animalMovementDiagnosticCapture = capture;
+        capture.timerId = setTimeout(() => {
+            if (globalThis.animalMovementDiagnosticCapture === capture) {
+                globalThis.stopAnimalMovementDiagnostics();
+            }
+        }, duration);
+
+        const label = animal.scriptingName || animal.name || animal.type || "animal";
+        console.log(`Capturing animal movement diagnostics for ${label} for ${duration} ms.`);
+        return {
+            animal,
+            durationMs: duration,
+            limit,
+            events: eventSet ? Array.from(eventSet) : null
+        };
+    };
+
+    globalThis.setAnimalMovementDiagnosticsLive = function(enabled = true, target = 0, durationMs = 1000) {
+        if (enabled !== true) {
+            const capture = globalThis.animalMovementDiagnosticCapture;
+            if (capture && capture.active === true) {
+                return globalThis.stopAnimalMovementDiagnostics();
+            }
+            return [];
+        }
+        console.warn("Broad live animal movement logging has been removed. Starting a bounded one-animal capture instead.");
+        return globalThis.captureAnimalMovementDiagnostics(target, durationMs);
     };
 
     globalThis.dumpHitboxCollisionDebug = function(target = 0) {

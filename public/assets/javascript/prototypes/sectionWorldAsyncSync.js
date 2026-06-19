@@ -107,9 +107,7 @@
                 throw new Error(`prototype building object ${entry.record && entry.record.id || "(unknown)"} is missing canonical floor membership for building ${buildingId}`);
             }
             const fragment = floorSupportApi.resolvePrototypeBuildingFloorFragment(map, membership);
-            const layer = Number.isFinite(Number(membership.level))
-                ? Math.round(Number(membership.level))
-                : (Number.isFinite(Number(fragment && fragment.level)) ? Math.round(Number(fragment.level)) : 0);
+            const layer = Number.isFinite(Number(fragment && fragment.level)) ? Math.round(Number(fragment.level)) : 0;
             if (layer <= 0) return false;
             const baseNode = runtimeObj.node && typeof runtimeObj.node === "object"
                 ? runtimeObj.node
@@ -122,7 +120,7 @@
                     {
                         fragmentId: fragment.fragmentId,
                         surfaceId: fragment.surfaceId,
-                        sourceNode: baseNode,
+                        groundNode: baseNode,
                         worldX: runtimeObj.x,
                         worldY: runtimeObj.y,
                         allowScan: true
@@ -130,8 +128,11 @@
                 )
                 : null;
             if (!floorNode && baseNode && typeof map.createFloorNodeFromSource === "function") {
+                if (!Number.isFinite(Number(fragment.nodeBaseZ))) {
+                    throw new Error(`async building object sync fragment ${fragment.fragmentId || "(unknown)"} requires nodeBaseZ`);
+                }
                 floorNode = map.createFloorNodeFromSource(baseNode, fragment, {
-                    baseZ: Number.isFinite(Number(fragment.nodeBaseZ)) ? Number(fragment.nodeBaseZ) : layer * 3,
+                    baseZ: Number(fragment.nodeBaseZ),
                     traversalLayer: layer
                 });
                 if (floorNode && typeof map._connectFloorNodesIncremental === "function") {
@@ -149,7 +150,10 @@
             }
             runtimeObj.fragmentId = typeof fragment.fragmentId === "string" ? fragment.fragmentId : "";
             runtimeObj.surfaceId = typeof fragment.surfaceId === "string" ? fragment.surfaceId : "";
-            const baseZ = Number.isFinite(Number(fragment.nodeBaseZ)) ? Number(fragment.nodeBaseZ) : layer * 3;
+            if (!Number.isFinite(Number(fragment.nodeBaseZ))) {
+                throw new Error(`async building object sync fragment ${fragment.fragmentId || "(unknown)"} requires nodeBaseZ`);
+            }
+            const baseZ = Number(fragment.nodeBaseZ);
             const support = {
                 type: "floor",
                 layer,

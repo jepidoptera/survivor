@@ -21,9 +21,6 @@
             ownerId: owner.id,
             floorId
         };
-        if (Number.isFinite(Number(membership.level))) {
-            out.level = Math.round(Number(membership.level));
-        }
         return out;
     }
 
@@ -77,17 +74,11 @@
             (fragment ? getSourceFloorIdFromFragment(fragment) : "") ||
             getSourceFloorIdFromRef(data, ownerId);
         if (!owner || !floorId) return null;
-        const level = Number.isFinite(Number(data.level))
-            ? Math.round(Number(data.level))
-            : (Number.isFinite(Number(data.layer))
-                ? Math.round(Number(data.layer))
-                : (Number.isFinite(Number(fragment && fragment.level)) ? Math.round(Number(fragment.level)) : null));
         const membership = {
             ownerType: owner.type,
             ownerId: owner.id,
             floorId
         };
-        if (Number.isFinite(level)) membership.level = level;
         return membership;
     }
 
@@ -229,7 +220,6 @@
         const right = cloneFloorMembership(b);
         if (!left || !right) return false;
         if (left.ownerType !== right.ownerType || left.ownerId !== right.ownerId || left.floorId !== right.floorId) return false;
-        if (Number.isFinite(left.level) && Number.isFinite(right.level) && left.level !== right.level) return false;
         return true;
     }
 
@@ -245,8 +235,6 @@
             if (candidate.ownerType !== "building" || candidate.ownerId !== normalized.ownerId) continue;
             const candidateFloorId = getSourceFloorIdFromFragment(candidate);
             if (candidateFloorId !== normalized.floorId) continue;
-            const candidateLayer = Number.isFinite(Number(candidate.level)) ? Math.round(Number(candidate.level)) : null;
-            if (Number.isFinite(normalized.level) && candidateLayer !== normalized.level) continue;
             matches.push(candidate);
         }
         if (matches.length === 1) return matches[0];
@@ -265,7 +253,10 @@
             : (Number.isFinite(fragment && fragment.level) ? Math.round(Number(fragment.level)) : 0);
         const baseZ = Number.isFinite(data.baseZ)
             ? Number(data.baseZ)
-            : (Number.isFinite(fragment && fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : layer * 3);
+            : (Number.isFinite(fragment && fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : null);
+        if (!Number.isFinite(baseZ)) {
+            throw new Error(`floor support for layer ${layer} requires baseZ or fragment nodeBaseZ`);
+        }
         const owner = getFragmentOwner(fragment) || normalizeOwner(data.ownerType, data.ownerId, data.sectionKey);
         const floorMembership = createFloorMembership({
             ...data,

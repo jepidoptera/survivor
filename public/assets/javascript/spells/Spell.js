@@ -118,11 +118,11 @@ class Spell {
             const characterZ = Spell.getCharacterWorldZ(target);
             if (Number.isFinite(characterZ)) return characterZ;
         }
-        const membership = (target._floorMembership && typeof target._floorMembership === "object")
-            ? target._floorMembership
-            : (target.floorMembership && typeof target.floorMembership === "object" ? target.floorMembership : null);
-        if (membership && Number.isFinite(Number(membership.level))) {
-            return Spell.getLayerBaseZForLevel(Number(membership.level)) + (Number.isFinite(target.z) ? Number(target.z) : 0);
+        const support = target.currentMovementSupport && typeof target.currentMovementSupport === "object"
+            ? target.currentMovementSupport
+            : null;
+        if (support && Number.isFinite(support.baseZ)) {
+            return Number(support.baseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
         }
         if (Number.isFinite(target.currentLayerBaseZ)) {
             return Number(target.currentLayerBaseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
@@ -133,6 +133,27 @@ class Spell {
         const node = target.node || (typeof target.getNode === "function" ? target.getNode() : null);
         if (node && Number.isFinite(node.baseZ)) {
             return Number(node.baseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
+        }
+        const membership = (target._floorMembership && typeof target._floorMembership === "object")
+            ? target._floorMembership
+            : (target.floorMembership && typeof target.floorMembership === "object" ? target.floorMembership : null);
+        const fragmentId = typeof target.fragmentId === "string" && target.fragmentId.length > 0
+            ? target.fragmentId
+            : (typeof membership?.floorId === "string" && membership.floorId.length > 0
+                ? membership.floorId
+                : (typeof node?.fragmentId === "string" ? node.fragmentId : ""));
+        const mapRef = target.map || (node && node.map) || (typeof globalThis !== "undefined" ? globalThis.map : null);
+        let fragment = fragmentId && mapRef && mapRef.floorsById instanceof Map
+            ? mapRef.floorsById.get(fragmentId) || null
+            : null;
+        if (!fragment && membership && membership.ownerType === "building") {
+            const floorSupportApi = typeof globalThis !== "undefined" ? globalThis.FloorSupport : null;
+            if (floorSupportApi && typeof floorSupportApi.resolvePrototypeBuildingFloorFragment === "function") {
+                fragment = floorSupportApi.resolvePrototypeBuildingFloorFragment(mapRef, membership, { required: false });
+            }
+        }
+        if (fragment && Number.isFinite(Number(fragment.nodeBaseZ))) {
+            return Number(fragment.nodeBaseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
         }
         const layer = Number.isFinite(target.traversalLayer)
             ? Number(target.traversalLayer)

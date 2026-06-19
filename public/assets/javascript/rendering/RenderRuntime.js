@@ -150,7 +150,7 @@
             ? Number(support.baseZ)
             : (Number.isFinite(obj.currentLayerBaseZ)
                 ? Number(obj.currentLayerBaseZ)
-                : (Number.isFinite(layer) ? layer * 3 : null));
+                : null);
         if (!Number.isFinite(baseZ)) return null;
         if (support && support.type === "stair") {
             if (Number.isFinite(support.continuousLocalZ)) return baseZ + Number(support.continuousLocalZ);

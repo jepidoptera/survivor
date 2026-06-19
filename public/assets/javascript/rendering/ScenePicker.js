@@ -71,6 +71,7 @@ uniform float uViewScale;
 uniform float uXyRatio;
 uniform float uCameraPitch;
 uniform vec2 uDepthRange;
+uniform float uDepthBias;
 uniform vec2 uWorldSize;
 uniform vec2 uWrapEnabled;
 uniform vec2 uWrapAnchorWorld;
@@ -115,7 +116,7 @@ void main(void) {
     float pitchHeight = sin(uCameraPitch) / ${PICK_CAMERA_PITCH_BASE.toFixed(16)};
     float screenX = camDx * uViewScale;
     float screenY = (camDy * pitchFloor - camDz * pitchHeight) * uViewScale * uXyRatio;
-    float depthMetric = camDy * pitchHeight + camDz * pitchFloor;
+    float depthMetric = camDy * pitchHeight + camDz * pitchFloor + uDepthBias;
     float farMetric = uDepthRange.x;
     float invSpan = max(1e-6, uDepthRange.y);
     float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
@@ -139,6 +140,7 @@ uniform float uViewScale;
 uniform float uXyRatio;
 uniform float uCameraPitch;
 uniform vec2 uDepthRange;
+uniform float uDepthBias;
 uniform vec3 uModelOrigin;
 uniform vec2 uWorldSize;
 uniform vec2 uWrapEnabled;
@@ -191,7 +193,7 @@ void main(void) {
 
     float sx = max(1.0, uScreenSize.x);
     float sy = max(1.0, uScreenSize.y);
-    float depthMetric = camDy * pitchHeight + camDz * pitchFloor;
+    float depthMetric = camDy * pitchHeight + camDz * pitchFloor + uDepthBias;
     float farMetric = uDepthRange.x;
     float invSpan = max(1e-6, uDepthRange.y);
     float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
@@ -1173,7 +1175,14 @@ void main(void) {
             const membership = (item._floorMembership && typeof item._floorMembership === "object")
                 ? item._floorMembership
                 : (item.floorMembership && typeof item.floorMembership === "object" ? item.floorMembership : null);
-            if (membership && Number.isFinite(Number(membership.level))) return Math.round(Number(membership.level));
+            if (membership && membership.ownerType === "building") {
+                const floorSupportApi = global && global.FloorSupport ? global.FloorSupport : null;
+                const mapRef = global && global.map ? global.map : null;
+                if (floorSupportApi && typeof floorSupportApi.resolvePrototypeBuildingFloorFragment === "function") {
+                    const fragment = floorSupportApi.resolvePrototypeBuildingFloorFragment(mapRef, membership, { required: false });
+                    if (fragment && Number.isFinite(Number(fragment.level))) return Math.round(Number(fragment.level));
+                }
+            }
             if (Number.isFinite(item.traversalLayer)) return Math.round(Number(item.traversalLayer));
             if (Number.isFinite(item.level)) return Math.round(Number(item.level));
             return Number.isFinite(fallback) ? Math.round(Number(fallback)) : 0;
@@ -1721,6 +1730,7 @@ void main(void) {
                     uXyRatio: 1,
                     uCameraPitch: PICK_CAMERA_DEFAULT_PITCH,
                     uDepthRange: new Float32Array([0, 1]),
+                    uDepthBias: 0,
                     uModelOrigin: new Float32Array([0, 0, 0]),
                     uWorldSize: new Float32Array([0, 0]),
                     uWrapEnabled: new Float32Array([0, 0]),
@@ -2033,6 +2043,17 @@ void main(void) {
                         record.shader.uniforms.uXyRatio = Number(camera && camera.xyratio) || 1;
                         record.shader.uniforms.uDepthRange[0] = Number(depthRange && depthRange.farMetric) || 1;
                         record.shader.uniforms.uDepthRange[1] = Number(depthRange && depthRange.invSpan) || 1;
+                        if (Number.isFinite(record.shader.uniforms.uDepthBias)) {
+                            const sourceDepthBias = Number(
+                                displayObj &&
+                                displayObj.shader &&
+                                displayObj.shader.uniforms &&
+                                displayObj.shader.uniforms.uDepthBias
+                            );
+                            record.shader.uniforms.uDepthBias = Number.isFinite(sourceDepthBias)
+                                ? sourceDepthBias
+                                : 0;
+                        }
                         if (Number.isFinite(record.shader.uniforms.uCameraRotation)) {
                             record.shader.uniforms.uCameraRotation = Number(camera && camera.rotation) || 0;
                         }

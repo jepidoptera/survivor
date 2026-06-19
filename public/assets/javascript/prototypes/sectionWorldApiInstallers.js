@@ -594,21 +594,46 @@
                 : [];
         };
         map.getPrototypeActivityNode = function getPrototypeActivityNode(node) {
-            if (!node) return null;
-            if (node.sourceNode && typeof node.sourceNode === "object") return node.sourceNode;
-            return node;
+            return node || null;
+        };
+        map.getNodeActivityState = function getNodeActivityState(node) {
+            if (!node || typeof node !== "object") {
+                return { active: false, void: true, activityNode: null };
+            }
+            const layer = Number.isFinite(node.traversalLayer)
+                ? Math.round(Number(node.traversalLayer))
+                : (Number.isFinite(node.level) ? Math.round(Number(node.level)) : 0);
+            const usesSectionActivity = (
+                layer !== 0 &&
+                node._prototypeBuildingFloorNode !== true &&
+                node._prototypeOwnerType !== "building" &&
+                this._prototypeSectionState &&
+                this._prototypeSectionState.allNodesByCoordKey instanceof Map
+            );
+            const activityNode = usesSectionActivity
+                ? (this._prototypeSectionState.allNodesByCoordKey.get(`${Number(node.xindex)},${Number(node.yindex)}`) || node)
+                : node;
+            return {
+                active: !!(activityNode && activityNode._prototypeSectionActive === true),
+                void: !!(activityNode && activityNode._prototypeVoid === true),
+                activityNode
+            };
         };
         map.isPrototypeNodeActive = function isPrototypeNodeActive(node) {
-            const activityNode = this.getPrototypeActivityNode(node);
-            return !!(activityNode && activityNode._prototypeSectionActive === true);
+            const state = typeof this.getNodeActivityState === "function"
+                ? this.getNodeActivityState(node)
+                : { active: !!(node && node._prototypeSectionActive === true) };
+            return state.active === true;
         };
         map.shouldRenderNode = function shouldRenderNode(node) {
             return this.isPrototypeNodeActive(node);
         };
         map.getMinimapNodeColor = function getMinimapNodeColor(node) {
-            const activityNode = this.getPrototypeActivityNode(node);
-            if (!activityNode || activityNode._prototypeVoid === true) return "#000000";
-            return activityNode._prototypeSectionActive === true ? "#007700" : "#000000";
+            const state = typeof this.getNodeActivityState === "function"
+                ? this.getNodeActivityState(node)
+                : { active: !!(node && node._prototypeSectionActive === true), void: !!(node && node._prototypeVoid === true) };
+            if (!state.activityNode || state.void === true) return "#000000";
+            return state.active === true ? "#007700" : "#000000";
         };
         map.canOccupyWorldPosition = function canOccupyWorldPosition(worldX, worldY, actor = null, options = {}) {
             const baseNode = (typeof this.worldToNode === "function") ? this.worldToNode(worldX, worldY) : null;
@@ -637,11 +662,13 @@
                     allowScan: false
                 }) || null;
             }
-            const activityNode = this.getPrototypeActivityNode(node);
+            const activityState = typeof this.getNodeActivityState === "function"
+                ? this.getNodeActivityState(node)
+                : { active: !!(node && node._prototypeSectionActive === true), void: !!(node && node._prototypeVoid === true) };
             const isBlocked = node && typeof node.isBlocked === "function"
                 ? node.isBlocked()
                 : !!(node && (node.blocked || node.blockedByObjects > 0));
-            return !!(node && activityNode && activityNode._prototypeSectionActive === true && activityNode._prototypeVoid !== true && !isBlocked);
+            return !!(node && activityState.active === true && activityState.void !== true && !isBlocked);
         };
         map.getNodesInIndexWindow = function getNodesInIndexWindow(xStart, xEnd, yStart, yEnd) {
             if (typeof this.syncPrototypeBuildingMovementBlockers === "function") {

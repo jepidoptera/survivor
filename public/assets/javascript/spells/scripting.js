@@ -5881,7 +5881,10 @@
                 } else {
                     creature.traversalLayer = spawnLayer;
                     creature.currentLayer = spawnLayer;
-                    creature.currentLayerBaseZ = Number.isFinite(spawnNode.baseZ) ? Number(spawnNode.baseZ) : spawnLayer * 3;
+                    if (!Number.isFinite(spawnNode.baseZ)) {
+                        throw new Error(`summoned creature ${creature.id || creature.name || creature.type || "(unknown)"} requires spawn node baseZ`);
+                    }
+                    creature.currentLayerBaseZ = Number(spawnNode.baseZ);
                 }
                 creature.z = typeof creature.getNodeStandingZ === "function"
                     ? creature.getNodeStandingZ(spawnNode)

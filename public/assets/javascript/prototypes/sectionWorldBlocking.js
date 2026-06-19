@@ -60,7 +60,6 @@
                                 xindex: Number(node.xindex),
                                 yindex: Number(node.yindex),
                                 traversalLayer: wallLayer,
-                                level: wallLayer,
                                 surfaceId: (typeof node.surfaceId === "string") ? node.surfaceId : "",
                                 fragmentId: (typeof node.fragmentId === "string") ? node.fragmentId : ""
                             });
@@ -74,7 +73,6 @@
                             blockedEdges.push({
                                 recordId,
                                 traversalLayer: wallLayer,
-                                level: wallLayer,
                                 a: serializePoint(nodeA),
                                 b: serializePoint(nodeB)
                             });
@@ -468,7 +466,6 @@
                 xindex: Number(node.xindex),
                 yindex: Number(node.yindex),
                 traversalLayer: wallLayer,
-                level: wallLayer,
                 surfaceId: typeof node.surfaceId === "string" ? node.surfaceId : "",
                 fragmentId: typeof node.fragmentId === "string" ? node.fragmentId : ""
             });
@@ -485,7 +482,6 @@
                 asset.blockedEdges.push({
                     recordId,
                     traversalLayer: wallLayer,
-                    level: wallLayer,
                     a: serializePoint(node),
                     b: serializePoint(neighborNode)
                 });

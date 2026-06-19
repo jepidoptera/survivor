@@ -363,9 +363,16 @@ class Wizard extends Character {
             },
             set: (value) => {
                 const normalized = Number.isFinite(value) ? Math.round(Number(value)) : 0;
+                const previousLayer = Number.isFinite(this.currentLayer)
+                    ? Math.round(Number(this.currentLayer))
+                    : (Number.isFinite(this.traversalLayer) ? Math.round(Number(this.traversalLayer)) : null);
+                const previousBaseZ = Number.isFinite(this.currentLayerBaseZ) ? Number(this.currentLayerBaseZ) : null;
                 this.currentLayer = normalized;
                 this.traversalLayer = normalized;
-                let layerBaseZ = normalized * 3;
+                let layerBaseZ = normalized === 0 ? 0 : null;
+                if (previousLayer === normalized && Number.isFinite(previousBaseZ)) {
+                    layerBaseZ = previousBaseZ;
+                }
                 const nodeLayer = Number.isFinite(this.node && this.node.traversalLayer)
                     ? Math.round(Number(this.node.traversalLayer))
                     : (Number.isFinite(this.node && this.node.level) ? Math.round(Number(this.node.level)) : null);
@@ -374,6 +381,9 @@ class Wizard extends Character {
                     if (Number.isFinite(nodeZ)) {
                         layerBaseZ = Number(nodeZ);
                     }
+                }
+                if (!Number.isFinite(layerBaseZ)) {
+                    throw new Error(`wizard selectedFloorEditLevel ${normalized} requires a node standing Z`);
                 }
                 this.currentLayerBaseZ = layerBaseZ;
             }
@@ -1144,16 +1154,23 @@ class Wizard extends Character {
         if (!obj || obj === this || obj.gone || !obj.groundPlaneHitbox) return false;
         if (!doesObjectBlockWizardMovement(obj)) return false;
 
-        const wizardLayerBaseZ = Number.isFinite(this.currentLayerBaseZ)
-            ? Number(this.currentLayerBaseZ)
-            : ((Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0) * 3);
+        if (!Number.isFinite(this.currentLayerBaseZ)) {
+            throw new Error("wizard vector movement requires currentLayerBaseZ");
+        }
+        const wizardLayerBaseZ = Number(this.currentLayerBaseZ);
         const wizardWorldZ = wizardLayerBaseZ + (Number.isFinite(this.z) ? Number(this.z) : 0);
         if (wizardWorldZ > 0) {
+            const objLayerBaseZ = Number.isFinite(obj.currentLayerBaseZ)
+                ? Number(obj.currentLayerBaseZ)
+                : (Number.isFinite(obj._renderLayerBaseZ)
+                    ? Number(obj._renderLayerBaseZ)
+                    : (Number.isFinite(obj._floorBaseZ) ? Number(obj._floorBaseZ) : null));
             const objBottomZ = Number.isFinite(obj.bottomZ)
                 ? Number(obj.bottomZ)
-                : ((Number.isFinite(obj.traversalLayer)
-                    ? Math.round(Number(obj.traversalLayer))
-                    : (Number.isFinite(obj.level) ? Math.round(Number(obj.level)) : 0)) * 3);
+                : (Number.isFinite(objLayerBaseZ) ? objLayerBaseZ + (Number.isFinite(obj.z) ? Number(obj.z) : 0) : null);
+            if (!Number.isFinite(objBottomZ)) {
+                throw new Error(`wizard vector movement object ${obj.id || obj.name || obj.type || "(unknown)"} requires bottomZ or currentLayerBaseZ`);
+            }
             const objHeight = Number.isFinite(obj.height) ? Number(obj.height) : 0;
             const objTopZ = objBottomZ + objHeight;
             if (objTopZ > 0 && wizardWorldZ >= objTopZ) {
@@ -1439,9 +1456,10 @@ class Wizard extends Character {
     drawHat(interpolatedJumpHeight = null, interpolatedWorldPosition = null) {
         // Recalculate screen position from world coordinates
         const renderWorld = interpolatedWorldPosition || this.getInterpolatedPosition();
-        const layerBaseZ = Number.isFinite(this.currentLayerBaseZ)
-            ? Number(this.currentLayerBaseZ)
-            : ((Number.isFinite(this.currentLayer) ? Number(this.currentLayer) : 0) * 3);
+        if (!Number.isFinite(this.currentLayerBaseZ)) {
+            throw new Error("wizard hat rendering requires currentLayerBaseZ");
+        }
+        const layerBaseZ = Number(this.currentLayerBaseZ);
         const screenCoors = worldToScreen({ x: renderWorld.x, y: renderWorld.y, z: layerBaseZ });
         let wizardScreenX = screenCoors.x;
         const jumpHeightForRender = Number.isFinite(interpolatedJumpHeight)
@@ -1544,9 +1562,10 @@ class Wizard extends Character {
         const cameraX = Number.isFinite(viewport && viewport.x) ? Number(viewport.x) : Number(renderWorld.x) || 0;
         const cameraY = Number.isFinite(viewport && viewport.y) ? Number(viewport.y) : Number(renderWorld.y) || 0;
         const scale = Math.max(0.65, Number(this.visualRadius) || 0.5) * 0.95;
-        const layerBaseZ = Number.isFinite(this.currentLayerBaseZ)
-            ? Number(this.currentLayerBaseZ)
-            : ((Number.isFinite(this.currentLayer) ? Number(this.currentLayer) : 0) * 3);
+        if (!Number.isFinite(this.currentLayerBaseZ)) {
+            throw new Error("wizard shield rendering requires currentLayerBaseZ");
+        }
+        const layerBaseZ = Number(this.currentLayerBaseZ);
         const jumpZ = Number.isFinite(interpolatedJumpHeight) ? interpolatedJumpHeight : (Number(renderWorld.z) || 0);
         const centerZ = layerBaseZ + 0.45 + (jumpZ * 0.55);
         const edgeThicknessPx = Math.max(1.25, (Number(viewscale) || 1) * 0.016);
@@ -1905,9 +1924,10 @@ class Wizard extends Character {
         const currentLayer = Number.isFinite(record.currentLayer)
             ? Math.round(Number(record.currentLayer))
             : (Number.isFinite(record.traversalLayer) ? Math.round(Number(record.traversalLayer)) : 0);
-        const baseZ = Number.isFinite(record.currentLayerBaseZ)
-            ? Number(record.currentLayerBaseZ)
-            : currentLayer * 3;
+        if (!Number.isFinite(record.currentLayerBaseZ)) {
+            throw new Error(`${label} is missing finite currentLayerBaseZ`);
+        }
+        const baseZ = Number(record.currentLayerBaseZ);
         const out = {
             x,
             y,

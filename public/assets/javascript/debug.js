@@ -1422,7 +1422,14 @@ function getDebugTraversalLayer(obj, fallback = 0) {
     const membership = (obj._floorMembership && typeof obj._floorMembership === "object")
         ? obj._floorMembership
         : (obj.floorMembership && typeof obj.floorMembership === "object" ? obj.floorMembership : null);
-    if (membership && Number.isFinite(Number(membership.level))) return Math.round(Number(membership.level));
+    if (membership && membership.ownerType === "building") {
+        const floorSupportApi = typeof globalThis !== "undefined" ? globalThis.FloorSupport : null;
+        const mapRef = typeof globalThis !== "undefined" ? globalThis.map : null;
+        if (floorSupportApi && typeof floorSupportApi.resolvePrototypeBuildingFloorFragment === "function") {
+            const fragment = floorSupportApi.resolvePrototypeBuildingFloorFragment(mapRef, membership, { required: false });
+            if (fragment && Number.isFinite(Number(fragment.level))) return Math.round(Number(fragment.level));
+        }
+    }
     if (Number.isFinite(obj.traversalLayer)) return Math.round(Number(obj.traversalLayer));
     if (Number.isFinite(obj.currentLayer)) return Math.round(Number(obj.currentLayer));
     if (Number.isFinite(obj.level)) return Math.round(Number(obj.level));

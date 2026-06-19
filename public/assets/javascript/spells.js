@@ -598,8 +598,15 @@ const SpellSystem = (() => {
     function setSelectedFloorEditLevel(wizardRef, level, options = {}) {
         const normalized = normalizeFloorEditLevel(level);
         const shouldMoveWizard = !!(options && options.moveWizard === true);
-        const targetBaseZ = normalized * 3;
         const wizardTarget = wizardRef || ((typeof globalThis !== "undefined") ? globalThis.wizard : null);
+        const targetBaseZ = Number.isFinite(options && options.baseZ)
+            ? Number(options.baseZ)
+            : (wizardTarget && Number.isFinite(wizardTarget.currentLayerBaseZ)
+                ? Number(wizardTarget.currentLayerBaseZ)
+                : null);
+        if (shouldMoveWizard && !Number.isFinite(targetBaseZ)) {
+            throw new Error(`selected floor edit level ${normalized} requires baseZ when moving wizard`);
+        }
         const previousLayer = wizardTarget && Number.isFinite(wizardTarget.currentLayer)
             ? Number(wizardTarget.currentLayer)
             : null;
@@ -2801,7 +2808,7 @@ const SpellSystem = (() => {
         ) {
             return Number(wizardRef.currentLayerBaseZ);
         }
-        return normalizedLayer * 3;
+        throw new Error(`layer ${normalizedLayer} requires currentLayerBaseZ`);
     }
 
     function getWallLikeTraversalLayer(target, fallback = 0) {
@@ -4177,7 +4184,7 @@ const SpellSystem = (() => {
 
     function getMoveObjectSupportBaseZ(support, fallbackLayer = 0) {
         if (support && Number.isFinite(support.baseZ)) return Number(support.baseZ);
-        return getMoveObjectSupportLayer(support, fallbackLayer) * 3;
+        throw new Error(`moved object support layer ${getMoveObjectSupportLayer(support, fallbackLayer)} requires baseZ`);
     }
 
     function beginMovedPlacedObjectFloorFall(target, mapRef, result, previousWorldZ) {
@@ -6543,7 +6550,7 @@ const SpellSystem = (() => {
         let bestDistanceSq = TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX * TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX;
         for (let i = 0; i < fragments.length; i++) {
             const fragment = fragments[i];
-            const baseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : (getSelectedFloorEditLevel(wizardRef) * 3);
+            const baseZ = getFloorEditorBaseZ(wizardRef, fragment, "floor editor vertex selection");
             const rings = getFloorEditorRingsForFragment(fragment);
             for (let r = 0; r < rings.length; r++) {
                 const ring = rings[r];
@@ -6665,7 +6672,7 @@ const SpellSystem = (() => {
         let bestDistanceSq = TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX * TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX;
         for (let i = 0; i < fragments.length; i++) {
             const fragment = fragments[i];
-            const baseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : (getSelectedFloorEditLevel(wizardRef) * 3);
+            const baseZ = getFloorEditorBaseZ(wizardRef, fragment, "floor editor snap selection");
             const rings = getFloorEditorRingsForFragment(fragment);
             for (let r = 0; r < rings.length; r++) {
                 const ring = rings[r];
@@ -6751,7 +6758,7 @@ const SpellSystem = (() => {
         let bestDistanceSq = TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX * TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX;
         for (let i = 0; i < fragments.length; i++) {
             const fragment = fragments[i];
-            const baseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : (getSelectedFloorEditLevel(wizardRef) * 3);
+            const baseZ = getFloorEditorBaseZ(wizardRef, fragment, "floor editor edge selection");
             const rings = getFloorEditorRingsForFragment(fragment);
             for (let r = 0; r < rings.length; r++) {
                 const ring = rings[r];
@@ -6822,6 +6829,24 @@ const SpellSystem = (() => {
             return normalizeFloorEditLevel(wizardRef.currentLayer);
         }
         return getSelectedFloorEditLevel(wizardRef);
+    }
+
+    function getFloorEditorBaseZ(wizardRef, fragment = null, label = "floor editor") {
+        if (fragment && Number.isFinite(fragment.nodeBaseZ)) return Number(fragment.nodeBaseZ);
+        const targetLevel = fragment && Number.isFinite(fragment.level)
+            ? normalizeFloorEditLevel(fragment.level)
+            : getSelectedFloorEditLevel(wizardRef);
+        const wizardLayer = wizardRef && Number.isFinite(wizardRef.currentLayer)
+            ? normalizeFloorEditLevel(wizardRef.currentLayer)
+            : null;
+        if (
+            wizardLayer === targetLevel &&
+            wizardRef &&
+            Number.isFinite(wizardRef.currentLayerBaseZ)
+        ) {
+            return Number(wizardRef.currentLayerBaseZ);
+        }
+        throw new Error(`${label} level ${targetLevel} requires fragment nodeBaseZ or matching wizard currentLayerBaseZ`);
     }
 
     function getFloorEditorPolygonArea(points) {
@@ -6951,7 +6976,7 @@ const SpellSystem = (() => {
             if (fragment._prototypeGroundFloor === true && !(includeGround && level === 0)) continue;
             if (fragment._floorEditEmpty === true) continue;
             if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
-            const baseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : (level * 3);
+            const baseZ = getFloorEditorBaseZ(wizardRef, fragment, "visible floor polygon selection");
             let point = resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenX, screenY, baseZ);
             let pointInside = !!(point && isPointInsideFloorEditorFragment(point.x, point.y, fragment));
             if (
@@ -7072,14 +7097,22 @@ const SpellSystem = (() => {
             if (floorTarget && floorTarget.point) {
                 targetPoint = floorTarget.point;
                 targetLayer = Number.isFinite(floorTarget.level) ? Math.round(Number(floorTarget.level)) : 0;
-                targetBaseZ = Number.isFinite(floorTarget.baseZ) ? Number(floorTarget.baseZ) : targetLayer * 3;
+                targetBaseZ = Number.isFinite(Number(floorTarget.fragment && floorTarget.fragment.nodeBaseZ))
+                    ? Number(floorTarget.fragment.nodeBaseZ)
+                    : (Number.isFinite(floorTarget.baseZ) ? Number(floorTarget.baseZ) : null);
+                if (!Number.isFinite(targetBaseZ)) {
+                    throw new Error(`floor target layer ${targetLayer} requires baseZ`);
+                }
             } else {
                 targetLayer = isUndergroundTarget ? currentLayer : 0;
                 targetBaseZ = isUndergroundTarget
                     ? (Number.isFinite(wizardRef && wizardRef.currentLayerBaseZ)
                         ? Number(wizardRef.currentLayerBaseZ)
-                        : targetLayer * 3)
+                        : null)
                     : 0;
+                if (isUndergroundTarget && !Number.isFinite(targetBaseZ)) {
+                    throw new Error(`underground target layer ${targetLayer} requires wizard currentLayerBaseZ`);
+                }
                 targetPoint = isUndergroundTarget
                     ? resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenPoint.screenX, screenPoint.screenY, targetBaseZ)
                     : resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenPoint.screenX, screenPoint.screenY, 0);
@@ -7097,6 +7130,15 @@ const SpellSystem = (() => {
         const destinationNode = (isUndergroundTarget && !floorTarget)
             ? null
             : resolveVisibleFloorNodeOnLayer(mapRef, wrappedX, wrappedY, targetLayer, floorTarget);
+        if (destinationNode && Number.isFinite(Number(destinationNode.baseZ))) {
+            targetBaseZ = Number(destinationNode.baseZ);
+        } else if (
+            floorTarget &&
+            floorTarget.fragment &&
+            Number.isFinite(Number(floorTarget.fragment.nodeBaseZ))
+        ) {
+            targetBaseZ = Number(floorTarget.fragment.nodeBaseZ);
+        }
 
         return {
             x: wrappedX,
@@ -7121,7 +7163,7 @@ const SpellSystem = (() => {
     function resolveFloorEditorPaintWorldPoint(wizardRef, worldX, worldY, options = {}) {
         const screenX = Number(options && options.screenX);
         const screenY = Number(options && options.screenY);
-        const baseZ = getFloorEditorPointLevel(wizardRef) * 3;
+        const baseZ = getFloorEditorBaseZ(wizardRef, null, "floor editor paint point");
         const screenPoint = resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenX, screenY, baseZ);
         if (screenPoint) {
             return screenPoint;
@@ -7408,9 +7450,7 @@ const SpellSystem = (() => {
     function resolveFloorEditorSelectedInsertionPoint(wizardRef, selection, screenX, screenY, worldX, worldY) {
         const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
         const fragment = selection && selection.fragment ? selection.fragment : null;
-        const baseZ = Number.isFinite(fragment && fragment.nodeBaseZ)
-            ? Number(fragment.nodeBaseZ)
-            : (getSelectedFloorEditLevel(wizardRef) * 3);
+        const baseZ = getFloorEditorBaseZ(wizardRef, fragment, "floor editor insertion point");
         const screenPoint = resolveWorldPointOnFloorPlaneFromScreen(wizardRef, Number(screenX), Number(screenY), baseZ);
         let x = screenPoint && Number.isFinite(screenPoint.x) ? Number(screenPoint.x) : Number(worldX);
         let y = screenPoint && Number.isFinite(screenPoint.y) ? Number(screenPoint.y) : Number(worldY);
@@ -8445,13 +8485,19 @@ const SpellSystem = (() => {
                 const existing = existingAtLevel[i] || null;
                 const surfaceId = (existing && existing.surfaceId) ? existing.surfaceId : fallbackSurfaceId;
                 const fragmentId = (existing && existing.fragmentId) ? existing.fragmentId : `${fallbackSurfaceId}:${i}`;
+                const nodeBaseZ = Number.isFinite(existing && existing.nodeBaseZ)
+                    ? Number(existing.nodeBaseZ)
+                    : (Number.isFinite(options && options.nodeBaseZ) ? Number(options.nodeBaseZ) : null);
+                if (!Number.isFinite(nodeBaseZ)) {
+                    throw new Error(`floor edit asset ${asset.key || "(unknown)"} level ${normalizedLevel} requires nodeBaseZ`);
+                }
                 const record = {
                     fragmentId,
                     surfaceId,
                     ownerSectionKey: asset.key,
                     level: normalizedLevel,
                     nodeBaseZOffset: 0,
-                    nodeBaseZ: normalizedLevel * 3,
+                    nodeBaseZ,
                     outerPolygon: outer,
                     holes,
                     tileCoordKeys

@@ -48,6 +48,7 @@
     const BUILDING_DOORWAY_TRANSITION_EXIT_SPAN_PADDING = 0.6;
     const BUILDING_INTERIOR_OVERLAY_Z = 2147483648;
     const BUILDING_INTERIOR_FOREGROUND_Z = 2147483650;
+    const BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS = 32;
     const BUILDING_INTERIOR_WIZARD_HAT_Z = BUILDING_INTERIOR_FOREGROUND_Z + 1;
     const LOS_SHADOW_DEPTH_BIAS_UNITS = 0.004;
     const WIZARD_SHADOW_DEPTH_BIAS_UNITS = 0.02;
@@ -1344,8 +1345,15 @@ void main(void) {
             if (!item) return this.getLayerIndexFromValue(fallback, 0);
             const membership = this.normalizeRenderFloorMembership(item._floorMembership) ||
                 this.normalizeRenderFloorMembership(item.floorMembership);
-            if (membership && Number.isFinite(Number(membership.level))) {
-                return this.getLayerIndexFromValue(membership.level, fallback);
+            if (membership && membership.ownerType === "building") {
+                const floorSupportApi = global && global.FloorSupport ? global.FloorSupport : null;
+                const mapRef = global && global.map ? global.map : null;
+                if (floorSupportApi && typeof floorSupportApi.resolvePrototypeBuildingFloorFragment === "function") {
+                    const fragment = floorSupportApi.resolvePrototypeBuildingFloorFragment(mapRef, membership, { required: false });
+                    if (fragment && Number.isFinite(Number(fragment.level))) {
+                        return this.getLayerIndexFromValue(fragment.level, fallback);
+                    }
+                }
             }
             if (item.type === "wallSection" && item._prototypeBuildingPlacementId && Number.isFinite(item.traversalLayer)) {
                 return this.getLayerIndexFromValue(item.traversalLayer, fallback);
@@ -1372,7 +1380,70 @@ void main(void) {
             if (this.isCharacterRenderItem(item)) {
                 return 0;
             }
+            const support = item && item.currentMovementSupport && typeof item.currentMovementSupport === "object"
+                ? item.currentMovementSupport
+                : null;
+            if (support && Number.isFinite(Number(support.baseZ))) return Number(support.baseZ);
+            if (item && Number.isFinite(Number(item.currentLayerBaseZ))) return Number(item.currentLayerBaseZ);
+            if (item && Number.isFinite(Number(item._floorBaseZ))) return Number(item._floorBaseZ);
+            if (item && item.node && Number.isFinite(Number(item.node.baseZ))) return Number(item.node.baseZ);
+            const fragmentId = item && typeof item.fragmentId === "string" && item.fragmentId.length > 0
+                ? item.fragmentId
+                : (item && typeof item.node?.fragmentId === "string" ? item.node.fragmentId : "");
+            const mapRef = (item && item.map) || this.map || (typeof global !== "undefined" ? global.map : null);
+            const fragment = fragmentId && mapRef && mapRef.floorsById instanceof Map
+                ? mapRef.floorsById.get(fragmentId) || null
+                : null;
+            if (fragment && Number.isFinite(Number(fragment.nodeBaseZ))) return Number(fragment.nodeBaseZ);
+            if (item && Number.isFinite(Number(item._renderLayerBaseZ))) return Number(item._renderLayerBaseZ);
             return this.getLayerBaseZForLevel(this.getLayerIndexForObject(item, fallback));
+        }
+
+        getPlacementLayerBaseZForWizard(wizardRef = null, mapRef = null, placementLayer = 0, referencePoint = null) {
+            const layer = this.getLayerIndexFromValue(placementLayer, 0);
+            const wizardLayer = this.getLayerIndexFromValue(
+                wizardRef && Number.isFinite(wizardRef.currentLayer)
+                    ? wizardRef.currentLayer
+                    : (wizardRef && Number.isFinite(wizardRef.traversalLayer) ? wizardRef.traversalLayer : layer),
+                layer
+            );
+            const support = wizardRef && wizardRef.currentMovementSupport && typeof wizardRef.currentMovementSupport === "object"
+                ? wizardRef.currentMovementSupport
+                : null;
+            const supportLayer = support && Number.isFinite(Number(support.layer))
+                ? this.getLayerIndexFromValue(support.layer, wizardLayer)
+                : wizardLayer;
+            if (support && supportLayer === layer && Number.isFinite(Number(support.baseZ))) {
+                return Number(support.baseZ);
+            }
+            if (wizardLayer === layer && wizardRef && Number.isFinite(Number(wizardRef.currentLayerBaseZ))) {
+                return Number(wizardRef.currentLayerBaseZ);
+            }
+            const node = wizardRef && wizardRef.node && typeof wizardRef.node === "object" ? wizardRef.node : null;
+            const nodeLayer = node ? this.getLayerIndexForNode(node) : null;
+            if (node && nodeLayer === layer && Number.isFinite(Number(node.baseZ))) {
+                return Number(node.baseZ);
+            }
+            const pointX = Number.isFinite(referencePoint && referencePoint.x)
+                ? Number(referencePoint.x)
+                : (wizardRef && Number.isFinite(wizardRef.x) ? Number(wizardRef.x) : NaN);
+            const pointY = Number.isFinite(referencePoint && referencePoint.y)
+                ? Number(referencePoint.y)
+                : (wizardRef && Number.isFinite(wizardRef.y) ? Number(wizardRef.y) : NaN);
+            if (mapRef && mapRef.floorsById instanceof Map && Number.isFinite(pointX) && Number.isFinite(pointY)) {
+                let best = null;
+                for (const fragment of mapRef.floorsById.values()) {
+                    if (!fragment) continue;
+                    const fragmentLevel = this.getLayerIndexFromValue(fragment.level, 0);
+                    if (fragmentLevel !== layer) continue;
+                    if (!Number.isFinite(Number(fragment.nodeBaseZ))) continue;
+                    if (!isPointInsideFloorVisibilityFragment(fragment, pointX, pointY)) continue;
+                    const baseZ = Number(fragment.nodeBaseZ);
+                    if (!best || baseZ > best.baseZ) best = { baseZ };
+                }
+                if (best) return best.baseZ;
+            }
+            return this.getLayerBaseZForLevel(layer);
         }
 
         getRendererScreenSize(ctx = null) {
@@ -1870,9 +1941,7 @@ void main(void) {
                 ? membership.floorId
                 : (typeof membership.sourceFloorId === "string" ? membership.sourceFloorId : "");
             if (!ownerType || !ownerId || !floorId) return null;
-            const out = { ownerType, ownerId, floorId };
-            if (Number.isFinite(Number(membership.level))) out.level = Math.round(Number(membership.level));
-            return out;
+            return { ownerType, ownerId, floorId };
         }
 
         getRenderItemFloorMembership(item, mapRef = null, refs = null) {
@@ -1910,14 +1979,13 @@ void main(void) {
                     ownerId,
                     fragmentId: typeof region.fragmentId === "string" ? region.fragmentId : "",
                     surfaceId: typeof region.surfaceId === "string" ? region.surfaceId : "",
-                    floorId: typeof region._prototypeBuildingSourceFragmentId === "string" ? region._prototypeBuildingSourceFragmentId : "",
-                    level: Number.isFinite(Number(region.level)) ? Math.round(Number(region.level)) : undefined
+                    floorId: typeof region._prototypeBuildingSourceFragmentId === "string" ? region._prototypeBuildingSourceFragmentId : ""
                 }));
             }
             const floorId = typeof (fragment && fragment._prototypeBuildingSourceFragmentId) === "string" && fragment._prototypeBuildingSourceFragmentId.length > 0
                 ? fragment._prototypeBuildingSourceFragmentId
                 : (typeof region._prototypeBuildingSourceFragmentId === "string" ? region._prototypeBuildingSourceFragmentId : "");
-            return this.normalizeRenderFloorMembership({ ownerType, ownerId, floorId, level: region.level });
+            return this.normalizeRenderFloorMembership({ ownerType, ownerId, floorId });
         }
 
         floorMembershipsMatchForRender(itemMembership, regionMembership) {
@@ -1927,7 +1995,6 @@ void main(void) {
             if (itemFloor.ownerType !== regionFloor.ownerType) return false;
             if (itemFloor.ownerId !== regionFloor.ownerId) return false;
             if (itemFloor.floorId !== regionFloor.floorId) return false;
-            if (Number.isFinite(itemFloor.level) && Number.isFinite(regionFloor.level) && itemFloor.level !== regionFloor.level) return false;
             return true;
         }
 
@@ -2382,6 +2449,19 @@ void main(void) {
             return fragmentIds;
         }
 
+        getBuildingInteriorActiveFloorFragmentIds(ctx = null, cutawayState = null) {
+            const state = cutawayState || (ctx && ctx._renderingLayerCutawayState) || this.getLayerCutawayState(ctx);
+            const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
+            const fragmentIds = new Set();
+            for (let i = 0; i < triggers.length; i++) {
+                const trigger = triggers[i];
+                if (!trigger || !trigger.activeInteriorRegion) continue;
+                const fragmentId = this.getBuildingInteriorRegionFragmentId(trigger.activeInteriorRegion);
+                if (fragmentId) fragmentIds.add(fragmentId);
+            }
+            return fragmentIds;
+        }
+
         getBuildingInteriorRegionFragmentId(region) {
             if (!region) return "";
             if (typeof region.fragmentId === "string" && region.fragmentId.length > 0) return region.fragmentId;
@@ -2410,6 +2490,8 @@ void main(void) {
                 this._buildingInteriorRenderPlan = {
                     active: false,
                     items: new Set(),
+                    depthBumpedItems: new Set(),
+                    depthBumpRegions: [],
                     wallTopFaceOnly: new Map(),
                     doorInteriorSide: new Map()
                 };
@@ -2417,6 +2499,10 @@ void main(void) {
             const plan = this._buildingInteriorRenderPlan;
             plan.active = false;
             plan.items.clear();
+            if (!(plan.depthBumpedItems instanceof Set)) plan.depthBumpedItems = new Set();
+            plan.depthBumpedItems.clear();
+            if (!Array.isArray(plan.depthBumpRegions)) plan.depthBumpRegions = [];
+            plan.depthBumpRegions.length = 0;
             plan.wallTopFaceOnly.clear();
             if (!(plan.doorInteriorSide instanceof Map)) plan.doorInteriorSide = new Map();
             plan.doorInteriorSide.clear();
@@ -2434,6 +2520,12 @@ void main(void) {
             const presentationWizardRef = this.getDoorwayTransitionPresentationWizard(cutawayState) || wizardRef;
             const mapRef = (ctx && ctx.map) || global.map || null;
             const dynamicCharacters = this.getBuildingInteriorDynamicCharacterCandidates(ctx, wizardRef);
+            const addDepthBumpedItem = (item) => {
+                if (item) plan.depthBumpedItems.add(item);
+            };
+            const addDepthBumpRegion = (region) => {
+                if (region && region.polygon) plan.depthBumpRegions.push(region);
+            };
             for (let i = 0; i < triggers.length; i++) {
                 const trigger = triggers[i];
                 const activeRegion = trigger && trigger.activeInteriorRegion;
@@ -2454,6 +2546,7 @@ void main(void) {
                     continue;
                 }
                 const activeRegionId = typeof activeRegion.id === "string" ? activeRegion.id : "";
+                addDepthBumpRegion(activeRegion);
                 const prototypeInteriorBitmapReady = this.isPrototypeBuildingInteriorBitmapReady(ctx, trigger);
                 if (prototypeInteriorBitmapReady) {
                     const regions = this.getBuildingInteriorOverlayRegionsForTrigger(trigger);
@@ -2475,6 +2568,7 @@ void main(void) {
                                     !this.isPrototypeBuildingInteriorBitmapObjectCovered(item, cutawayState, mapRef, ctx)
                                 ) {
                                     plan.items.add(item);
+                                    addDepthBumpedItem(item);
                                 }
                             }
                             const floorRenderItems = this.collectBuildingInteriorFloorRenderItems(ctx, region, mapRef, trigger);
@@ -2482,12 +2576,14 @@ void main(void) {
                                 const item = floorRenderItems[j];
                                 if (!item || this.isPrototypeBuildingInteriorBitmapObjectCovered(item, cutawayState, mapRef, ctx)) continue;
                                 plan.items.add(item);
+                                addDepthBumpedItem(item);
                             }
                         }
                         for (let j = 0; j < dynamicCharacters.length; j++) {
                             const character = dynamicCharacters[j];
                             if (this.shouldRenderBuildingInteriorCharacter(character, region, ctx, wizardRef, mapRef)) {
                                 plan.items.add(character);
+                                if (isActiveRegion) addDepthBumpedItem(character);
                             }
                         }
                     }
@@ -2498,6 +2594,7 @@ void main(void) {
                     const item = entry && entry.item;
                     if (this.shouldRenderBuildingInteriorDoorItem(item, activeRegion, entry, ctx, wizardRef)) {
                         plan.items.add(item);
+                        addDepthBumpedItem(item);
                         const interiorSide = this.getBuildingInteriorMountedDoorSide(
                             item,
                             activeRegion,
@@ -2523,6 +2620,7 @@ void main(void) {
                         if (!item || item.gone || item.vanishing) continue;
                         if (this.shouldRenderBuildingInteriorDoorItem(item, region, entry, ctx, wizardRef)) {
                             plan.items.add(item);
+                            if (isActiveRegion) addDepthBumpedItem(item);
                             if (isActiveRegion) {
                                 const interiorSide = this.getBuildingInteriorMountedDoorSide(
                                     item,
@@ -2535,6 +2633,7 @@ void main(void) {
                         } else if (item.type === "wallSection") {
                             if (!this.shouldRenderBuildingInteriorOverlayWall(item, region, trigger, ctx, wizardRef)) continue;
                             plan.items.add(item);
+                            if (isActiveRegion) addDepthBumpedItem(item);
                             plan.wallTopFaceOnly.set(
                                 item,
                                 isActiveRegion ? this.shouldFlattenBuildingInteriorOverlayWall(item, ctx, presentationWizardRef) : false
@@ -2547,21 +2646,26 @@ void main(void) {
                                 continue;
                             }
                             plan.items.add(item);
+                            if (isActiveRegion) addDepthBumpedItem(item);
                         }
                     }
                     for (let j = 0; j < dynamicCharacters.length; j++) {
                         const character = dynamicCharacters[j];
                         if (this.shouldRenderBuildingInteriorCharacter(character, region, ctx, wizardRef, mapRef)) {
                             plan.items.add(character);
+                            if (isActiveRegion) addDepthBumpedItem(character);
                         }
                     }
                     const floorRenderItems = this.collectBuildingInteriorFloorRenderItems(ctx, region, mapRef, trigger);
                     for (let j = 0; j < floorRenderItems.length; j++) {
-                        if (floorRenderItems[j]) plan.items.add(floorRenderItems[j]);
+                        if (floorRenderItems[j]) {
+                            plan.items.add(floorRenderItems[j]);
+                            if (isActiveRegion) addDepthBumpedItem(floorRenderItems[j]);
+                        }
                     }
                 }
             }
-            plan.active = plan.items.size > 0;
+            plan.active = plan.items.size > 0 || plan.depthBumpRegions.length > 0;
             return finishPlan();
         }
 
@@ -4010,7 +4114,6 @@ void main(void) {
             };
             const pushNode = (node) => {
                 pushRef(node);
-                if (node && node.sourceNode) pushRef(node.sourceNode);
             };
             const pushEndpoint = (endpoint) => {
                 pushNode(endpoint);
@@ -4284,7 +4387,7 @@ void main(void) {
                 ownerType: membership && typeof membership.ownerType === "string" ? membership.ownerType : "",
                 ownerId: membership && typeof membership.ownerId === "string" ? membership.ownerId : "",
                 floorId: membership && typeof membership.floorId === "string" ? membership.floorId : "",
-                floorLevel: membership && Number.isFinite(Number(membership.level)) ? Math.round(Number(membership.level)) : null
+                floorLevel: this.getLayerIndexForObject(item, 0)
             });
         }
 
@@ -4460,6 +4563,21 @@ void main(void) {
             for (let i = 0; i < samples.length; i++) {
                 const sample = samples[i];
                 if (sample && floorVisualPolygonsContainPoint(polygons, sample.x, sample.y)) return true;
+            }
+            return false;
+        }
+
+        shouldApplyBuildingInteriorActiveFloorDepthBumpToItem(item, itemLayer, plan = null, mapRef = null) {
+            if (!item || item.type === "roof" || !plan || !plan.active) return false;
+            if (plan.depthBumpedItems instanceof Set && plan.depthBumpedItems.has(item)) return true;
+            const regions = Array.isArray(plan.depthBumpRegions) ? plan.depthBumpRegions : [];
+            if (regions.length === 0) return false;
+            const layer = this.getLayerIndexFromValue(itemLayer, 0);
+            for (let i = 0; i < regions.length; i++) {
+                const region = regions[i];
+                if (!region || !region.polygon) continue;
+                if (this.getLayerIndexFromValue(region.level, 0) !== layer) continue;
+                if (this.renderItemSamplesMatchPolygons(item, [region.polygon], mapRef || global.map || null)) return true;
             }
             return false;
         }
@@ -8164,6 +8282,13 @@ void main(void) {
                 return startZ + ((targetZ - startZ) * progress);
             }
             if (Number.isFinite(projectile.visualBaseZ)) return Number(projectile.visualBaseZ);
+            const support = projectile.currentMovementSupport && typeof projectile.currentMovementSupport === "object"
+                ? projectile.currentMovementSupport
+                : null;
+            if (support && Number.isFinite(Number(support.baseZ))) return Number(support.baseZ);
+            if (Number.isFinite(Number(projectile.currentLayerBaseZ))) return Number(projectile.currentLayerBaseZ);
+            if (Number.isFinite(Number(projectile._renderLayerBaseZ))) return Number(projectile._renderLayerBaseZ);
+            if (projectile.node && Number.isFinite(Number(projectile.node.baseZ))) return Number(projectile.node.baseZ);
             return 0;
         }
 
@@ -10457,7 +10582,7 @@ void main(void) {
                     : (typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "");
                 const activitySectionKey = typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0
                     ? node._prototypeSectionKey
-                    : (typeof node.sourceNode?._prototypeSectionKey === "string" ? node.sourceNode._prototypeSectionKey : "");
+                    : ownerSectionKey;
                 if (
                     ownerSectionKey &&
                     useViewportSectionFilter &&
@@ -14611,6 +14736,7 @@ void main(void) {
             );
             const wizardLayer = this.getWizardVisualLayerIndex(wizard, 0);
             const cutawayState = this.getLayerCutawayState(ctx);
+            const activeInteriorFloorFragmentIds = this.getBuildingInteriorActiveFloorFragmentIds(ctx, cutawayState);
             const entries = [];
             const metrics = this.currentFrameMetrics || null;
             let scannedFragments = 0;
@@ -14652,6 +14778,9 @@ void main(void) {
                         ? Math.max(0, Math.min(1, Number(buildingCutawayTrigger.alpha)))
                         : BUILDING_CUTAWAY_GHOST_ALPHA;
                     const floorCutawayAlpha = buildingCutawayTrigger ? 1 : cutawayAlpha;
+                    const activeInteriorDepthBump = activeInteriorFloorFragmentIds.has(fragmentId)
+                        ? BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS
+                        : 0;
                     const sectionKey = typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : "";
                     const state = map._prototypeSectionState || null;
                     const asset = sectionKey && state && state.sectionAssetsByKey instanceof Map
@@ -14694,7 +14823,21 @@ void main(void) {
                                     if (chunkEntries[ce]) {
                                         chunkEntries[ce].buildingCutawayCompositeFrame = buildingCutawayCompositeFrame;
                                         chunkEntries[ce].buildingCutawayCompositeAlpha = buildingCutawayCompositeAlpha;
+                                        if (activeInteriorDepthBump > 0) {
+                                            const baseDepthBias = Number.isFinite(chunkEntries[ce].depthBias)
+                                                ? Number(chunkEntries[ce].depthBias)
+                                                : FLOOR_VISUAL_DEPTH_BIAS_UNITS;
+                                            chunkEntries[ce].depthBias = baseDepthBias + activeInteriorDepthBump;
+                                        }
                                     }
+                                }
+                            } else if (activeInteriorDepthBump > 0) {
+                                for (let ce = 0; ce < chunkEntries.length; ce++) {
+                                    if (!chunkEntries[ce]) continue;
+                                    const baseDepthBias = Number.isFinite(chunkEntries[ce].depthBias)
+                                        ? Number(chunkEntries[ce].depthBias)
+                                        : FLOOR_VISUAL_DEPTH_BIAS_UNITS;
+                                    chunkEntries[ce].depthBias = baseDepthBias + activeInteriorDepthBump;
                                 }
                             }
                             if (chunkEntries.length === 0) {
@@ -14749,7 +14892,7 @@ void main(void) {
                             level
                         ),
                         alpha: ((paintedTexturePath || level !== 0) ? 1 : defaultAlpha) * fadeMultiplier,
-                        depthBias: level === 0 ? (FLOOR_VISUAL_DEPTH_BIAS_UNITS - 0.005) : FLOOR_VISUAL_DEPTH_BIAS_UNITS,
+                        depthBias: (level === 0 ? (FLOOR_VISUAL_DEPTH_BIAS_UNITS - 0.005) : FLOOR_VISUAL_DEPTH_BIAS_UNITS) + activeInteriorDepthBump,
                         isHoleOverlay: false
                     });
                     if (buildingCutawayCompositeFrame > 0) {
@@ -14773,7 +14916,7 @@ void main(void) {
                             texturePath: "",
                             tint: this.getLayerDarkenedTint(FLOOR_VISUAL_HOLE_FILL, level),
                             alpha: fadeMultiplier,
-                            depthBias: FLOOR_VISUAL_HOLE_DEPTH_BIAS_UNITS,
+                            depthBias: FLOOR_VISUAL_HOLE_DEPTH_BIAS_UNITS + activeInteriorDepthBump,
                             isHoleOverlay: true
                         });
                         if (buildingCutawayCompositeFrame > 0) {
@@ -15543,7 +15686,7 @@ void main(void) {
                             const existingColor = drawnMarkers.get(markerKey);
                             if (existingColor === 0x3399ff || existingColor === color) continue;
                             drawnMarkers.set(markerKey, {
-                                sourceNode,
+                                fromNode: sourceNode,
                                 destinationNode,
                                 incomingDir,
                                 color
@@ -15552,9 +15695,9 @@ void main(void) {
                     }
 
                     for (const marker of drawnMarkers.values()) {
-                        if (!marker || !marker.sourceNode || !marker.destinationNode) continue;
-                        const sourceWorldX = Number(marker.sourceNode.x) || 0;
-                        const sourceWorldY = Number(marker.sourceNode.y) || 0;
+                        if (!marker || !marker.fromNode || !marker.destinationNode) continue;
+                        const sourceWorldX = Number(marker.fromNode.x) || 0;
+                        const sourceWorldY = Number(marker.fromNode.y) || 0;
                         const destinationWorldX = Number(marker.destinationNode.x) || 0;
                         const destinationWorldY = Number(marker.destinationNode.y) || 0;
                         const dxWorld = sourceWorldX - destinationWorldX;
@@ -15882,9 +16025,15 @@ void main(void) {
                 item._renderLayerIndex = itemLayer;
                 item._renderLayerFadeAlpha = layerAlpha;
                 item._renderLayerAlpha = renderAlpha;
-                item._renderLayerBaseZ = this.isCharacterRenderItem(item)
-                    ? 0
-                    : this.getLayerBaseZForLevel(itemLayer);
+                item._renderLayerBaseZ = this.getLayerBaseZForObject(item, itemLayer);
+                const baseRenderDepthBias = Number.isFinite(item.renderDepthOffset)
+                    ? Number(item.renderDepthOffset)
+                    : 0;
+                item._renderDepthBias = baseRenderDepthBias + (
+                    this.shouldApplyBuildingInteriorActiveFloorDepthBumpToItem(item, itemLayer, buildingInteriorRenderPlan, mapRef)
+                        ? BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS
+                        : 0
+                );
                 if (
                     !buildingInteriorRenderPlan.items.has(item) &&
                     this.isRenderItemHiddenByLayerCutaway(item, itemLayer, cutawayState, mapRef)
@@ -16715,6 +16864,7 @@ void main(void) {
             );
             const wizardLayer = this.getWizardVisualLayerIndex(wizard, 0);
             const cutawayState = this.getLayerCutawayState(ctx);
+            const buildingInteriorRenderPlan = this.buildBuildingInteriorRenderPlan(ctx, cutawayState);
 
             const list = Array.isArray(ctx && ctx.powerups)
                 ? ctx.powerups
@@ -16803,6 +16953,14 @@ void main(void) {
                         powerup._renderLayerBaseZ = floorBaseZ;
                         return floorBaseZ + (Number.isFinite(powerup.z) ? Number(powerup.z) : 0);
                     })()
+                );
+                const basePowerupDepthBias = Number.isFinite(powerup.renderDepthOffset)
+                    ? Number(powerup.renderDepthOffset)
+                    : 0;
+                powerup._renderDepthBias = basePowerupDepthBias + (
+                    this.shouldApplyBuildingInteriorActiveFloorDepthBumpToItem(powerup, powerupLayer, buildingInteriorRenderPlan, mapRef)
+                        ? BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS
+                        : 0
                 );
                 const w = Number.isFinite(powerup.width) ? Math.max(0.01, Number(powerup.width)) : 0.8;
                 const h = Number.isFinite(powerup.height) ? Math.max(0.01, Number(powerup.height)) : 0.8;
@@ -18438,9 +18596,7 @@ void main(void) {
                     : (Number.isFinite(wizard.selectedFloorEditLevel) ? wizard.selectedFloorEditLevel : 0),
                 0
             );
-            const placementLayerBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
-                ? Number(wizard.currentLayerBaseZ)
-                : this.getLayerBaseZForLevel(placementLayer);
+            const placementLayerBaseZ = this.getPlacementLayerBaseZForWizard(wizard, mapRef, placementLayer);
             const projectedLayerPoint = this.resolveScreenPointOnLayerPlane(
                 mousePosRef.screenX,
                 mousePosRef.screenY,
@@ -19335,7 +19491,7 @@ void main(void) {
             proxy.traversalLayer = level;
             proxy.level = level;
             proxy._renderLayerIndex = level;
-            proxy._renderLayerBaseZ = this.getLayerBaseZForLevel(level);
+            proxy._renderLayerBaseZ = this.getLayerBaseZForObject(item, level);
             proxy._renderLayerFadeAlpha = 1;
             proxy._renderLayerAlpha = 1;
             proxy._renderDepthBias = Number.isFinite(item.renderDepthOffset) ? Number(item.renderDepthOffset) : 0;
@@ -20396,12 +20552,10 @@ void main(void) {
             }
 
             const mapRef = (ctx && ctx.map) || wizard.map || global.map || null;
-            const placementLayerBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
-                ? Number(wizard.currentLayerBaseZ)
-                : 0;
             const placementLayer = Number.isFinite(wizard.currentLayer)
                 ? Math.round(Number(wizard.currentLayer))
                 : 0;
+            const placementLayerBaseZ = this.getPlacementLayerBaseZForWizard(wizard, mapRef, placementLayer);
             const projectedPoint = this.resolveScreenPointOnLayerPlane(
                 mousePosRef.screenX,
                 mousePosRef.screenY,

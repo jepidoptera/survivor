@@ -4071,10 +4071,6 @@ jQuery(() => {
             return minLayer;
         }
 
-        function getLayerBaseZ(layer) {
-            return Math.round(Number.isFinite(layer) ? Number(layer) : 0) * 3;
-        }
-
         function getSupportedFallTargetLayerBelow(x, y, fromLayer, mapRef) {
             const startLayer = Number.isFinite(fromLayer) ? Math.round(Number(fromLayer)) : 0;
             const lowestLayer = Math.min(0, getLowestRegisteredFloorLayer(mapRef));
@@ -4093,7 +4089,7 @@ jQuery(() => {
 
         function getMovementSupportBaseZ(support, fallbackLayer = 0) {
             if (support && Number.isFinite(support.baseZ)) return Number(support.baseZ);
-            return getLayerBaseZ(getMovementSupportLayer(support, fallbackLayer));
+            throw new Error(`movement support for layer ${getMovementSupportLayer(support, fallbackLayer)} requires baseZ`);
         }
 
         function resolveWizardFloorSupportFragment(wizardRef, mapRef) {

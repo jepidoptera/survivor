@@ -302,15 +302,28 @@
             for (let i = 0; i < rawBlockedEdges.length; i++) {
                 const edge = rawBlockedEdges[i];
                 if (!edge || typeof edge !== "object") continue;
-                const a = edge.a && typeof edge.a === "object"
-                    ? { xindex: Number(edge.a.xindex), yindex: Number(edge.a.yindex) }
-                    : null;
-                const b = edge.b && typeof edge.b === "object"
-                    ? { xindex: Number(edge.b.xindex), yindex: Number(edge.b.yindex) }
-                    : null;
+                const cloneEndpoint = (endpoint) => {
+                    if (!endpoint || typeof endpoint !== "object") return null;
+                    const out = {
+                        xindex: Number(endpoint.xindex),
+                        yindex: Number(endpoint.yindex)
+                    };
+                    if (Number.isFinite(Number(endpoint.traversalLayer))) out.traversalLayer = Math.round(Number(endpoint.traversalLayer));
+                    if (Number.isFinite(Number(endpoint.level))) out.level = Math.round(Number(endpoint.level));
+                    if (typeof endpoint.surfaceId === "string" && endpoint.surfaceId.length > 0) out.surfaceId = endpoint.surfaceId;
+                    if (typeof endpoint.fragmentId === "string" && endpoint.fragmentId.length > 0) out.fragmentId = endpoint.fragmentId;
+                    return out;
+                };
+                const a = cloneEndpoint(edge.a);
+                const b = cloneEndpoint(edge.b);
                 const recordId = Number(edge.recordId);
                 if (!a || !b || !Number.isInteger(recordId)) continue;
-                cloned.push({ recordId, a, b });
+                const clonedEdge = { recordId, a, b };
+                if (Number.isFinite(Number(edge.traversalLayer))) clonedEdge.traversalLayer = Math.round(Number(edge.traversalLayer));
+                if (Number.isFinite(Number(edge.level))) clonedEdge.level = Math.round(Number(edge.level));
+                if (typeof edge.surfaceId === "string" && edge.surfaceId.length > 0) clonedEdge.surfaceId = edge.surfaceId;
+                if (typeof edge.fragmentId === "string" && edge.fragmentId.length > 0) clonedEdge.fragmentId = edge.fragmentId;
+                cloned.push(clonedEdge);
             }
             return cloned;
         }
@@ -417,16 +430,8 @@
                         ? record.id
                         : `section:${sectionKey}:floor:${i}`);
                 const level = Number.isFinite(record.level) ? Math.round(Number(record.level)) : 0;
-                const canonicalBaseZ = level * 3;
-                const explicitOffset = Number.isFinite(record.nodeBaseZOffset) ? Number(record.nodeBaseZOffset) : null;
-                const legacyBaseZ = Number.isFinite(record.nodeBaseZ) ? Number(record.nodeBaseZ) : null;
-                let resolvedOffset = 0;
-                if (Number.isFinite(explicitOffset)) {
-                    resolvedOffset = Number(explicitOffset);
-                } else if (Number.isFinite(legacyBaseZ)) {
-                    const looksLikeLegacyBug = Math.abs(Number(legacyBaseZ) - level) < 1e-6
-                        && Math.abs(Number(legacyBaseZ) - canonicalBaseZ) > 1e-6;
-                    resolvedOffset = looksLikeLegacyBug ? 0 : (Number(legacyBaseZ) - canonicalBaseZ);
+                if (!Number.isFinite(record.nodeBaseZ)) {
+                    throw new Error(`section ${sectionKey} floor fragment ${fragmentId} requires nodeBaseZ`);
                 }
                 cloned.push({
                     ...record,
@@ -438,8 +443,8 @@
                         ? record.ownerSectionKey
                         : sectionKey,
                     level,
-                    nodeBaseZOffset: resolvedOffset,
-                    nodeBaseZ: canonicalBaseZ + resolvedOffset,
+                    nodeBaseZOffset: Number.isFinite(record.nodeBaseZOffset) ? Number(record.nodeBaseZOffset) : 0,
+                    nodeBaseZ: Number(record.nodeBaseZ),
                     outerPolygon: clonePrototypePointList(record.outerPolygon),
                     holes: clonePrototypePolygonList(record.holes),
                     tileCoordKeys: sortPrototypeTileCoordKeys(record.tileCoordKeys)

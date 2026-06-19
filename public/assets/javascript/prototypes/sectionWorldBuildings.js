@@ -5,7 +5,8 @@
     const BUILDING_SAVE_SCHEMA = "survivor-building-v1";
     const EXTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-biased-v5-alpha-mask-runtime-floor-layers";
     const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v17-edge-aligned-platform-cap";
-    const MOVEMENT_BLOCKER_GEOMETRY_VERSION = "layered-wall-column-stairless-v7-runtime-floor-layers";
+    const MOVEMENT_BLOCKER_GEOMETRY_VERSION = "layered-wall-column-stairless-v10-stack-layers";
+    const MOVEMENT_EDGE_BLOCKER_VERSION = "surface-neighbor-crossings-v3";
     const DEFAULT_BUILDING_WALL_HEIGHT = 3;
     const DEFAULT_PROTOTYPE_BUILDING_BITMAP_PADDING_PIXELS = 96;
     const DEFAULT_PROTOTYPE_BUILDING_BITMAP_MAX_DIMENSION = 4096;
@@ -80,15 +81,18 @@
         }
         const traversalLayer = Number.isFinite(Number(entry.traversalLayer))
             ? Math.round(Number(entry.traversalLayer))
-            : (Number.isFinite(Number(entry.level)) ? Math.round(Number(entry.level)) : null);
+            : null;
         if (!Number.isFinite(traversalLayer)) {
             throw new Error(`${label} ${index} movement blocker entry requires traversalLayer`);
         }
         const normalized = {
             polygon: normalizePolygon(entry.polygon, `${label} ${index} polygon`),
-            level: Number.isFinite(Number(entry.level)) ? Math.round(Number(entry.level)) : traversalLayer,
             traversalLayer
         };
+        if (typeof entry.surfaceId === "string" && entry.surfaceId.length > 0) normalized.surfaceId = entry.surfaceId;
+        if (typeof entry.fragmentId === "string" && entry.fragmentId.length > 0) normalized.fragmentId = entry.fragmentId;
+        if (typeof entry.floorId === "string" && entry.floorId.length > 0) normalized.floorId = entry.floorId;
+        if (typeof entry.sourceFloorId === "string" && entry.sourceFloorId.length > 0) normalized.sourceFloorId = entry.sourceFloorId;
         if (Object.prototype.hasOwnProperty.call(entry, "bottomZ")) {
             normalized.bottomZ = finiteNumber(entry.bottomZ, `${label} ${index} bottomZ`);
         }
@@ -99,6 +103,51 @@
             }
         }
         return normalized;
+    }
+
+    function normalizeMovementBlockedEdges(edges, label = "building placement movementBlockedEdges") {
+        if (edges === undefined || edges === null) return [];
+        if (!Array.isArray(edges)) {
+            throw new Error(`${label} must be an array`);
+        }
+        const out = [];
+        for (let i = 0; i < edges.length; i++) {
+            const edge = edges[i];
+            if (!edge || typeof edge !== "object") {
+                throw new Error(`${label} ${i} must be an object`);
+            }
+            const surfaceId = nonEmptyString(edge.surfaceId, `${label} ${i} surfaceId`);
+            const normalizeEndpoint = (endpoint, endpointLabel) => {
+                if (!endpoint || typeof endpoint !== "object") {
+                    throw new Error(`${endpointLabel} must be an object`);
+                }
+                const normalized = {
+                    xindex: finiteNumber(endpoint.xindex, `${endpointLabel} xindex`),
+                    yindex: finiteNumber(endpoint.yindex, `${endpointLabel} yindex`),
+                    surfaceId
+                };
+                if (typeof endpoint.fragmentId === "string" && endpoint.fragmentId.length > 0) {
+                    normalized.fragmentId = endpoint.fragmentId;
+                }
+                if (typeof endpoint.surfaceId === "string" && endpoint.surfaceId.length > 0) {
+                    normalized.surfaceId = endpoint.surfaceId;
+                }
+                if (Number.isFinite(Number(endpoint.traversalLayer))) normalized.traversalLayer = Math.round(Number(endpoint.traversalLayer));
+                return normalized;
+            };
+            const normalizedEdge = {
+                id: typeof edge.id === "string" && edge.id.length > 0 ? edge.id : `${surfaceId}:${i}`,
+                buildingPlacementId: typeof edge.buildingPlacementId === "string" ? edge.buildingPlacementId : "",
+                surfaceId,
+                a: normalizeEndpoint(edge.a, `${label} ${i} a`),
+                b: normalizeEndpoint(edge.b, `${label} ${i} b`)
+            };
+            if (typeof edge.fragmentId === "string" && edge.fragmentId.length > 0) normalizedEdge.fragmentId = edge.fragmentId;
+            if (Number.isInteger(Number(edge.movementBlockerIndex))) normalizedEdge.movementBlockerIndex = Number(edge.movementBlockerIndex);
+            if (Number.isFinite(Number(edge.traversalLayer))) normalizedEdge.traversalLayer = Math.round(Number(edge.traversalLayer));
+            out.push(normalizedEdge);
+        }
+        return out;
     }
 
     function getMovementBlockerEntryPolygon(entry, label = "building movement blocker") {
@@ -112,7 +161,7 @@
         if (entry && typeof entry === "object") {
             const traversalLayer = Number.isFinite(Number(entry.traversalLayer))
                 ? Math.round(Number(entry.traversalLayer))
-                : (Number.isFinite(Number(entry.level)) ? Math.round(Number(entry.level)) : null);
+                : null;
             if (Number.isFinite(traversalLayer)) return traversalLayer;
         }
         throw new Error(`${label} requires traversalLayer`);
@@ -261,6 +310,10 @@
             ? null
             : normalizeMovementBlockerPolygons(instance.movementBlockerPolygons);
         placement.movementBlockerGeometryVersion = instance.movementBlockerGeometryVersion || "";
+        placement.movementBlockedEdges = instance.movementBlockedEdges === null || instance.movementBlockedEdges === undefined
+            ? null
+            : normalizeMovementBlockedEdges(instance.movementBlockedEdges, `building placement ${placement.id} movementBlockedEdges`);
+        placement.movementEdgeBlockerVersion = instance.movementEdgeBlockerVersion || "";
         placement.overlappedSectionKeys = normalizeSectionKeys(instance.touchedSectionKeys || instance.overlappedSectionKeys);
         placement.touchedSectionKeys = placement.overlappedSectionKeys.slice();
         placement.loadState = instance.loadState || placement.loadState || "unloaded";
@@ -616,6 +669,12 @@
             movementBlockerGeometryVersion: typeof record.movementBlockerGeometryVersion === "string"
                 ? record.movementBlockerGeometryVersion
                 : "",
+            movementBlockedEdges: record.movementBlockedEdges === undefined || record.movementBlockedEdges === null
+                ? null
+                : normalizeMovementBlockedEdges(record.movementBlockedEdges, `building placement ${index} movementBlockedEdges`),
+            movementEdgeBlockerVersion: typeof record.movementEdgeBlockerVersion === "string"
+                ? record.movementEdgeBlockerVersion
+                : "",
             overlappedSectionKeys: normalizeSectionKeys(record.overlappedSectionKeys),
             touchedSectionKeys: normalizeSectionKeys(record.touchedSectionKeys || record.overlappedSectionKeys),
             loadState: typeof record.loadState === "string" && record.loadState.length > 0
@@ -653,6 +712,12 @@
         instance.movementBlockerGeometryVersion = typeof instance.movementBlockerGeometryVersion === "string"
             ? instance.movementBlockerGeometryVersion
             : "";
+        instance.movementBlockedEdges = instance.movementBlockedEdges === undefined || instance.movementBlockedEdges === null
+            ? null
+            : normalizeMovementBlockedEdges(instance.movementBlockedEdges, `building instance ${instance.id} movementBlockedEdges`);
+        instance.movementEdgeBlockerVersion = typeof instance.movementEdgeBlockerVersion === "string"
+            ? instance.movementEdgeBlockerVersion
+            : "";
         const touchedSectionKeys = normalizeSectionKeys(instance.touchedSectionKeys || instance.overlappedSectionKeys);
         instance.touchedSectionKeys = touchedSectionKeys;
         instance.overlappedSectionKeys = touchedSectionKeys.slice();
@@ -679,6 +744,8 @@
             footprintPolygons: normalized.footprintPolygons,
             movementBlockerPolygons: normalized.movementBlockerPolygons,
             movementBlockerGeometryVersion: normalized.movementBlockerGeometryVersion,
+            movementBlockedEdges: normalized.movementBlockedEdges,
+            movementEdgeBlockerVersion: normalized.movementEdgeBlockerVersion,
             overlappedSectionKeys: normalized.touchedSectionKeys,
             touchedSectionKeys: normalized.touchedSectionKeys,
             loadState: normalized.loadState
@@ -707,6 +774,12 @@
             instance.movementBlockerPolygons = computeBuildingPlacementMovementBlockerPolygons(buildingData, placement);
             instance.movementBlockerGeometryVersion = MOVEMENT_BLOCKER_GEOMETRY_VERSION;
         }
+        instance.movementBlockedEdges = Array.isArray(options.movementBlockedEdges)
+            ? normalizeMovementBlockedEdges(options.movementBlockedEdges, `building instance ${instance.id} movementBlockedEdges`)
+            : null;
+        instance.movementEdgeBlockerVersion = Array.isArray(instance.movementBlockedEdges)
+            ? MOVEMENT_EDGE_BLOCKER_VERSION
+            : "";
         instance.touchedSectionKeys = normalizeSectionKeys(options.touchedSectionKeys || placement.touchedSectionKeys || placement.overlappedSectionKeys);
         instance.overlappedSectionKeys = instance.touchedSectionKeys.slice();
         instance.objects = Array.isArray(options.objects) ? deepCloneJson(options.objects) : [];
@@ -753,7 +826,10 @@
         const offset = hasFiniteNumericValue(floor && floor.nodeBaseZOffset)
             ? Number(floor.nodeBaseZOffset)
             : 0;
-        return (Number(layer) || 0) * 3 + offset;
+        if (offset !== 0) {
+            throw new Error(`building floor layer ${layer} has nodeBaseZOffset without nodeBaseZ`);
+        }
+        throw new Error(`building floor layer ${layer} requires nodeBaseZ`);
     }
 
     function assignBuildingFloorRuntimeTraversalLayers(buildingData) {
@@ -777,9 +853,7 @@
         for (let i = 0; i < floors.length; i++) {
             const floor = floors[i];
             if (!floor || typeof floor !== "object") continue;
-            const layer = Number.isFinite(Number(floor.traversalLayer))
-                ? Math.round(Number(floor.traversalLayer))
-                : (ordinalByFloor.has(floor) ? ordinalByFloor.get(floor) : i);
+            const layer = ordinalByFloor.has(floor) ? ordinalByFloor.get(floor) : i;
             Object.defineProperty(floor, "_prototypeRuntimeTraversalLayer", {
                 value: layer,
                 writable: true,
@@ -796,12 +870,9 @@
 
     function getBuildingFloorLayer(floor) {
         const candidates = [];
-        if (hasFiniteNumericValue(floor && floor.traversalLayer)) candidates.push(floor.traversalLayer);
         if (hasFiniteNumericValue(floor && floor._prototypeRuntimeTraversalLayer)) candidates.push(floor._prototypeRuntimeTraversalLayer);
+        if (hasFiniteNumericValue(floor && floor.traversalLayer)) candidates.push(floor.traversalLayer);
         if (hasFiniteNumericValue(floor && floor.level)) candidates.push(floor.level);
-        if (hasFiniteNumericValue(floor && floor.nodeBaseZ)) candidates.push(Number(floor.nodeBaseZ) / 3);
-        if (hasFiniteNumericValue(floor && floor.elevation)) candidates.push(Number(floor.elevation) / 3);
-        if (hasFiniteNumericValue(floor && floor.nodeBaseZOffset)) candidates.push(Number(floor.nodeBaseZOffset) / 3);
         for (let i = 0; i < candidates.length; i++) {
             const value = Number(candidates[i]);
             if (Number.isFinite(value)) return Math.round(value);
@@ -989,6 +1060,9 @@
             const wall = walls[i];
             const wallFloorId = String(wall && (wall.fragmentId || wall.floorId) || "");
             const ownerFloor = floorsById.get(wallFloorId) || null;
+            const sourceFloorId = ownerFloor ? getBuildingFloorId(ownerFloor, wallFloorId) : wallFloorId;
+            const fragmentId = sourceFloorId ? `${placement.id}:floor:${sourceFloorId}` : "";
+            const surfaceId = sourceFloorId ? `${placement.id}:surface:${String(ownerFloor && ownerFloor.surfaceId || sourceFloorId)}` : "";
             const layer = floorIdsByLayer.has(wallFloorId)
                 ? floorIdsByLayer.get(wallFloorId)
                 : (Number.isFinite(Number(wall && wall.traversalLayer)) ? Math.round(Number(wall.traversalLayer)) : 0);
@@ -996,12 +1070,25 @@
             const height = buildingElementHeight(ownerFloor, wall);
             const polygons = wallMovementBlockerPolygons(buildingData, wall);
             for (let p = 0; p < polygons.length; p++) {
-                localEntries.push({ polygon: polygons[p], level: layer, traversalLayer: layer, bottomZ, height });
+                localEntries.push({
+                    polygon: polygons[p],
+                    level: layer,
+                    traversalLayer: layer,
+                    bottomZ,
+                    height,
+                    surfaceId,
+                    fragmentId,
+                    floorId: sourceFloorId,
+                    sourceFloorId
+                });
             }
         }
         for (let i = 0; i < floors.length; i++) {
             const floor = floors[i];
             const floorLayer = getBuildingFloorLayer(floor);
+            const sourceFloorId = getBuildingFloorId(floor, i);
+            const fragmentId = `${placement.id}:floor:${sourceFloorId}`;
+            const surfaceId = `${placement.id}:surface:${String(floor && floor.surfaceId || sourceFloorId)}`;
             const columns = Array.isArray(floor && floor.columns) ? floor.columns : [];
             for (let c = 0; c < columns.length; c++) {
                 const column = columns[c];
@@ -1011,7 +1098,11 @@
                     level: layer,
                     traversalLayer: layer,
                     bottomZ: buildingElementBottomZ(floor, layer, column),
-                    height: buildingElementHeight(floor, column)
+                    height: buildingElementHeight(floor, column),
+                    surfaceId,
+                    fragmentId,
+                    floorId: sourceFloorId,
+                    sourceFloorId
                 });
             }
         }
@@ -1023,7 +1114,11 @@
             level: entry.level,
             traversalLayer: entry.traversalLayer,
             bottomZ: entry.bottomZ,
-            height: entry.height
+            height: entry.height,
+            surfaceId: entry.surfaceId,
+            fragmentId: entry.fragmentId,
+            floorId: entry.floorId,
+            sourceFloorId: entry.sourceFloorId
         }));
     }
 
@@ -1036,7 +1131,21 @@
             `building placement ${placement.id} movementBlockerPolygons`
         );
         placement.movementBlockerGeometryVersion = MOVEMENT_BLOCKER_GEOMETRY_VERSION;
+        placement.movementBlockedEdges = null;
+        placement.movementEdgeBlockerVersion = "";
         return placement.movementBlockerPolygons;
+    }
+
+    function setPlacementMovementBlockedEdges(placement, edges) {
+        if (!placement || typeof placement !== "object") {
+            throw new Error("cannot assign movement edge blockers without a placement");
+        }
+        placement.movementBlockedEdges = normalizeMovementBlockedEdges(
+            edges,
+            `building placement ${placement.id} movementBlockedEdges`
+        );
+        placement.movementEdgeBlockerVersion = MOVEMENT_EDGE_BLOCKER_VERSION;
+        return placement.movementBlockedEdges;
     }
 
     function placementHasCurrentMovementBlockerGeometry(placement) {
@@ -1153,7 +1262,6 @@
             ownerId: placement.id,
             level: layer,
             nodeBaseZ: baseZ,
-            nodeBaseZOffset: baseZ - (layer * 3),
             outerPolygon: interiorPolygonsByFloor instanceof Map && interiorPolygonsByFloor.has(sourceFloorId)
                 ? normalizePolygon(interiorPolygonsByFloor.get(sourceFloorId), `building placement ${placement.id} floor ${sourceFloorId} interiorPolygon`)
                 : transformPolygon(floor && floor.outerPolygon, placement.transform, `building placement ${placement.id} floor ${sourceFloorId} outerPolygon`),
@@ -1164,12 +1272,13 @@
         };
     }
 
-    function createPrototypeBuildingWallItem(placement, wall, sourceFloorToFragmentId, sourceFloorToLayer, index) {
+    function createPrototypeBuildingWallItem(placement, wall, sourceFloorToFragmentId, sourceFloorToLayer, sourceFloorToFloor, index) {
         const wallId = String(wall && wall.id);
         if (!wallId) throw new Error(`building placement ${placement.id} wall ${index} missing wall id`);
         const points = wallCenterlinePoints(wall);
         const sourceFloorId = String(wall && (wall.fragmentId || wall.floorId) || "");
         const fragmentId = sourceFloorToFragmentId.get(sourceFloorId) || "";
+        const ownerFloor = sourceFloorToFloor instanceof Map ? sourceFloorToFloor.get(sourceFloorId) || null : null;
         const layer = sourceFloorToLayer instanceof Map && sourceFloorToLayer.has(sourceFloorId)
             ? sourceFloorToLayer.get(sourceFloorId)
             : (Number.isFinite(Number(wall && wall.traversalLayer)) ? Math.round(Number(wall.traversalLayer)) : 0);
@@ -1183,7 +1292,7 @@
             surfaceId: fragmentId,
             startPoint: transformPoint(points[0], placement.transform),
             endPoint: transformPoint(points[1], placement.transform),
-            bottomZ: Number.isFinite(Number(wall && wall.bottomZ)) ? Number(wall.bottomZ) : layer * 3,
+            bottomZ: buildingElementBottomZ(ownerFloor, layer, wall),
             traversalLayer: layer,
             level: layer,
             gone: false,
@@ -1267,6 +1376,7 @@
         const fragments = [];
         const sourceFloorToFragmentId = new Map();
         const sourceFloorToLayer = new Map();
+        const sourceFloorToFloor = new Map();
         const interiorPolygonsByFloor = computeInteriorPolygonsByFloor(buildingData, placement);
         for (let i = 0; i < buildingData.floorFragments.length; i++) {
             const floor = buildingData.floorFragments[i];
@@ -1275,6 +1385,7 @@
             const sourceFloorId = getBuildingFloorId(floor, i);
             sourceFloorToFragmentId.set(sourceFloorId, fragment.fragmentId);
             sourceFloorToLayer.set(sourceFloorId, fragment.level);
+            sourceFloorToFloor.set(sourceFloorId, floor);
         }
         if (fragments.length === 0) {
             throw new Error(`building placement ${placement.id} has no cutaway floor fragments`);
@@ -1285,7 +1396,7 @@
         const walls = Array.isArray(buildingData.wallSections) ? buildingData.wallSections : [];
         for (let i = 0; i < walls.length; i++) {
             const wall = walls[i];
-            const wallItem = createPrototypeBuildingWallItem(placement, wall, sourceFloorToFragmentId, sourceFloorToLayer, i);
+            const wallItem = createPrototypeBuildingWallItem(placement, wall, sourceFloorToFragmentId, sourceFloorToLayer, sourceFloorToFloor, i);
             wallItemsBySourceId.set(String(wall && wall.id), wallItem);
             renderItems.push({
                 item: wallItem,
@@ -1420,6 +1531,146 @@
             if (pointInRing(point, holes[i])) return false;
         }
         return true;
+    }
+
+    function orientation2D(a, b, c) {
+        return ((Number(b.y) - Number(a.y)) * (Number(c.x) - Number(b.x))) -
+            ((Number(b.x) - Number(a.x)) * (Number(c.y) - Number(b.y)));
+    }
+
+    function pointOnSegment2D(a, b, p, eps = 1e-9) {
+        return (
+            Math.min(Number(a.x), Number(b.x)) - eps <= Number(p.x) &&
+            Number(p.x) <= Math.max(Number(a.x), Number(b.x)) + eps &&
+            Math.min(Number(a.y), Number(b.y)) - eps <= Number(p.y) &&
+            Number(p.y) <= Math.max(Number(a.y), Number(b.y)) + eps &&
+            Math.abs(orientation2D(a, b, p)) <= eps
+        );
+    }
+
+    function segmentsIntersect2D(a, b, c, d, eps = 1e-9) {
+        const o1 = orientation2D(a, b, c);
+        const o2 = orientation2D(a, b, d);
+        const o3 = orientation2D(c, d, a);
+        const o4 = orientation2D(c, d, b);
+        if (Math.abs(o1) <= eps && pointOnSegment2D(a, b, c, eps)) return true;
+        if (Math.abs(o2) <= eps && pointOnSegment2D(a, b, d, eps)) return true;
+        if (Math.abs(o3) <= eps && pointOnSegment2D(c, d, a, eps)) return true;
+        if (Math.abs(o4) <= eps && pointOnSegment2D(c, d, b, eps)) return true;
+        return (o1 > eps) !== (o2 > eps) && (o3 > eps) !== (o4 > eps);
+    }
+
+    function segmentIntersectsPolygon2D(a, b, polygon) {
+        if (!Array.isArray(polygon) || polygon.length < 3) return false;
+        if (pointInRing(a, polygon) || pointInRing(b, polygon)) return true;
+        for (let i = 0; i < polygon.length; i++) {
+            const c = polygon[i];
+            const d = polygon[(i + 1) % polygon.length];
+            if (segmentsIntersect2D(a, b, c, d)) return true;
+        }
+        return false;
+    }
+
+    function getBuildingNodeEndpoint(node) {
+        return {
+            xindex: Number(node.xindex),
+            yindex: Number(node.yindex),
+            surfaceId: typeof node.surfaceId === "string" ? node.surfaceId : "",
+            fragmentId: typeof node.fragmentId === "string" ? node.fragmentId : "",
+            traversalLayer: Number.isFinite(Number(node.traversalLayer)) ? Math.round(Number(node.traversalLayer)) : undefined
+        };
+    }
+
+    function buildingNodeEndpointKey(node) {
+        return [
+            Number(node && node.xindex),
+            Number(node && node.yindex),
+            String(node && node.surfaceId || ""),
+            String(node && node.fragmentId || "")
+        ].join(",");
+    }
+
+    function placementHasCurrentMovementBlockedEdges(placement) {
+        return !!(
+            placement &&
+            Array.isArray(placement.movementBlockedEdges) &&
+            placement.movementEdgeBlockerVersion === MOVEMENT_EDGE_BLOCKER_VERSION &&
+            placement.movementBlockerGeometryVersion === MOVEMENT_BLOCKER_GEOMETRY_VERSION
+        );
+    }
+
+    function computeBuildingPlacementMovementBlockedEdges(map, placement) {
+        const state = map && map._prototypeBuildingState;
+        if (!map || !state || !placement || !placement.id) return null;
+        const polygons = getPlacementMovementBlockerPolygons(map, placement, { scheduleLoad: true });
+        if (polygons === null) return null;
+        const fragmentIds = state.runtimeFloorFragmentIdsByPlacementId instanceof Map
+            ? (state.runtimeFloorFragmentIdsByPlacementId.get(placement.id) || [])
+            : [];
+        if (fragmentIds.length === 0) return null;
+
+        const polygonsBySurfaceId = new Map();
+        for (let i = 0; i < polygons.length; i++) {
+            const entry = polygons[i];
+            const surfaceId = typeof entry.surfaceId === "string" ? entry.surfaceId : "";
+            if (!surfaceId) {
+                throw new Error(`building placement ${placement.id} movement blocker ${i} is missing surfaceId`);
+            }
+            if (!polygonsBySurfaceId.has(surfaceId)) polygonsBySurfaceId.set(surfaceId, []);
+            polygonsBySurfaceId.get(surfaceId).push({
+                index: i,
+                polygon: getMovementBlockerEntryPolygon(entry, `building placement ${placement.id} movement blocker ${i}`),
+                entry
+            });
+        }
+
+        const edges = [];
+        const seen = new Set();
+        for (let f = 0; f < fragmentIds.length; f++) {
+            const fragmentId = fragmentIds[f];
+            const nodes = map.floorNodesById instanceof Map ? (map.floorNodesById.get(fragmentId) || []) : [];
+            for (let n = 0; n < nodes.length; n++) {
+                const node = nodes[n];
+                if (!node || !Array.isArray(node.neighbors)) continue;
+                const surfaceId = typeof node.surfaceId === "string" ? node.surfaceId : "";
+                if (!surfaceId) {
+                    throw new Error(`building placement ${placement.id} floor node ${node.xindex},${node.yindex} is missing surfaceId`);
+                }
+                const blockers = polygonsBySurfaceId.get(surfaceId);
+                if (!Array.isArray(blockers) || blockers.length === 0) continue;
+                const a = { x: Number(node.x), y: Number(node.y) };
+                if (!Number.isFinite(a.x) || !Number.isFinite(a.y)) continue;
+                for (let d = 0; d < node.neighbors.length; d++) {
+                    const neighbor = node.neighbors[d];
+                    if (!neighbor || neighbor === node || neighbor.surfaceId !== surfaceId) continue;
+                    const b = { x: Number(neighbor.x), y: Number(neighbor.y) };
+                    if (!Number.isFinite(b.x) || !Number.isFinite(b.y)) continue;
+                    const nodeKey = buildingNodeEndpointKey(node);
+                    const neighborKey = buildingNodeEndpointKey(neighbor);
+                    const edgeKey = nodeKey <= neighborKey ? `${nodeKey}|${neighborKey}` : `${neighborKey}|${nodeKey}`;
+                    if (seen.has(edgeKey)) continue;
+                    let blockingEntry = null;
+                    for (let p = 0; p < blockers.length; p++) {
+                        if (!segmentIntersectsPolygon2D(a, b, blockers[p].polygon)) continue;
+                        blockingEntry = blockers[p];
+                        break;
+                    }
+                    if (!blockingEntry) continue;
+                    seen.add(edgeKey);
+                    edges.push({
+                        id: `${placement.id}:movement-edge:${edges.length}`,
+                        buildingPlacementId: placement.id,
+                        surfaceId,
+                        fragmentId: typeof node.fragmentId === "string" ? node.fragmentId : "",
+                        movementBlockerIndex: blockingEntry.index,
+                        traversalLayer: Number.isFinite(Number(node.traversalLayer)) ? Math.round(Number(node.traversalLayer)) : undefined,
+                        a: getBuildingNodeEndpoint(node),
+                        b: getBuildingNodeEndpoint(neighbor)
+                    });
+                }
+            }
+        }
+        return edges;
     }
 
     function findBuildingRuntimeFloorAtZ(fragments, z, point, stairId, endpointLabel) {
@@ -1698,15 +1949,137 @@
         }
     }
 
+    function removePrototypeBuildingMovementEdgeBlockers(state, placementId = null) {
+        if (!state || !(state.movementEdgeBlockersByPlacementId instanceof Map)) return 0;
+        const entries = placementId
+            ? [[placementId, state.movementEdgeBlockersByPlacementId.get(placementId)]]
+            : Array.from(state.movementEdgeBlockersByPlacementId.entries());
+        let removed = 0;
+        for (let e = 0; e < entries.length; e++) {
+            const [id, activeEntry] = entries[e];
+            const links = Array.isArray(activeEntry && activeEntry.links) ? activeEntry.links : [];
+            for (let i = 0; i < links.length; i++) {
+                const link = links[i];
+                const node = link && link.node;
+                const direction = Number(link && link.direction);
+                const blocker = link && link.blocker;
+                if (!node || !Number.isInteger(direction) || !blocker) continue;
+                if (!(node.blockedNeighbors instanceof Map) || !node.blockedNeighbors.has(direction)) continue;
+                const blockers = node.blockedNeighbors.get(direction);
+                if (!(blockers instanceof Set) || !blockers.has(blocker)) continue;
+                blockers.delete(blocker);
+                if (blockers.size === 0) node.blockedNeighbors.delete(direction);
+                blocker.gone = true;
+                removed += 1;
+            }
+            state.movementEdgeBlockersByPlacementId.delete(id);
+        }
+        return removed;
+    }
+
     function clearPrototypeBuildingMovementBlockers(state) {
-        if (!state || !(state.movementBlockersByPlacementId instanceof Map)) return;
-        for (const blockers of state.movementBlockersByPlacementId.values()) {
-            if (!Array.isArray(blockers)) continue;
-            for (let i = 0; i < blockers.length; i++) {
-                removePrototypeBuildingMovementBlocker(blockers[i]);
+        if (!state) return;
+        removePrototypeBuildingMovementEdgeBlockers(state);
+        if (state.movementBlockersByPlacementId instanceof Map) {
+            for (const blockers of state.movementBlockersByPlacementId.values()) {
+                if (!Array.isArray(blockers)) continue;
+                for (let i = 0; i < blockers.length; i++) {
+                    removePrototypeBuildingMovementBlocker(blockers[i]);
+                }
+            }
+            state.movementBlockersByPlacementId.clear();
+        }
+    }
+
+    function resolveMovementBlockedEdgeNode(map, endpoint, surfaceId) {
+        if (!map || !endpoint) return null;
+        const x = Number(endpoint.xindex);
+        const y = Number(endpoint.yindex);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        const resolvedSurfaceId = typeof endpoint.surfaceId === "string" && endpoint.surfaceId.length > 0
+            ? endpoint.surfaceId
+            : surfaceId;
+        const fragmentId = typeof endpoint.fragmentId === "string" ? endpoint.fragmentId : "";
+        if (fragmentId && map.floorNodeIndex instanceof Map && typeof map.getFloorNodeKey === "function") {
+            const directNode = map.floorNodeIndex.get(map.getFloorNodeKey(x, y, resolvedSurfaceId, fragmentId)) || null;
+            if (directNode) return directNode;
+        }
+        if (resolvedSurfaceId && typeof map.getFloorNodeBySurface === "function") {
+            return map.getFloorNodeBySurface(resolvedSurfaceId, x, y);
+        }
+        return null;
+    }
+
+    function getPlacementMovementBlockedEdges(map, placement) {
+        if (!placement || typeof placement !== "object") return null;
+        if (placementHasCurrentMovementBlockedEdges(placement)) {
+            return normalizeMovementBlockedEdges(placement.movementBlockedEdges, `building placement ${placement.id} movementBlockedEdges`);
+        }
+        const edges = computeBuildingPlacementMovementBlockedEdges(map, placement);
+        if (edges === null) return null;
+        return setPlacementMovementBlockedEdges(placement, edges);
+    }
+
+    function applyPrototypeBuildingMovementBlockedEdges(map, placement) {
+        const state = map && map._prototypeBuildingState;
+        if (!state || !placement || !placement.id) return { applied: 0, pending: 0 };
+        if (!(state.movementEdgeBlockersByPlacementId instanceof Map)) {
+            state.movementEdgeBlockersByPlacementId = new Map();
+        }
+        removePrototypeBuildingMovementEdgeBlockers(state, placement.id);
+        const edges = getPlacementMovementBlockedEdges(map, placement);
+        if (edges === null) return { applied: 0, pending: 1 };
+        const instance = getBuildingInstanceRecord(state, placement);
+        if (instance) {
+            instance.movementBlockedEdges = normalizeMovementBlockedEdges(edges, `building instance ${instance.id} movementBlockedEdges`);
+            instance.movementEdgeBlockerVersion = MOVEMENT_EDGE_BLOCKER_VERSION;
+        }
+        const links = [];
+        let applied = 0;
+        for (let i = 0; i < edges.length; i++) {
+            const edge = edges[i];
+            const surfaceId = nonEmptyString(edge.surfaceId, `building placement ${placement.id} movement edge ${i} surfaceId`);
+            const nodeA = resolveMovementBlockedEdgeNode(map, edge.a, surfaceId);
+            const nodeB = resolveMovementBlockedEdgeNode(map, edge.b, surfaceId);
+            if (!nodeA || !nodeB || !Array.isArray(nodeA.neighbors) || !Array.isArray(nodeB.neighbors)) continue;
+            const dirA = nodeA.neighbors.indexOf(nodeB);
+            const dirB = nodeB.neighbors.indexOf(nodeA);
+            if (dirA < 0 && dirB < 0) continue;
+            const blocker = {
+                type: "prototypeBuildingMovementEdgeBlocker",
+                id: edge.id || `${placement.id}:movement-edge:${i}`,
+                buildingPlacementId: placement.id,
+                surfaceId,
+                fragmentId: edge.fragmentId || "",
+                movementBlockerIndex: Number.isInteger(edge.movementBlockerIndex) ? edge.movementBlockerIndex : null,
+                blocksTile: false,
+                isPassable: false,
+                gone: false,
+                _prototypeBuildingMovementEdgeBlocker: true
+            };
+            if (dirA >= 0) {
+                if (!(nodeA.blockedNeighbors instanceof Map)) nodeA.blockedNeighbors = new Map();
+                if (!nodeA.blockedNeighbors.has(dirA)) nodeA.blockedNeighbors.set(dirA, new Set());
+                const blockersA = nodeA.blockedNeighbors.get(dirA);
+                if (!blockersA.has(blocker)) {
+                    blockersA.add(blocker);
+                    links.push({ node: nodeA, direction: dirA, blocker });
+                    applied += 1;
+                }
+            }
+            if (dirB >= 0) {
+                if (!(nodeB.blockedNeighbors instanceof Map)) nodeB.blockedNeighbors = new Map();
+                if (!nodeB.blockedNeighbors.has(dirB)) nodeB.blockedNeighbors.set(dirB, new Set());
+                const blockersB = nodeB.blockedNeighbors.get(dirB);
+                if (!blockersB.has(blocker)) {
+                    blockersB.add(blocker);
+                    links.push({ node: nodeB, direction: dirB, blocker });
+                    applied += 1;
+                }
             }
         }
-        state.movementBlockersByPlacementId.clear();
+        state.movementEdgeBlockersByPlacementId.set(placement.id, { links });
+        return { applied, pending: 0 };
     }
 
     function scheduleMovementGeometryLoad(map, placement) {
@@ -1725,10 +2098,17 @@
             : map.loadPrototypeBuildingEditorSaveData.bind(map);
         const promise = loadBuildingData(placement)
             .then((buildingData) => {
-                setPlacementMovementBlockerPolygons(
+                const polygons = setPlacementMovementBlockerPolygons(
                     placement,
                     computeBuildingPlacementMovementBlockerPolygons(buildingData, placement)
                 );
+                const instance = getBuildingInstanceRecord(state, placement);
+                if (instance) {
+                    instance.movementBlockerPolygons = normalizeMovementBlockerPolygons(polygons);
+                    instance.movementBlockerGeometryVersion = MOVEMENT_BLOCKER_GEOMETRY_VERSION;
+                    instance.movementBlockedEdges = null;
+                    instance.movementEdgeBlockerVersion = "";
+                }
                 markPrototypeBuildingMovementBlockersDirty(map);
                 if (hasPrototypeBuildingMovementNodeRegistry(map)) {
                     syncPrototypeBuildingMovementBlockers(map);
@@ -1753,13 +2133,20 @@
         const state = map && map._prototypeBuildingState;
         const buildingData = state ? getBuildingDataForPlacement(state, placement) : null;
         if (buildingData && !placementHasCurrentMovementBlockerGeometry(placement)) {
-            setPlacementMovementBlockerPolygons(
+            const polygons = setPlacementMovementBlockerPolygons(
                 placement,
                 computeBuildingPlacementMovementBlockerPolygons(buildingData, placement)
             );
+            const instance = getBuildingInstanceRecord(state, placement);
+            if (instance) {
+                instance.movementBlockerPolygons = normalizeMovementBlockerPolygons(polygons);
+                instance.movementBlockerGeometryVersion = MOVEMENT_BLOCKER_GEOMETRY_VERSION;
+                instance.movementBlockedEdges = null;
+                instance.movementEdgeBlockerVersion = "";
+            }
             return placement.movementBlockerPolygons;
         }
-        if (Array.isArray(placement.movementBlockerPolygons)) {
+        if (placementHasCurrentMovementBlockerGeometry(placement) && Array.isArray(placement.movementBlockerPolygons)) {
             return normalizeMovementBlockerPolygons(placement.movementBlockerPolygons, `building placement ${placement.id} movementBlockerPolygons`);
         }
         if (options.scheduleLoad === true && scheduleMovementGeometryLoad(map, placement)) {
@@ -1886,7 +2273,9 @@
             throw new Error("building movement blocking requires a prototype node index");
         }
         let attachedCount = 0;
+        let edgeBlockedCount = 0;
         let awaitingGeometry = 0;
+        let awaitingEdges = 0;
         for (let i = 0; i < placements.length; i++) {
             const placement = placements[i];
             if (!isPrototypeBuildingPlacementDesired(state, placement)) continue;
@@ -1911,12 +2300,17 @@
                 blockers.push(blocker);
             }
             state.movementBlockersByPlacementId.set(placement.id, blockers);
+            const edgeStats = applyPrototypeBuildingMovementBlockedEdges(map, placement);
+            edgeBlockedCount += Number(edgeStats && edgeStats.applied) || 0;
+            awaitingEdges += Number(edgeStats && edgeStats.pending) || 0;
         }
         state.lastMovementBlockerStats = {
             placements: placements.length,
             blockers: Array.from(state.movementBlockersByPlacementId.values()).reduce((sum, blockers) => sum + blockers.length, 0),
             nodeAttachments: attachedCount,
-            awaitingGeometry
+            edgeBlockedConnections: edgeBlockedCount,
+            awaitingGeometry,
+            awaitingEdges
         };
         return attachedCount;
     }
@@ -2055,6 +2449,7 @@
             pendingInteriorBitmapLoadsByKey: new Map(),
             interiorBitmapObjectExclusionsByKey: new Map(),
             movementBlockersByPlacementId: new Map(),
+            movementEdgeBlockersByPlacementId: new Map(),
             pendingMovementGeometryByPlacementId: new Map(),
             cutawayBuildingsByPlacementId: new Map(),
             runtimeFloorFragmentIdsByPlacementId: new Map(),
@@ -2347,19 +2742,47 @@
 
     function ensurePrototypeBuildingFloorNodeMethods(node) {
         if (!node || typeof node !== "object") return node;
+        const doesBlockTile = (obj) => (
+            typeof globalScope.doesObjectBlockTile === "function"
+                ? globalScope.doesObjectBlockTile(obj)
+                : !!(obj && !obj.gone && obj.blocksTile !== false)
+        );
+        const recountBlockingObjects = function recountBlockingObjects() {
+            let count = 0;
+            if (Array.isArray(this.objects)) {
+                for (let i = 0; i < this.objects.length; i++) {
+                    if (doesBlockTile(this.objects[i])) count += 1;
+                }
+            }
+            this.blockedByObjects = count;
+        };
         if (typeof node.addObject !== "function") {
             node.addObject = function addObject(obj) {
                 if (!obj) return;
                 if (!Array.isArray(this.objects)) this.objects = [];
-                if (!this.objects.includes(obj)) this.objects.push(obj);
+                if (!this.objects.includes(obj)) {
+                    this.objects.push(obj);
+                    if (doesBlockTile(obj)) {
+                        this.blockedByObjects = Math.max(0, Number(this.blockedByObjects) || 0) + 1;
+                    }
+                }
             };
         }
         if (typeof node.removeObject !== "function") {
             node.removeObject = function removeObject(obj) {
                 if (!Array.isArray(this.objects)) return;
                 const index = this.objects.indexOf(obj);
-                if (index >= 0) this.objects.splice(index, 1);
+                if (index >= 0) {
+                    const removed = this.objects[index];
+                    this.objects.splice(index, 1);
+                    if (doesBlockTile(removed)) {
+                        this.blockedByObjects = Math.max(0, (Number(this.blockedByObjects) || 0) - 1);
+                    }
+                }
             };
+        }
+        if (typeof node.recountBlockingObjects !== "function") {
+            node.recountBlockingObjects = recountBlockingObjects;
         }
         if (typeof node.addVisibilityObject !== "function") {
             node.addVisibilityObject = function addVisibilityObject(obj) {
@@ -2382,7 +2805,12 @@
         }
         if (typeof node.hasBlockingObject !== "function") {
             node.hasBlockingObject = function hasBlockingObject() {
-                return !!(this.blockedByObjects > 0);
+                if (this.blockedByObjects <= 0) return false;
+                if (!Array.isArray(this.objects)) return false;
+                for (let i = 0; i < this.objects.length; i++) {
+                    if (doesBlockTile(this.objects[i])) return true;
+                }
+                return false;
             };
         }
         if (typeof node.isBlocked !== "function") {
@@ -2407,29 +2835,14 @@
         const node = NodeCtor ? new NodeCtor(xi, yi, 1, 1) : {};
         const point = getPrototypeBuildingNodeWorldPoint(xi, yi);
         const layer = Number.isFinite(Number(fragment.level)) ? Math.round(Number(fragment.level)) : 0;
-        const baseZ = Number.isFinite(Number(fragment.nodeBaseZ)) ? Number(fragment.nodeBaseZ) : layer * 3;
+        if (!Number.isFinite(Number(fragment.nodeBaseZ))) {
+            throw new Error(`prototype building floor node fragment ${fragment.fragmentId || "(unknown)"} requires nodeBaseZ`);
+        }
+        const baseZ = Number(fragment.nodeBaseZ);
         node.xindex = xi;
         node.yindex = yi;
         node.x = point.x;
         node.y = point.y;
-        node.sourceNode = {
-            xindex: xi,
-            yindex: yi,
-            x: point.x,
-            y: point.y,
-            traversalLayer: 0,
-            baseZ: 0,
-            id: `${xi},${yi},0`,
-            neighborOffsets: getPrototypeBuildingNeighborOffsetsForColumn(xi),
-            neighbors: new Array(12).fill(null),
-            objects: [],
-            visibilityObjects: [],
-            blockedNeighbors: new Map(),
-            blockedByObjects: 0,
-            blocked: false,
-            clearance: Infinity,
-            _prototypeBuildingFloorSource: true
-        };
         node.surfaceId = typeof fragment.surfaceId === "string" ? fragment.surfaceId : "";
         node.fragmentId = typeof fragment.fragmentId === "string" ? fragment.fragmentId : "";
         node.ownerSectionKey = typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : placement.id;
@@ -2834,17 +3247,14 @@
                 : (Number.isFinite(Number(obj.traversalLayer)) ? Math.round(Number(obj.traversalLayer)) : 0);
             if (layer <= 0) continue;
             const baseNode = map.worldToNode(obj.x, obj.y);
-            if (!baseNode) {
-                throw new Error(`building placement ${placementId} cannot rehome object ${getPrototypeBuildingObjectLabel(obj)} without a base node`);
-            }
-            let floorNode = map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
+            let floorNode = baseNode ? map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
                 fragmentId: fragment.fragmentId,
                 surfaceId: fragment.surfaceId,
-                sourceNode: baseNode,
+                groundNode: baseNode,
                 worldX: obj.x,
                 worldY: obj.y,
                 allowScan: true
-            });
+            }) : null;
             if (!floorNode) {
                 floorNode = findNearestPrototypeBuildingFloorNode(map, fragment, obj, layer);
             }
@@ -2858,7 +3268,10 @@
             obj.traversalLayer = layer;
             obj.level = layer;
             obj.currentLayer = layer;
-            obj.currentLayerBaseZ = Number.isFinite(Number(fragment.nodeBaseZ)) ? Number(fragment.nodeBaseZ) : layer * 3;
+            if (!Number.isFinite(Number(fragment.nodeBaseZ))) {
+                throw new Error(`building placement ${placementId} object ${getPrototypeBuildingObjectLabel(obj)} requires fragment nodeBaseZ`);
+            }
+            obj.currentLayerBaseZ = Number(fragment.nodeBaseZ);
             obj._activeFloorFragment = fragment;
             if (typeof obj.refreshIndexedNodesFromHitbox === "function") {
                 obj.refreshIndexedNodesFromHitbox({
@@ -3211,10 +3624,17 @@
                         setPrototypeBuildingLoadState(state, placement, "shell");
                         state.loadedBuildingsById.set(placementId, placement);
                         if (!placementHasCurrentMovementBlockerGeometry(placement)) {
-                            setPlacementMovementBlockerPolygons(
+                            const polygons = setPlacementMovementBlockerPolygons(
                                 placement,
                                 computeBuildingPlacementMovementBlockerPolygons(buildingData, placement)
                             );
+                            const instance = getBuildingInstanceRecord(state, placement);
+                            if (instance) {
+                                instance.movementBlockerPolygons = normalizeMovementBlockerPolygons(polygons);
+                                instance.movementBlockerGeometryVersion = MOVEMENT_BLOCKER_GEOMETRY_VERSION;
+                                instance.movementBlockedEdges = null;
+                                instance.movementEdgeBlockerVersion = "";
+                            }
                         }
                         maybeSyncPrototypeBuildingGeometryRuntime(this);
                         markPrototypeBuildingMovementBlockersDirty(this);
@@ -3393,10 +3813,17 @@
                             updatePlacementFromInstance(placement, instance);
                         }
                         if (placementHasCurrentMovementBlockerGeometry(placement)) return;
-                        setPlacementMovementBlockerPolygons(
+                        const polygons = setPlacementMovementBlockerPolygons(
                             placement,
                             computeBuildingPlacementMovementBlockerPolygons(buildingData, placement)
                         );
+                        const instance = getBuildingInstanceRecord(state, placement);
+                        if (instance) {
+                            instance.movementBlockerPolygons = normalizeMovementBlockerPolygons(polygons);
+                            instance.movementBlockerGeometryVersion = MOVEMENT_BLOCKER_GEOMETRY_VERSION;
+                            instance.movementBlockedEdges = null;
+                            instance.movementEdgeBlockerVersion = "";
+                        }
                     });
                     if (state.cutawayBuildingsByPlacementId instanceof Map) {
                         state.cutawayBuildingsByPlacementId.clear();
@@ -4032,6 +4459,8 @@
                     ? null
                     : normalizeMovementBlockerPolygons(placement.movementBlockerPolygons);
                 instance.movementBlockerGeometryVersion = placement.movementBlockerGeometryVersion || "";
+                instance.movementBlockedEdges = null;
+                instance.movementEdgeBlockerVersion = "";
                 instance.touchedSectionKeys = placement.touchedSectionKeys.slice();
                 instance.overlappedSectionKeys = placement.touchedSectionKeys.slice();
                 instance.contentVersion = Number(instance.contentVersion || 1) + 1;

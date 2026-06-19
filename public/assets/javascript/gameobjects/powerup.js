@@ -687,7 +687,10 @@
                 ? Number(data._floorBaseZ)
                 : (Number.isFinite(data.currentLayerBaseZ)
                     ? Number(data.currentLayerBaseZ)
-                    : savedLayer * 3);
+                    : null);
+            if (!Number.isFinite(savedFloorBaseZ)) {
+                throw new Error(`powerup ${data.id || data.name || data.type || "(unknown)"} load requires currentLayerBaseZ`);
+            }
             const savedZ = Number.isFinite(data.z) ? Number(data.z) : 0;
             const localZ = data.zMode === "local"
                 ? savedZ

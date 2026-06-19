@@ -645,14 +645,21 @@ function resolveExpandedNodeIndexNodes(mapRef, hitbox, options = {}) {
         if (!point) continue;
         const node = mapRef.worldToNode(point.x, point.y);
         if (!node) continue;
-        const resolvedNode = (
-            traversalLayer !== 0 &&
-            typeof mapRef.getFloorNodeAtLayer === "function"
-        ) ? (mapRef.getFloorNodeAtLayer(node.xindex, node.yindex, traversalLayer, {
-            surfaceId: typeof options.surfaceId === "string" ? options.surfaceId : "",
-            fragmentId: typeof options.fragmentId === "string" ? options.fragmentId : "",
-            allowScan: true
-        }) || node) : node;
+        let resolvedNode = node;
+        if (traversalLayer !== 0 && typeof mapRef.getFloorNodeAtLayer === "function") {
+            resolvedNode = mapRef.getFloorNodeAtLayer(node.xindex, node.yindex, traversalLayer, {
+                surfaceId: typeof options.surfaceId === "string" ? options.surfaceId : "",
+                fragmentId: typeof options.fragmentId === "string" ? options.fragmentId : "",
+                groundNode: node,
+                worldX: point.x,
+                worldY: point.y,
+                allowScan: true
+            }) || null;
+            if (!resolvedNode) {
+                if (options.requireTraversalLayerNode === true) continue;
+                resolvedNode = node;
+            }
+        }
         const key = `${Number(resolvedNode.xindex)}:${Number(resolvedNode.yindex)}:${Number.isFinite(resolvedNode.traversalLayer) ? Number(resolvedNode.traversalLayer) : traversalLayer}:${String(resolvedNode.surfaceId || "")}:${String(resolvedNode.fragmentId || "")}`;
         if (nodeKeys.has(key)) continue;
         nodeKeys.add(key);
@@ -2363,6 +2370,7 @@ void main(void) {
         const hasDoorHitShake = Math.abs(shakeDx) > 1e-3 || Math.abs(shakeDy) > 1e-3;
 
         let signature = "";
+        let extraDepthBias = 0;
         if (useDualWallPlanes) {
             const width = Math.max(0.01, Number.isFinite(this.width) ? Number(this.width) : 1);
             const height = Math.max(0.01, Number.isFinite(this.height) ? Number(this.height) : 1);
@@ -2460,16 +2468,27 @@ void main(void) {
             const anchorY = (sprite.anchor && Number.isFinite(sprite.anchor.y)) ? Number(sprite.anchor.y) : 1;
             const worldWidth = Math.max(0.01, Math.abs(Number(sprite.width) || 0) / viewScale);
             const worldHeightZ = Math.max(0.01, Math.abs(Number(sprite.height) || 0) / (viewScale * xyRatio));
-            // Upright floor-standing billboards are depth-projected from their
-            // bottom edge, independent of sprite anchor. Otherwise center-anchored
-            // sprites put half of their depth quad below the floor and get clipped
-            // by depth-writing ground polygons.
+            // Most upright floor-standing billboards are depth-projected from
+            // their bottom edge. Furniture metadata uses vertical anchors to
+            // align visuals to the ground footprint, so let furniture sit there
+            // and handle any ground clipping with an explicit depth lift.
+            const useFurnitureVerticalAnchorY = !!(
+                category === "furniture" &&
+                this.rotationAxis !== "ground"
+            );
             const useVerticalAnchorY = this.depthBillboardUseVerticalAnchorY === true ||
-                (options && options.useVerticalAnchorY === true);
+                (options && options.useVerticalAnchorY === true) ||
+                useFurnitureVerticalAnchorY;
             const bottomZ = useVerticalAnchorY
                 ? worldZ - ((1 - anchorY) * worldHeightZ)
                 : worldZ;
             const topZ = bottomZ + worldHeightZ;
+            if (useFurnitureVerticalAnchorY) {
+                const submergedDepth = Math.max(0, worldZ - bottomZ);
+                extraDepthBias = submergedDepth > 0
+                    ? (submergedDepth * 2) + 0.02
+                    : 0;
+            }
             const isSpatialDoorOrWindow = !!(
                 this.rotationAxis === "spatial" &&
                 (category === "windows" || category === "doors" || this.type === "window" || this.type === "door")
@@ -2602,7 +2621,7 @@ void main(void) {
             }
         }
         uniforms.uLayerBaseZ = effectiveLayerBaseZ;
-        uniforms.uDepthBias = Number.isFinite(this._renderDepthBias) ? Number(this._renderDepthBias) : 0;
+        uniforms.uDepthBias = (Number.isFinite(this._renderDepthBias) ? Number(this._renderDepthBias) : 0) + extraDepthBias;
         uniforms.uViewScale = Number(cam.viewscale) || 1;
         uniforms.uXyRatio = Number(cam.xyratio) || 1;
         uniforms.uDepthRange[0] = farMetric;
@@ -2728,6 +2747,12 @@ void main(void) {
             }
         }
         if (nodesUnchanged && this.node === nextPrimaryNode) {
+            for (let i = 0; i < nextNodes.length; i++) {
+                const node = nextNodes[i];
+                if (node && typeof node.recountBlockingObjects === "function") {
+                    node.recountBlockingObjects();
+                }
+            }
             return;
         }
 
@@ -2770,16 +2795,31 @@ void main(void) {
             : (Number.isFinite(this.traversalLayer)
                 ? Math.round(Number(this.traversalLayer))
                 : (Number.isFinite(this.level) ? Math.round(Number(this.level)) : 0));
+        const fallbackNode = options.fallbackNode && typeof options.fallbackNode === "object"
+            ? options.fallbackNode
+            : null;
+        const fallbackLayer = fallbackNode && Number.isFinite(Number(fallbackNode.traversalLayer))
+            ? Math.round(Number(fallbackNode.traversalLayer))
+            : (fallbackNode && Number.isFinite(Number(fallbackNode.level)) ? Math.round(Number(fallbackNode.level)) : 0);
+        const layerFallbackNode = fallbackNode && (traversalLayer === 0 || fallbackLayer === traversalLayer)
+            ? fallbackNode
+            : null;
         const basePrimaryNode = mapRef.worldToNode(this.x, this.y);
-        const primaryNode = (
+        let primaryNode = basePrimaryNode || layerFallbackNode || null;
+        if (
             basePrimaryNode &&
             traversalLayer !== 0 &&
             typeof mapRef.getFloorNodeAtLayer === "function"
-        ) ? (mapRef.getFloorNodeAtLayer(basePrimaryNode.xindex, basePrimaryNode.yindex, traversalLayer, {
-            surfaceId: typeof this.surfaceId === "string" ? this.surfaceId : "",
-            fragmentId: typeof this.fragmentId === "string" ? this.fragmentId : "",
-            allowScan: true
-        }) || basePrimaryNode) : basePrimaryNode;
+        ) {
+            primaryNode = mapRef.getFloorNodeAtLayer(basePrimaryNode.xindex, basePrimaryNode.yindex, traversalLayer, {
+                surfaceId: typeof this.surfaceId === "string" ? this.surfaceId : "",
+                fragmentId: typeof this.fragmentId === "string" ? this.fragmentId : "",
+                groundNode: basePrimaryNode,
+                worldX: this.x,
+                worldY: this.y,
+                allowScan: true
+            }) || layerFallbackNode || (options.requireTraversalLayerNode === true ? null : basePrimaryNode);
+        }
         if (!hitbox || !shouldUseExpandedNodeIndexing(hitbox, options)) {
             this.setIndexedNodes(primaryNode ? [primaryNode] : [], primaryNode);
             return;
@@ -2793,7 +2833,8 @@ void main(void) {
             traversalLayer,
             surfaceId: typeof this.surfaceId === "string" ? this.surfaceId : "",
             fragmentId: typeof this.fragmentId === "string" ? this.fragmentId : "",
-            extraPoints: options.extraPoints
+            extraPoints: options.extraPoints,
+            requireTraversalLayerNode: options.requireTraversalLayerNode
         });
         if (nodes.length === 0) {
             this.setIndexedNodes(primaryNode ? [primaryNode] : [], primaryNode);
@@ -3791,7 +3832,6 @@ void main(void) {
             : (Number.isFinite(this.level) ? Math.round(Number(this.level)) : 0);
         if (savedTraversalLayer !== 0) {
             data.traversalLayer = savedTraversalLayer;
-            data.level = savedTraversalLayer;
         }
         const surfaceId = typeof this.surfaceId === "string" && this.surfaceId.length > 0
             ? this.surfaceId
@@ -3811,9 +3851,6 @@ void main(void) {
                 ownerId: floorMembership.ownerId,
                 floorId: floorMembership.floorId
             };
-            if (Number.isFinite(Number(floorMembership.level))) {
-                data.floorMembership.level = Math.round(Number(floorMembership.level));
-            }
         }
         if (this.falling && !(this._floorFallState && this._floorFallState.active === true)) data.falling = true;
         if (typeof this.fallDirection === "string") data.fallDirection = this.fallDirection;
@@ -3994,6 +4031,20 @@ void main(void) {
             if (obj) {
                 obj.x = data.x;
                 obj.y = data.y;
+                const resolveLoadedLayerBaseZ = (fallbackLayer = 0) => {
+                    if (node && Number.isFinite(node.baseZ)) return Number(node.baseZ);
+                    const fragmentId = typeof data.fragmentId === "string" && data.fragmentId.length > 0
+                        ? data.fragmentId
+                        : (typeof obj.fragmentId === "string" && obj.fragmentId.length > 0 ? obj.fragmentId : "");
+                    const fragment = fragmentId && map && map.floorsById instanceof Map
+                        ? map.floorsById.get(fragmentId) || null
+                        : null;
+                    if (fragment && Number.isFinite(Number(fragment.nodeBaseZ))) {
+                        return Number(fragment.nodeBaseZ);
+                    }
+                    if (Number.isFinite(data.currentLayerBaseZ)) return Number(data.currentLayerBaseZ);
+                    throw new Error(`static object ${data.id || data.name || data.type || "(unknown)"} load requires currentLayerBaseZ or fragment nodeBaseZ`);
+                };
                 const loadedTraversalLayer = Number.isFinite(data.traversalLayer)
                     ? Math.round(Number(data.traversalLayer))
                     : (Number.isFinite(data.level) ? Math.round(Number(data.level)) : null);
@@ -4001,18 +4052,16 @@ void main(void) {
                     obj.traversalLayer = loadedTraversalLayer;
                     obj.level = loadedTraversalLayer;
                     obj.currentLayer = loadedTraversalLayer;
-                    obj.currentLayerBaseZ = Number.isFinite(data.currentLayerBaseZ)
-                        ? Number(data.currentLayerBaseZ)
-                        : loadedTraversalLayer * 3;
+                    obj.currentLayerBaseZ = resolveLoadedLayerBaseZ(loadedTraversalLayer);
+                    obj._floorBaseZ = obj.currentLayerBaseZ;
+                    obj._renderLayerBaseZ = obj.currentLayerBaseZ;
                 }
                 if (Number.isFinite(data.z)) {
                     obj.z = Number(data.z);
                     const loadedLayer = Number.isFinite(data.traversalLayer)
                         ? Math.round(Number(data.traversalLayer))
                         : (Number.isFinite(data.level) ? Math.round(Number(data.level)) : 0);
-                    const loadedLayerBaseZ = Number.isFinite(data.currentLayerBaseZ)
-                        ? Number(data.currentLayerBaseZ)
-                        : loadedLayer * 3;
+                    const loadedLayerBaseZ = resolveLoadedLayerBaseZ(loadedLayer);
                     const isWallMountedPlacedObject = !!(
                         data.type === "placedObject" &&
                         (

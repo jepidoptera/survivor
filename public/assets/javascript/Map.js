@@ -1142,17 +1142,15 @@ class GameMap {
         const ownerType = typeof (candidate && candidate.ownerType) === "string" ? candidate.ownerType : "";
         const ownerId = typeof (candidate && candidate.ownerId) === "string" ? candidate.ownerId : "";
         const floorId = typeof (candidate && candidate.floorId) === "string" ? candidate.floorId : "";
-        const level = Number(candidate && candidate.level);
-        if (ownerType && ownerId && floorId && Number.isFinite(level)) {
+        if (ownerType && ownerId && floorId) {
             return {
                 ownerType,
                 ownerId,
-                floorId,
-                level: Math.round(level)
+                floorId
             };
         }
         if (required) {
-            throw new Error(`${sourceLabel} requires canonical floor membership with ownerType, ownerId, floorId, and level`);
+            throw new Error(`${sourceLabel} requires canonical floor membership with ownerType, ownerId, and floorId`);
         }
         return null;
     }
@@ -1160,7 +1158,7 @@ class GameMap {
     getFloorObjectMembershipKey(membership, options = {}) {
         const normalized = this.normalizeFloorObjectMembership(membership, options);
         if (!normalized) return "";
-        return `${normalized.ownerType}|${normalized.ownerId}|${normalized.floorId}|${normalized.level}`;
+        return `${normalized.ownerType}|${normalized.ownerId}|${normalized.floorId}`;
     }
 
     getFloorObjectMembershipForObject(obj, options = {}) {
@@ -1173,14 +1171,6 @@ class GameMap {
             membership = obj._floorMembership && typeof obj._floorMembership === "object"
                 ? obj._floorMembership
                 : (obj.floorMembership && typeof obj.floorMembership === "object" ? obj.floorMembership : null);
-        }
-        if (membership && !Number.isFinite(Number(membership.level)) && obj && typeof obj === "object") {
-            const level = Number.isFinite(Number(obj.traversalLayer))
-                ? Math.round(Number(obj.traversalLayer))
-                : (Number.isFinite(Number(obj.level))
-                    ? Math.round(Number(obj.level))
-                    : (Number.isFinite(Number(obj.currentLayer)) ? Math.round(Number(obj.currentLayer)) : NaN));
-            if (Number.isFinite(level)) membership = { ...membership, level };
         }
         return this.normalizeFloorObjectMembership(membership, {
             required: opts.required !== false,
@@ -1280,8 +1270,7 @@ class GameMap {
         const membership = {
             ownerType: owner && owner.type ? owner.type : (typeof fragmentOrMembership.ownerType === "string" ? fragmentOrMembership.ownerType : ""),
             ownerId: owner && owner.id ? owner.id : (typeof fragmentOrMembership.ownerId === "string" ? fragmentOrMembership.ownerId : ""),
-            floorId,
-            level: Number.isFinite(Number(fragmentOrMembership.level)) ? Math.round(Number(fragmentOrMembership.level)) : NaN
+            floorId
         };
         return this.getObjectsForFloorMembership(membership);
     }
@@ -1560,17 +1549,11 @@ class GameMap {
         if (!fragmentId) return null;
 
         const level = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
-        const canonicalBaseZ = level * 3;
-        const explicitOffset = Number.isFinite(fragment.nodeBaseZOffset) ? Number(fragment.nodeBaseZOffset) : null;
-        const legacyBaseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : null;
-        let resolvedOffset = 0;
-        if (Number.isFinite(explicitOffset)) {
-            resolvedOffset = Number(explicitOffset);
-        } else if (Number.isFinite(legacyBaseZ)) {
-            const looksLikeLegacyBug = Math.abs(Number(legacyBaseZ) - level) < 1e-6
-                && Math.abs(Number(legacyBaseZ) - canonicalBaseZ) > 1e-6;
-            resolvedOffset = looksLikeLegacyBug ? 0 : (Number(legacyBaseZ) - canonicalBaseZ);
+        if (!Number.isFinite(fragment.nodeBaseZ)) {
+            throw new Error(`floor fragment ${fragmentId} requires finite nodeBaseZ`);
         }
+        const nodeBaseZ = Number(fragment.nodeBaseZ);
+        const nodeBaseZOffset = Number.isFinite(fragment.nodeBaseZOffset) ? Number(fragment.nodeBaseZOffset) : 0;
 
         const normalized = {
             ...fragment,
@@ -1588,8 +1571,8 @@ class GameMap {
                 ? fragment.ownerId
                 : ((typeof fragment.ownerSectionKey === "string") ? fragment.ownerSectionKey : ""),
             level,
-            nodeBaseZOffset: resolvedOffset,
-            nodeBaseZ: canonicalBaseZ + resolvedOffset,
+            nodeBaseZOffset,
+            nodeBaseZ,
             outerPolygon: Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon.slice() : [],
             holes: Array.isArray(fragment.holes) ? fragment.holes.slice() : []
         };
@@ -2191,7 +2174,6 @@ class GameMap {
         floorNode.yindex = Number(sourceNode.yindex);
         floorNode.x = Number(sourceNode.x);
         floorNode.y = Number(sourceNode.y);
-        floorNode.sourceNode = sourceNode;
         if (sourceNode && Object.prototype.hasOwnProperty.call(sourceNode, "_prototypeSectionKey")) {
             floorNode._prototypeSectionKey = sourceNode._prototypeSectionKey;
         }
@@ -2204,6 +2186,11 @@ class GameMap {
         floorNode.surfaceId = (typeof fragment.surfaceId === "string") ? fragment.surfaceId : "";
         floorNode.fragmentId = (typeof fragment.fragmentId === "string") ? fragment.fragmentId : "";
         floorNode.ownerSectionKey = (typeof fragment.ownerSectionKey === "string") ? fragment.ownerSectionKey : "";
+        floorNode._prototypeOwnerType = typeof fragment.ownerType === "string" ? fragment.ownerType : "";
+        floorNode._prototypeOwnerId = typeof fragment.ownerId === "string" ? fragment.ownerId : "";
+        if (fragment.ownerType === "building") {
+            floorNode._prototypeBuildingFloorNode = true;
+        }
         floorNode.level = Number.isFinite(fragment.level) ? Number(fragment.level) : 0;
         floorNode.traversalLayer = Number.isFinite(options.traversalLayer)
             ? Number(options.traversalLayer)
@@ -2730,7 +2717,10 @@ class GameMap {
         const bounds = getPolygonBounds2D(polygon);
         if (!bounds) throw new Error(`stair ${stair.id || "(unknown)"} footprint blocker has invalid bounds`);
         const traversalLayer = Number.isFinite(Number(layer)) ? Math.round(Number(layer)) : 0;
-        const bottomZ = Number.isFinite(Number(baseZ)) ? Number(baseZ) : traversalLayer * 3;
+        if (!Number.isFinite(Number(baseZ))) {
+            throw new Error(`stair ${stair.id || "(unknown)"} footprint blocker requires finite baseZ`);
+        }
+        const bottomZ = Number(baseZ);
         if (!(stair._movementFootprintBlockersByLayer instanceof Map)) {
             stair._movementFootprintBlockersByLayer = new Map();
         }
@@ -2767,7 +2757,10 @@ class GameMap {
         const endpoint = this.getStairEndpointForFloorSupport(floorSupport, stair);
         if (!endpoint) return [];
         const layer = Number.isFinite(Number(floorSupport.layer)) ? Math.round(Number(floorSupport.layer)) : 0;
-        const baseZ = Number.isFinite(Number(floorSupport.baseZ)) ? Number(floorSupport.baseZ) : layer * 3;
+        if (!Number.isFinite(Number(floorSupport.baseZ))) {
+            throw new Error(`stair ${stair.id || "(unknown)"} footprint blockers require finite floor support baseZ`);
+        }
+        const baseZ = Number(floorSupport.baseZ);
         const fragment = floorSupport.fragment && typeof floorSupport.fragment === "object"
             ? floorSupport.fragment
             : (
@@ -3082,7 +3075,10 @@ class GameMap {
         const ownerId = typeof fragment.ownerId === "string" ? fragment.ownerId : "";
         const baseZ = Number.isFinite(fragment.nodeBaseZ)
             ? Number(fragment.nodeBaseZ)
-            : (Number.isFinite(actor.currentLayerBaseZ) ? Number(actor.currentLayerBaseZ) : targetLayer * 3);
+            : (Number.isFinite(actor.currentLayerBaseZ) ? Number(actor.currentLayerBaseZ) : null);
+        if (!Number.isFinite(baseZ)) {
+            throw new Error(`actor floor support for fragment ${fragmentId || "(unknown)"} requires nodeBaseZ or actor currentLayerBaseZ`);
+        }
         return {
             type: "floor",
             layer: targetLayer,
@@ -3107,16 +3103,15 @@ class GameMap {
         if (this.actorUsesLocalMovementZ(actor)) {
             const baseZ = Number.isFinite(actor && actor.currentLayerBaseZ)
                 ? Number(actor.currentLayerBaseZ)
-                : (
-                    support && Number.isFinite(support.baseZ)
-                        ? Number(support.baseZ)
-                        : this.getActorTraversalLayer(actor, options) * 3
-                );
+                : (support && Number.isFinite(support.baseZ) ? Number(support.baseZ) : null);
+            if (!Number.isFinite(baseZ)) {
+                throw new Error(`actor ${actor && (actor.id || actor.name || actor.type) || "(unknown)"} support world Z requires currentLayerBaseZ or support baseZ`);
+            }
             return baseZ + (Number.isFinite(actorZ) ? actorZ : 0);
         }
         if (Number.isFinite(actorZ)) return actorZ;
         if (support && Number.isFinite(support.baseZ)) return Number(support.baseZ);
-        return this.getActorTraversalLayer(actor, options) * 3;
+        throw new Error(`actor ${actor && (actor.id || actor.name || actor.type) || "(unknown)"} support world Z requires worldZ, actor z, or support baseZ`);
     }
 
     getActorSupportOwnerKey(support) {
@@ -3144,7 +3139,10 @@ class GameMap {
         }
         const baseZ = Number.isFinite(fragment.nodeBaseZ)
             ? Number(fragment.nodeBaseZ)
-            : (node ? this.getNodeBaseZ(node) : targetLayer * 3);
+            : (node ? this.getNodeBaseZ(node) : null);
+        if (!Number.isFinite(baseZ)) {
+            throw new Error(`floor support for fragment ${fragment.fragmentId || "(unknown)"} requires nodeBaseZ or floor node baseZ`);
+        }
         return {
             type: "floor",
             layer: targetLayer,
@@ -3175,9 +3173,10 @@ class GameMap {
         for (let i = 0; i < fragments.length; i++) {
             const fragment = fragments[i];
             if (!fragment || !Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
-            const baseZ = Number.isFinite(fragment.nodeBaseZ)
-                ? Number(fragment.nodeBaseZ)
-                : ((Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0) * 3);
+            if (!Number.isFinite(fragment.nodeBaseZ)) {
+                throw new Error(`floor fragment ${fragment.fragmentId || fragment.id || "(unknown)"} requires finite nodeBaseZ`);
+            }
+            const baseZ = Number(fragment.nodeBaseZ);
             if (Number.isFinite(maxZ) && baseZ > maxZ + 1e-6) continue;
             if (!this.isCircleSupportedByFloorFragment(fragment, worldX, worldY, radius)) continue;
             const area = Math.abs(this.getPolygonSignedArea2D(fragment.outerPolygon));
@@ -3292,9 +3291,10 @@ class GameMap {
         const previousLayer = Number.isFinite(actor.currentLayer)
             ? Math.round(Number(actor.currentLayer))
             : (Number.isFinite(actor.traversalLayer) ? Math.round(Number(actor.traversalLayer)) : 0);
-        const previousBaseZ = Number.isFinite(actor.currentLayerBaseZ)
-            ? Number(actor.currentLayerBaseZ)
-            : previousLayer * 3;
+        if (!Number.isFinite(actor.currentLayerBaseZ)) {
+            throw new Error(`actor ${actor.id || actor.name || actor.type || "(unknown)"} movement support requires currentLayerBaseZ`);
+        }
+        const previousBaseZ = Number(actor.currentLayerBaseZ);
         const supportType = support.type === "stair"
             ? "stair"
             : (support.type === "floor" ? "floor" : "ground");
@@ -3342,7 +3342,10 @@ class GameMap {
             };
         } else if (supportType === "floor") {
             nextLayer = Number.isFinite(support.layer) ? Math.round(Number(support.layer)) : 0;
-            nextBaseZ = Number.isFinite(support.baseZ) ? Number(support.baseZ) : nextLayer * 3;
+            if (!Number.isFinite(support.baseZ)) {
+                throw new Error(`actor ${actor.id || actor.name || actor.type || "(unknown)"} floor support requires finite baseZ`);
+            }
+            nextBaseZ = Number(support.baseZ);
             const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
             const fragment = floorSupportApi && typeof floorSupportApi.getFragmentFromSupport === "function"
                 ? floorSupportApi.getFragmentFromSupport(this, support)
@@ -3394,7 +3397,10 @@ class GameMap {
         actor.currentMovementSupport = normalized;
         actor.currentLayer = nextLayer;
         actor.traversalLayer = nextLayer;
-        actor.currentLayerBaseZ = Number.isFinite(nextBaseZ) ? Number(nextBaseZ) : nextLayer * 3;
+        if (!Number.isFinite(nextBaseZ)) {
+            throw new Error(`actor ${actor.id || actor.name || actor.type || "(unknown)"} movement support resolved non-finite baseZ`);
+        }
+        actor.currentLayerBaseZ = Number(nextBaseZ);
         if (this.actorUsesLocalMovementZ(actor) && Number.isFinite(actor.prevZ)) {
             const previousWorldZ = previousBaseZ + Number(actor.prevZ);
             actor.prevZ = previousWorldZ - actor.currentLayerBaseZ;
@@ -4143,10 +4149,10 @@ class GameMap {
         const surfaceId = (options && typeof options.surfaceId === "string") ? options.surfaceId : "";
         const fragmentId = (options && typeof options.fragmentId === "string") ? options.fragmentId : "";
         const allowScan = !options || options.allowScan !== false;
-        const explicitSourceNode = options && options.sourceNode &&
-            Number(options.sourceNode.xindex) === xi &&
-            Number(options.sourceNode.yindex) === yi
-            ? options.sourceNode
+        const explicitGroundNode = options && options.groundNode &&
+            Number(options.groundNode.xindex) === xi &&
+            Number(options.groundNode.yindex) === yi
+            ? options.groundNode
             : null;
 
         if (surfaceId || fragmentId) {
@@ -4183,7 +4189,7 @@ class GameMap {
                 if (sectionKey && (
                     candidate.ownerSectionKey === sectionKey ||
                     candidate._prototypeSectionKey === sectionKey ||
-                    (candidate.sourceNode && candidate.sourceNode._prototypeSectionKey === sectionKey)
+                    (typeof this.getNodeSectionKey === "function" && this.getNodeSectionKey(candidate) === sectionKey)
                 )) {
                     return candidate;
                 }
@@ -4208,7 +4214,7 @@ class GameMap {
                 if (sectionKey && (
                     candidate.ownerSectionKey === sectionKey ||
                     candidate._prototypeSectionKey === sectionKey ||
-                    (candidate.sourceNode && candidate.sourceNode._prototypeSectionKey === sectionKey)
+                    (typeof this.getNodeSectionKey === "function" && this.getNodeSectionKey(candidate) === sectionKey)
                 )) {
                     return candidate;
                 }
@@ -4221,21 +4227,24 @@ class GameMap {
                 ? Math.round(Number(fragment.level))
                 : 0;
             if (fragment && fragmentLayer === targetLayer) {
-                const sourceNode = explicitSourceNode || this.getNode(xi, yi, 0);
+                const groundNode = explicitGroundNode || this.getGroundNodeForCoord(xi, yi);
                 const supportX = Number.isFinite(options && options.worldX)
                     ? Number(options.worldX)
-                    : (Number.isFinite(sourceNode && sourceNode.x) ? Number(sourceNode.x) : NaN);
+                    : (Number.isFinite(groundNode && groundNode.x) ? Number(groundNode.x) : NaN);
                 const supportY = Number.isFinite(options && options.worldY)
                     ? Number(options.worldY)
-                    : (Number.isFinite(sourceNode && sourceNode.y) ? Number(sourceNode.y) : NaN);
+                    : (Number.isFinite(groundNode && groundNode.y) ? Number(groundNode.y) : NaN);
                 if (
-                    sourceNode &&
+                    groundNode &&
                     Number.isFinite(supportX) &&
                     Number.isFinite(supportY) &&
                     this.isPointSupportedByFloorFragment(fragment, supportX, supportY)
                 ) {
-                    const created = this.createFloorNodeFromSource(sourceNode, fragment, {
-                        baseZ: Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : targetLayer * 3,
+                    if (!Number.isFinite(fragment.nodeBaseZ)) {
+                        throw new Error(`floor fragment ${fragment.fragmentId || fragment.id || "(unknown)"} requires finite nodeBaseZ`);
+                    }
+                    const created = this.createFloorNodeFromSource(groundNode, fragment, {
+                        baseZ: Number(fragment.nodeBaseZ),
                         traversalLayer: targetLayer
                     });
                     if (created) {
@@ -4871,16 +4880,8 @@ class GameMap {
                 return true;
             };
 
-            const attachGroundSourceMirror = (endpointNode, targetNode) => {
-                if (!endpointNode || !targetNode || !endpointNode.sourceNode) return false;
-                if (Number(endpointNode.level) !== 0) return false;
-                return attachEdge(endpointNode.sourceNode, targetNode);
-            };
-
             if (attachEdge(fromNode, toNode)) connectionCount += 1;
-            if (attachGroundSourceMirror(fromNode, toNode)) connectionCount += 1;
             if (transition.bidirectional !== false && attachEdge(toNode, fromNode)) connectionCount += 1;
-            if (transition.bidirectional !== false && attachGroundSourceMirror(toNode, fromNode)) connectionCount += 1;
         }
         return connectionCount;
     }
@@ -4999,6 +5000,59 @@ class GameMap {
         const tx = this.wrapX ? this.wrapIndexX(Math.round(x)) : Math.round(x);
         const ty = this.wrapY ? this.wrapIndexY(Math.round(y)) : Math.round(y);
         return (this.nodes[tx] && this.nodes[tx][ty]) ? this.nodes[tx][ty] : null;
+    }
+
+    getNodeSectionKey(node) {
+        if (!node || typeof node !== "object") return "";
+        const candidates = [
+            node._prototypeSectionKey,
+            node.ownerSectionKey,
+            node._prototypeOwnerSectionKey,
+            node.sectionKey
+        ];
+        for (let i = 0; i < candidates.length; i++) {
+            if (typeof candidates[i] === "string" && candidates[i].length > 0) {
+                return candidates[i];
+            }
+        }
+        return "";
+    }
+
+    getGroundNodeForCoord(xindex, yindex) {
+        const x = Number(xindex);
+        const y = Number(yindex);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        return this.getNode(x, y, 0);
+    }
+
+    getGroundNodeForNode(node) {
+        if (!node || typeof node !== "object") return null;
+        return this.getGroundNodeForCoord(node.xindex, node.yindex);
+    }
+
+    resolveNodeAtLayer(node, layer = 0, options = {}) {
+        if (!node || typeof node !== "object") return null;
+        const targetLayer = Number.isFinite(Number(layer)) ? Math.round(Number(layer)) : 0;
+        const xindex = Number(node.xindex);
+        const yindex = Number(node.yindex);
+        if (!Number.isFinite(xindex) || !Number.isFinite(yindex)) return null;
+        if (targetLayer === 0) {
+            return this.getGroundNodeForCoord(xindex, yindex);
+        }
+        if (typeof this.getFloorNodeAtLayer !== "function") return null;
+        const sectionKey = options && typeof options.sectionKey === "string"
+            ? options.sectionKey
+            : this.getNodeSectionKey(node);
+        const surfaceId = options && typeof options.surfaceId === "string" ? options.surfaceId : "";
+        const fragmentId = options && typeof options.fragmentId === "string" ? options.fragmentId : "";
+        return this.getFloorNodeAtLayer(xindex, yindex, targetLayer, {
+            sectionKey,
+            surfaceId,
+            fragmentId,
+            allowScan: options && Object.prototype.hasOwnProperty.call(options, "allowScan")
+                ? options.allowScan
+                : false
+        }) || null;
     }
 
     getNodeBaseZ(node) {

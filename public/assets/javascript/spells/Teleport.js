@@ -80,7 +80,10 @@ class Teleport extends globalThis.Spell {
             ? Number(options.destinationBaseZ)
             : (Number.isFinite(destinationNode && destinationNode.baseZ)
                 ? Number(destinationNode.baseZ)
-                : destinationLayer * 3);
+                : null);
+        if (!Number.isFinite(destinationBaseZ)) {
+            throw new Error(`teleport destination layer ${destinationLayer} requires destinationBaseZ or node baseZ`);
+        }
         const destinationFragmentId = typeof (options && options.destinationFragmentId) === "string"
             ? options.destinationFragmentId
             : (typeof (destinationNode && destinationNode.fragmentId) === "string" ? destinationNode.fragmentId : "");

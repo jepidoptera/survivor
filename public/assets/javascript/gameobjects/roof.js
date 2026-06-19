@@ -286,19 +286,14 @@ void main(void) {
             wizardRef && wizardRef.selectedFloorEditLevel,
             wizardRef && wizardRef.traversalLayer
         ];
-        for (let i = 0; i < candidates.length; i++) {
-            const layer = Number(candidates[i]);
-            if (Number.isFinite(layer)) return Math.round(layer) * 3;
-        }
-        return 0;
+        const layer = candidates.find(value => Number.isFinite(Number(value)));
+        throw new Error(`roof layer base Z requires wizard currentLayerBaseZ for layer ${Number.isFinite(Number(layer)) ? Math.round(Number(layer)) : "(unknown)"}`);
     }
 
     static _getWallSectionBottomZ(section) {
         if (!section) return 0;
         if (Number.isFinite(section.bottomZ)) return Number(section.bottomZ);
-        if (Number.isFinite(section.traversalLayer)) return Math.round(Number(section.traversalLayer)) * 3;
-        if (Number.isFinite(section.level)) return Math.round(Number(section.level)) * 3;
-        return 0;
+        throw new Error(`roof wall section ${section.id || section.name || "(unknown)"} requires bottomZ`);
     }
 
     static getWallSectionTopZForLayer(section, layerBaseZ = null) {

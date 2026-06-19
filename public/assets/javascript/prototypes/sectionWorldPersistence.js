@@ -428,8 +428,7 @@
                     return {
                         ownerType: membershipOwnerType,
                         ownerId: membershipOwnerId,
-                        floorId,
-                        level: Number.isFinite(Number(record.floorMembership.level)) ? Math.round(Number(record.floorMembership.level)) : undefined
+                        floorId
                     };
                 }
             }
@@ -440,10 +439,7 @@
             return {
                 ownerType: "building",
                 ownerId,
-                floorId,
-                level: Number.isFinite(Number(record.traversalLayer))
-                    ? Math.round(Number(record.traversalLayer))
-                    : (Number.isFinite(Number(record.level)) ? Math.round(Number(record.level)) : undefined)
+                floorId
             };
         };
 
@@ -546,11 +542,6 @@
                 ownerId: reference.buildingId,
                 floorId: reference.sourceFloorId
             };
-            if (Number.isFinite(Number(normalized.traversalLayer))) {
-                expectedMembership.level = Math.round(Number(normalized.traversalLayer));
-            } else if (Number.isFinite(Number(normalized.level))) {
-                expectedMembership.level = Math.round(Number(normalized.level));
-            }
             const currentMembership = normalized.floorMembership && typeof normalized.floorMembership === "object"
                 ? normalized.floorMembership
                 : null;
@@ -558,8 +549,7 @@
                 !currentMembership ||
                 currentMembership.ownerType !== expectedMembership.ownerType ||
                 currentMembership.ownerId !== expectedMembership.ownerId ||
-                currentMembership.floorId !== expectedMembership.floorId ||
-                (Number.isFinite(expectedMembership.level) && Math.round(Number(currentMembership.level)) !== expectedMembership.level)
+                currentMembership.floorId !== expectedMembership.floorId
             ) {
                 normalized.floorMembership = expectedMembership;
                 changed = true;
