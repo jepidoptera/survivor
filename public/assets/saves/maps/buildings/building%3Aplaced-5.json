@@ -1,6 +1,6 @@
 {
   "schema": "survivor-building-v1",
-  "id": "building-15",
+  "id": "building:placed-5",
   "name": "the house",
   "origin": {
     "x": 0,
@@ -138,6 +138,7 @@
             2.8238124719587026
           ],
           "bottomZ": 0,
+          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/brick.jpg"
         },
         {
@@ -163,6 +164,7 @@
             2.885300018148837
           ],
           "bottomZ": 0,
+          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/brick.jpg"
         }
       ],
@@ -805,6 +807,26 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
+        "generatedBy": {
+          "type": "roof",
+          "mode": "gabled",
+          "roofId": "roof-38",
+          "floorId": "floor-fragment-26",
+          "plane": {
+            "kind": "shedPlane",
+            "mode": "gabled",
+            "direction": {
+              "x": 0,
+              "y": -1
+            },
+            "minProjection": -8,
+            "maxProjection": 5.091907427798054,
+            "baseZ": 5.029,
+            "peakHeight": 5,
+            "clearance": 0.001
+          },
+          "originalHeight": 4
+        },
         "stations": [
           {
             "t": 0,
@@ -831,27 +853,7 @@
             "leftHeight": 1.888309467473996,
             "rightHeight": 1.888309467473996
           }
-        ],
-        "generatedBy": {
-          "type": "roof",
-          "mode": "gabled",
-          "roofId": "roof-38",
-          "floorId": "floor-fragment-26",
-          "plane": {
-            "kind": "shedPlane",
-            "mode": "gabled",
-            "direction": {
-              "x": 0,
-              "y": -1
-            },
-            "minProjection": -8,
-            "maxProjection": 5.091907427798054,
-            "baseZ": 5.029,
-            "peakHeight": 5,
-            "clearance": 0.001
-          },
-          "originalHeight": 4
-        }
+        ]
       },
       "bottomZ": 4,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
@@ -984,18 +986,6 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
-        "stations": [
-          {
-            "t": 0,
-            "leftHeight": 1.7928306377546637,
-            "rightHeight": 1.9837882971933292
-          },
-          {
-            "t": 1,
-            "leftHeight": 1.7928306377546637,
-            "rightHeight": 1.9837882971933292
-          }
-        ],
         "generatedBy": {
           "type": "roof",
           "mode": "gabled",
@@ -1015,7 +1005,19 @@
             "clearance": 0.001
           },
           "originalHeight": 4
-        }
+        },
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 1.7928306377546637,
+            "rightHeight": 1.9837882971933292
+          },
+          {
+            "t": 1,
+            "leftHeight": 1.7928306377546637,
+            "rightHeight": 1.9837882971933292
+          }
+        ]
       },
       "bottomZ": 4,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
@@ -1109,6 +1111,26 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
+        "generatedBy": {
+          "type": "roof",
+          "mode": "gabled",
+          "roofId": "roof-38",
+          "floorId": "floor-fragment-26",
+          "plane": {
+            "kind": "shedPlane",
+            "mode": "gabled",
+            "direction": {
+              "x": 0,
+              "y": -1
+            },
+            "minProjection": -8,
+            "maxProjection": 5.091907427798054,
+            "baseZ": 5.029,
+            "peakHeight": 5,
+            "clearance": 0.001
+          },
+          "originalHeight": 4
+        },
         "stations": [
           {
             "t": 0,
@@ -1135,27 +1157,7 @@
             "leftHeight": 1.9585111766633743,
             "rightHeight": 1.9585111766633743
           }
-        ],
-        "generatedBy": {
-          "type": "roof",
-          "mode": "gabled",
-          "roofId": "roof-38",
-          "floorId": "floor-fragment-26",
-          "plane": {
-            "kind": "shedPlane",
-            "mode": "gabled",
-            "direction": {
-              "x": 0,
-              "y": -1
-            },
-            "minProjection": -8,
-            "maxProjection": 5.091907427798054,
-            "baseZ": 5.029,
-            "peakHeight": 5,
-            "clearance": 0.001
-          },
-          "originalHeight": 4
-        }
+        ]
       },
       "bottomZ": 4,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
@@ -1288,18 +1290,6 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
-        "stations": [
-          {
-            "t": 0,
-            "leftHeight": 1.863032346944041,
-            "rightHeight": 2.0539900063827066
-          },
-          {
-            "t": 1,
-            "leftHeight": 1.863032346944041,
-            "rightHeight": 2.0539900063827066
-          }
-        ],
         "generatedBy": {
           "type": "roof",
           "mode": "gabled",
@@ -1319,7 +1309,19 @@
             "clearance": 0.001
           },
           "originalHeight": 4
-        }
+        },
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 1.863032346944041,
+            "rightHeight": 2.0539900063827066
+          },
+          {
+            "t": 1,
+            "leftHeight": 1.863032346944041,
+            "rightHeight": 2.0539900063827066
+          }
+        ]
       },
       "bottomZ": 4,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
@@ -2545,5 +2547,411 @@
       ]
     }
   ],
-  "roof": null
+  "roof": null,
+  "sourceBuildingSaveName": "the house",
+  "buildingSaveName": "the house",
+  "transform": {
+    "x": -155.93187515726052,
+    "y": 215.14577136974268,
+    "rotation": 1.3089969389957472
+  },
+  "footprintPolygons": [
+    [
+      {
+        "x": -152.08417918300123,
+        "y": 202.45964510166272
+      },
+      {
+        "x": -147.153158735708,
+        "y": 220.86246394412203
+      },
+      {
+        "x": -163.57389778262217,
+        "y": 225.26238771086489
+      },
+      {
+        "x": -165.36699612709242,
+        "y": 218.57045358633422
+      },
+      {
+        "x": -170.19662525853775,
+        "y": 219.86454881184682
+      },
+      {
+        "x": -171.54144901689045,
+        "y": 214.84559821844883
+      },
+      {
+        "x": -166.71181988544512,
+        "y": 213.5515029929362
+      },
+      {
+        "x": -168.50491822991538,
+        "y": 206.85956886840555
+      }
+    ],
+    [
+      {
+        "x": -154.3095447826921,
+        "y": 205.74557753366926
+      },
+      {
+        "x": -164.93472887187184,
+        "y": 208.592587029797
+      },
+      {
+        "x": -161.3485321829313,
+        "y": 221.9764552788583
+      },
+      {
+        "x": -150.72334809375155,
+        "y": 219.12944578273058
+      }
+    ]
+  ],
+  "movementBlockerPolygons": [
+    {
+      "polygon": [
+        {
+          "x": -152.20491991128736,
+          "y": 202.49199748230052
+        },
+        {
+          "x": -168.38417750162924,
+          "y": 206.82721648776774
+        },
+        {
+          "x": -168.3194727403536,
+          "y": 207.06869794434002
+        },
+        {
+          "x": -152.14021515001173,
+          "y": 202.7334789388728
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-5:surface:floor-fragment-16",
+      "fragmentId": "building:placed-5:floor:floor-fragment-16",
+      "floorId": "floor-fragment-16",
+      "sourceFloorId": "floor-fragment-16",
+      "bottomZ": 0,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -168.47256584927757,
+          "y": 206.98030959669168
+        },
+        {
+          "x": -166.1869348619772,
+          "y": 215.51040056865045
+        },
+        {
+          "x": -165.94545340540495,
+          "y": 215.44569580737482
+        },
+        {
+          "x": -168.2310843927053,
+          "y": 206.91560483541605
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-5:surface:floor-fragment-16",
+      "fragmentId": "building:placed-5:floor:floor-fragment-16",
+      "floorId": "floor-fragment-16",
+      "sourceFloorId": "floor-fragment-16",
+      "bottomZ": 0,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -165.89188115056032,
+          "y": 216.61155601061998
+        },
+        {
+          "x": -163.60625016325997,
+          "y": 225.14164698257875
+        },
+        {
+          "x": -163.3647687066877,
+          "y": 225.0769422213031
+        },
+        {
+          "x": -165.65039969398808,
+          "y": 216.54685124934434
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-5:surface:floor-fragment-16",
+      "fragmentId": "building:placed-5:floor:floor-fragment-16",
+      "floorId": "floor-fragment-16",
+      "sourceFloorId": "floor-fragment-16",
+      "bottomZ": 0,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -163.45315705433603,
+          "y": 225.23003533022705
+        },
+        {
+          "x": -155.91830696301878,
+          "y": 223.21107833316904
+        },
+        {
+          "x": -155.9830117242944,
+          "y": 222.96959687659677
+        },
+        {
+          "x": -163.51786181561167,
+          "y": 224.9885538736548
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-5:surface:floor-fragment-16",
+      "fragmentId": "building:placed-5:floor:floor-fragment-16",
+      "floorId": "floor-fragment-16",
+      "sourceFloorId": "floor-fragment-16",
+      "bottomZ": 0,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -154.80874955531138,
+          "y": 222.91377332181787
+        },
+        {
+          "x": -147.27389946399413,
+          "y": 220.89481632475986
+        },
+        {
+          "x": -147.33860422526976,
+          "y": 220.65333486818759
+        },
+        {
+          "x": -154.87345431658702,
+          "y": 222.6722918652456
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-5:surface:floor-fragment-16",
+      "fragmentId": "building:placed-5:floor:floor-fragment-16",
+      "floorId": "floor-fragment-16",
+      "sourceFloorId": "floor-fragment-16",
+      "bottomZ": 0,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -147.18551111634582,
+          "y": 220.7417232158359
+        },
+        {
+          "x": -152.0518268023634,
+          "y": 202.58038582994882
+        },
+        {
+          "x": -152.29330825893567,
+          "y": 202.64509059122446
+        },
+        {
+          "x": -147.42699257291807,
+          "y": 220.80642797711153
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-5:surface:floor-fragment-16",
+      "fragmentId": "building:placed-5:floor:floor-fragment-16",
+      "floorId": "floor-fragment-16",
+      "sourceFloorId": "floor-fragment-16",
+      "bottomZ": 0,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -154.43028551097822,
+          "y": 205.77792991430707
+        },
+        {
+          "x": -164.8139881435857,
+          "y": 208.56023464915918
+        },
+        {
+          "x": -164.74928338231007,
+          "y": 208.80171610573143
+        },
+        {
+          "x": -154.3655807497026,
+          "y": 206.01941137087934
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-5:surface:floor-fragment-26",
+      "fragmentId": "building:placed-5:floor:floor-fragment-26",
+      "floorId": "floor-fragment-26",
+      "sourceFloorId": "floor-fragment-26",
+      "bottomZ": 4,
+      "height": 6.028998062848377
+    },
+    {
+      "polygon": [
+        {
+          "x": -164.902376491234,
+          "y": 208.71332775808312
+        },
+        {
+          "x": -161.3808845635691,
+          "y": 221.85571455057217
+        },
+        {
+          "x": -161.13940310699684,
+          "y": 221.79100978929657
+        },
+        {
+          "x": -164.66089503466173,
+          "y": 208.6486229968075
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-5:surface:floor-fragment-26",
+      "fragmentId": "building:placed-5:floor:floor-fragment-26",
+      "floorId": "floor-fragment-26",
+      "sourceFloorId": "floor-fragment-26",
+      "bottomZ": 4,
+      "height": 1.9837882971933292
+    },
+    {
+      "polygon": [
+        {
+          "x": -161.22779145464517,
+          "y": 221.9441028982205
+        },
+        {
+          "x": -150.8440888220377,
+          "y": 219.16179816336842
+        },
+        {
+          "x": -150.90879358331333,
+          "y": 218.92031670679614
+        },
+        {
+          "x": -161.2924962159208,
+          "y": 221.70262144164823
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-5:surface:floor-fragment-26",
+      "fragmentId": "building:placed-5:floor:floor-fragment-26",
+      "floorId": "floor-fragment-26",
+      "sourceFloorId": "floor-fragment-26",
+      "bottomZ": 4,
+      "height": 6.028998062848375
+    },
+    {
+      "polygon": [
+        {
+          "x": -150.75570047438936,
+          "y": 219.00870505444445
+        },
+        {
+          "x": -154.27719240205425,
+          "y": 205.8663182619554
+        },
+        {
+          "x": -154.51867385862653,
+          "y": 205.93102302323103
+        },
+        {
+          "x": -150.99718193096163,
+          "y": 219.07340981572008
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-5:surface:floor-fragment-26",
+      "fragmentId": "building:placed-5:floor:floor-fragment-26",
+      "floorId": "floor-fragment-26",
+      "sourceFloorId": "floor-fragment-26",
+      "bottomZ": 4,
+      "height": 2.0539900063827066
+    },
+    {
+      "polygon": [
+        {
+          "x": -171.63295536783656,
+          "y": 214.50409186750272
+        },
+        {
+          "x": -171.19994266594435,
+          "y": 214.75409186750272
+        },
+        {
+          "x": -171.44994266594435,
+          "y": 215.18710456939493
+        },
+        {
+          "x": -171.88295536783656,
+          "y": 214.93710456939493
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-5:surface:floor-fragment-16",
+      "fragmentId": "building:placed-5:floor:floor-fragment-16",
+      "floorId": "floor-fragment-16",
+      "sourceFloorId": "floor-fragment-16",
+      "bottomZ": 0,
+      "height": 2
+    },
+    {
+      "polygon": [
+        {
+          "x": -170.53813160948388,
+          "y": 219.95605516279292
+        },
+        {
+          "x": -170.28813160948388,
+          "y": 219.5230424609007
+        },
+        {
+          "x": -169.85511890759165,
+          "y": 219.7730424609007
+        },
+        {
+          "x": -170.10511890759165,
+          "y": 220.20605516279292
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-5:surface:floor-fragment-16",
+      "fragmentId": "building:placed-5:floor:floor-fragment-16",
+      "floorId": "floor-fragment-16",
+      "sourceFloorId": "floor-fragment-16",
+      "bottomZ": 0,
+      "height": 2
+    }
+  ],
+  "movementBlockerGeometryVersion": "layered-wall-column-stairless-v10-stack-layers",
+  "touchedSectionKeys": [
+    "-4,0",
+    "-4,1",
+    "-5,1"
+  ],
+  "overlappedSectionKeys": [
+    "-4,0",
+    "-4,1",
+    "-5,1"
+  ],
+  "objects": [],
+  "animals": [],
+  "powerups": [],
+  "triggers": [],
+  "loadState": "interior",
+  "contentVersion": 5,
+  "movementBlockedEdges": null,
+  "movementEdgeBlockerVersion": ""
 }

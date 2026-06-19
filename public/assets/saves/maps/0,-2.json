@@ -57312,7 +57312,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup1",
-      "id": 11
+      "id": 17
     },
     {
       "type": "powerup",
@@ -57336,7 +57336,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup3",
-      "id": 12
+      "id": 18
     },
     {
       "type": "powerup",
@@ -57360,7 +57360,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup6",
-      "id": 13
+      "id": 19
     },
     {
       "type": "powerup",
@@ -57384,7 +57384,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup7",
-      "id": 14
+      "id": 20
     },
     {
       "type": "powerup",
@@ -57408,7 +57408,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup15",
-      "id": 15
+      "id": 21
     },
     {
       "type": "powerup",
@@ -57432,7 +57432,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup18",
-      "id": 16
+      "id": 22
     },
     {
       "type": "powerup",
@@ -57456,7 +57456,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup20",
-      "id": 17
+      "id": 23
     },
     {
       "type": "powerup",
@@ -57480,7 +57480,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup23",
-      "id": 18
+      "id": 24
     },
     {
       "type": "powerup",
@@ -57504,7 +57504,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup25",
-      "id": 19
+      "id": 25
     },
     {
       "type": "powerup",
@@ -57528,7 +57528,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup56",
-      "id": 20
+      "id": 26
     },
     {
       "type": "powerup",
@@ -57552,7 +57552,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup57",
-      "id": 21
+      "id": 27
     },
     {
       "type": "powerup",
@@ -57576,7 +57576,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup59",
-      "id": 22
+      "id": 28
     },
     {
       "type": "powerup",
@@ -57600,7 +57600,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup61",
-      "id": 23
+      "id": 29
     },
     {
       "type": "powerup",
@@ -57624,7 +57624,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup66",
-      "id": 24
+      "id": 30
     },
     {
       "type": "powerup",
@@ -57648,7 +57648,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup68",
-      "id": 25
+      "id": 31
     },
     {
       "type": "powerup",
@@ -57672,7 +57672,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup69",
-      "id": 26
+      "id": 32
     },
     {
       "type": "powerup",
@@ -57696,7 +57696,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup70",
-      "id": 27
+      "id": 33
     }
   ],
   "buildingRefs": []

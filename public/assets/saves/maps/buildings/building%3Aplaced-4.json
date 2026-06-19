@@ -1,6 +1,6 @@
 {
   "schema": "survivor-building-v1",
-  "id": "building-27",
+  "id": "building:placed-4",
   "name": "the cottage",
   "origin": {
     "x": 0,
@@ -72,6 +72,7 @@
           "height": 2,
           "topHeights": null,
           "bottomZ": 0,
+          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/brick.jpg"
         }
       ],
@@ -82,40 +83,40 @@
           "stairKind": "treadPath",
           "floorId": "floor-fragment-28",
           "startPoint": {
-            "x": -3.9549210912262436,
-            "y": 0.8021290761198314
+            "x": -3.9323211739054633,
+            "y": 0.8187596295681907
           },
           "endPoint": {
-            "x": 2.252904569442261,
-            "y": 0.8021290761198314
+            "x": 2.275504486763041,
+            "y": 0.8187596295681907
           },
           "treads": [
             {
               "left": {
-                "x": -3.9549210912262436,
-                "y": 0.0021290761198313746
+                "x": -3.9323211739054633,
+                "y": 0.01875962956819066
               },
               "right": {
-                "x": -3.9549210912262436,
-                "y": 1.6021290761198315
+                "x": -3.9323211739054633,
+                "y": 1.6187596295681907
               },
               "center": {
-                "x": -3.9549210912262436,
-                "y": 0.8021290761198314
+                "x": -3.9323211739054633,
+                "y": 0.8187596295681907
               }
             },
             {
               "left": {
-                "x": 2.252904569442261,
-                "y": 1.6021290761198315
+                "x": 2.275504486763041,
+                "y": 1.6187596295681907
               },
               "right": {
-                "x": 2.252904569442261,
-                "y": 0.0021290761198313746
+                "x": 2.275504486763041,
+                "y": 0.01875962956819066
               },
               "center": {
-                "x": 2.252904569442261,
-                "y": 0.8021290761198314
+                "x": 2.275504486763041,
+                "y": 0.8187596295681907
               }
             }
           ],
@@ -131,20 +132,20 @@
           "riserTexturePath": "/assets/images/flooring/black.png",
           "footprint": [
             {
-              "x": -3.9549210912262436,
-              "y": 0.0021290761198313746
+              "x": -3.9323211739054633,
+              "y": 0.01875962956819066
             },
             {
-              "x": 2.252904569442261,
-              "y": 1.6021290761198315
+              "x": 2.275504486763041,
+              "y": 1.6187596295681907
             },
             {
-              "x": 2.252904569442261,
-              "y": 0.0021290761198313746
+              "x": 2.275504486763041,
+              "y": 0.01875962956819066
             },
             {
-              "x": -3.9549210912262436,
-              "y": 1.6021290761198315
+              "x": -3.9323211739054633,
+              "y": 1.6187596295681907
             }
           ]
         }
@@ -628,18 +629,6 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
-        "stations": [
-          {
-            "t": 0,
-            "leftHeight": 3.2455127020785213,
-            "rightHeight": 3.029
-          },
-          {
-            "t": 1,
-            "leftHeight": 3.2455127020785213,
-            "rightHeight": 3.029
-          }
-        ],
         "generatedBy": {
           "type": "roof",
           "mode": "gabled",
@@ -659,7 +648,19 @@
             "clearance": 0.001
           },
           "originalHeight": 3
-        }
+        },
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 3.2455127020785213,
+            "rightHeight": 3.029
+          },
+          {
+            "t": 1,
+            "leftHeight": 3.2455127020785213,
+            "rightHeight": 3.029
+          }
+        ]
       },
       "bottomZ": 3,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
@@ -753,23 +754,6 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
-        "stations": [
-          {
-            "t": 0,
-            "leftHeight": 3.1372563510392615,
-            "rightHeight": 3.1372563510392615
-          },
-          {
-            "t": 0.5,
-            "leftHeight": 9.028999999999998,
-            "rightHeight": 9.028999999999998
-          },
-          {
-            "t": 1,
-            "leftHeight": 3.1372563510392624,
-            "rightHeight": 3.1372563510392624
-          }
-        ],
         "generatedBy": {
           "type": "roof",
           "mode": "gabled",
@@ -789,7 +773,24 @@
             "clearance": 0.001
           },
           "originalHeight": 3
-        }
+        },
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 3.1372563510392615,
+            "rightHeight": 3.1372563510392615
+          },
+          {
+            "t": 0.5,
+            "leftHeight": 9.028999999999998,
+            "rightHeight": 9.028999999999998
+          },
+          {
+            "t": 1,
+            "leftHeight": 3.1372563510392624,
+            "rightHeight": 3.1372563510392624
+          }
+        ]
       },
       "bottomZ": 3,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
@@ -896,18 +897,6 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
-        "stations": [
-          {
-            "t": 0,
-            "leftHeight": 3.245512702078523,
-            "rightHeight": 3.0290000000000017
-          },
-          {
-            "t": 1,
-            "leftHeight": 3.2455127020785213,
-            "rightHeight": 3.029
-          }
-        ],
         "generatedBy": {
           "type": "roof",
           "mode": "gabled",
@@ -927,7 +916,19 @@
             "clearance": 0.001
           },
           "originalHeight": 3
-        }
+        },
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 3.245512702078523,
+            "rightHeight": 3.0290000000000017
+          },
+          {
+            "t": 1,
+            "leftHeight": 3.2455127020785213,
+            "rightHeight": 3.029
+          }
+        ]
       },
       "bottomZ": 3,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
@@ -1021,23 +1022,6 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
-        "stations": [
-          {
-            "t": 0,
-            "leftHeight": 3.1372563510392606,
-            "rightHeight": 3.1372563510392606
-          },
-          {
-            "t": 0.5,
-            "leftHeight": 9.029,
-            "rightHeight": 9.029
-          },
-          {
-            "t": 1,
-            "leftHeight": 3.1372563510392615,
-            "rightHeight": 3.1372563510392615
-          }
-        ],
         "generatedBy": {
           "type": "roof",
           "mode": "gabled",
@@ -1057,7 +1041,24 @@
             "clearance": 0.001
           },
           "originalHeight": 3
-        }
+        },
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 3.1372563510392606,
+            "rightHeight": 3.1372563510392606
+          },
+          {
+            "t": 0.5,
+            "leftHeight": 9.029,
+            "rightHeight": 9.029
+          },
+          {
+            "t": 1,
+            "leftHeight": 3.1372563510392615,
+            "rightHeight": 3.1372563510392615
+          }
+        ]
       },
       "bottomZ": 3,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
@@ -2972,5 +2973,568 @@
       ]
     }
   ],
-  "roof": null
+  "roof": null,
+  "sourceBuildingSaveName": "the cottage",
+  "buildingSaveName": "the cottage",
+  "transform": {
+    "x": -132.97764591148206,
+    "y": 198.59312744797813,
+    "rotation": 0
+  },
+  "footprintPolygons": [
+    [
+      {
+        "x": -142.93664591148206,
+        "y": 198.34312744797813
+      },
+      {
+        "x": -129.08064591148207,
+        "y": 198.34312744797813
+      },
+      {
+        "x": -129.08064591148207,
+        "y": 212.19912744797813
+      },
+      {
+        "x": -142.93664591148206,
+        "y": 212.19912744797813
+      }
+    ],
+    [
+      {
+        "x": -142.93664591148206,
+        "y": 198.34312744797813
+      },
+      {
+        "x": -129.08064591148207,
+        "y": 198.34312744797813
+      },
+      {
+        "x": -129.08064591148207,
+        "y": 212.19912744797813
+      },
+      {
+        "x": -142.93664591148206,
+        "y": 212.19912744797813
+      }
+    ]
+  ],
+  "movementBlockerPolygons": [
+    {
+      "polygon": [
+        {
+          "x": -142.81164591148206,
+          "y": 198.59312744797813
+        },
+        {
+          "x": -129.20564591148207,
+          "y": 198.59312744797813
+        },
+        {
+          "x": -129.20564591148207,
+          "y": 198.34312744797813
+        },
+        {
+          "x": -142.81164591148206,
+          "y": 198.34312744797813
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-4:surface:floor-fragment-28",
+      "fragmentId": "building:placed-4:floor:floor-fragment-28",
+      "floorId": "floor-fragment-28",
+      "sourceFloorId": "floor-fragment-28",
+      "bottomZ": 0,
+      "height": 3
+    },
+    {
+      "polygon": [
+        {
+          "x": -129.33064591148207,
+          "y": 198.46812744797813
+        },
+        {
+          "x": -129.33064591148207,
+          "y": 212.07412744797813
+        },
+        {
+          "x": -129.08064591148207,
+          "y": 212.07412744797813
+        },
+        {
+          "x": -129.08064591148207,
+          "y": 198.46812744797813
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-4:surface:floor-fragment-28",
+      "fragmentId": "building:placed-4:floor:floor-fragment-28",
+      "floorId": "floor-fragment-28",
+      "sourceFloorId": "floor-fragment-28",
+      "bottomZ": 0,
+      "height": 3
+    },
+    {
+      "polygon": [
+        {
+          "x": -129.20564591148207,
+          "y": 211.94912744797813
+        },
+        {
+          "x": -135.58350900279126,
+          "y": 211.94912744797813
+        },
+        {
+          "x": -135.58350900279126,
+          "y": 212.19912744797813
+        },
+        {
+          "x": -129.20564591148207,
+          "y": 212.19912744797813
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-4:surface:floor-fragment-28",
+      "fragmentId": "building:placed-4:floor:floor-fragment-28",
+      "floorId": "floor-fragment-28",
+      "sourceFloorId": "floor-fragment-28",
+      "bottomZ": 0,
+      "height": 3
+    },
+    {
+      "polygon": [
+        {
+          "x": -136.43378282017284,
+          "y": 211.94912744797813
+        },
+        {
+          "x": -142.81164591148206,
+          "y": 211.94912744797813
+        },
+        {
+          "x": -142.81164591148206,
+          "y": 212.19912744797813
+        },
+        {
+          "x": -136.43378282017284,
+          "y": 212.19912744797813
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-4:surface:floor-fragment-28",
+      "fragmentId": "building:placed-4:floor:floor-fragment-28",
+      "floorId": "floor-fragment-28",
+      "sourceFloorId": "floor-fragment-28",
+      "bottomZ": 0,
+      "height": 3
+    },
+    {
+      "polygon": [
+        {
+          "x": -142.68664591148206,
+          "y": 212.07412744797813
+        },
+        {
+          "x": -142.68664591148206,
+          "y": 203.75255007095464
+        },
+        {
+          "x": -142.93664591148206,
+          "y": 203.75255007095464
+        },
+        {
+          "x": -142.93664591148206,
+          "y": 212.07412744797813
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-4:surface:floor-fragment-28",
+      "fragmentId": "building:placed-4:floor:floor-fragment-28",
+      "floorId": "floor-fragment-28",
+      "sourceFloorId": "floor-fragment-28",
+      "bottomZ": 0,
+      "height": 3
+    },
+    {
+      "polygon": [
+        {
+          "x": -142.68664591148206,
+          "y": 202.90227625357306
+        },
+        {
+          "x": -142.68664591148206,
+          "y": 198.46812744797813
+        },
+        {
+          "x": -142.93664591148206,
+          "y": 198.46812744797813
+        },
+        {
+          "x": -142.93664591148206,
+          "y": 202.90227625357306
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-4:surface:floor-fragment-28",
+      "fragmentId": "building:placed-4:floor:floor-fragment-28",
+      "floorId": "floor-fragment-28",
+      "sourceFloorId": "floor-fragment-28",
+      "bottomZ": 0,
+      "height": 3
+    },
+    {
+      "polygon": [
+        {
+          "x": -142.81164591148206,
+          "y": 198.59312744797813
+        },
+        {
+          "x": -129.20564591148207,
+          "y": 198.59312744797813
+        },
+        {
+          "x": -129.20564591148207,
+          "y": 198.34312744797813
+        },
+        {
+          "x": -142.81164591148206,
+          "y": 198.34312744797813
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "floorId": "floor-fragment-34",
+      "sourceFloorId": "floor-fragment-34",
+      "bottomZ": 3,
+      "height": 3.2455127020785213
+    },
+    {
+      "polygon": [
+        {
+          "x": -129.33064591148207,
+          "y": 198.46812744797813
+        },
+        {
+          "x": -129.33064591148207,
+          "y": 212.07412744797813
+        },
+        {
+          "x": -129.08064591148207,
+          "y": 212.07412744797813
+        },
+        {
+          "x": -129.08064591148207,
+          "y": 198.46812744797813
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "floorId": "floor-fragment-34",
+      "sourceFloorId": "floor-fragment-34",
+      "bottomZ": 3,
+      "height": 9.028999999999998
+    },
+    {
+      "polygon": [
+        {
+          "x": -129.20564591148207,
+          "y": 211.94912744797813
+        },
+        {
+          "x": -142.81164591148206,
+          "y": 211.94912744797813
+        },
+        {
+          "x": -142.81164591148206,
+          "y": 212.19912744797813
+        },
+        {
+          "x": -129.20564591148207,
+          "y": 212.19912744797813
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "floorId": "floor-fragment-34",
+      "sourceFloorId": "floor-fragment-34",
+      "bottomZ": 3,
+      "height": 3.245512702078523
+    },
+    {
+      "polygon": [
+        {
+          "x": -142.68664591148206,
+          "y": 212.07412744797813
+        },
+        {
+          "x": -142.68664591148206,
+          "y": 198.46812744797813
+        },
+        {
+          "x": -142.93664591148206,
+          "y": 198.46812744797813
+        },
+        {
+          "x": -142.93664591148206,
+          "y": 212.07412744797813
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "floorId": "floor-fragment-34",
+      "sourceFloorId": "floor-fragment-34",
+      "bottomZ": 3,
+      "height": 9.029
+    },
+    {
+      "polygon": [
+        {
+          "x": -129.32926221103847,
+          "y": 207.66319461208963
+        },
+        {
+          "x": -130.19709265400323,
+          "y": 207.66319461208963
+        },
+        {
+          "x": -130.19709265400323,
+          "y": 207.78819461208963
+        },
+        {
+          "x": -129.32926221103847,
+          "y": 207.78819461208963
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-4:surface:floor-fragment-28",
+      "fragmentId": "building:placed-4:floor:floor-fragment-28",
+      "floorId": "floor-fragment-28",
+      "sourceFloorId": "floor-fragment-28",
+      "bottomZ": 0,
+      "height": 12
+    },
+    {
+      "polygon": [
+        {
+          "x": -130.25959265400323,
+          "y": 207.72569461208963
+        },
+        {
+          "x": -130.25959265400323,
+          "y": 208.5332535308206
+        },
+        {
+          "x": -130.13459265400323,
+          "y": 208.5332535308206
+        },
+        {
+          "x": -130.13459265400323,
+          "y": 207.72569461208963
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-4:surface:floor-fragment-28",
+      "fragmentId": "building:placed-4:floor:floor-fragment-28",
+      "floorId": "floor-fragment-28",
+      "sourceFloorId": "floor-fragment-28",
+      "bottomZ": 0,
+      "height": 12
+    },
+    {
+      "polygon": [
+        {
+          "x": -130.19709265400323,
+          "y": 208.5957535308206
+        },
+        {
+          "x": -129.3259888775117,
+          "y": 208.5957535308206
+        },
+        {
+          "x": -129.3259888775117,
+          "y": 208.4707535308206
+        },
+        {
+          "x": -130.19709265400323,
+          "y": 208.4707535308206
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-4:surface:floor-fragment-28",
+      "fragmentId": "building:placed-4:floor:floor-fragment-28",
+      "floorId": "floor-fragment-28",
+      "sourceFloorId": "floor-fragment-28",
+      "bottomZ": 0,
+      "height": 12
+    },
+    {
+      "polygon": [
+        {
+          "x": -129.39176169761376,
+          "y": 207.7259479455122
+        },
+        {
+          "x": -129.38848836408698,
+          "y": 208.53350686424315
+        },
+        {
+          "x": -129.26348939093637,
+          "y": 208.533000197398
+        },
+        {
+          "x": -129.26676272446315,
+          "y": 207.72544127866703
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-4:surface:floor-fragment-28",
+      "fragmentId": "building:placed-4:floor:floor-fragment-28",
+      "floorId": "floor-fragment-28",
+      "sourceFloorId": "floor-fragment-28",
+      "bottomZ": 0,
+      "height": 12
+    },
+    {
+      "polygon": [
+        {
+          "x": -130.3243590185476,
+          "y": 209.13368695833782
+        },
+        {
+          "x": -130.3243590185476,
+          "y": 207.13368695833782
+        },
+        {
+          "x": -129.3243590185476,
+          "y": 207.13368695833782
+        },
+        {
+          "x": -129.3243590185476,
+          "y": 209.13368695833782
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-4:surface:floor-fragment-28",
+      "fragmentId": "building:placed-4:floor:floor-fragment-28",
+      "floorId": "floor-fragment-28",
+      "sourceFloorId": "floor-fragment-28",
+      "bottomZ": 0,
+      "height": 2
+    }
+  ],
+  "movementBlockerGeometryVersion": "layered-wall-column-stairless-v10-stack-layers",
+  "touchedSectionKeys": [
+    "-4,0"
+  ],
+  "overlappedSectionKeys": [
+    "-4,0"
+  ],
+  "objects": [
+    {
+      "type": "placedObject",
+      "x": -136.38048530279627,
+      "y": 206.02161425309666,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "z": 0,
+      "floorMembership": {
+        "ownerType": "building",
+        "ownerId": "building:placed-4",
+        "floorId": "floor-fragment-28"
+      },
+      "scriptingName": "furniture6",
+      "texturePath": "/assets/images/furniture/crystal%20ball.png",
+      "category": "furniture",
+      "width": 2.138,
+      "height": 2.138,
+      "renderDepthOffset": 0,
+      "rotationAxis": "visual",
+      "placementRotation": 30,
+      "isPassable": false,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "castsLosShadows": false,
+      "zMode": "local",
+      "currentLayerBaseZ": 0,
+      "id": 11377,
+      "fragmentId": "building:placed-4:floor:floor-fragment-28",
+      "surfaceId": "building:placed-4:surface:floor-fragment-28"
+    },
+    {
+      "type": "placedObject",
+      "x": -140.07398987445816,
+      "y": 206.3245334569686,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "z": 0,
+      "traversalLayer": 1,
+      "floorMembership": {
+        "ownerType": "building",
+        "ownerId": "building:placed-4",
+        "floorId": "floor-fragment-34"
+      },
+      "scriptingName": "furniture4",
+      "texturePath": "/assets/images/furniture/table.png",
+      "category": "furniture",
+      "width": 2.733,
+      "height": 2.733,
+      "renderDepthOffset": 0,
+      "rotationAxis": "visual",
+      "placementRotation": 30,
+      "isPassable": false,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "castsLosShadows": false,
+      "zMode": "local",
+      "currentLayerBaseZ": 3,
+      "id": 11375,
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34"
+    }
+  ],
+  "animals": [
+    {
+      "type": "squirrel",
+      "x": -132.2093333333334,
+      "y": 198.83333333333326,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5521505999139358,
+      "inventory": {},
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "floorMembership": {
+        "ownerType": "building",
+        "ownerId": "building:placed-4",
+        "floorId": "floor-fragment-34"
+      },
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel1",
+      "id": 262
+    }
+  ],
+  "powerups": [],
+  "triggers": [],
+  "loadState": "interior",
+  "contentVersion": 714,
+  "movementBlockedEdges": null,
+  "movementEdgeBlockerVersion": ""
 }

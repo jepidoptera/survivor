@@ -1,8 +1,8 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -42.88660220589403,
-    "y": 125.81403600261217,
+    "x": -42.4211549866698,
+    "y": 124.2137855157392,
     "z": 0,
     "currentLayer": 8,
     "traversalLayer": 8,
@@ -24,7 +24,7 @@
     "shieldHp": 0,
     "maxShieldHp": 0,
     "food": 0,
-    "currentSpell": "editorvanish",
+    "currentSpell": "moveobject",
     "activeAura": "speed",
     "activeAuras": [
       "speed"
@@ -59,7 +59,10 @@
       "/assets/images/windows/pointy%20arch%20window.png": 0,
       "/assets/images/windows/very%20plain%20arch.png": 0,
       "/assets/images/furniture/redrug.png": 0,
-      "/assets/images/furniture/table.png": 0
+      "/assets/images/furniture/table.png": 0,
+      "/assets/images/furniture/bed.png": 0,
+      "/assets/images/furniture/bed2.png": 0,
+      "/assets/images/furniture/armor.png": 0
     },
     "selectedPlaceableScale": 2.138,
     "selectedPlaceableScaleByTexture": {
@@ -68,7 +71,7 @@
       "/assets/images/roofs/smallshingles.png": 1.023,
       "/assets/images/roofs/slate.png": 1,
       "/assets/images/furniture/chair.png": 1,
-      "/assets/images/furniture/circlerug.png": 4,
+      "/assets/images/furniture/circlerug.png": 6.196,
       "/assets/images/doors/door2.png": 1.932,
       "/assets/images/flowers/red%20flower.png": 0.55,
       "/assets/images/flowers/fireflower.png": 5,
@@ -78,7 +81,10 @@
       "/assets/images/windows/pointy%20arch%20window.png": 1.468,
       "/assets/images/windows/very%20plain%20arch.png": 1.81,
       "/assets/images/furniture/redrug.png": 4,
-      "/assets/images/furniture/table.png": 2.733
+      "/assets/images/furniture/table.png": 2.733,
+      "/assets/images/furniture/bed.png": 6.196,
+      "/assets/images/furniture/bed2.png": 3.657,
+      "/assets/images/furniture/armor.png": 2.731
     },
     "selectedPlaceableRotation": 30,
     "selectedPlaceableRotationByTexture": {
@@ -97,7 +103,10 @@
       "/assets/images/windows/pointy%20arch%20window.png": 0,
       "/assets/images/windows/very%20plain%20arch.png": 0,
       "/assets/images/furniture/redrug.png": 0,
-      "/assets/images/furniture/table.png": 30
+      "/assets/images/furniture/table.png": 30,
+      "/assets/images/furniture/bed.png": 0,
+      "/assets/images/furniture/bed2.png": 0,
+      "/assets/images/furniture/armor.png": 0
     },
     "selectedPlaceableRotationAxis": "visual",
     "selectedPlaceableRotationAxisByTexture": {
@@ -116,7 +125,10 @@
       "/assets/images/windows/pointy%20arch%20window.png": "spatial",
       "/assets/images/windows/very%20plain%20arch.png": "spatial",
       "/assets/images/furniture/redrug.png": "ground",
-      "/assets/images/furniture/table.png": "visual"
+      "/assets/images/furniture/table.png": "visual",
+      "/assets/images/furniture/bed.png": "visual",
+      "/assets/images/furniture/bed2.png": "visual",
+      "/assets/images/furniture/armor.png": "none"
     },
     "selectedPlaceableAnchorX": 0.5,
     "selectedPlaceableAnchorY": 0.5,
@@ -136,7 +148,10 @@
       "/assets/images/windows/pointy%20arch%20window.png": 0.5,
       "/assets/images/windows/very%20plain%20arch.png": 0.5,
       "/assets/images/furniture/redrug.png": 0.5,
-      "/assets/images/furniture/table.png": 0.5
+      "/assets/images/furniture/table.png": 0.5,
+      "/assets/images/furniture/bed.png": 0.5,
+      "/assets/images/furniture/bed2.png": 0.5,
+      "/assets/images/furniture/armor.png": 0.5
     },
     "selectedPlaceableAnchorYByTexture": {
       "/assets/images/doors/door5.png": 1,
@@ -154,7 +169,10 @@
       "/assets/images/windows/pointy%20arch%20window.png": 0.5,
       "/assets/images/windows/very%20plain%20arch.png": 0.5,
       "/assets/images/furniture/redrug.png": 0.5,
-      "/assets/images/furniture/table.png": 0.5
+      "/assets/images/furniture/table.png": 0.5,
+      "/assets/images/furniture/bed.png": 0.5,
+      "/assets/images/furniture/bed2.png": 0.5,
+      "/assets/images/furniture/armor.png": 0.9
     },
     "selectedPowerupPlacementScale": 2.043,
     "selectedPowerupFileName": "chalice.png",
@@ -239,8 +257,8 @@
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -58.3781864186765,
-      "y": 107.45452978234948
+      "x": -57.92739349859048,
+      "y": 105.84596092840242
     }
   },
   "los": {

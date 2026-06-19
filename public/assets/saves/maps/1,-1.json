@@ -160077,7 +160077,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup13",
-      "id": 28
+      "id": 34
     },
     {
       "type": "powerup",
@@ -160101,7 +160101,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup21",
-      "id": 29
+      "id": 35
     },
     {
       "type": "powerup",
@@ -160125,7 +160125,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup22",
-      "id": 30
+      "id": 36
     },
     {
       "type": "powerup",
@@ -160153,7 +160153,7 @@
         "playerTouches": "player.speed += 2;",
         "__init": "this.forceVisible = true"
       },
-      "id": 31
+      "id": 37
     },
     {
       "type": "powerup",
@@ -160180,7 +160180,7 @@
       "script": {
         "playerTouches": "healPlayer(this.size * 10)"
       },
-      "id": 32
+      "id": 38
     },
     {
       "type": "powerup",
@@ -160207,7 +160207,7 @@
       "script": {
         "playerTouches": "healPlayer(this.size * 10)"
       },
-      "id": 33
+      "id": 39
     },
     {
       "type": "powerup",
@@ -160234,7 +160234,7 @@
       "script": {
         "playerTouches": "healPlayer(this.size * 10)"
       },
-      "id": 34
+      "id": 40
     },
     {
       "type": "powerup",
@@ -160261,7 +160261,7 @@
       "script": {
         "playerTouches": "healPlayer(this.size * 10)"
       },
-      "id": 35
+      "id": 41
     },
     {
       "type": "powerup",
@@ -160288,7 +160288,7 @@
       "script": {
         "playerTouches": "healPlayer(this.size * 10)"
       },
-      "id": 36
+      "id": 42
     },
     {
       "type": "powerup",
@@ -160315,7 +160315,7 @@
       "script": {
         "playerTouches": "healPlayer(this.size * 10)"
       },
-      "id": 37
+      "id": 43
     },
     {
       "type": "powerup",
@@ -160342,7 +160342,7 @@
       "script": {
         "playerTouches": "healPlayer(this.size * 10)"
       },
-      "id": 38
+      "id": 44
     }
   ],
   "buildingRefs": []

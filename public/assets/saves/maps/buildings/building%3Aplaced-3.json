@@ -1,6 +1,6 @@
 {
   "schema": "survivor-building-v1",
-  "id": "building-63",
+  "id": "building:placed-3",
   "name": "the tower",
   "origin": {
     "x": 0,
@@ -7135,5 +7135,2333 @@
       ]
     }
   ],
-  "roof": null
+  "roof": null,
+  "sourceBuildingSaveName": "the tower",
+  "buildingSaveName": "the tower",
+  "transform": {
+    "x": -143.7388311057134,
+    "y": 191.66609270687596,
+    "rotation": 0
+  },
+  "footprintPolygons": [
+    [
+      {
+        "x": -151.9658311057134,
+        "y": 185.91609270687596
+      },
+      {
+        "x": -150.70036945416092,
+        "y": 185.87541215718034
+      },
+      {
+        "x": -149.4674984617215,
+        "y": 186.16364333987036
+      },
+      {
+        "x": -148.35123624911424,
+        "y": 186.76114377617026
+      },
+      {
+        "x": -147.42765424141777,
+        "y": 187.62719479876236
+      },
+      {
+        "x": -146.7596930261652,
+        "y": 188.702776461674
+      },
+      {
+        "x": -146.39287305631788,
+        "y": 189.91458965206047
+      },
+      {
+        "x": -146.35219250662226,
+        "y": 191.18005130361294
+      },
+      {
+        "x": -146.64042368931229,
+        "y": 192.4129222960524
+      },
+      {
+        "x": -147.23792412561218,
+        "y": 193.52918450865965
+      },
+      {
+        "x": -148.10397514820428,
+        "y": 194.4527665163561
+      },
+      {
+        "x": -149.17955681111593,
+        "y": 195.12072773160867
+      },
+      {
+        "x": -150.39137000150242,
+        "y": 195.48754770145598
+      },
+      {
+        "x": -151.6568316530549,
+        "y": 195.5282282511516
+      },
+      {
+        "x": -152.8897026454943,
+        "y": 195.23999706846158
+      },
+      {
+        "x": -154.00596485810158,
+        "y": 194.64249663216168
+      },
+      {
+        "x": -154.92954686579802,
+        "y": 193.77644560956958
+      },
+      {
+        "x": -155.5975080810506,
+        "y": 192.70086394665793
+      },
+      {
+        "x": -155.9643280508979,
+        "y": 191.48905075627147
+      },
+      {
+        "x": -156.00500860059356,
+        "y": 190.223589104719
+      },
+      {
+        "x": -155.71677741790353,
+        "y": 188.99071811227958
+      },
+      {
+        "x": -155.1192769816036,
+        "y": 187.8744558996723
+      },
+      {
+        "x": -154.2532259590115,
+        "y": 186.95087389197585
+      },
+      {
+        "x": -153.17764429609988,
+        "y": 186.28291267672327
+      }
+    ],
+    [
+      {
+        "x": -157.35491064865022,
+        "y": 190.19374471447043
+      },
+      {
+        "x": -157.01295837249617,
+        "y": 188.61251028590868
+      },
+      {
+        "x": -156.27340425271706,
+        "y": 187.17365887552825
+      },
+      {
+        "x": -155.18664768040486,
+        "y": 185.97524582913223
+      },
+      {
+        "x": -153.8267493200125,
+        "y": 185.09894101536128
+      },
+      {
+        "x": -152.28638399746242,
+        "y": 184.6044631591117
+      },
+      {
+        "x": -150.67052506391235,
+        "y": 184.52551010912364
+      },
+      {
+        "x": -149.0892906353506,
+        "y": 184.86746238527772
+      },
+      {
+        "x": -147.65043922497017,
+        "y": 185.6070165050568
+      },
+      {
+        "x": -146.45202617857416,
+        "y": 186.693773077369
+      },
+      {
+        "x": -145.5757213648032,
+        "y": 188.05367143776138
+      },
+      {
+        "x": -145.08124350855365,
+        "y": 189.59403676031144
+      },
+      {
+        "x": -145.0022904585656,
+        "y": 191.2098956938615
+      },
+      {
+        "x": -145.34424273471964,
+        "y": 192.79113012242328
+      },
+      {
+        "x": -146.08379685449873,
+        "y": 194.2299815328037
+      },
+      {
+        "x": -147.17055342681093,
+        "y": 195.4283945791997
+      },
+      {
+        "x": -148.5304517872033,
+        "y": 196.30469939297066
+      },
+      {
+        "x": -150.07081710975336,
+        "y": 196.79917724922024
+      },
+      {
+        "x": -151.68667604330344,
+        "y": 196.8781302992083
+      },
+      {
+        "x": -153.2679104718652,
+        "y": 196.53617802305425
+      },
+      {
+        "x": -154.70676188224562,
+        "y": 195.79662390327513
+      },
+      {
+        "x": -155.90517492864163,
+        "y": 194.70986733096294
+      },
+      {
+        "x": -156.78147974241259,
+        "y": 193.34996897057056
+      },
+      {
+        "x": -157.27595759866216,
+        "y": 191.8096036480205
+      }
+    ]
+  ],
+  "movementBlockerPolygons": [
+    {
+      "polygon": [
+        {
+          "x": -151.94135048819533,
+          "y": 186.16543487700633
+        },
+        {
+          "x": -150.70878496771653,
+          "y": 186.12581183284104
+        },
+        {
+          "x": -150.71681751969774,
+          "y": 185.87594090994548
+        },
+        {
+          "x": -151.94938304017654,
+          "y": 185.91556395411078
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -150.74125749583365,
+          "y": 186.12259424894177
+        },
+        {
+          "x": -149.54043542855482,
+          "y": 186.40333275830292
+        },
+        {
+          "x": -149.48352292430178,
+          "y": 186.1598970032059
+        },
+        {
+          "x": -150.68434499158062,
+          "y": 185.87915849384476
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -149.57096871011572,
+          "y": 186.39182030219703
+        },
+        {
+          "x": -148.48372413546963,
+          "y": 186.97378849961402
+        },
+        {
+          "x": -148.3657450680948,
+          "y": 186.7533776567288
+        },
+        {
+          "x": -149.4529896427409,
+          "y": 186.1714094593118
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -148.51023737779454,
+          "y": 186.95476572615988
+        },
+        {
+          "x": -147.61066421678672,
+          "y": 187.7983034407266
+        },
+        {
+          "x": -147.43965866476208,
+          "y": 187.6159381447497
+        },
+        {
+          "x": -148.3392318257699,
+          "y": 186.77240043018293
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -147.63135058622638,
+          "y": 187.77306672049852
+        },
+        {
+          "x": -146.98075326316456,
+          "y": 188.82068825097932
+        },
+        {
+          "x": -146.76837497226057,
+          "y": 188.68879639545858
+        },
+        {
+          "x": -147.4189722953224,
+          "y": 187.64117486497778
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -146.99420301782754,
+          "y": 188.79095742475513
+        },
+        {
+          "x": -146.63691866511547,
+          "y": 189.97126909512411
+        },
+        {
+          "x": -146.39764086488552,
+          "y": 189.89883889205174
+        },
+        {
+          "x": -146.7549252175976,
+          "y": 188.71852722168273
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -146.64221522644826,
+          "y": 189.93907026957854
+        },
+        {
+          "x": -146.60259218228296,
+          "y": 191.17163579005734
+        },
+        {
+          "x": -146.3527212593874,
+          "y": 191.16360323807612
+        },
+        {
+          "x": -146.39234430355273,
+          "y": 189.93103771759732
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -146.5993745983837,
+          "y": 191.1391632619402
+        },
+        {
+          "x": -146.88011310774485,
+          "y": 192.33998532921905
+        },
+        {
+          "x": -146.63667735264784,
+          "y": 192.39689783347208
+        },
+        {
+          "x": -146.35593884328668,
+          "y": 191.19607576619325
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -146.86860065163896,
+          "y": 192.30945204765817
+        },
+        {
+          "x": -147.45056884905594,
+          "y": 193.39669662230423
+        },
+        {
+          "x": -147.2301580061707,
+          "y": 193.51467568967905
+        },
+        {
+          "x": -146.64818980875376,
+          "y": 192.42743111503296
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -147.4315460756018,
+          "y": 193.37018337997935
+        },
+        {
+          "x": -147.56251184585835,
+          "y": 193.5098490877468
+        },
+        {
+          "x": -147.3801465498814,
+          "y": 193.6808546397714
+        },
+        {
+          "x": -147.24918077962485,
+          "y": 193.54118893200396
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -148.144118019912,
+          "y": 194.13009083321973
+        },
+        {
+          "x": -148.27508379016854,
+          "y": 194.26975654098717
+        },
+        {
+          "x": -148.09271849419162,
+          "y": 194.44076209301178
+        },
+        {
+          "x": -147.96175272393506,
+          "y": 194.30109638524434
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -148.24984706994044,
+          "y": 194.2490701715475
+        },
+        {
+          "x": -149.29746860042124,
+          "y": 194.8996674946093
+        },
+        {
+          "x": -149.1655767449005,
+          "y": 195.1120457855133
+        },
+        {
+          "x": -148.1179552144197,
+          "y": 194.46144846245147
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -149.26773777419706,
+          "y": 194.88621773994632
+        },
+        {
+          "x": -150.44804944456604,
+          "y": 195.2435020926584
+        },
+        {
+          "x": -150.37561924149367,
+          "y": 195.48277989288837
+        },
+        {
+          "x": -149.19530757112466,
+          "y": 195.1254955401763
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -150.41585061902046,
+          "y": 195.2382055313256
+        },
+        {
+          "x": -151.64841613949926,
+          "y": 195.2778285754909
+        },
+        {
+          "x": -151.64038358751804,
+          "y": 195.52769949838645
+        },
+        {
+          "x": -150.40781806703924,
+          "y": 195.48807645422116
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -151.61594361138214,
+          "y": 195.28104615939017
+        },
+        {
+          "x": -152.81676567866097,
+          "y": 195.00030765002901
+        },
+        {
+          "x": -152.873678182914,
+          "y": 195.24374340512603
+        },
+        {
+          "x": -151.67285611563517,
+          "y": 195.52448191448718
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -152.7862323971001,
+          "y": 195.0118201061349
+        },
+        {
+          "x": -153.8734769717462,
+          "y": 194.42985190871792
+        },
+        {
+          "x": -153.99145603912098,
+          "y": 194.65026275160315
+        },
+        {
+          "x": -152.90421146447488,
+          "y": 195.23223094902013
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -153.84696372942128,
+          "y": 194.44887468217206
+        },
+        {
+          "x": -154.7465368904291,
+          "y": 193.60533696760533
+        },
+        {
+          "x": -154.9175424424537,
+          "y": 193.78770226358225
+        },
+        {
+          "x": -154.0179692814459,
+          "y": 194.631239978149
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -154.7258505209894,
+          "y": 193.63057368783342
+        },
+        {
+          "x": -155.37644784405123,
+          "y": 192.58295215735262
+        },
+        {
+          "x": -155.58882613495524,
+          "y": 192.71484401287336
+        },
+        {
+          "x": -154.9382288118934,
+          "y": 193.76246554335415
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -155.36299808938824,
+          "y": 192.6126829835768
+        },
+        {
+          "x": -155.7202824421003,
+          "y": 191.43237131320782
+        },
+        {
+          "x": -155.9595602423303,
+          "y": 191.5048015162802
+        },
+        {
+          "x": -155.60227588961823,
+          "y": 192.6851131866492
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -155.71498588076753,
+          "y": 191.4645701387534
+        },
+        {
+          "x": -155.75460892493282,
+          "y": 190.2320046182746
+        },
+        {
+          "x": -156.00447984782838,
+          "y": 190.24003717025582
+        },
+        {
+          "x": -155.96485680366308,
+          "y": 191.47260269073462
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -155.7578265088321,
+          "y": 190.26447714639173
+        },
+        {
+          "x": -155.47708799947094,
+          "y": 189.0636550791129
+        },
+        {
+          "x": -155.72052375456795,
+          "y": 189.00674257485986
+        },
+        {
+          "x": -156.0012622639291,
+          "y": 190.2075646421387
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -155.48860045557683,
+          "y": 189.0941883606738
+        },
+        {
+          "x": -154.90663225815985,
+          "y": 188.0069437860277
+        },
+        {
+          "x": -155.12704310104507,
+          "y": 187.8889647186529
+        },
+        {
+          "x": -155.70901129846206,
+          "y": 188.97620929329898
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -154.92565503161399,
+          "y": 188.03345702835261
+        },
+        {
+          "x": -154.08211731704725,
+          "y": 187.13388386734476
+        },
+        {
+          "x": -154.2644826130242,
+          "y": 186.96287831532015
+        },
+        {
+          "x": -155.10802032759094,
+          "y": 187.86245147632798
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -154.10735403727534,
+          "y": 187.15457023678445
+        },
+        {
+          "x": -153.05973250679457,
+          "y": 186.50397291372263
+        },
+        {
+          "x": -153.1916243623153,
+          "y": 186.29159462281865
+        },
+        {
+          "x": -154.23924589279608,
+          "y": 186.94219194588047
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -153.08946333301873,
+          "y": 186.51742266838562
+        },
+        {
+          "x": -151.90915166264975,
+          "y": 186.16013831567355
+        },
+        {
+          "x": -151.98158186572212,
+          "y": 185.92086051544356
+        },
+        {
+          "x": -153.16189353609113,
+          "y": 186.27814486815566
+        }
+      ],
+      "traversalLayer": 0,
+      "surfaceId": "building:placed-3:surface:floor-fragment-64",
+      "fragmentId": "building:placed-3:floor:floor-fragment-64",
+      "floorId": "floor-fragment-64",
+      "sourceFloorId": "floor-fragment-64",
+      "bottomZ": 0,
+      "height": 30
+    },
+    {
+      "polygon": [
+        {
+          "x": -155.88329072304504,
+          "y": 190.2520453568455
+        },
+        {
+          "x": -155.595059540355,
+          "y": 189.0191743644061
+        },
+        {
+          "x": -155.83849529545202,
+          "y": 188.96226186015306
+        },
+        {
+          "x": -156.12672647814205,
+          "y": 190.19513285259248
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -155.6065719964609,
+          "y": 189.04970764596698
+        },
+        {
+          "x": -155.009071560161,
+          "y": 187.9334454333597
+        },
+        {
+          "x": -155.22948240304623,
+          "y": 187.8154663659849
+        },
+        {
+          "x": -155.82698283934613,
+          "y": 188.93172857859216
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -155.02809433361514,
+          "y": 187.95995867568462
+        },
+        {
+          "x": -154.16204331102304,
+          "y": 187.03637666798815
+        },
+        {
+          "x": -154.344408607,
+          "y": 186.86537111596354
+        },
+        {
+          "x": -155.2104596295921,
+          "y": 187.78895312365998
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -154.18728003125113,
+          "y": 187.05706303742784
+        },
+        {
+          "x": -153.11169836833952,
+          "y": 186.38910182217526
+        },
+        {
+          "x": -153.24359022386025,
+          "y": 186.17672353127128
+        },
+        {
+          "x": -154.31917188677187,
+          "y": 186.84468474652385
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -153.14142919456367,
+          "y": 186.40255157683825
+        },
+        {
+          "x": -151.9296160041772,
+          "y": 186.03573160699094
+        },
+        {
+          "x": -152.00204620724958,
+          "y": 185.79645380676098
+        },
+        {
+          "x": -153.21385939763607,
+          "y": 186.1632737766083
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -151.96181482972278,
+          "y": 186.04102816832372
+        },
+        {
+          "x": -150.6963531781703,
+          "y": 186.0003476186281
+        },
+        {
+          "x": -150.70438573015153,
+          "y": 185.75047669573254
+        },
+        {
+          "x": -151.969847381704,
+          "y": 185.7911572454282
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -150.72882570628744,
+          "y": 185.99713003472883
+        },
+        {
+          "x": -149.49595471384802,
+          "y": 186.28536121741885
+        },
+        {
+          "x": -149.439042209595,
+          "y": 186.04192546232184
+        },
+        {
+          "x": -150.6719132020344,
+          "y": 185.75369427963182
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -149.5264879954089,
+          "y": 186.27384876131296
+        },
+        {
+          "x": -148.41022578280163,
+          "y": 186.87134919761286
+        },
+        {
+          "x": -148.2922467154268,
+          "y": 186.65093835472766
+        },
+        {
+          "x": -149.40850892803408,
+          "y": 186.05343791842773
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -148.43673902512654,
+          "y": 186.85232642415872
+        },
+        {
+          "x": -147.51315701743007,
+          "y": 187.71837744675082
+        },
+        {
+          "x": -147.34215146540546,
+          "y": 187.5360121507739
+        },
+        {
+          "x": -148.26573347310193,
+          "y": 186.6699611281818
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -147.53384338686976,
+          "y": 187.69314072652273
+        },
+        {
+          "x": -146.8658821716172,
+          "y": 188.76872238943437
+        },
+        {
+          "x": -146.6535038807132,
+          "y": 188.63683053391364
+        },
+        {
+          "x": -147.32146509596578,
+          "y": 187.561248871002
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -146.87933192628017,
+          "y": 188.7389915632102
+        },
+        {
+          "x": -146.51251195643286,
+          "y": 189.95080475359669
+        },
+        {
+          "x": -146.2732341562029,
+          "y": 189.87837455052428
+        },
+        {
+          "x": -146.64005412605022,
+          "y": 188.66656136013782
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -146.51780851776564,
+          "y": 189.9186059280511
+        },
+        {
+          "x": -146.47712796807002,
+          "y": 191.18406757960358
+        },
+        {
+          "x": -146.2272570451745,
+          "y": 191.17603502762233
+        },
+        {
+          "x": -146.26793759487012,
+          "y": 189.91057337606986
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -146.47391038417075,
+          "y": 191.15159505148642
+        },
+        {
+          "x": -146.76214156686078,
+          "y": 192.38446604392587
+        },
+        {
+          "x": -146.51870581176377,
+          "y": 192.4413785481789
+        },
+        {
+          "x": -146.23047462907377,
+          "y": 191.20850755573946
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -146.7506291107549,
+          "y": 192.35393276236496
+        },
+        {
+          "x": -147.34812954705478,
+          "y": 193.47019497497223
+        },
+        {
+          "x": -147.12771870416958,
+          "y": 193.58817404234705
+        },
+        {
+          "x": -146.53021826786969,
+          "y": 192.47191182973978
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -147.32910677360064,
+          "y": 193.44368173264732
+        },
+        {
+          "x": -147.47132919786986,
+          "y": 193.5953518637591
+        },
+        {
+          "x": -147.28896390189294,
+          "y": 193.76635741578372
+        },
+        {
+          "x": -147.14674147762372,
+          "y": 193.61468728467196
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -148.05293537192352,
+          "y": 194.21559360923203
+        },
+        {
+          "x": -148.19515779619275,
+          "y": 194.3672637403438
+        },
+        {
+          "x": -148.01279250021582,
+          "y": 194.5382692923684
+        },
+        {
+          "x": -147.8705700759466,
+          "y": 194.38659916125664
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -148.16992107596465,
+          "y": 194.3465773709041
+        },
+        {
+          "x": -149.2455027388763,
+          "y": 195.01453858615668
+        },
+        {
+          "x": -149.11361088335556,
+          "y": 195.22691687706066
+        },
+        {
+          "x": -148.03802922044392,
+          "y": 194.55895566180808
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -149.21577191265212,
+          "y": 195.0010888314937
+        },
+        {
+          "x": -150.4275851030386,
+          "y": 195.367908801341
+        },
+        {
+          "x": -150.3551548999662,
+          "y": 195.60718660157096
+        },
+        {
+          "x": -149.14334170957974,
+          "y": 195.24036663172365
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -150.39538627749303,
+          "y": 195.36261224000822
+        },
+        {
+          "x": -151.6608479290455,
+          "y": 195.40329278970384
+        },
+        {
+          "x": -151.65281537706426,
+          "y": 195.6531637125994
+        },
+        {
+          "x": -150.3873537255118,
+          "y": 195.61248316290374
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -151.62837540092838,
+          "y": 195.4065103736031
+        },
+        {
+          "x": -152.8612463933678,
+          "y": 195.11827919091309
+        },
+        {
+          "x": -152.91815889762083,
+          "y": 195.3617149460101
+        },
+        {
+          "x": -151.6852879051814,
+          "y": 195.64994612870012
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -152.8307131118069,
+          "y": 195.12979164701898
+        },
+        {
+          "x": -153.94697532441415,
+          "y": 194.53229121071908
+        },
+        {
+          "x": -154.06495439178897,
+          "y": 194.75270205360428
+        },
+        {
+          "x": -152.9486921791817,
+          "y": 195.3502024899042
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -153.92046208208927,
+          "y": 194.55131398417322
+        },
+        {
+          "x": -154.8440440897857,
+          "y": 193.68526296158112
+        },
+        {
+          "x": -155.01504964181032,
+          "y": 193.86762825755804
+        },
+        {
+          "x": -154.09146763411388,
+          "y": 194.73367928015014
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -154.82335772034602,
+          "y": 193.7104996818092
+        },
+        {
+          "x": -155.4913189355986,
+          "y": 192.63491801889757
+        },
+        {
+          "x": -155.70369722650258,
+          "y": 192.7668098744183
+        },
+        {
+          "x": -155.03573601125,
+          "y": 193.84239153732995
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -155.4778691809356,
+          "y": 192.66464884512175
+        },
+        {
+          "x": -155.84468915078293,
+          "y": 191.45283565473525
+        },
+        {
+          "x": -156.08396695101288,
+          "y": 191.52526585780765
+        },
+        {
+          "x": -155.71714698116557,
+          "y": 192.73707904819415
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -155.83939258945014,
+          "y": 191.48503448028086
+        },
+        {
+          "x": -155.88007313914576,
+          "y": 190.2195728287284
+        },
+        {
+          "x": -156.12994406204132,
+          "y": 190.2276053807096
+        },
+        {
+          "x": -156.08926351234567,
+          "y": 191.49306703226208
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 4
+    },
+    {
+      "polygon": [
+        {
+          "x": -155.98914432639896,
+          "y": 194.80246398446766
+        },
+        {
+          "x": -154.79073128000292,
+          "y": 195.88922055677986
+        },
+        {
+          "x": -154.62279248448831,
+          "y": 195.7040272497704
+        },
+        {
+          "x": -155.82120553088433,
+          "y": 194.6172706774582
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -154.76390431471756,
+          "y": 195.90779828166868
+        },
+        {
+          "x": -153.32505290433716,
+          "y": 196.64735240144776
+        },
+        {
+          "x": -153.21076803939326,
+          "y": 196.4250036446607
+        },
+        {
+          "x": -154.64961944977367,
+          "y": 195.6854495248816
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -153.29433177671115,
+          "y": 196.6583537761734
+        },
+        {
+          "x": -151.71309734814938,
+          "y": 197.00030605232746
+        },
+        {
+          "x": -151.6602547384575,
+          "y": 196.7559545460891
+        },
+        {
+          "x": -153.24148916701924,
+          "y": 196.41400226993505
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -151.6805756522614,
+          "y": 197.002981351383
+        },
+        {
+          "x": -150.06471671871134,
+          "y": 196.92402830139494
+        },
+        {
+          "x": -150.0769175007954,
+          "y": 196.6743261970455
+        },
+        {
+          "x": -151.69277643434546,
+          "y": 196.75327924703356
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -150.0326107543915,
+          "y": 196.9181952075709
+        },
+        {
+          "x": -148.49224543184144,
+          "y": 196.42371735132133
+        },
+        {
+          "x": -148.56865814256517,
+          "y": 196.18568143462
+        },
+        {
+          "x": -150.10902346511523,
+          "y": 196.68015929086954
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -148.46274316750052,
+          "y": 196.40977338032218
+        },
+        {
+          "x": -147.10284480710817,
+          "y": 195.53346856655122
+        },
+        {
+          "x": -147.2382620465137,
+          "y": 195.32332059184822
+        },
+        {
+          "x": -148.59816040690606,
+          "y": 196.19962540561914
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -147.0779567733062,
+          "y": 195.51236397695703
+        },
+        {
+          "x": -145.991200200994,
+          "y": 194.313950930561
+        },
+        {
+          "x": -146.17639350800346,
+          "y": 194.14601213504636
+        },
+        {
+          "x": -147.26315008031565,
+          "y": 195.3444251814424
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -145.97262247610522,
+          "y": 194.28712396527564
+        },
+        {
+          "x": -145.2330683563261,
+          "y": 192.8482725548952
+        },
+        {
+          "x": -145.45541711311316,
+          "y": 192.73398768995133
+        },
+        {
+          "x": -146.19497123289227,
+          "y": 194.17283910033174
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -145.22206698160045,
+          "y": 192.81755142726922
+        },
+        {
+          "x": -144.8801147054464,
+          "y": 191.23631699870745
+        },
+        {
+          "x": -145.12446621168476,
+          "y": 191.18347438901557
+        },
+        {
+          "x": -145.4664184878388,
+          "y": 192.76470881757731
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -144.87743940639086,
+          "y": 191.2037953028195
+        },
+        {
+          "x": -144.95639245637892,
+          "y": 189.5879363692694
+        },
+        {
+          "x": -145.20609456072836,
+          "y": 189.60013715135347
+        },
+        {
+          "x": -145.1271415107403,
+          "y": 191.21599608490354
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -144.96222555020296,
+          "y": 189.55583040494957
+        },
+        {
+          "x": -145.45670340645253,
+          "y": 188.01546508239952
+        },
+        {
+          "x": -145.69473932315387,
+          "y": 188.09187779312325
+        },
+        {
+          "x": -145.20026146690432,
+          "y": 189.6322431156733
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -145.47064737745168,
+          "y": 187.9859628180586
+        },
+        {
+          "x": -146.34695219122264,
+          "y": 186.62606445766625
+        },
+        {
+          "x": -146.55710016592568,
+          "y": 186.7614816970718
+        },
+        {
+          "x": -145.68079535215472,
+          "y": 188.12138005746414
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -145.47064737745168,
+          "y": 187.9859628180586
+        },
+        {
+          "x": -146.34695219122264,
+          "y": 186.62606445766625
+        },
+        {
+          "x": -146.55710016592568,
+          "y": 186.7614816970718
+        },
+        {
+          "x": -145.68079535215472,
+          "y": 188.12138005746414
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -146.36805678081686,
+          "y": 186.60117642386427
+        },
+        {
+          "x": -147.56646982721287,
+          "y": 185.51441985155208
+        },
+        {
+          "x": -147.7344086227275,
+          "y": 185.69961315856153
+        },
+        {
+          "x": -146.53599557633146,
+          "y": 186.78636973087373
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -146.36805678081686,
+          "y": 186.60117642386427
+        },
+        {
+          "x": -147.56646982721287,
+          "y": 185.51441985155208
+        },
+        {
+          "x": -147.7344086227275,
+          "y": 185.69961315856153
+        },
+        {
+          "x": -146.53599557633146,
+          "y": 186.78636973087373
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -146.36805678081686,
+          "y": 186.60117642386427
+        },
+        {
+          "x": -147.56646982721287,
+          "y": 185.51441985155208
+        },
+        {
+          "x": -147.7344086227275,
+          "y": 185.69961315856153
+        },
+        {
+          "x": -146.53599557633146,
+          "y": 186.78636973087373
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -147.59329679249825,
+          "y": 185.4958421266633
+        },
+        {
+          "x": -149.03214820287866,
+          "y": 184.75628800688418
+        },
+        {
+          "x": -149.14643306782253,
+          "y": 184.97863676367123
+        },
+        {
+          "x": -147.70758165744212,
+          "y": 185.71819088345035
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -149.06286933050464,
+          "y": 184.74528663215852
+        },
+        {
+          "x": -150.6441037590664,
+          "y": 184.40333435600448
+        },
+        {
+          "x": -150.69694636875832,
+          "y": 184.64768586224284
+        },
+        {
+          "x": -149.11571194019655,
+          "y": 184.98963813839688
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -150.67662545495438,
+          "y": 184.40065905694894
+        },
+        {
+          "x": -152.29248438850445,
+          "y": 184.479612106937
+        },
+        {
+          "x": -152.2802836064204,
+          "y": 184.72931421128644
+        },
+        {
+          "x": -150.66442467287033,
+          "y": 184.65036116129838
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -152.3245903528243,
+          "y": 184.48544520076103
+        },
+        {
+          "x": -153.86495567537438,
+          "y": 184.9799230570106
+        },
+        {
+          "x": -153.78854296465065,
+          "y": 185.21795897371194
+        },
+        {
+          "x": -152.24817764210056,
+          "y": 184.7234811174624
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -153.89445793971527,
+          "y": 184.99386702800976
+        },
+        {
+          "x": -155.25435630010764,
+          "y": 185.87017184178072
+        },
+        {
+          "x": -155.11893906070208,
+          "y": 186.08031981648372
+        },
+        {
+          "x": -153.75904070030973,
+          "y": 185.2040150027128
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -155.2792443339096,
+          "y": 185.8912764313749
+        },
+        {
+          "x": -156.36600090622179,
+          "y": 187.08968947777095
+        },
+        {
+          "x": -156.18080759921233,
+          "y": 187.25762827328558
+        },
+        {
+          "x": -155.09405102690013,
+          "y": 186.05921522688953
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -156.3845786311106,
+          "y": 187.11651644305633
+        },
+        {
+          "x": -157.1241327508897,
+          "y": 188.55536785343674
+        },
+        {
+          "x": -156.90178399410263,
+          "y": 188.6696527183806
+        },
+        {
+          "x": -156.16222987432351,
+          "y": 187.2308013080002
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -157.13513412561534,
+          "y": 188.58608898106272
+        },
+        {
+          "x": -157.47708640176938,
+          "y": 190.1673234096245
+        },
+        {
+          "x": -157.23273489553102,
+          "y": 190.22016601931637
+        },
+        {
+          "x": -156.89078261937698,
+          "y": 188.63893159075462
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -157.47976170082492,
+          "y": 190.19984510551245
+        },
+        {
+          "x": -157.40080865083686,
+          "y": 191.81570403906252
+        },
+        {
+          "x": -157.15110654648743,
+          "y": 191.80350325697847
+        },
+        {
+          "x": -157.23005959647548,
+          "y": 190.1876443234284
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -157.39497555701283,
+          "y": 191.84781000338236
+        },
+        {
+          "x": -156.90049770076325,
+          "y": 193.38817532593242
+        },
+        {
+          "x": -156.66246178406192,
+          "y": 193.3117626152087
+        },
+        {
+          "x": -157.15693964031146,
+          "y": 191.77139729265863
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -156.8865537297641,
+          "y": 193.41767759027334
+        },
+        {
+          "x": -156.01024891599315,
+          "y": 194.7775759506657
+        },
+        {
+          "x": -155.80010094129014,
+          "y": 194.64215871126015
+        },
+        {
+          "x": -156.6764057550611,
+          "y": 193.2822603508678
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    },
+    {
+      "polygon": [
+        {
+          "x": -155.98914432639896,
+          "y": 194.80246398446766
+        },
+        {
+          "x": -154.79073128000292,
+          "y": 195.88922055677986
+        },
+        {
+          "x": -154.62279248448831,
+          "y": 195.7040272497704
+        },
+        {
+          "x": -155.82120553088433,
+          "y": 194.6172706774582
+        }
+      ],
+      "traversalLayer": 1,
+      "surfaceId": "building:placed-3:surface:floor-fragment-90",
+      "fragmentId": "building:placed-3:floor:floor-fragment-90",
+      "floorId": "floor-fragment-90",
+      "sourceFloorId": "floor-fragment-90",
+      "bottomZ": 30,
+      "height": 1
+    }
+  ],
+  "movementBlockerGeometryVersion": "layered-wall-column-stairless-v10-stack-layers",
+  "touchedSectionKeys": [
+    "-4,0"
+  ],
+  "overlappedSectionKeys": [
+    "-4,0"
+  ],
+  "objects": [],
+  "animals": [],
+  "powerups": [],
+  "triggers": [],
+  "loadState": "interior",
+  "contentVersion": 7,
+  "movementBlockedEdges": null,
+  "movementEdgeBlockerVersion": ""
 }

@@ -34512,7 +34512,7 @@
     "-3,99": 10,
     "-2,99": 11,
     "-1,99": 11,
-    "0,99": 11,
+    "0,99": 12,
     "-96,100": 26,
     "-95,100": 26,
     "-94,100": 25,
@@ -34608,10 +34608,10 @@
     "-4,100": 11,
     "-3,100": 11,
     "-2,100": 12,
-    "-1,100": 11,
-    "0,100": 10,
-    "1,100": 10,
-    "2,100": 9,
+    "-1,100": 12,
+    "0,100": 13,
+    "1,100": 13,
+    "2,100": 14,
     "-96,101": 26,
     "-95,101": 25,
     "-94,101": 24,
@@ -34706,11 +34706,11 @@
     "-5,101": 11,
     "-4,101": 12,
     "-3,101": 12,
-    "-2,101": 12,
-    "-1,101": 11,
-    "0,101": 10,
-    "1,101": 9,
-    "2,101": 8,
+    "-2,101": 13,
+    "-1,101": 13,
+    "0,101": 14,
+    "1,101": 14,
+    "2,101": 15,
     "-96,102": 26,
     "-95,102": 25,
     "-94,102": 24,
@@ -34806,10 +34806,10 @@
     "-4,102": 11,
     "-3,102": 12,
     "-2,102": 12,
-    "-1,102": 11,
-    "0,102": 10,
-    "1,102": 9,
-    "2,102": 8,
+    "-1,102": 13,
+    "0,102": 13,
+    "1,102": 14,
+    "2,102": 14,
     "-96,103": 25,
     "-95,103": 25,
     "-94,103": 24,
@@ -34905,10 +34905,10 @@
     "-4,103": 10,
     "-3,103": 11,
     "-2,103": 11,
-    "-1,103": 11,
-    "0,103": 10,
-    "1,103": 9,
-    "2,103": 8,
+    "-1,103": 12,
+    "0,103": 12,
+    "1,103": 13,
+    "2,103": 14,
     "-96,104": 24,
     "-95,104": 24,
     "-94,104": 23,
@@ -35005,9 +35005,9 @@
     "-3,104": 10,
     "-2,104": 10,
     "-1,104": 11,
-    "0,104": 10,
-    "1,104": 9,
-    "2,104": 8,
+    "0,104": 12,
+    "1,104": 13,
+    "2,104": 14,
     "-96,105": 23,
     "-95,105": 23,
     "-94,105": 22,
@@ -35104,9 +35104,9 @@
     "-3,105": 9,
     "-2,105": 10,
     "-1,105": 11,
-    "0,105": 10,
-    "1,105": 9,
-    "2,105": 8,
+    "0,105": 12,
+    "1,105": 13,
+    "2,105": 14,
     "-96,106": 22,
     "-95,106": 22,
     "-94,106": 21,
@@ -35203,9 +35203,9 @@
     "-3,106": 9,
     "-2,106": 10,
     "-1,106": 11,
-    "0,106": 10,
-    "1,106": 9,
-    "2,106": 8,
+    "0,106": 12,
+    "1,106": 13,
+    "2,106": 14,
     "-96,107": 21,
     "-95,107": 21,
     "-94,107": 20,
@@ -35302,9 +35302,9 @@
     "-3,107": 9,
     "-2,107": 10,
     "-1,107": 11,
-    "0,107": 10,
-    "1,107": 9,
-    "2,107": 8,
+    "0,107": 12,
+    "1,107": 13,
+    "2,107": 14,
     "-96,108": 20,
     "-95,108": 20,
     "-94,108": 19,
@@ -35401,9 +35401,9 @@
     "-3,108": 9,
     "-2,108": 10,
     "-1,108": 11,
-    "0,108": 10,
-    "1,108": 9,
-    "2,108": 8,
+    "0,108": 12,
+    "1,108": 13,
+    "2,108": 13,
     "-96,109": 19,
     "-95,109": 19,
     "-94,109": 18,
@@ -35500,9 +35500,9 @@
     "-3,109": 9,
     "-2,109": 10,
     "-1,109": 11,
-    "0,109": 10,
-    "1,109": 9,
-    "2,109": 8,
+    "0,109": 11,
+    "1,109": 12,
+    "2,109": 12,
     "-96,110": 18,
     "-95,110": 18,
     "-94,110": 17,
@@ -35600,8 +35600,8 @@
     "-2,110": 9,
     "-1,110": 10,
     "0,110": 10,
-    "1,110": 9,
-    "2,110": 9,
+    "1,110": 11,
+    "2,110": 11,
     "-96,111": 17,
     "-95,111": 17,
     "-94,111": 16,
@@ -35700,7 +35700,7 @@
     "-1,111": 9,
     "0,111": 9,
     "1,111": 10,
-    "2,111": 9,
+    "2,111": 10,
     "-96,112": 16,
     "-95,112": 16,
     "-94,112": 15,
@@ -37284,7 +37284,7 @@
     "-1,127": 8,
     "0,127": 9,
     "1,127": 9,
-    "2,127": 8,
+    "2,127": 10,
     "-96,128": 14,
     "-95,128": 15,
     "-94,128": 15,
@@ -37383,7 +37383,7 @@
     "-1,128": 8,
     "0,128": 8,
     "1,128": 9,
-    "2,128": 8,
+    "2,128": 9,
     "-96,129": 13,
     "-95,129": 14,
     "-94,129": 15,
@@ -37482,7 +37482,7 @@
     "-1,129": 7,
     "0,129": 7,
     "1,129": 8,
-    "2,129": 8,
+    "2,129": 9,
     "-96,130": 13,
     "-95,130": 14,
     "-94,130": 14,
@@ -37581,7 +37581,7 @@
     "-1,130": 6,
     "0,130": 7,
     "1,130": 8,
-    "2,130": 8,
+    "2,130": 9,
     "-96,131": 12,
     "-95,131": 13,
     "-94,131": 14,
@@ -37680,7 +37680,7 @@
     "-1,131": 6,
     "0,131": 7,
     "1,131": 8,
-    "2,131": 8,
+    "2,131": 9,
     "-96,132": 12,
     "-95,132": 13,
     "-94,132": 13,
@@ -37779,7 +37779,7 @@
     "-1,132": 6,
     "0,132": 7,
     "1,132": 8,
-    "2,132": 8,
+    "2,132": 9,
     "-96,133": 11,
     "-95,133": 12,
     "-94,133": 13,
@@ -37878,7 +37878,7 @@
     "-1,133": 6,
     "0,133": 7,
     "1,133": 8,
-    "2,133": 8,
+    "2,133": 9,
     "-96,134": 11,
     "-95,134": 12,
     "-94,134": 12,
@@ -37977,7 +37977,7 @@
     "-1,134": 6,
     "0,134": 7,
     "1,134": 8,
-    "2,134": 8,
+    "2,134": 9,
     "-96,135": 10,
     "-95,135": 11,
     "-94,135": 12,
@@ -38076,7 +38076,7 @@
     "-1,135": 6,
     "0,135": 7,
     "1,135": 8,
-    "2,135": 8,
+    "2,135": 9,
     "-96,136": 10,
     "-95,136": 11,
     "-94,136": 11,
@@ -38373,7 +38373,7 @@
     "-1,138": 8,
     "0,138": 9,
     "1,138": 9,
-    "2,138": 8,
+    "2,138": 10,
     "-96,139": 8,
     "-95,139": 9,
     "-94,139": 10,
@@ -38471,8 +38471,8 @@
     "-2,139": 9,
     "-1,139": 9,
     "0,139": 10,
-    "1,139": 9,
-    "2,139": 8,
+    "1,139": 10,
+    "2,139": 11,
     "-96,140": 8,
     "-95,140": 9,
     "-94,140": 9,
@@ -38569,9 +38569,9 @@
     "-3,140": 9,
     "-2,140": 10,
     "-1,140": 10,
-    "0,140": 10,
-    "1,140": 9,
-    "2,140": 8,
+    "0,140": 11,
+    "1,140": 11,
+    "2,140": 12,
     "-96,141": 7,
     "-95,141": 8,
     "-94,141": 9,
@@ -38668,9 +38668,9 @@
     "-3,141": 9,
     "-2,141": 10,
     "-1,141": 11,
-    "0,141": 10,
-    "1,141": 9,
-    "2,141": 8,
+    "0,141": 12,
+    "1,141": 12,
+    "2,141": 13,
     "-96,142": 7,
     "-95,142": 8,
     "-94,142": 9,
@@ -38767,9 +38767,9 @@
     "-3,142": 9,
     "-2,142": 10,
     "-1,142": 11,
-    "0,142": 10,
-    "1,142": 9,
-    "2,142": 8,
+    "0,142": 12,
+    "1,142": 13,
+    "2,142": 14,
     "-96,143": 7,
     "-95,143": 8,
     "-94,143": 9,
@@ -38866,9 +38866,9 @@
     "-3,143": 9,
     "-2,143": 10,
     "-1,143": 11,
-    "0,143": 10,
-    "1,143": 9,
-    "2,143": 8,
+    "0,143": 12,
+    "1,143": 13,
+    "2,143": 14,
     "-96,144": 7,
     "-95,144": 8,
     "-94,144": 9,
@@ -38965,9 +38965,9 @@
     "-3,144": 9,
     "-2,144": 10,
     "-1,144": 11,
-    "0,144": 10,
-    "1,144": 9,
-    "2,144": 8,
+    "0,144": 12,
+    "1,144": 13,
+    "2,144": 14,
     "-96,145": 7,
     "-95,145": 8,
     "-94,145": 9,
@@ -39063,10 +39063,10 @@
     "-4,145": 8,
     "-3,145": 9,
     "-2,145": 10,
-    "-1,145": 10,
-    "0,145": 9,
-    "1,145": 9,
-    "2,145": 8,
+    "-1,145": 11,
+    "0,145": 12,
+    "1,145": 13,
+    "2,145": 14,
     "-96,146": 7,
     "-95,146": 8,
     "-94,146": 9,
@@ -39162,10 +39162,10 @@
     "-4,146": 9,
     "-3,146": 9,
     "-2,146": 10,
-    "-1,146": 9,
-    "0,146": 8,
-    "1,146": 8,
-    "2,146": 7,
+    "-1,146": 11,
+    "0,146": 12,
+    "1,146": 13,
+    "2,146": 14,
     "-96,147": 7,
     "-95,147": 8,
     "-94,147": 9,
@@ -39260,11 +39260,11 @@
     "-5,147": 9,
     "-4,147": 10,
     "-3,147": 10,
-    "-2,147": 10,
-    "-1,147": 9,
-    "0,147": 8,
-    "1,147": 7,
-    "2,147": 6,
+    "-2,147": 11,
+    "-1,147": 11,
+    "0,147": 12,
+    "1,147": 13,
+    "2,147": 14,
     "-96,148": 7,
     "-95,148": 8,
     "-94,148": 9,
@@ -39359,11 +39359,11 @@
     "-5,148": 10,
     "-4,148": 11,
     "-3,148": 11,
-    "-2,148": 10,
-    "-1,148": 9,
-    "0,148": 8,
-    "1,148": 7,
-    "2,148": 6,
+    "-2,148": 12,
+    "-1,148": 12,
+    "0,148": 13,
+    "1,148": 13,
+    "2,148": 14,
     "-96,149": 7,
     "-95,149": 8,
     "-94,149": 9,
@@ -39457,12 +39457,12 @@
     "-6,149": 11,
     "-5,149": 11,
     "-4,149": 12,
-    "-3,149": 11,
-    "-2,149": 10,
-    "-1,149": 9,
-    "0,149": 8,
-    "1,149": 7,
-    "2,149": 6,
+    "-3,149": 12,
+    "-2,149": 13,
+    "-1,149": 13,
+    "0,149": 14,
+    "1,149": 14,
+    "2,149": 15,
     "-95,150": 8,
     "-94,150": 9,
     "-93,150": 10,
@@ -39554,12 +39554,12 @@
     "-7,150": 11,
     "-6,150": 12,
     "-5,150": 12,
-    "-4,150": 12,
-    "-3,150": 11,
-    "-2,150": 10,
-    "-1,150": 9,
-    "0,150": 8,
-    "1,150": 7,
+    "-4,150": 13,
+    "-3,150": 13,
+    "-2,150": 14,
+    "-1,150": 14,
+    "0,150": 15,
+    "1,150": 15,
     "-93,151": 10,
     "-92,151": 11,
     "-91,151": 12,
@@ -39649,10 +39649,10 @@
     "-7,151": 12,
     "-6,151": 13,
     "-5,151": 13,
-    "-4,151": 12,
-    "-3,151": 11,
-    "-2,151": 10,
-    "-1,151": 9,
+    "-4,151": 14,
+    "-3,151": 14,
+    "-2,151": 15,
+    "-1,151": 15,
     "-91,152": 12,
     "-90,152": 13,
     "-89,152": 14,
@@ -39739,9 +39739,9 @@
     "-8,152": 12,
     "-7,152": 13,
     "-6,152": 14,
-    "-5,152": 13,
-    "-4,152": 12,
-    "-3,152": 11,
+    "-5,152": 14,
+    "-4,152": 15,
+    "-3,152": 15,
     "-89,153": 14,
     "-88,153": 15,
     "-87,153": 16,
@@ -39826,7 +39826,7 @@
     "-8,153": 13,
     "-7,153": 13,
     "-6,153": 14,
-    "-5,153": 13,
+    "-5,153": 15,
     "-87,154": 16,
     "-86,154": 17,
     "-85,154": 18,
@@ -49120,6 +49120,33 @@
     },
     {
       "type": "placedObject",
+      "x": -39.14321940855461,
+      "y": 89.20048242967161,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "z": 0,
+      "scriptingName": "furniture3",
+      "texturePath": "/assets/images/furniture/armor.png",
+      "category": "furniture",
+      "width": 1.8206666666666667,
+      "height": 2.731,
+      "renderDepthOffset": 0,
+      "rotationAxis": "none",
+      "placementRotation": 0,
+      "isPassable": false,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.9,
+      "castsLosShadows": true,
+      "zMode": "local",
+      "currentLayerBaseZ": 0,
+      "id": 11381
+    },
+    {
+      "type": "placedObject",
       "x": -62.352,
       "y": 134.375,
       "hp": 100,
@@ -49127,14 +49154,12 @@
       "_wasOnFire": false,
       "z": 0,
       "traversalLayer": -2,
-      "level": -2,
       "surfaceId": "floor_area:-3,0:-2",
       "fragmentId": "floor_area:-2,-1:-2:0",
       "floorMembership": {
         "ownerType": "section",
         "ownerId": "-2,-1",
-        "floorId": "floor_area:-2,-1:-2:0",
-        "level": -2
+        "floorId": "floor_area:-2,-1:-2:0"
       },
       "scriptingName": "door2",
       "texturePath": "/assets/images/doors/door2.png",
@@ -49185,14 +49210,12 @@
       "_wasOnFire": false,
       "z": 0,
       "traversalLayer": -2,
-      "level": -2,
       "surfaceId": "floor_area:-3,0:-2",
       "fragmentId": "floor_area:-2,-1:-2:0",
       "floorMembership": {
         "ownerType": "section",
         "ownerId": "-2,-1",
-        "floorId": "floor_area:-2,-1:-2:0",
-        "level": -2
+        "floorId": "floor_area:-2,-1:-2:0"
       },
       "scriptingName": "door5",
       "texturePath": "/assets/images/doors/door2.png",
@@ -49595,7 +49618,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8825
     },
     {
@@ -49629,7 +49651,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8826
     },
     {
@@ -49663,7 +49684,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8827
     },
     {
@@ -49697,7 +49717,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8828
     },
     {
@@ -49731,7 +49750,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8829
     },
     {
@@ -49765,7 +49783,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8830
     },
     {
@@ -49799,7 +49816,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8831
     },
     {
@@ -49833,7 +49849,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8832
     },
     {
@@ -49867,7 +49882,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8833
     },
     {
@@ -49901,7 +49915,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8834
     },
     {
@@ -49935,7 +49948,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8835
     },
     {
@@ -49969,7 +49981,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8837
     },
     {
@@ -50399,7 +50410,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8859
     },
     {
@@ -50565,7 +50575,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8864
     },
     {
@@ -50599,7 +50608,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8865
     },
     {
@@ -50633,7 +50641,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8866
     },
     {
@@ -50667,7 +50674,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8867
     },
     {
@@ -50701,7 +50707,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8868
     },
     {
@@ -50735,7 +50740,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8869
     },
     {
@@ -50769,7 +50773,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8870
     },
     {
@@ -50803,7 +50806,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8871
     },
     {
@@ -50837,7 +50839,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8872
     },
     {
@@ -50871,7 +50872,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8873
     },
     {
@@ -50905,7 +50905,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8874
     },
     {
@@ -51038,7 +51037,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8950
     },
     {
@@ -51072,7 +51070,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8951
     },
     {
@@ -51106,7 +51103,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8952
     },
     {
@@ -51140,7 +51136,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8953
     },
     {
@@ -51174,7 +51169,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8954
     },
     {
@@ -51208,7 +51202,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8955
     },
     {
@@ -51242,7 +51235,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8956
     },
     {
@@ -51276,7 +51268,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8957
     },
     {
@@ -51310,7 +51301,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8958
     },
     {
@@ -51344,7 +51334,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8959
     },
     {
@@ -52962,7 +52951,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9029
     },
     {
@@ -52996,7 +52984,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9030
     },
     {
@@ -53030,7 +53017,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9031
     },
     {
@@ -53328,6 +53314,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9045
     },
     {
@@ -53361,6 +53348,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9046
     },
     {
@@ -53394,6 +53382,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9047
     },
     {
@@ -53427,6 +53416,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9049
     },
     {
@@ -53460,6 +53450,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9050
     },
     {
@@ -53493,6 +53484,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9051
     },
     {
@@ -53526,6 +53518,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9052
     },
     {
@@ -53559,6 +53552,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9053
     },
     {
@@ -53592,6 +53586,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9055
     },
     {
@@ -53727,7 +53722,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9059
     },
     {
@@ -53761,7 +53755,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9060
     },
     {
@@ -53795,7 +53788,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9061
     },
     {
@@ -53829,7 +53821,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9062
     },
     {
@@ -53896,6 +53887,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9064
     },
     {
@@ -53929,6 +53921,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9065
     },
     {
@@ -53962,6 +53955,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9066
     },
     {
@@ -53995,6 +53989,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9067
     },
     {
@@ -54391,6 +54386,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9079
     },
     {
@@ -54424,6 +54420,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9080
     },
     {
@@ -54457,6 +54454,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9081
     },
     {
@@ -54490,6 +54488,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9082
     },
     {
@@ -54523,6 +54522,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9083
     },
     {
@@ -54589,6 +54589,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9085
     },
     {
@@ -54622,6 +54623,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9086
     },
     {
@@ -54754,6 +54756,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9090
     },
     {
@@ -54787,6 +54790,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9091
     },
     {
@@ -54820,6 +54824,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9092
     },
     {
@@ -54853,6 +54858,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9093
     },
     {
@@ -55150,7 +55156,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9099
     },
     {
@@ -55184,7 +55189,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9100
     },
     {
@@ -55218,7 +55222,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9101
     },
     {
@@ -55252,7 +55255,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9102
     },
     {
@@ -55418,7 +55420,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9107
     },
     {
@@ -55452,7 +55453,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9108
     },
     {
@@ -55486,7 +55486,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9109
     },
     {
@@ -55520,7 +55519,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9110
     },
     {
@@ -55554,7 +55552,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9111
     },
     {
@@ -55588,7 +55585,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9112
     },
     {
@@ -55622,7 +55618,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9113
     },
     {
@@ -56019,7 +56014,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9125
     },
     {
@@ -56053,7 +56047,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9126
     },
     {
@@ -56087,7 +56080,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9127
     },
     {
@@ -56121,7 +56113,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9128
     },
     {
@@ -56155,7 +56146,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9129
     },
     {
@@ -56189,7 +56179,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9130
     },
     {
@@ -56223,7 +56212,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9131
     },
     {
@@ -56257,7 +56245,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9132
     },
     {
@@ -56291,7 +56278,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9133
     },
     {
@@ -56424,7 +56410,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9137
     },
     {
@@ -56458,7 +56443,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9138
     },
     {
@@ -56492,7 +56476,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9139
     },
     {
@@ -56526,7 +56509,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9140
     },
     {
@@ -56560,7 +56542,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9141
     },
     {
@@ -56594,7 +56575,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9142
     },
     {
@@ -56628,7 +56608,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9143
     },
     {
@@ -56827,6 +56806,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9151
     },
     {
@@ -56860,6 +56840,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9152
     },
     {
@@ -56893,6 +56874,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9153
     },
     {
@@ -56926,6 +56908,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9154
     },
     {
@@ -56992,7 +56975,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9226
     },
     {
@@ -57026,7 +57008,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9227
     },
     {
@@ -57060,7 +57041,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9228
     },
     {
@@ -57094,7 +57074,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9229
     },
     {
@@ -57128,7 +57107,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9230
     },
     {
@@ -57162,7 +57140,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9231
     },
     {
@@ -57196,7 +57173,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9232
     },
     {
@@ -57230,6 +57206,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9233
     },
     {
@@ -57263,7 +57240,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 9234
     },
     {
@@ -57429,6 +57405,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9048
     },
     {
@@ -57462,6 +57439,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9054
     },
     {
@@ -57495,6 +57473,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9224
     },
     {
@@ -58057,7 +58036,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 10818
     },
     {
@@ -58091,7 +58069,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 10819
     },
     {
@@ -58158,7 +58135,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 10821
     },
     {
@@ -58192,7 +58168,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 8823
     },
     {
@@ -58259,7 +58234,6 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
-      "currentLayerBaseZ": 0,
       "id": 10826
     },
     {
@@ -58271,14 +58245,12 @@
       "_wasOnFire": false,
       "z": 0,
       "traversalLayer": -2,
-      "level": -2,
       "surfaceId": "floor_area:-3,0:-2",
       "fragmentId": "floor_area:-2,-1:-2:0",
       "floorMembership": {
         "ownerType": "section",
         "ownerId": "-2,-1",
-        "floorId": "floor_area:-2,-1:-2:0",
-        "level": -2
+        "floorId": "floor_area:-2,-1:-2:0"
       },
       "scriptingName": "door4",
       "texturePath": "/assets/images/doors/door2.png",
@@ -58323,43 +58295,9 @@
   ],
   "animals": [
     {
-      "type": "squirrel",
-      "x": -62.43526923076934,
-      "y": 109.35576923076954,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.5462468276136349,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel148",
-      "id": 8
-    },
-    {
-      "type": "deer",
-      "x": 5.628999999999997,
-      "y": 118.25000000000006,
-      "hp": 12.496235785799826,
-      "maxHp": 12.496235785799826,
-      "mp": 12.496235785799826,
-      "maxMp": 12.496235785799826,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.8859030680811175,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "deer26",
-      "id": 16
-    },
-    {
       "type": "eagleman",
-      "x": -22.8624,
-      "y": 154.69999999999993,
+      "x": 3.830384615384614,
+      "y": 137,
       "hp": 112.56834689760683,
       "maxHp": 112.56834689760683,
       "mp": 225.13669379521366,
@@ -58375,8 +58313,42 @@
     },
     {
       "type": "squirrel",
-      "x": -50.194692307692186,
-      "y": 108.55769230769198,
+      "x": -25.98,
+      "y": 103.49999999999994,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5462468276136349,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel148",
+      "id": 8
+    },
+    {
+      "type": "deer",
+      "x": 12.816799999999992,
+      "y": 80.09999999999991,
+      "hp": 12.496235785799826,
+      "maxHp": 12.496235785799826,
+      "mp": 12.496235785799826,
+      "maxMp": 12.496235785799826,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.8859030680811175,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "deer26",
+      "id": 16
+    },
+    {
+      "type": "squirrel",
+      "x": -11.777599999999998,
+      "y": 39.3,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -58392,8 +58364,8 @@
     },
     {
       "type": "bear",
-      "x": -9.237333333333314,
-      "y": 131.16666666666697,
+      "x": 7.777346153846149,
+      "y": 46.97115384615394,
       "hp": 42.480684170915424,
       "maxHp": 42.480684170915424,
       "mp": 42.480684170915424,
@@ -58408,7 +58380,188 @@
       "id": 19
     }
   ],
-  "powerups": [],
+  "powerups": [
+    {
+      "type": "powerup",
+      "file": "goldcoin.png",
+      "x": -33.40631738765308,
+      "y": 131.4054392720058,
+      "z": 0,
+      "zMode": "local",
+      "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
+      "gravity": 10,
+      "size": 0.625,
+      "imagePath": "/assets/images/powerups/goldcoin.png",
+      "width": 0.9375,
+      "height": 0.5,
+      "radius": 0.21875,
+      "hitboxOffsetX": 0,
+      "hitboxOffsetY": 0,
+      "anchorX": 0.5,
+      "anchorY": 0.5,
+      "billboardAlpha": 1,
+      "billboardTint": 16777215,
+      "gravitateRadius": 2,
+      "gravitateSpeed": 5,
+      "scriptingName": "powerup4",
+      "script": {
+        "playerTouches": "if (this.size * 25 < 1) { player.inventory.add(\"gold\", 1) }\nif (this.size * 25 >= 1) { player.inventory.add(\"gold\", this.size * 25) }"
+      },
+      "id": 4
+    },
+    {
+      "type": "powerup",
+      "file": "goldcoin.png",
+      "x": -31.024296204643033,
+      "y": 133.1846678543687,
+      "z": 0,
+      "zMode": "local",
+      "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
+      "gravity": 10,
+      "size": 0.625,
+      "imagePath": "/assets/images/powerups/goldcoin.png",
+      "width": 0.9375,
+      "height": 0.5,
+      "radius": 0.21875,
+      "hitboxOffsetX": 0,
+      "hitboxOffsetY": 0,
+      "anchorX": 0.5,
+      "anchorY": 0.5,
+      "billboardAlpha": 1,
+      "billboardTint": 16777215,
+      "gravitateRadius": 2,
+      "gravitateSpeed": 5,
+      "scriptingName": "powerup5",
+      "script": {
+        "playerTouches": "if (this.size * 25 < 1) { player.inventory.add(\"gold\", 1) }\nif (this.size * 25 >= 1) { player.inventory.add(\"gold\", this.size * 25) }"
+      },
+      "id": 5
+    },
+    {
+      "type": "powerup",
+      "file": "goldcoin.png",
+      "x": -31.024296204643033,
+      "y": 133.1846678543687,
+      "z": 0,
+      "zMode": "local",
+      "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
+      "gravity": 10,
+      "size": 0.625,
+      "imagePath": "/assets/images/powerups/goldcoin.png",
+      "width": 0.9375,
+      "height": 0.5,
+      "radius": 0.21875,
+      "hitboxOffsetX": 0,
+      "hitboxOffsetY": 0,
+      "anchorX": 0.5,
+      "anchorY": 0.5,
+      "billboardAlpha": 1,
+      "billboardTint": 16777215,
+      "gravitateRadius": 2,
+      "gravitateSpeed": 5,
+      "scriptingName": "powerup6",
+      "script": {
+        "playerTouches": "if (this.size * 25 < 1) { player.inventory.add(\"gold\", 1) }\nif (this.size * 25 >= 1) { player.inventory.add(\"gold\", this.size * 25) }"
+      },
+      "id": 6
+    },
+    {
+      "type": "powerup",
+      "file": "goldcoin.png",
+      "x": -42.4211549866698,
+      "y": 124.2137855157392,
+      "z": 0,
+      "zMode": "local",
+      "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
+      "gravity": 10,
+      "size": 0.625,
+      "imagePath": "/assets/images/powerups/goldcoin.png",
+      "width": 0.9375,
+      "height": 0.5,
+      "radius": 0.21875,
+      "hitboxOffsetX": 0,
+      "hitboxOffsetY": 0,
+      "anchorX": 0.5,
+      "anchorY": 0.5,
+      "billboardAlpha": 1,
+      "billboardTint": 16777215,
+      "gravitateRadius": 2,
+      "gravitateSpeed": 5,
+      "scriptingName": "powerup1",
+      "script": {
+        "playerTouches": "if (this.size * 25 < 1) { player.inventory.add(\"gold\", 1) }\nif (this.size * 25 >= 1) { player.inventory.add(\"gold\", this.size * 25) }"
+      },
+      "id": 1
+    },
+    {
+      "type": "powerup",
+      "file": "goldcoin.png",
+      "x": -42.4211549866698,
+      "y": 124.2137855157392,
+      "z": 0,
+      "zMode": "local",
+      "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
+      "gravity": 10,
+      "size": 0.625,
+      "imagePath": "/assets/images/powerups/goldcoin.png",
+      "width": 0.9375,
+      "height": 0.5,
+      "radius": 0.21875,
+      "hitboxOffsetX": 0,
+      "hitboxOffsetY": 0,
+      "anchorX": 0.5,
+      "anchorY": 0.5,
+      "billboardAlpha": 1,
+      "billboardTint": 16777215,
+      "gravitateRadius": 2,
+      "gravitateSpeed": 5,
+      "scriptingName": "powerup2",
+      "script": {
+        "playerTouches": "if (this.size * 25 < 1) { player.inventory.add(\"gold\", 1) }\nif (this.size * 25 >= 1) { player.inventory.add(\"gold\", this.size * 25) }"
+      },
+      "id": 2
+    },
+    {
+      "type": "powerup",
+      "file": "goldcoin.png",
+      "x": -42.4211549866698,
+      "y": 124.2137855157392,
+      "z": 0,
+      "zMode": "local",
+      "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
+      "gravity": 10,
+      "size": 0.625,
+      "imagePath": "/assets/images/powerups/goldcoin.png",
+      "width": 0.9375,
+      "height": 0.5,
+      "radius": 0.21875,
+      "hitboxOffsetX": 0,
+      "hitboxOffsetY": 0,
+      "anchorX": 0.5,
+      "anchorY": 0.5,
+      "billboardAlpha": 1,
+      "billboardTint": 16777215,
+      "gravitateRadius": 2,
+      "gravitateSpeed": 5,
+      "scriptingName": "powerup3",
+      "script": {
+        "playerTouches": "if (this.size * 25 < 1) { player.inventory.add(\"gold\", 1) }\nif (this.size * 25 >= 1) { player.inventory.add(\"gold\", this.size * 25) }"
+      },
+      "id": 3
+    }
+  ],
   "buildingRefs": [
     {
       "id": "building:placed-8",

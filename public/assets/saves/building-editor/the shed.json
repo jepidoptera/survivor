@@ -22,8 +22,6 @@
       "surfaceId": "floor-fragment-9",
       "ownerSectionKey": "",
       "name": "floor",
-      "level": 0,
-      "nodeBaseZOffset": 0,
       "nodeBaseZ": 0,
       "outerPolygon": [
         {
@@ -113,8 +111,8 @@
           "depth": 0.75,
           "rotation": 0,
           "height": 5,
+          "topHeights": null,
           "bottomZ": 0,
-          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/stonewall.png"
         },
         {
@@ -133,8 +131,8 @@
           "depth": 0.75,
           "rotation": 1.5707963267948966,
           "height": 5,
+          "topHeights": null,
           "bottomZ": 0,
-          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/stonewall.png"
         },
         {
@@ -153,8 +151,8 @@
           "depth": 0.75,
           "rotation": 0,
           "height": 5,
+          "topHeights": null,
           "bottomZ": 0,
-          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/stonewall.png"
         },
         {
@@ -173,8 +171,8 @@
           "depth": 0.75,
           "rotation": 0,
           "height": 1.5,
+          "topHeights": null,
           "bottomZ": 0,
-          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/stonewall.png"
         },
         {
@@ -193,8 +191,8 @@
           "depth": 0.75,
           "rotation": 1.5707963267948966,
           "height": 1.5,
+          "topHeights": null,
           "bottomZ": 0,
-          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/stonewall.png"
         },
         {
@@ -213,8 +211,8 @@
           "depth": 0.75,
           "rotation": 1.5707963267948966,
           "height": 5,
+          "topHeights": null,
           "bottomZ": 0,
-          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/stonewall.png"
         },
         {
@@ -233,8 +231,8 @@
           "depth": 0.75,
           "rotation": -1.5707963267948968,
           "height": 1.5,
+          "topHeights": null,
           "bottomZ": 0,
-          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/stonewall.png"
         },
         {
@@ -253,8 +251,8 @@
           "depth": 0.75,
           "rotation": 3.141592653589793,
           "height": 1.5,
+          "topHeights": null,
           "bottomZ": 0,
-          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/stonewall.png"
         },
         {
@@ -273,11 +271,13 @@
           "depth": 0.75,
           "rotation": 0,
           "height": 5,
+          "topHeights": null,
           "bottomZ": 0,
-          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/stonewall.png"
         }
-      ]
+      ],
+      "roofs": [],
+      "stairs": []
     }
   ],
   "wallSections": [
@@ -309,7 +309,6 @@
       "height": 5,
       "thickness": 0.25,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/brick.jpg",
       "role": "perimeter",
       "attachment": {
@@ -401,7 +400,6 @@
       "height": 5,
       "thickness": 0.25,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/brick.jpg",
       "role": "perimeter",
       "attachment": {
@@ -493,7 +491,6 @@
       "height": 5,
       "thickness": 0.25,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/brick.jpg",
       "role": "perimeter",
       "attachment": {
@@ -585,7 +582,6 @@
       "height": 5,
       "thickness": 0.25,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/brick.jpg",
       "role": "perimeter",
       "attachment": {
@@ -675,7 +671,6 @@
       "thickness": 0.25,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": {
@@ -770,7 +765,6 @@
       "thickness": 0.25,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -854,7 +848,6 @@
       "thickness": 0.25,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -938,7 +931,6 @@
       "thickness": 0.25,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -1057,8 +1049,7 @@
           "x": -4.9334999999999996,
           "y": -4.5243003686228205
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
