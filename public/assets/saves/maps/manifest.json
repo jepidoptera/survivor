@@ -1,15 +1,15 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -44.4233188733187,
-    "y": 124.1719874235874,
+    "x": -42.047806527907944,
+    "y": 117.70945245606895,
     "z": 0,
     "currentLayer": 8,
     "traversalLayer": 8,
     "currentLayerBaseZ": 30,
-    "surfaceId": "building:placed-8:surface:floor-fragment-71",
-    "fragmentId": "building:placed-8:floor:floor-fragment-71",
-    "hp": 32.983333333332105,
+    "surfaceId": "building:placed-9:surface:floor-fragment-71",
+    "fragmentId": "building:placed-9:floor:floor-fragment-71",
+    "hp": 100,
     "maxHp": 100,
     "mp": 100,
     "maxMp": 100,
@@ -24,7 +24,7 @@
     "shieldHp": 0,
     "maxShieldHp": 0,
     "food": 0,
-    "currentSpell": "teleport",
+    "currentSpell": "moveobject",
     "activeAura": "speed",
     "activeAuras": [
       "speed"
@@ -33,12 +33,12 @@
     "selectedFlooringTexture": "/assets/images/flooring/dirt.jpg",
     "selectedTreeTextureVariant": "random",
     "selectedPlaceableCategory": "furniture",
-    "selectedPlaceableTexturePath": "/assets/images/furniture/crystal%20ball.png",
+    "selectedPlaceableTexturePath": "/assets/images/furniture/armor.png",
     "selectedPlaceableByCategory": {
       "flowers": "/assets/images/flowers/thornflowers.png",
       "windows": "/assets/images/windows/very%20plain%20arch.png",
       "doors": "/assets/images/doors/door2.png",
-      "furniture": "/assets/images/furniture/crystal%20ball.png",
+      "furniture": "/assets/images/furniture/armor.png",
       "signs": "/assets/images/signs/princess.png",
       "roof": "/assets/images/roofs/smallshingles.png"
     },
@@ -64,29 +64,29 @@
       "/assets/images/furniture/bed2.png": 0,
       "/assets/images/furniture/armor.png": 0
     },
-    "selectedPlaceableScale": 2.138,
+    "selectedPlaceableScale": 2.55,
     "selectedPlaceableScaleByTexture": {
       "/assets/images/doors/door5.png": 1,
       "/assets/images/windows/window.png": 0.997,
       "/assets/images/roofs/smallshingles.png": 1.023,
       "/assets/images/roofs/slate.png": 1,
       "/assets/images/furniture/chair.png": 1,
-      "/assets/images/furniture/circlerug.png": 4,
+      "/assets/images/furniture/circlerug.png": 5.146,
       "/assets/images/doors/door2.png": 1.932,
       "/assets/images/flowers/red%20flower.png": 0.55,
       "/assets/images/flowers/fireflower.png": 5,
       "/assets/images/flowers/thornflowers.png": 5,
       "/assets/images/furniture/hexrug.png": 4,
-      "/assets/images/furniture/crystal%20ball.png": 2.138,
+      "/assets/images/furniture/crystal%20ball.png": 1.372,
       "/assets/images/windows/pointy%20arch%20window.png": 1.468,
       "/assets/images/windows/very%20plain%20arch.png": 1.81,
       "/assets/images/furniture/redrug.png": 4,
       "/assets/images/furniture/table.png": 2.733,
       "/assets/images/furniture/bed.png": 6.196,
       "/assets/images/furniture/bed2.png": 3.657,
-      "/assets/images/furniture/armor.png": 2.731
+      "/assets/images/furniture/armor.png": 2.55
     },
-    "selectedPlaceableRotation": 30,
+    "selectedPlaceableRotation": 0,
     "selectedPlaceableRotationByTexture": {
       "/assets/images/doors/door5.png": 0,
       "/assets/images/windows/window.png": 0,
@@ -108,7 +108,7 @@
       "/assets/images/furniture/bed2.png": 0,
       "/assets/images/furniture/armor.png": 0
     },
-    "selectedPlaceableRotationAxis": "visual",
+    "selectedPlaceableRotationAxis": "none",
     "selectedPlaceableRotationAxisByTexture": {
       "/assets/images/doors/door5.png": "spatial",
       "/assets/images/windows/window.png": "spatial",
@@ -131,7 +131,7 @@
       "/assets/images/furniture/armor.png": "none"
     },
     "selectedPlaceableAnchorX": 0.5,
-    "selectedPlaceableAnchorY": 0.5,
+    "selectedPlaceableAnchorY": 0.9,
     "selectedPlaceableAnchorXByTexture": {
       "/assets/images/doors/door5.png": 0.5,
       "/assets/images/windows/window.png": 0.5,
@@ -257,8 +257,8 @@
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -59.91467353496384,
-      "y": 110.66784860564105
+      "x": -57.54089290096516,
+      "y": 104.2053136381226
     }
   },
   "los": {
