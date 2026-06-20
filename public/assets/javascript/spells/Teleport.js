@@ -155,6 +155,16 @@ class Teleport extends globalThis.Spell {
         wizard.prevX = destinationX;
         wizard.prevY = destinationY;
         wizard.updateHitboxes();
+        const mapRef = wizard.map || null;
+        if (mapRef && typeof mapRef.updatePrototypeSectionBubble === "function") {
+            const scope = typeof mapRef.getPrototypeWorldScope === "function"
+                ? mapRef.getPrototypeWorldScope()
+                : null;
+            const teleportedIntoBuildingScope = !!(scope && scope.type === "building");
+            mapRef.updatePrototypeSectionBubble(wizard, teleportedIntoBuildingScope
+                ? { reason: "teleport" }
+                : { force: true, advanceImmediately: true, reason: "teleport" });
+        }
         if (typeof centerViewport === "function") {
             centerViewport(wizard, 0);
         }

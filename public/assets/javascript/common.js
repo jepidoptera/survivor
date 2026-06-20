@@ -48,6 +48,8 @@ class Player{
 let player = new Player();
 let paused = false;
 let msgBoxActive = false;
+// Temporary perf diagnostic: skip road/floor tile object records, not floor fragments.
+globalThis.SKIP_ROAD_AND_FLOOR_TILE_OBJECT_LOAD = globalThis.SKIP_ROAD_AND_FLOOR_TILE_OBJECT_LOAD !== false;
 let activeScrollMessageResolver = null;
 const INVENTORY_MODAL_ID = "inventoryModal";
 const INVENTORY_MODAL_BACKDROP_ID = "inventoryModalBackdrop";

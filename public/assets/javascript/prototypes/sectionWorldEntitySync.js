@@ -22,6 +22,35 @@
         return `${ownerType}:${ownerId}:${Number.isInteger(recordId) ? recordId : ""}`;
     }
 
+    function shouldSkipRoadAndFloorTileObjectLoad() {
+        return typeof globalScope !== "undefined" &&
+            globalScope.SKIP_ROAD_AND_FLOOR_TILE_OBJECT_LOAD !== false;
+    }
+
+    function isRoadOrFloorTileObjectRecord(record) {
+        if (!shouldSkipRoadAndFloorTileObjectLoad() || !record || typeof record !== "object") return false;
+        const type = typeof record.type === "string" ? record.type.trim().toLowerCase() : "";
+        const category = typeof record.category === "string" ? record.category.trim().toLowerCase() : "";
+        const objectType = typeof record.objectType === "string" ? record.objectType.trim().toLowerCase() : "";
+        return (
+            type === "road" ||
+            type === "floor" ||
+            type === "floortile" ||
+            type === "flooring" ||
+            type === "tile" ||
+            objectType === "road" ||
+            objectType === "floor" ||
+            objectType === "floortile" ||
+            objectType === "flooring" ||
+            objectType === "tile" ||
+            category === "roads" ||
+            category === "floor" ||
+            category === "floors" ||
+            category === "flooring" ||
+            category === "tiles"
+        );
+    }
+
     function collectPrototypeOwnedRecords(map, fieldName, activeSectionKeys) {
         const desiredRecords = [];
         const sectionKeys = activeSectionKeys instanceof Set
@@ -34,6 +63,7 @@
             for (let i = 0; i < records.length; i++) {
                 const record = records[i];
                 if (!record || typeof record !== "object") continue;
+                if (fieldName === "objects" && isRoadOrFloorTileObjectRecord(record)) continue;
                 desiredRecords.push({
                     ownerType: "section",
                     ownerId: sectionKey,
@@ -55,6 +85,7 @@
                     for (let i = 0; i < records.length; i++) {
                         const record = records[i];
                         if (!record || typeof record !== "object") continue;
+                        if (fieldName === "objects" && isRoadOrFloorTileObjectRecord(record)) continue;
                         desiredRecords.push({
                             ownerType: "building",
                             ownerId: buildingId,

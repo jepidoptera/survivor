@@ -2403,7 +2403,75 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
         assert.equal(lowerEntryWallCharacter.moveDirection({ x: 0.928, y: 0.371 }, { lockMovementVector: true }), true);
         assert.ok(lowerEntryWallCharacter._stairSupport, "wall-side lower entry should still enter the stair");
         assert.equal(lowerEntryWallCharacter._stairSupport.stairId, "walkable_stairs");
-        assert.ok(Math.abs(lowerEntryWallCharacter.movementVector.y) < 0.0001, "entry should cancel only the into-wall component");
+        assert.ok(
+            lowerEntryWallCharacter.y + lowerEntryWallCharacter.groundRadius <= 0.3201,
+            "entry support should not be accepted inside the wall"
+        );
+
+        const overlappingEntryWallBlocker = {
+            gone: false,
+            groundPlaneHitbox: {
+                intersects(hitbox) {
+                    const radius = Number(hitbox && hitbox.radius) || 0;
+                    const x = Number(hitbox && hitbox.x);
+                    const y = Number(hitbox && hitbox.y);
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+                    if (x < -10 || x > 10) return null;
+                    const wallY = 0.25;
+                    const overlap = y + radius - wallY;
+                    if (overlap <= 0) return null;
+                    return { pushX: 0, pushY: -overlap };
+                }
+            }
+        };
+        map.collectPrototypeBuildingMovementBlockersInBounds = () => [overlappingEntryWallBlocker];
+        const overlappedEntryCharacter = Object.create(Character.prototype);
+        Object.assign(overlappedEntryCharacter, {
+            type: "wizard",
+            map,
+            x: -0.25,
+            y: 0.02,
+            z: 0,
+            prevX: -0.25,
+            prevY: 0.02,
+            currentLayer: 0,
+            traversalLayer: 0,
+            currentLayerBaseZ: 0,
+            groundRadius: 0.3,
+            speed: 1,
+            frameRate: 1,
+            moving: false,
+            movementVector: { x: 0.5, y: 0.2 },
+            currentMovementSupport: {
+                type: "floor",
+                layer: 0,
+                baseZ: 0,
+                fragmentId: "lower",
+                surfaceId: "lower_surface",
+                node: lowerNode
+            },
+            isFrozen: () => false,
+            getVectorMovementMaxSpeed: () => 1,
+            prepareVectorMovementContext() {
+                return {
+                    nearbyObjects: [overlappingEntryWallBlocker],
+                    nearbyCharacters: [],
+                    forceTouchedObjects: new Set()
+                };
+            },
+            updateHitboxes() {}
+        });
+        assert.equal(overlappedEntryCharacter.moveDirection({ x: 0.928, y: 0.371 }, { lockMovementVector: true }), true);
+        assert.ok(overlappedEntryCharacter._stairSupport, "overlapping lower entry should slide into a valid stair support");
+        assert.ok(
+            overlappedEntryCharacter.y + overlappedEntryCharacter.groundRadius <= 0.2501,
+            "overlapping handoff support should be slid clear of the wall"
+        );
+        assert.ok(overlappedEntryCharacter.movementVector.x > 0.01, "overlapping handoff should keep tangential motion");
+        assert.ok(
+            Math.abs(overlappedEntryCharacter.movementVector.y) < 0.0001,
+            "overlapping handoff should remove retained into-wall momentum"
+        );
     } finally {
         map.collectPrototypeBuildingMovementBlockersInBounds = originalBuildingBlockerCollector;
     }

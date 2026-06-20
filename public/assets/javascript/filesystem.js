@@ -1515,13 +1515,7 @@ function saveGameState(options = {}) {
         const exportedSections = (typeof map.exportPrototypeSectionWorld === "function")
             ? map.exportPrototypeSectionWorld()
             : null;
-        const clonePrototypeSectionWithoutExperimentalObjects = (section) => {
-            const cloned = JSON.parse(JSON.stringify(section));
-            if (cloned && Array.isArray(cloned.objects)) {
-                cloned.objects = cloned.objects.filter((obj) => !(obj && obj.type === "roadPath"));
-            }
-            return cloned;
-        };
+        const clonePrototypeSection = (section) => JSON.parse(JSON.stringify(section));
         const loadedSectionKeys = includeAllPrototypeSections
             ? ((state.sectionAssetsByKey instanceof Map)
                 ? Array.from(state.sectionAssetsByKey.keys())
@@ -1534,7 +1528,7 @@ function saveGameState(options = {}) {
             for (let i = 0; i < exportedSections.length; i++) {
                 const section = exportedSections[i];
                 if (!section || typeof section !== "object") continue;
-                sections.push(clonePrototypeSectionWithoutExperimentalObjects(section));
+                sections.push(clonePrototypeSection(section));
             }
         } else {
             for (let i = 0; i < loadedSectionKeys.length; i++) {
@@ -1569,7 +1563,6 @@ function saveGameState(options = {}) {
                     walls: Array.isArray(asset.walls) ? asset.walls.map((wall) => ({ ...wall })) : [],
                     objects: Array.isArray(asset.objects)
                         ? asset.objects
-                            .filter((obj) => !(obj && obj.type === "roadPath"))
                             .map((obj) => ({ ...obj }))
                         : [],
                     animals: Array.isArray(asset.animals) ? asset.animals.map((animal) => ({ ...animal })) : [],
@@ -1958,6 +1951,34 @@ function sanitizeWizardLoadMovementSupport(wizardData) {
     return wizardData;
 }
 
+function shouldSkipRoadAndFloorTileObjectLoad() {
+    return typeof globalThis !== "undefined" && globalThis.SKIP_ROAD_AND_FLOOR_TILE_OBJECT_LOAD !== false;
+}
+
+function isRoadOrFloorTileObjectRecord(record) {
+    if (!record || typeof record !== "object") return false;
+    const type = typeof record.type === "string" ? record.type.trim().toLowerCase() : "";
+    const category = typeof record.category === "string" ? record.category.trim().toLowerCase() : "";
+    const objectType = typeof record.objectType === "string" ? record.objectType.trim().toLowerCase() : "";
+    return (
+        type === "road" ||
+        type === "floor" ||
+        type === "floortile" ||
+        type === "flooring" ||
+        type === "tile" ||
+        objectType === "road" ||
+        objectType === "floor" ||
+        objectType === "floortile" ||
+        objectType === "flooring" ||
+        objectType === "tile" ||
+        category === "roads" ||
+        category === "floor" ||
+        category === "floors" ||
+        category === "flooring" ||
+        category === "tiles"
+    );
+}
+
 function loadGameState(saveData) {
     if (!saveData || !saveData.wizard || !map) {
         console.error("Invalid save data");
@@ -2232,6 +2253,10 @@ function loadGameState(saveData) {
                 if (restoredKeys.has(key)) return;
                 restoredKeys.add(key);
 
+                if (shouldSkipRoadAndFloorTileObjectLoad() && isRoadOrFloorTileObjectRecord(objData)) {
+                    return;
+                }
+
                 if (objData && objData.type === 'road') {
                     registerLazyRoadRecord(objData, false);
                     return;
@@ -2332,7 +2357,9 @@ function loadGameState(saveData) {
         const _lt5 = performance.now();
         console.log(`[LOAD TIMING] restore static objects + ground: ${(_lt5 - _lt4).toFixed(1)}ms`);
 
-        hydrateVisibleLazyRoads({ maxPerFrame: 192, paddingWorld: 12 });
+        if (!shouldSkipRoadAndFloorTileObjectLoad()) {
+            hydrateVisibleLazyRoads({ maxPerFrame: 192, paddingWorld: 12 });
+        }
         hydrateVisibleLazyTrees({ maxPerFrame: 256, paddingWorld: 12 });
 
         // Repair any stale blocking counters from older runtime versions.

@@ -1910,6 +1910,30 @@ class Character {
         return true;
     }
 
+    _projectMovementVectorAlongCollisionNormal(collision) {
+        if (
+            !this.movementVector ||
+            typeof this.movementVector !== "object" ||
+            !collision ||
+            collision.hasNormal !== true
+        ) {
+            return false;
+        }
+        const normalX = Number(collision.normalX);
+        const normalY = Number(collision.normalY);
+        const normalLen = Math.hypot(normalX, normalY);
+        if (!(normalLen > 1e-9)) return false;
+        const nx = normalX / normalLen;
+        const ny = normalY / normalLen;
+        const vectorX = Number(this.movementVector.x) || 0;
+        const vectorY = Number(this.movementVector.y) || 0;
+        const intoWallComponent = vectorX * nx + vectorY * ny;
+        if (!(intoWallComponent < -1e-6)) return false;
+        this.movementVector.x = vectorX - nx * intoWallComponent;
+        this.movementVector.y = vectorY - ny * intoWallComponent;
+        return true;
+    }
+
     moveDirection(vector, options = {}) {
         const movementPerfEnabled = typeof globalThis !== "undefined" &&
             globalThis.movementPerfBreakdownState &&
@@ -2046,6 +2070,9 @@ class Character {
                 if (stairOccupancy && stairOccupancy.handled === true) {
                     if (stairOccupancy.allowed === true) {
                         this._pendingVectorMovementSupport = stairOccupancy.support || null;
+                        if (stairOccupancy.slidByBuildingMovement === true) {
+                            this._projectMovementVectorAlongCollisionNormal(stairOccupancy.buildingBlockerCollision);
+                        }
                         const supportPoint = stairOccupancy.support &&
                             stairOccupancy.support.point &&
                             Number.isFinite(Number(stairOccupancy.support.point.x)) &&
@@ -2065,29 +2092,15 @@ class Character {
                     if (
                         stairOccupancy.blockedByBuildingMovement === true &&
                         stairSlideRetryCount === 0 &&
-                        this.movementVector &&
-                        typeof this.movementVector === "object" &&
                         stairOccupancy.buildingBlockerCollision &&
                         stairOccupancy.buildingBlockerCollision.hasNormal === true
                     ) {
-                        const normalX = Number(stairOccupancy.buildingBlockerCollision.normalX);
-                        const normalY = Number(stairOccupancy.buildingBlockerCollision.normalY);
-                        const normalLen = Math.hypot(normalX, normalY);
-                        if (normalLen > 1e-9) {
-                            const nx = normalX / normalLen;
-                            const ny = normalY / normalLen;
-                            const vectorX = Number(this.movementVector.x) || 0;
-                            const vectorY = Number(this.movementVector.y) || 0;
-                            const intoWallComponent = vectorX * nx + vectorY * ny;
-                            if (intoWallComponent < -1e-6) {
-                                this.movementVector.x = vectorX - nx * intoWallComponent;
-                                this.movementVector.y = vectorY - ny * intoWallComponent;
-                                if (Math.hypot(this.movementVector.x, this.movementVector.y) >= 0.001) {
-                                    newX = this.x + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
-                                    newY = this.y + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
-                                    stairSlideRetryCount++;
-                                    continue;
-                                }
+                        if (this._projectMovementVectorAlongCollisionNormal(stairOccupancy.buildingBlockerCollision)) {
+                            if (Math.hypot(this.movementVector.x, this.movementVector.y) >= 0.001) {
+                                newX = this.x + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
+                                newY = this.y + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
+                                stairSlideRetryCount++;
+                                continue;
                             }
                         }
                     }

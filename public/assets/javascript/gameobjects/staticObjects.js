@@ -3900,12 +3900,11 @@ void main(void) {
                 }
                 return triggerObj;
             }
-            if (data.type === 'roadPath') {
-                return null;
-            }
-            const node = resolveStaticObjectLoadNode(map, data, options);
+            const node = data.type === 'roadPath'
+                ? null
+                : resolveStaticObjectLoadNode(map, data, options);
 
-            if (!node) return null;
+            if (!node && data.type !== 'roadPath') return null;
 
             let obj;
             let textures = [];
@@ -3935,6 +3934,25 @@ void main(void) {
                         deferTextureRefresh: !!options.deferRoadTextureRefresh,
                         suppressAutoScriptingName: !!options.suppressAutoScriptingName
                     });
+                    break;
+                case 'roadPath':
+                    obj = new RoadPath(
+                        Array.isArray(data.points) ? data.points : data.pathPoints,
+                        map,
+                        {
+                            width: Number.isFinite(data.width) ? Number(data.width) : undefined,
+                            fillTexturePath: (typeof data.fillTexturePath === 'string' && data.fillTexturePath.length > 0)
+                                ? data.fillTexturePath
+                                : undefined,
+                            traversalLayer: Number.isFinite(data.traversalLayer)
+                                ? Math.round(Number(data.traversalLayer))
+                                : (Number.isFinite(data.level) ? Math.round(Number(data.level)) : undefined),
+                            level: Number.isFinite(data.level)
+                                ? Math.round(Number(data.level))
+                                : (Number.isFinite(data.traversalLayer) ? Math.round(Number(data.traversalLayer)) : undefined),
+                            suppressAutoScriptingName: !!options.suppressAutoScriptingName
+                        }
+                    );
                     break;
                 case 'firewall':
                     if (typeof FirewallEmitter === 'function') {
@@ -4249,6 +4267,9 @@ void main(void) {
 
             return obj;
         } catch (e) {
+            if (data && data.type === "roadPath") {
+                throw e;
+            }
             console.error("Error loading static object:", e);
             return null;
         }
@@ -6827,11 +6848,38 @@ class RoadPath extends StaticObject {
     }
 
     saveJson() {
-        throw new Error("roadPath persistence is disabled until path roads are proven stable");
+        const data = super.saveJson();
+        data.type = "roadPath";
+        data.points = this.pathPoints.map(point => ({
+            x: Number(point.x),
+            y: Number(point.y)
+        }));
+        data.width = Number(this.roadWidth);
+        data.fillTexturePath = RoadPath.normalizeFillTexturePath(this.fillTexturePath);
+        data.isPassable = true;
+        data.castsLosShadows = false;
+        return data;
     }
 
     static loadJson(data, map, options = {}) {
-        throw new Error("roadPath loading is disabled until path roads are proven stable");
+        if (!data || !map) return null;
+        return new RoadPath(
+            Array.isArray(data.points) ? data.points : data.pathPoints,
+            map,
+            {
+                width: Number.isFinite(data.width) ? Number(data.width) : undefined,
+                fillTexturePath: (typeof data.fillTexturePath === "string" && data.fillTexturePath.length > 0)
+                    ? data.fillTexturePath
+                    : undefined,
+                traversalLayer: Number.isFinite(data.traversalLayer)
+                    ? Math.round(Number(data.traversalLayer))
+                    : (Number.isFinite(data.level) ? Math.round(Number(data.level)) : undefined),
+                level: Number.isFinite(data.level)
+                    ? Math.round(Number(data.level))
+                    : (Number.isFinite(data.traversalLayer) ? Math.round(Number(data.traversalLayer)) : undefined),
+                suppressAutoScriptingName: !!options.suppressAutoScriptingName
+            }
+        );
     }
 }
 

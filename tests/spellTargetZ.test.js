@@ -2717,6 +2717,53 @@ test("teleport cast synchronizes wizard to the destination node layer", () => {
     assert.equal(context.wizard.magic, 75);
 });
 
+test("teleport cast refreshes the outdoor prototype bubble after leaving building scope", () => {
+    const { context } = loadTeleportContext();
+    const bubbleUpdates = [];
+    context.wizard.map.getPrototypeWorldScope = () => ({ type: "sectionWorld" });
+    context.wizard.map.updatePrototypeSectionBubble = (actor, options) => {
+        bubbleUpdates.push({ actor, options });
+        return true;
+    };
+    const destinationNode = { xindex: 2, yindex: 3, traversalLayer: 0, baseZ: 0 };
+    const spell = new context.Teleport();
+
+    spell.cast(2, 3, { destinationNode, destinationLayer: 0, destinationBaseZ: 0 });
+
+    assert.equal(bubbleUpdates.length, 1);
+    assert.equal(bubbleUpdates[0].actor, context.wizard);
+    assert.equal(bubbleUpdates[0].options.force, true);
+    assert.equal(bubbleUpdates[0].options.advanceImmediately, true);
+    assert.equal(bubbleUpdates[0].options.reason, "teleport");
+});
+
+test("teleport cast preserves building-scope bubble suspension after entering a building", () => {
+    const { context } = loadTeleportContext();
+    const bubbleUpdates = [];
+    context.wizard.map.getPrototypeWorldScope = () => ({ type: "building", id: "building:placed-3" });
+    context.wizard.map.updatePrototypeSectionBubble = (actor, options) => {
+        bubbleUpdates.push({ actor, options });
+        return false;
+    };
+    const destinationNode = {
+        xindex: 2,
+        yindex: 3,
+        traversalLayer: 1,
+        baseZ: 30,
+        fragmentId: "building:placed-3:floor:floor-fragment-90",
+        surfaceId: "building:placed-3:surface:floor-fragment-90"
+    };
+    const spell = new context.Teleport();
+
+    spell.cast(2, 3, { destinationNode, destinationLayer: 1, destinationBaseZ: 30 });
+
+    assert.equal(bubbleUpdates.length, 1);
+    assert.equal(bubbleUpdates[0].actor, context.wizard);
+    assert.equal(bubbleUpdates[0].options.force, undefined);
+    assert.equal(bubbleUpdates[0].options.advanceImmediately, undefined);
+    assert.equal(bubbleUpdates[0].options.reason, "teleport");
+});
+
 test("teleport cast accepts a floor fragment destination without a node", () => {
     const { context } = loadTeleportContext();
     const spell = new context.Teleport();

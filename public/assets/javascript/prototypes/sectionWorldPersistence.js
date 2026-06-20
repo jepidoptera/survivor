@@ -811,7 +811,6 @@
         const isPrototypeSavableObject = (obj) => {
             if (!obj || obj.gone || obj.vanishing) return false;
             if (typeof obj.saveJson !== "function") return false;
-            if (obj.type === "roadPath") return false;
             if (obj.type === "wallSection") return false;
             if (isPrototypeWizardRuntimeObject(obj)) return false;
             return true;

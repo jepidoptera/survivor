@@ -3578,6 +3578,36 @@ class GameMap {
             }
             return null;
         };
+        const supportPointCollision = options && options.requireClearStairSupportPoint === true
+            ? collisionInfoAt(supportPoint.x, supportPoint.y)
+            : null;
+        if (supportPointCollision) {
+            const pushX = Number(supportPointCollision.pushX);
+            const pushY = Number(supportPointCollision.pushY);
+            const depth = Number(supportPointCollision.depth);
+            if (depth > 1e-9 && Number.isFinite(pushX) && Number.isFinite(pushY)) {
+                return {
+                    blocker: supportPointCollision.blocker,
+                    normalX: pushX / depth,
+                    normalY: pushY / depth,
+                    pushX,
+                    pushY,
+                    depth,
+                    hasNormal: true,
+                    supportPointOverlap: true
+                };
+            }
+            return {
+                blocker: supportPointCollision.blocker,
+                normalX: 0,
+                normalY: 0,
+                pushX: Number.isFinite(pushX) ? pushX : 0,
+                pushY: Number.isFinite(pushY) ? pushY : 0,
+                depth: Number.isFinite(depth) ? depth : 0,
+                hasNormal: false,
+                supportPointOverlap: true
+            };
+        }
 
         return segmentCollision(startX, startY, targetX, targetY) ||
             segmentCollision(startX, startY, supportPoint.x, supportPoint.y);
@@ -3611,6 +3641,49 @@ class GameMap {
             projectionError: 0
         }, actor, options);
         return traversal.supportFromPathLocal(stair, frame, clamped);
+    }
+
+    slideStairEndpointEntrySupportPastBuildingBlocker(stair, endpoint, entrySupport, collision, actor = null, options = {}) {
+        if (!stair || !entrySupport || !collision || collision.supportPointOverlap !== true) return null;
+        if (endpoint !== "lower" && endpoint !== "higher") throw new Error(`unknown stair endpoint: ${endpoint}`);
+        const point = entrySupport.point &&
+            Number.isFinite(Number(entrySupport.point.x)) &&
+            Number.isFinite(Number(entrySupport.point.y))
+            ? { x: Number(entrySupport.point.x), y: Number(entrySupport.point.y) }
+            : null;
+        if (!point) return null;
+        const pushX = Number(collision.pushX);
+        const pushY = Number(collision.pushY);
+        const depth = Number(collision.depth);
+        if (!(depth > 1e-9) || !Number.isFinite(pushX) || !Number.isFinite(pushY)) return null;
+        const traversal = this.requireStairTraversal();
+        const frame = this.getStairTraversalFrame(stair);
+        const nudge = Math.max(0.002, this.getActorMovementSupportRadius(actor, options) * 0.02);
+        const adjustedPoint = {
+            x: point.x + pushX + (pushX / depth) * nudge,
+            y: point.y + pushY + (pushY / depth) * nudge
+        };
+        const localOptions = this.stairEndpointMouthProjectionOptions(stair, endpoint);
+        const adjustedLocal = traversal.localPointForPathFrame(frame, adjustedPoint, localOptions);
+        const clamped = this.clampStairLocalSide(frame, {
+            ...adjustedLocal,
+            upDown: endpoint === "lower" ? 0 : 1,
+            projectionError: 0
+        }, actor, options);
+        const adjustedSupport = traversal.supportFromPathLocal(stair, frame, clamped);
+        const remainingCollision = this.getActorStairFastPathBuildingBlockerCollision(
+            Number(actor && actor.x),
+            Number(actor && actor.y),
+            adjustedSupport.point.x,
+            adjustedSupport.point.y,
+            adjustedSupport,
+            actor,
+            {
+                ...options,
+                requireClearStairSupportPoint: true
+            }
+        );
+        return remainingCollision ? null : adjustedSupport;
     }
 
     getActorStairTopStepSideEntrySupport(stair, x, y, actor = null, options = {}) {
@@ -4006,6 +4079,40 @@ class GameMap {
                 )
                     ? movementSupportCache.currentFloorSupport
                     : this.getActorFloorSupportForStairEntry(actor, worldX, worldY, currentLayer, options);
+            const floorStairFootprintMovementResult = () => {
+                const floorSupport = {
+                    ...currentFloorSupport,
+                    point: { x: Number(worldX), y: Number(worldY) }
+                };
+                const buildingBlockerCollision = this.getActorStairFastPathBuildingBlockerCollision(
+                    Number(actor && actor.x),
+                    Number(actor && actor.y),
+                    worldX,
+                    worldY,
+                    floorSupport,
+                    actor,
+                    {
+                        ...options,
+                        requireClearStairSupportPoint: true
+                    }
+                );
+                if (buildingBlockerCollision) {
+                    return {
+                        handled: true,
+                        allowed: false,
+                        support: null,
+                        currentSupport: currentFloorSupport,
+                        blockedByBuildingMovement: true,
+                        buildingBlockerCollision
+                    };
+                }
+                return {
+                    handled: true,
+                    allowed: true,
+                    support: floorSupport,
+                    currentSupport: currentFloorSupport
+                };
+            };
             if (currentStairSupport) {
                 return cacheOccupancyResult(this.resolveActorStairLocalMovement(currentStairSupport, worldX, worldY, actor, options));
             }
@@ -4028,9 +4135,30 @@ class GameMap {
                                 worldY,
                                 entrySupport,
                                 actor,
-                                options
+                                {
+                                    ...options,
+                                    requireClearStairSupportPoint: true
+                                }
                             );
                             if (buildingBlockerCollision) {
+                                const adjustedEntrySupport = this.slideStairEndpointEntrySupportPastBuildingBlocker(
+                                    stair,
+                                    endpoint,
+                                    entrySupport,
+                                    buildingBlockerCollision,
+                                    actor,
+                                    options
+                                );
+                                if (adjustedEntrySupport) {
+                                    return cacheOccupancyResult({
+                                        handled: true,
+                                        allowed: true,
+                                        support: adjustedEntrySupport,
+                                        currentSupport: currentFloorSupport,
+                                        slidByBuildingMovement: true,
+                                        buildingBlockerCollision
+                                    });
+                                }
                                 return cacheOccupancyResult({
                                     handled: true,
                                     allowed: false,
@@ -4053,9 +4181,30 @@ class GameMap {
                                 worldY,
                                 topStepSideEntrySupport,
                                 actor,
-                                options
+                                {
+                                    ...options,
+                                    requireClearStairSupportPoint: true
+                                }
                             );
                             if (buildingBlockerCollision) {
+                                const adjustedEntrySupport = this.slideStairEndpointEntrySupportPastBuildingBlocker(
+                                    stair,
+                                    "higher",
+                                    topStepSideEntrySupport,
+                                    buildingBlockerCollision,
+                                    actor,
+                                    options
+                                );
+                                if (adjustedEntrySupport) {
+                                    return cacheOccupancyResult({
+                                        handled: true,
+                                        allowed: true,
+                                        support: adjustedEntrySupport,
+                                        currentSupport: currentFloorSupport,
+                                        slidByBuildingMovement: true,
+                                        buildingBlockerCollision
+                                    });
+                                }
                                 return cacheOccupancyResult({
                                     handled: true,
                                     allowed: false,
@@ -4092,9 +4241,30 @@ class GameMap {
                                 worldY,
                                 entrySupport,
                                 actor,
-                                options
+                                {
+                                    ...options,
+                                    requireClearStairSupportPoint: true
+                                }
                             );
                             if (buildingBlockerCollision) {
+                                const adjustedEntrySupport = this.slideStairEndpointEntrySupportPastBuildingBlocker(
+                                    stair,
+                                    endpoint,
+                                    entrySupport,
+                                    buildingBlockerCollision,
+                                    actor,
+                                    options
+                                );
+                                if (adjustedEntrySupport) {
+                                    return cacheOccupancyResult({
+                                        handled: true,
+                                        allowed: true,
+                                        support: adjustedEntrySupport,
+                                        currentSupport: currentFloorSupport,
+                                        slidByBuildingMovement: true,
+                                        buildingBlockerCollision
+                                    });
+                                }
                                 return cacheOccupancyResult({
                                     handled: true,
                                     allowed: false,
@@ -4129,26 +4299,10 @@ class GameMap {
                     if (!endpoint) continue;
                     if (!this.actorFootprintOverlapsStairFloorBlocker(stair, currentFloorSupport, worldX, worldY, actor, options)) continue;
                     if (this.actorMovesAwayFromStairEndpointMouth(stair, actor, worldX, worldY, endpoint, options)) {
-                        return cacheOccupancyResult({
-                            handled: true,
-                            allowed: true,
-                            support: {
-                                ...currentFloorSupport,
-                                point: { x: Number(worldX), y: Number(worldY) }
-                            },
-                            currentSupport: currentFloorSupport
-                        });
+                        return cacheOccupancyResult(floorStairFootprintMovementResult());
                     }
                     if (this.actorApproachesStairEndpointMouth(stair, actor, worldX, worldY, endpoint, options)) {
-                        return cacheOccupancyResult({
-                            handled: true,
-                            allowed: true,
-                            support: {
-                                ...currentFloorSupport,
-                                point: { x: Number(worldX), y: Number(worldY) }
-                            },
-                            currentSupport: currentFloorSupport
-                        });
+                        return cacheOccupancyResult(floorStairFootprintMovementResult());
                     }
                     return cacheOccupancyResult({ handled: true, allowed: false, support: null, currentSupport: currentFloorSupport, slideAlongStairFootprint: true });
                 }
