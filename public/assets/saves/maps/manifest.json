@@ -1,15 +1,15 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -42.4211549866698,
-    "y": 124.2137855157392,
+    "x": -44.4233188733187,
+    "y": 124.1719874235874,
     "z": 0,
     "currentLayer": 8,
     "traversalLayer": 8,
     "currentLayerBaseZ": 30,
     "surfaceId": "building:placed-8:surface:floor-fragment-71",
     "fragmentId": "building:placed-8:floor:floor-fragment-71",
-    "hp": 100,
+    "hp": 32.983333333332105,
     "maxHp": 100,
     "mp": 100,
     "maxMp": 100,
@@ -24,7 +24,7 @@
     "shieldHp": 0,
     "maxShieldHp": 0,
     "food": 0,
-    "currentSpell": "moveobject",
+    "currentSpell": "teleport",
     "activeAura": "speed",
     "activeAuras": [
       "speed"
@@ -71,7 +71,7 @@
       "/assets/images/roofs/smallshingles.png": 1.023,
       "/assets/images/roofs/slate.png": 1,
       "/assets/images/furniture/chair.png": 1,
-      "/assets/images/furniture/circlerug.png": 6.196,
+      "/assets/images/furniture/circlerug.png": 4,
       "/assets/images/doors/door2.png": 1.932,
       "/assets/images/flowers/red%20flower.png": 0.55,
       "/assets/images/flowers/fireflower.png": 5,
@@ -251,14 +251,14 @@
     ],
     "inventory": {
       "spellCredits": 4,
-      "gold": 6090
+      "gold": 6690
     },
     "scriptingName": "human1",
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -57.92739349859048,
-      "y": 105.84596092840242
+      "x": -59.91467353496384,
+      "y": 110.66784860564105
     }
   },
   "los": {

@@ -23019,8 +23019,7 @@
       "floorMembership": {
         "ownerType": "section",
         "ownerId": "-4,0",
-        "floorId": "section:-4,0:ground",
-        "level": 0
+        "floorId": "section:-4,0:ground"
       },
       "scriptingName": "furniture1",
       "texturePath": "/assets/images/furniture/table.png",
@@ -23045,8 +23044,25 @@
   "animals": [
     {
       "type": "squirrel",
-      "x": -277.2865384615387,
-      "y": 205.2115384615384,
+      "x": -137.5274615384617,
+      "y": 314.5,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5675310682755336,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel115",
+      "id": 4
+    },
+    {
+      "type": "squirrel",
+      "x": -273.0209333333335,
+      "y": 206.86666666666696,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -23062,8 +23078,8 @@
     },
     {
       "type": "squirrel",
-      "x": -231.98807692307693,
-      "y": 221.5,
+      "x": -230.61579999999992,
+      "y": 225.65000000000012,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -23079,8 +23095,8 @@
     },
     {
       "type": "squirrel",
-      "x": -55.090923076923,
-      "y": 206.92307692307713,
+      "x": -69.62640000000007,
+      "y": 204.29999999999984,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -23093,23 +23109,6 @@
       "chaseRadius": -1,
       "scriptingName": "squirrel135",
       "id": 6
-    },
-    {
-      "type": "squirrel",
-      "x": -131.7392190476192,
-      "y": 309.70476190476177,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.5675310682755336,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel115",
-      "id": 4
     }
   ],
   "powerups": [],

@@ -513,7 +513,7 @@ test("building exterior bitmap rendering uses vertical texture anchor", () => {
     assert.equal(updateThis._renderDepthBias, 0);
     assert.equal(mesh.state, createdState);
     assert.equal(mesh.state.depthTest, true);
-    assert.equal(mesh.state.depthMask, true);
+    assert.equal(mesh.state.depthMask, false);
     assert.equal(mesh.state.blend, true);
     assert.equal(mesh.alpha, 0.25);
     assert.deepEqual(Array.from(mesh.shader.uniforms.uTint), [0.25, 0.25, 0.25, 0.25]);

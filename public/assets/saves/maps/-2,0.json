@@ -32350,6 +32350,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9178
     },
     {
@@ -32383,6 +32384,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9179
     },
     {
@@ -32416,6 +32418,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9180
     },
     {
@@ -32449,6 +32452,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9181
     },
     {
@@ -32482,6 +32486,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9182
     },
     {
@@ -32515,6 +32520,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9183
     },
     {
@@ -32548,6 +32554,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9184
     },
     {
@@ -32581,6 +32588,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9185
     },
     {
@@ -32614,6 +32622,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9186
     },
     {
@@ -32647,6 +32656,7 @@
       ],
       "castsLosShadows": false,
       "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9187
     },
     {
@@ -32980,8 +32990,8 @@
   "animals": [
     {
       "type": "squirrel",
-      "x": 37.238,
-      "y": 190.00000000000006,
+      "x": 12.297199999999995,
+      "y": 211.4000000000001,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,

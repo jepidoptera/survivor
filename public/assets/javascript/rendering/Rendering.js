@@ -1049,6 +1049,7 @@ void main(void) {
             this.buildingCutawayCompositeCache = null;
             this.buildingCutawayCompositeBillboardState = null;
             this.prototypeBuildingExteriorDepthState = null;
+            this.prototypeBuildingExteriorTransparentDepthState = null;
             this.buildingCutawayCompositePendingBaseTextures = new Set();
             this.layerTransitionSnapshotRenderTexture = null;
             this.layerTransitionSnapshotSprite = null;
@@ -6734,6 +6735,18 @@ void main(void) {
             state.blend = true;
             state.culling = false;
             this.prototypeBuildingExteriorDepthState = state;
+            return state;
+        }
+
+        ensurePrototypeBuildingExteriorTransparentDepthState() {
+            if (this.prototypeBuildingExteriorTransparentDepthState) return this.prototypeBuildingExteriorTransparentDepthState;
+            if (typeof PIXI === "undefined" || !PIXI.State) return null;
+            const state = new PIXI.State();
+            state.depthTest = true;
+            state.depthMask = false;
+            state.blend = true;
+            state.culling = false;
+            this.prototypeBuildingExteriorTransparentDepthState = state;
             return state;
         }
 
@@ -20533,7 +20546,9 @@ void main(void) {
             if (typeof this.flipBuildingCutawayCompositeBillboardUvs === "function") {
                 this.flipBuildingCutawayCompositeBillboardUvs(mesh, sprite.texture);
             }
-            const exteriorDepthState = this.ensurePrototypeBuildingExteriorDepthState();
+            const exteriorDepthState = alpha < 0.999
+                ? this.ensurePrototypeBuildingExteriorTransparentDepthState()
+                : this.ensurePrototypeBuildingExteriorDepthState();
             if (exteriorDepthState) mesh.state = exteriorDepthState;
             if (typeof PIXI !== "undefined" && PIXI.BLEND_MODES) {
                 mesh.blendMode = PIXI.BLEND_MODES.NORMAL;

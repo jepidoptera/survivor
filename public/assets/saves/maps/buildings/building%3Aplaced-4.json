@@ -3507,8 +3507,8 @@
   "animals": [
     {
       "type": "squirrel",
-      "x": -132.2093333333334,
-      "y": 198.83333333333326,
+      "x": -133.14750000000004,
+      "y": 201.87500000000009,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -3534,7 +3534,1856 @@
   "powerups": [],
   "triggers": [],
   "loadState": "interior",
-  "contentVersion": 714,
-  "movementBlockedEdges": null,
-  "movementEdgeBlockerVersion": ""
+  "contentVersion": 726,
+  "movementBlockedEdges": [
+    {
+      "id": "building:placed-4:movement-edge:0",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -164,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -162,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:1",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -164,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -163,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:2",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -164,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -163,
+        "yindex": 200,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:3",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -164,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -164,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:4",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -164,
+        "yindex": 210,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -163,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:5",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -164,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -163,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:6",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -163,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -162,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:7",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -163,
+        "yindex": 200,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -162,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:8",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -163,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -163,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:9",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -163,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -162,
+        "yindex": 210,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:10",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -163,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -162,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:11",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -163,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -161,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:12",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -162,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -160,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:13",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -162,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -161,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:14",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -162,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -161,
+        "yindex": 200,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:15",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -162,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -162,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:16",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -162,
+        "yindex": 210,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -161,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:17",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -162,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -161,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:18",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -161,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -160,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:19",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -161,
+        "yindex": 200,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -160,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:20",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -161,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -161,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:21",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -161,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -160,
+        "yindex": 210,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:22",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -161,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -160,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:23",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -161,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -159,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:24",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -160,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -158,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:25",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -160,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -159,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:26",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -160,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -159,
+        "yindex": 200,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:27",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -160,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -160,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:28",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -160,
+        "yindex": 210,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -159,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:29",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -160,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -159,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:30",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -159,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -158,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:31",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -159,
+        "yindex": 200,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -158,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:32",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -159,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -159,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:33",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -159,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -158,
+        "yindex": 210,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:34",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -159,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -158,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:35",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -159,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -157,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:36",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -158,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -156,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:37",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -158,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -157,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:38",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -158,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -157,
+        "yindex": 200,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:39",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -158,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -158,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:40",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -158,
+        "yindex": 210,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -157,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:41",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -158,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -157,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:42",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -157,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -156,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:43",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -157,
+        "yindex": 200,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -156,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:44",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -157,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -157,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:45",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -157,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -156,
+        "yindex": 210,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:46",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -157,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -156,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:47",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -157,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -155,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:48",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -156,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -154,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:49",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -156,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -155,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:50",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -156,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -155,
+        "yindex": 200,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:51",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -156,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -156,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:52",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -156,
+        "yindex": 210,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -155,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:53",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -156,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -155,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:54",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -155,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -154,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:55",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -155,
+        "yindex": 200,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -154,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:56",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -155,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -155,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:57",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -155,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -154,
+        "yindex": 210,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:58",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -155,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -154,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:59",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -155,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -153,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:60",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -154,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -152,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:61",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -154,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -153,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:62",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -154,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -153,
+        "yindex": 200,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:63",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -154,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -154,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:64",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -154,
+        "yindex": 210,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -153,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:65",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -154,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -153,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:66",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -153,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -152,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:67",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -153,
+        "yindex": 200,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -152,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:68",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -153,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -153,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:69",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -153,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -152,
+        "yindex": 210,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:70",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -153,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -152,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:71",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -153,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -151,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:72",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -152,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -150,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:73",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -152,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -151,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:74",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -152,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -151,
+        "yindex": 200,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:75",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -152,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -152,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:76",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -152,
+        "yindex": 210,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -151,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:77",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -152,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -151,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:78",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -151,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -150,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:79",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -151,
+        "yindex": 200,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -150,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:80",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -151,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -151,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:81",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -151,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -150,
+        "yindex": 210,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:82",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -151,
+        "yindex": 212,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -150,
+        "yindex": 211,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 8,
+      "traversalLayer": 1
+    },
+    {
+      "id": "building:placed-4:movement-edge:83",
+      "buildingPlacementId": "building:placed-4",
+      "surfaceId": "building:placed-4:surface:floor-fragment-34",
+      "a": {
+        "xindex": -150,
+        "yindex": 198,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "b": {
+        "xindex": -150,
+        "yindex": 199,
+        "surfaceId": "building:placed-4:surface:floor-fragment-34",
+        "fragmentId": "building:placed-4:floor:floor-fragment-34",
+        "traversalLayer": 1
+      },
+      "fragmentId": "building:placed-4:floor:floor-fragment-34",
+      "movementBlockerIndex": 6,
+      "traversalLayer": 1
+    }
+  ],
+  "movementEdgeBlockerVersion": "surface-neighbor-crossings-v3"
 }

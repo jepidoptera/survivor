@@ -3441,6 +3441,6 @@
   "triggers": [],
   "loadState": "shell",
   "contentVersion": 1,
-  "movementBlockedEdges": null,
-  "movementEdgeBlockerVersion": ""
+  "movementBlockedEdges": [],
+  "movementEdgeBlockerVersion": "surface-neighbor-crossings-v3"
 }
