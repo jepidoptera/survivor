@@ -1169,6 +1169,131 @@ function presentGameFrame(renderAnimalsOverride = null) {
     }
     return false;
 }
+
+function getPrototypeInteriorInvalidationCaptureRequest() {
+    if (typeof globalThis === "undefined") return null;
+    const capture = globalThis.__prototypeInteriorInvalidationFrameCapture;
+    return capture && capture.status === "pending" ? capture : null;
+}
+
+function forceRenderForPrototypeInteriorInvalidationCapture() {
+    if (!app || !app.renderer) {
+        throw new Error("prototype interior invalidation capture requires the Pixi app renderer");
+    }
+    if (typeof app.render === "function") {
+        app.render();
+        return;
+    }
+    if (app.stage && typeof app.renderer.render === "function") {
+        app.renderer.render(app.stage);
+        return;
+    }
+    throw new Error("prototype interior invalidation capture could not force a Pixi render");
+}
+
+function getPrototypeInteriorInvalidationCaptureDataUrl() {
+    forceRenderForPrototypeInteriorInvalidationCapture();
+    const canvas = (app && app.renderer && app.renderer.view) || (app && app.view) || null;
+    if (!canvas || typeof canvas.toDataURL !== "function") {
+        throw new Error("prototype interior invalidation capture requires a readable renderer canvas");
+    }
+    return canvas.toDataURL("image/png");
+}
+
+function buildPrototypeInteriorInvalidationCapturePayload(capture, nowMs, perfSnapshot = null) {
+    return {
+        id: capture.id,
+        kind: "prototype-interior-invalidation-frame",
+        capturedAtMs: nowMs,
+        href: typeof window !== "undefined" ? String(window.location && window.location.href || "") : "",
+        userAgent: typeof navigator !== "undefined" ? String(navigator.userAgent || "") : "",
+        viewport: {
+            width: Number(window && window.innerWidth) || 0,
+            height: Number(window && window.innerHeight) || 0,
+            devicePixelRatio: Number(window && window.devicePixelRatio) || 1
+        },
+        camera: viewport ? {
+            x: Number(viewport.x),
+            y: Number(viewport.y),
+            viewscale: Number(viewscale),
+            xyratio: Number(xyratio)
+        } : null,
+        wizard: wizard ? {
+            x: Number(wizard.x),
+            y: Number(wizard.y),
+            z: Number(wizard.z),
+            currentLayer: Number(wizard.currentLayer),
+            currentLayerBaseZ: Number(wizard.currentLayerBaseZ),
+            floorMembership: wizard._floorMembership && typeof wizard._floorMembership === "object"
+                ? { ...wizard._floorMembership }
+                : null,
+            currentMovementSupport: wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                ? {
+                    ownerType: wizard.currentMovementSupport.ownerType || "",
+                    ownerId: wizard.currentMovementSupport.ownerId || "",
+                    layer: wizard.currentMovementSupport.layer,
+                    baseZ: wizard.currentMovementSupport.baseZ,
+                    floorMembership: wizard.currentMovementSupport.floorMembership && typeof wizard.currentMovementSupport.floorMembership === "object"
+                        ? { ...wizard.currentMovementSupport.floorMembership }
+                        : null
+                }
+                : null
+        } : null,
+        events: Array.isArray(capture.events) ? capture.events.slice() : [],
+        perf: perfSnapshot
+    };
+}
+
+function maybeCapturePrototypeInteriorInvalidationFrame(nowMs, perfSnapshot = null) {
+    const capture = getPrototypeInteriorInvalidationCaptureRequest();
+    if (!capture) return null;
+    capture.status = "capturing";
+    capture.captureStartedAtMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+        ? performance.now()
+        : Date.now();
+    let dataUrl = "";
+    let payload = null;
+    try {
+        dataUrl = getPrototypeInteriorInvalidationCaptureDataUrl();
+        payload = buildPrototypeInteriorInvalidationCapturePayload(capture, nowMs, perfSnapshot);
+    } catch (error) {
+        capture.status = "error";
+        capture.error = error && error.message ? error.message : String(error);
+        if (typeof globalThis !== "undefined") {
+            globalThis.__prototypeInteriorInvalidationFrameCaptureLast = capture;
+        }
+        console.error("[prototype interior invalidation capture] failed before upload", error);
+        return Promise.resolve(true);
+    }
+    return fetch("/api/debug/frame-capture", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, dataUrl })
+    }).then((response) => response.json()).then((result) => {
+        capture.status = result && result.ok ? "saved" : "error";
+        capture.response = result;
+        capture.savedAtMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        if (typeof globalThis !== "undefined") {
+            globalThis.__prototypeInteriorInvalidationFrameCaptureLast = capture;
+        }
+        if (result && result.ok) {
+            console.warn("[prototype interior invalidation capture] saved and frozen", result.url, capture);
+        } else {
+            console.error("[prototype interior invalidation capture] save failed", result, capture);
+        }
+        return true;
+    }).catch((error) => {
+        capture.status = "error";
+        capture.error = error && error.message ? error.message : String(error);
+        if (typeof globalThis !== "undefined") {
+            globalThis.__prototypeInteriorInvalidationFrameCaptureLast = capture;
+        }
+        console.error("[prototype interior invalidation capture] upload failed", error);
+        return true;
+    });
+}
 if (typeof globalThis !== "undefined") {
     globalThis.presentGameFrame = presentGameFrame;
 }
@@ -5376,6 +5501,27 @@ jQuery(() => {
                     : perfReadoutSummaryText;
                 perfPanel.text(perfReadoutVisibleText);
                 perfStats.lastUiUpdateAt = panelNow;
+            }
+            const capturePromise = maybeCapturePrototypeInteriorInvalidationFrame(nowMs, {
+                loopMs: perfStats.loopMs,
+                drawMs: perfStats.drawMs,
+                simMs: perfStats.simMs,
+                presentMs: perfStats.drawPresentMs,
+                simSteps: perfStats.simSteps
+            });
+            if (capturePromise) {
+                capturePromise.then(() => {
+                    if (typeof globalThis !== "undefined") {
+                        globalThis.__prototypeInteriorInvalidationFrameCaptureFrozen = true;
+                        globalThis.resumePrototypeInteriorInvalidationCaptureFreeze = function resumePrototypeInteriorInvalidationCaptureFreeze() {
+                            globalThis.__prototypeInteriorInvalidationFrameCaptureFrozen = false;
+                            globalThis.__prototypeInteriorInvalidationFrameCapture = null;
+                            requestAnimationFrame(renderFrame);
+                            return true;
+                        };
+                    }
+                });
+                return;
             }
             requestAnimationFrame(renderFrame);
             observePrototypeStartupPerfFrame();

@@ -21,6 +21,7 @@
             ownerId: owner.id,
             floorId
         };
+        if (Number.isFinite(membership.level)) out.level = Math.round(Number(membership.level));
         return out;
     }
 
@@ -79,6 +80,12 @@
             ownerId: owner.id,
             floorId
         };
+        const level = Number.isFinite(data.level)
+            ? Math.round(Number(data.level))
+            : (Number.isFinite(data.layer)
+                ? Math.round(Number(data.layer))
+                : (Number.isFinite(fragment && fragment.level) ? Math.round(Number(fragment.level)) : null));
+        if (Number.isFinite(level)) membership.level = level;
         return membership;
     }
 

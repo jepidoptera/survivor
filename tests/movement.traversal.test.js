@@ -348,6 +348,52 @@ test("GameMap stair fast-path movement is blocked by swept building wall blocker
     assert.deepEqual(queriedLayers, [0, 0]);
 });
 
+test("GameMap stair fast-path reports only into-wall blocker contact", () => {
+    const map = Object.create(GameMap.prototype);
+    map.wrapX = false;
+    map.wrapY = false;
+    map.collectPrototypeBuildingMovementBlockersInBounds = () => [{
+        gone: false,
+        groundPlaneHitbox: {
+            intersects(hitbox) {
+                const radius = Number(hitbox && hitbox.radius) || 0;
+                const y = Number(hitbox && hitbox.y);
+                if (!Number.isFinite(y)) return null;
+                const wallTopY = 0;
+                const overlap = wallTopY - (y - radius);
+                if (overlap <= 0) return null;
+                return { pushX: 0, pushY: overlap };
+            }
+        }
+    }];
+    const actor = {
+        x: 0,
+        y: 0.2,
+        currentLayer: 0,
+        groundRadius: 0.3
+    };
+    const support = {
+        type: "stair",
+        stair: { lowerLevel: 0, higherLevel: 1 },
+        upDown: 0.5,
+        point: { x: 1, y: 0.2 }
+    };
+
+    assert.equal(map.getActorStairFastPathBuildingBlockerCollision(0, 0.2, 1, 0.2, support, actor), null);
+    const deeperCollision = map.getActorStairFastPathBuildingBlockerCollision(0, 0.2, 1, 0.1, {
+        ...support,
+        point: { x: 1, y: 0.1 }
+    }, actor);
+    assert.ok(deeperCollision);
+    assert.equal(deeperCollision.hasNormal, true);
+    assert.ok(deeperCollision.normalY > 0);
+    assert.equal(map.actorStairFastPathClearsBuildingBlockers(0, 0.2, 1, 0.2, support, actor), true);
+    assert.equal(map.actorStairFastPathClearsBuildingBlockers(0, 0.2, 1, 0.1, {
+        ...support,
+        point: { x: 1, y: 0.1 }
+    }, actor), false);
+});
+
 test("GameMap applies smaller overlapping floor support after walking from ground into a building", () => {
     const map = Object.create(GameMap.prototype);
     map.width = 1;
@@ -2263,6 +2309,104 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
     assert.equal(floorSideCharacter.moveDirection({ x: 0.4472, y: -0.8944 }, { lockMovementVector: true }), true);
     assert.ok(floorSideCharacter.x > 1.0, "stair side collision should preserve tangential motion");
     assert.ok(Math.hypot(floorSideCharacter.movementVector.x, floorSideCharacter.movementVector.y) > 0.01);
+
+    const wallBlocker = {
+        gone: false,
+        groundPlaneHitbox: {
+            intersects(hitbox) {
+                const radius = Number(hitbox && hitbox.radius) || 0;
+                const x = Number(hitbox && hitbox.x);
+                const y = Number(hitbox && hitbox.y);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+                if (x < -10 || x > 10) return null;
+                const wallY = 0.32;
+                const overlap = y + radius - wallY;
+                if (overlap <= 0) return null;
+                return { pushX: 0, pushY: -overlap };
+            }
+        }
+    };
+    const originalBuildingBlockerCollector = map.collectPrototypeBuildingMovementBlockersInBounds;
+    map.collectPrototypeBuildingMovementBlockersInBounds = () => [wallBlocker];
+    try {
+        const stairWallCharacter = Object.create(Character.prototype);
+        Object.assign(stairWallCharacter, {
+            type: "wizard",
+            map,
+            x: 1.0,
+            y: 0,
+            z: 1,
+            prevX: 1.0,
+            prevY: 0,
+            currentLayer: 0,
+            traversalLayer: 0,
+            currentLayerBaseZ: 0,
+            groundRadius: 0.3,
+            speed: 1,
+            frameRate: 1,
+            moving: false,
+            movementVector: { x: 0.2, y: 0.4 },
+            currentMovementSupport: actor.currentMovementSupport ? { ...actor.currentMovementSupport } : null,
+            _stairSupport: { ...firstStepSupport },
+            isFrozen: () => false,
+            getVectorMovementMaxSpeed: () => 1,
+            prepareVectorMovementContext() {
+                return {
+                    nearbyObjects: [wallBlocker],
+                    nearbyCharacters: [],
+                    forceTouchedObjects: new Set()
+                };
+            },
+            updateHitboxes() {}
+        });
+        assert.equal(stairWallCharacter.moveDirection({ x: 0.4472, y: 0.8944 }, { lockMovementVector: true }), true);
+        assert.ok(stairWallCharacter.x > 1.0, "stair wall collision should keep tangential stair movement");
+        assert.ok(stairWallCharacter.y < 0.05, "wall collision should slide instead of entering the wall");
+        assert.ok(Math.hypot(stairWallCharacter.movementVector.x, stairWallCharacter.movementVector.y) > 0.01);
+
+        const lowerEntryWallCharacter = Object.create(Character.prototype);
+        Object.assign(lowerEntryWallCharacter, {
+            type: "wizard",
+            map,
+            x: -0.25,
+            y: 0.02,
+            z: 0,
+            prevX: -0.25,
+            prevY: 0.02,
+            currentLayer: 0,
+            traversalLayer: 0,
+            currentLayerBaseZ: 0,
+            groundRadius: 0.3,
+            speed: 1,
+            frameRate: 1,
+            moving: false,
+            movementVector: { x: 0.5, y: 0.2 },
+            currentMovementSupport: {
+                type: "floor",
+                layer: 0,
+                baseZ: 0,
+                fragmentId: "lower",
+                surfaceId: "lower_surface",
+                node: lowerNode
+            },
+            isFrozen: () => false,
+            getVectorMovementMaxSpeed: () => 1,
+            prepareVectorMovementContext() {
+                return {
+                    nearbyObjects: [wallBlocker],
+                    nearbyCharacters: [],
+                    forceTouchedObjects: new Set()
+                };
+            },
+            updateHitboxes() {}
+        });
+        assert.equal(lowerEntryWallCharacter.moveDirection({ x: 0.928, y: 0.371 }, { lockMovementVector: true }), true);
+        assert.ok(lowerEntryWallCharacter._stairSupport, "wall-side lower entry should still enter the stair");
+        assert.equal(lowerEntryWallCharacter._stairSupport.stairId, "walkable_stairs");
+        assert.ok(Math.abs(lowerEntryWallCharacter.movementVector.y) < 0.0001, "entry should cancel only the into-wall component");
+    } finally {
+        map.collectPrototypeBuildingMovementBlockersInBounds = originalBuildingBlockerCollector;
+    }
 
     wideActor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(0.5, 0, wideActor).support;
     map.applyActorResolvedMovementSupport(wideActor, 0.5, 0);
