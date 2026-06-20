@@ -3473,8 +3473,8 @@ class GameMap {
         return false;
     }
 
-    actorStairFastPathClearsBuildingBlockers(fromX, fromY, requestedX, requestedY, support, actor = null, options = {}) {
-        if (typeof this.collectPrototypeBuildingMovementBlockersInBounds !== "function") return true;
+    getActorStairFastPathBuildingBlockerCollision(fromX, fromY, requestedX, requestedY, support, actor = null, options = {}) {
+        if (typeof this.collectPrototypeBuildingMovementBlockersInBounds !== "function") return null;
         const startX = Number(fromX);
         const startY = Number(fromY);
         const targetX = Number(requestedX);
@@ -3502,12 +3502,13 @@ class GameMap {
                 ? Math.round(Number(support.layer))
                 : this.getActorTraversalLayer(actor, options));
         const blockers = this.collectPrototypeBuildingMovementBlockersInBounds(queryBounds, layer, options);
-        if (!Array.isArray(blockers) || blockers.length === 0) return true;
+        if (!Array.isArray(blockers) || blockers.length === 0) return null;
 
         const hitbox = { type: "circle", x: targetX, y: targetY, radius };
-        const collidesAt = (x, y) => {
+        const collisionInfoAt = (x, y) => {
             hitbox.x = x;
             hitbox.y = y;
+            let strongest = null;
             for (let i = 0; i < blockers.length; i++) {
                 const blocker = blockers[i];
                 if (
@@ -3518,26 +3519,80 @@ class GameMap {
                 ) {
                     continue;
                 }
-                if (blocker.groundPlaneHitbox.intersects(hitbox)) return true;
+                const collision = blocker.groundPlaneHitbox.intersects(hitbox);
+                if (!collision) continue;
+                const pushX = Number(collision.pushX);
+                const pushY = Number(collision.pushY);
+                const depth = Number.isFinite(pushX) && Number.isFinite(pushY)
+                    ? Math.hypot(pushX, pushY)
+                    : 0;
+                if (!strongest || depth > strongest.depth) {
+                    strongest = { blocker, pushX, pushY, depth };
+                }
             }
-            return false;
+            return strongest;
         };
-        const segmentCollides = (ax, ay, bx, by) => {
+        const segmentCollision = (ax, ay, bx, by) => {
             const dx = bx - ax;
             const dy = by - ay;
             const distance = Math.hypot(dx, dy);
-            if (!(distance > 1e-6)) return collidesAt(bx, by);
+            const movementNormalTolerance = Math.max(1e-6, distance * 1e-6);
+            const sampleCollision = (x, y) => {
+                const sampleCollision = collisionInfoAt(x, y);
+                if (!sampleCollision) return null;
+                const pushX = Number(sampleCollision.pushX);
+                const pushY = Number(sampleCollision.pushY);
+                const depth = Number(sampleCollision.depth);
+                if (!(depth > 1e-9) || !Number.isFinite(pushX) || !Number.isFinite(pushY)) {
+                    return {
+                        blocker: sampleCollision.blocker,
+                        normalX: 0,
+                        normalY: 0,
+                        pushX: Number.isFinite(pushX) ? pushX : 0,
+                        pushY: Number.isFinite(pushY) ? pushY : 0,
+                        depth: Number.isFinite(depth) ? depth : 0,
+                        hasNormal: false
+                    };
+                }
+                const normalX = pushX / depth;
+                const normalY = pushY / depth;
+                const movementIntoNormal = dx * normalX + dy * normalY;
+                if (movementIntoNormal >= -movementNormalTolerance) return null;
+                return {
+                    blocker: sampleCollision.blocker,
+                    normalX,
+                    normalY,
+                    pushX,
+                    pushY,
+                    depth,
+                    hasNormal: true
+                };
+            };
+            if (!(distance > 1e-6)) return sampleCollision(bx, by);
             const stepSize = Math.max(0.03, Math.min(0.12, radius > 0 ? radius * 0.25 : 0.05));
             const steps = Math.min(32, Math.max(1, Math.ceil(distance / stepSize)));
             for (let i = 1; i <= steps; i++) {
                 const t = i / steps;
-                if (collidesAt(ax + dx * t, ay + dy * t)) return true;
+                const collision = sampleCollision(ax + dx * t, ay + dy * t);
+                if (collision) return collision;
             }
-            return false;
+            return null;
         };
 
-        return !segmentCollides(startX, startY, targetX, targetY) &&
-            !segmentCollides(startX, startY, supportPoint.x, supportPoint.y);
+        return segmentCollision(startX, startY, targetX, targetY) ||
+            segmentCollision(startX, startY, supportPoint.x, supportPoint.y);
+    }
+
+    actorStairFastPathClearsBuildingBlockers(fromX, fromY, requestedX, requestedY, support, actor = null, options = {}) {
+        return !this.getActorStairFastPathBuildingBlockerCollision(
+            fromX,
+            fromY,
+            requestedX,
+            requestedY,
+            support,
+            actor,
+            options
+        );
     }
 
     getActorStairEndpointEntrySupport(stair, x, y, actor = null, options = {}) {
@@ -3847,7 +3902,7 @@ class GameMap {
                     ...floorSupport,
                     point: exitPoint
                 };
-                if (!this.actorStairFastPathClearsBuildingBlockers(
+                const buildingBlockerCollision = this.getActorStairFastPathBuildingBlockerCollision(
                     Number(actor && actor.x),
                     Number(actor && actor.y),
                     worldX,
@@ -3855,8 +3910,16 @@ class GameMap {
                     nextSupport,
                     actor,
                     options
-                )) {
-                    return { handled: true, allowed: false, support: null, currentSupport: currentStairSupport, blockedByBuildingMovement: true };
+                );
+                if (buildingBlockerCollision) {
+                    return {
+                        handled: true,
+                        allowed: false,
+                        support: null,
+                        currentSupport: currentStairSupport,
+                        blockedByBuildingMovement: true,
+                        buildingBlockerCollision
+                    };
                 }
                 return {
                     handled: true,
@@ -3868,7 +3931,7 @@ class GameMap {
             return { handled: true, allowed: false, support: null, currentSupport: currentStairSupport };
         }
         const nextSupport = traversal.supportFromPathLocal(stair, frame, nextLocal);
-        if (!this.actorStairFastPathClearsBuildingBlockers(
+        const buildingBlockerCollision = this.getActorStairFastPathBuildingBlockerCollision(
             Number(actor && actor.x),
             Number(actor && actor.y),
             worldX,
@@ -3876,8 +3939,16 @@ class GameMap {
             nextSupport,
             actor,
             options
-        )) {
-            return { handled: true, allowed: false, support: null, currentSupport: currentStairSupport, blockedByBuildingMovement: true };
+        );
+        if (buildingBlockerCollision) {
+            return {
+                handled: true,
+                allowed: false,
+                support: null,
+                currentSupport: currentStairSupport,
+                blockedByBuildingMovement: true,
+                buildingBlockerCollision
+            };
         }
         return {
             handled: true,
@@ -3949,9 +4020,8 @@ class GameMap {
                             ...options,
                             endpoint
                         });
-                        if (
-                            entrySupport &&
-                            this.actorStairFastPathClearsBuildingBlockers(
+                        if (entrySupport) {
+                            const buildingBlockerCollision = this.getActorStairFastPathBuildingBlockerCollision(
                                 Number(actor && actor.x),
                                 Number(actor && actor.y),
                                 worldX,
@@ -3959,16 +4029,24 @@ class GameMap {
                                 entrySupport,
                                 actor,
                                 options
-                            )
-                        ) {
+                            );
+                            if (buildingBlockerCollision) {
+                                return cacheOccupancyResult({
+                                    handled: true,
+                                    allowed: false,
+                                    support: null,
+                                    currentSupport: currentFloorSupport,
+                                    blockedByBuildingMovement: true,
+                                    buildingBlockerCollision
+                                });
+                            }
                             return cacheOccupancyResult({ handled: true, allowed: true, support: entrySupport, currentSupport: currentFloorSupport });
                         }
                     }
                     if (endpoint === "higher") {
                         const topStepSideEntrySupport = this.getActorStairTopStepSideEntrySupport(stair, worldX, worldY, actor, options);
-                        if (
-                            topStepSideEntrySupport &&
-                            this.actorStairFastPathClearsBuildingBlockers(
+                        if (topStepSideEntrySupport) {
+                            const buildingBlockerCollision = this.getActorStairFastPathBuildingBlockerCollision(
                                 Number(actor && actor.x),
                                 Number(actor && actor.y),
                                 worldX,
@@ -3976,8 +4054,17 @@ class GameMap {
                                 topStepSideEntrySupport,
                                 actor,
                                 options
-                            )
-                        ) {
+                            );
+                            if (buildingBlockerCollision) {
+                                return cacheOccupancyResult({
+                                    handled: true,
+                                    allowed: false,
+                                    support: null,
+                                    currentSupport: currentFloorSupport,
+                                    blockedByBuildingMovement: true,
+                                    buildingBlockerCollision
+                                });
+                            }
                             return cacheOccupancyResult({ handled: true, allowed: true, support: topStepSideEntrySupport, currentSupport: currentFloorSupport });
                         }
                     }
@@ -3997,9 +4084,8 @@ class GameMap {
                             ...options,
                             endpoint
                         });
-                        if (
-                            entrySupport &&
-                            this.actorStairFastPathClearsBuildingBlockers(
+                        if (entrySupport) {
+                            const buildingBlockerCollision = this.getActorStairFastPathBuildingBlockerCollision(
                                 Number(actor && actor.x),
                                 Number(actor && actor.y),
                                 worldX,
@@ -4007,8 +4093,17 @@ class GameMap {
                                 entrySupport,
                                 actor,
                                 options
-                            )
-                        ) {
+                            );
+                            if (buildingBlockerCollision) {
+                                return cacheOccupancyResult({
+                                    handled: true,
+                                    allowed: false,
+                                    support: null,
+                                    currentSupport: currentFloorSupport,
+                                    blockedByBuildingMovement: true,
+                                    buildingBlockerCollision
+                                });
+                            }
                             return cacheOccupancyResult({ handled: true, allowed: true, support: entrySupport, currentSupport: currentFloorSupport });
                         }
                     }

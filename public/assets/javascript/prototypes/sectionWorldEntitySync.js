@@ -209,6 +209,28 @@
         return true;
     }
 
+    function invalidatePrototypeInteriorBitmapForRuntimeObject(map, runtimeObj) {
+        if (!runtimeObj || !map || typeof map.invalidatePrototypeBuildingInteriorBitmap !== "function") return false;
+        const membership = runtimeObj._floorMembership && typeof runtimeObj._floorMembership === "object"
+            ? runtimeObj._floorMembership
+            : (runtimeObj.floorMembership && typeof runtimeObj.floorMembership === "object" ? runtimeObj.floorMembership : null);
+        if (
+            !membership ||
+            membership.ownerType !== "building" ||
+            typeof membership.ownerId !== "string" ||
+            membership.ownerId.length === 0 ||
+            typeof membership.floorId !== "string" ||
+            membership.floorId.length === 0
+        ) {
+            return false;
+        }
+        map.invalidatePrototypeBuildingInteriorBitmap({
+            placementId: membership.ownerId,
+            floorId: membership.floorId
+        });
+        return true;
+    }
+
     /**
      * Check all wall records in a section asset for cross-section spanning
      * and split them at seam boundaries. Mutates `asset.walls` in-place,
@@ -1038,6 +1060,7 @@
                         bumpProfile(runtimeProfileKey, "removed", 1, prototypeNow() - removeStart);
                         staticRemoved += 1;
                     }
+                    invalidatePrototypeInteriorBitmapForRuntimeObject(this, runtimeObj);
                     objectState.activeRuntimeObjectsByRecordId.delete(recordId);
                     removedAny = true;
                     removedCount += 1;
@@ -1191,6 +1214,7 @@
                     runtimeObj._prototypeOwnerSignature = `${runtimeObj._prototypeOwnerType}:${runtimeObj._prototypeOwnerId}`;
                     runtimeObj._prototypeOwnerSectionKey = runtimeObj._prototypeOwnerType === "section" ? entry.sectionKey : "";
                     restorePrototypeBuildingFloorSupportForObject(this, runtimeObj, entry);
+                    invalidatePrototypeInteriorBitmapForRuntimeObject(this, runtimeObj);
                     runtimeObj._prototypeDirty = false;
                     objectState.activeRuntimeObjectsByRecordId.set(recordId, runtimeObj);
                     loadedAny = true;

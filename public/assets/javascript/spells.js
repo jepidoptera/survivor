@@ -2694,6 +2694,7 @@ const SpellSystem = (() => {
         if (isMoveObjectToolName(spellName)) {
             const dragState = wizardRef.moveObjectDragState || null;
             finalizeMoveObjectDragSupport(dragState);
+            finalizeMovedPrototypeObjectPersistence(dragState);
             restorePrototypeBuildingMoveObjectBakeExclusion(wizardRef.moveObjectDragState);
             wizardRef.moveObjectDragState = null;
             if (dragState) {
@@ -4162,6 +4163,63 @@ const SpellSystem = (() => {
         }
     }
 
+    function getMoveObjectPersistenceSnapshot(target) {
+        if (!target || typeof target !== "object") return null;
+        return {
+            x: Number.isFinite(target.x) ? Number(target.x) : null,
+            y: Number.isFinite(target.y) ? Number(target.y) : null,
+            z: Number.isFinite(target.z) ? Number(target.z) : null,
+            rotation: Number.isFinite(target.rotation) ? Number(target.rotation) : null,
+            placementRotation: Number.isFinite(target.placementRotation) ? Number(target.placementRotation) : null,
+            mountedWallLineGroupId: Number.isInteger(Number(target.mountedWallLineGroupId)) ? Number(target.mountedWallLineGroupId) : null,
+            mountedSectionId: Number.isInteger(Number(target.mountedSectionId)) ? Number(target.mountedSectionId) : null,
+            mountedWallSectionUnitId: Number.isInteger(Number(target.mountedWallSectionUnitId)) ? Number(target.mountedWallSectionUnitId) : null,
+            mountedWallFacingSign: Number.isFinite(target.mountedWallFacingSign) ? Number(target.mountedWallFacingSign) : null,
+            fragmentId: typeof target.fragmentId === "string" ? target.fragmentId : "",
+            surfaceId: typeof target.surfaceId === "string" ? target.surfaceId : "",
+            ownerType: typeof target._prototypeOwnerType === "string" ? target._prototypeOwnerType : "",
+            ownerId: typeof target._prototypeOwnerId === "string" ? target._prototypeOwnerId : "",
+            ownerSectionKey: typeof target._prototypeOwnerSectionKey === "string" ? target._prototypeOwnerSectionKey : ""
+        };
+    }
+
+    function moveObjectPersistenceSnapshotChanged(previous, current, mapRef = null) {
+        if (!previous || !current) return false;
+        const numberChanged = (key) => {
+            const before = previous[key];
+            const after = current[key];
+            if (before === null || after === null) return before !== after;
+            if (key === "x" && mapRef && typeof mapRef.shortestDeltaX === "function") {
+                return Math.abs(mapRef.shortestDeltaX(before, after)) > 0.0001;
+            }
+            if (key === "y" && mapRef && typeof mapRef.shortestDeltaY === "function") {
+                return Math.abs(mapRef.shortestDeltaY(before, after)) > 0.0001;
+            }
+            return Math.abs(Number(after) - Number(before)) > 0.0001;
+        };
+        for (const key of ["x", "y", "z", "rotation", "placementRotation", "mountedWallFacingSign"]) {
+            if (numberChanged(key)) return true;
+        }
+        for (const key of ["mountedWallLineGroupId", "mountedSectionId", "mountedWallSectionUnitId"]) {
+            if (previous[key] !== current[key]) return true;
+        }
+        for (const key of ["fragmentId", "surfaceId", "ownerType", "ownerId", "ownerSectionKey"]) {
+            if (previous[key] !== current[key]) return true;
+        }
+        return false;
+    }
+
+    function finalizeMovedPrototypeObjectPersistence(dragState) {
+        if (!dragState || dragState.prototypePersistenceCaptured === true) return;
+        const target = dragState.target || null;
+        if (!target || target.gone || target.vanishing || target._prototypeRuntimeRecord !== true) return;
+        const mapRef = target.map || dragState.map || null;
+        const startSnapshot = dragState.prototypePersistenceStartSnapshot || null;
+        const currentSnapshot = getMoveObjectPersistenceSnapshot(target);
+        if (!moveObjectPersistenceSnapshotChanged(startSnapshot, currentSnapshot, mapRef)) return;
+        markMovedPrototypeObjectDirty(target, mapRef);
+    }
+
     function syncMovedPrototypeOwnerFromSupport(target) {
         if (!target || typeof target !== "object") return;
         const support = target.currentMovementSupport && typeof target.currentMovementSupport === "object"
@@ -4251,6 +4309,9 @@ const SpellSystem = (() => {
         }
         markMovedPrototypeObjectDirty(target, mapRef);
         captureMovedPrototypeObjectImmediately(target, mapRef);
+        if (dragState) {
+            dragState.prototypePersistenceCaptured = true;
+        }
         if (dragState && result.nextSupport) {
             dragState.lastMovementSupportChange = {
                 previousFragmentId: previousSupport.fragmentId || "",
@@ -5131,6 +5192,8 @@ const SpellSystem = (() => {
             currentOccupancyNode: target.node || null,
             velocityX: 0,
             velocityY: 0,
+            prototypePersistenceStartSnapshot: getMoveObjectPersistenceSnapshot(target),
+            prototypePersistenceCaptured: false,
             lastForceUpdateMs: (
                 typeof performance !== "undefined" &&
                 performance &&

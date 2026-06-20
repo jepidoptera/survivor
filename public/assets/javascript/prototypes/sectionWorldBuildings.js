@@ -4,12 +4,18 @@
     const BUILDING_PLACEMENT_SCHEMA = "survivor-building-placement-v1";
     const BUILDING_SAVE_SCHEMA = "survivor-building-v1";
     const EXTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-biased-v5-alpha-mask-runtime-floor-layers";
-    const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v17-edge-aligned-platform-cap";
+    const INTERIOR_BITMAP_RENDER_DATA_VERSION = "depth-rgb-interior-v28-object-bake-y-origin";
     const MOVEMENT_BLOCKER_GEOMETRY_VERSION = "layered-wall-column-stairless-v10-stack-layers";
     const MOVEMENT_EDGE_BLOCKER_VERSION = "surface-neighbor-crossings-v3";
     const DEFAULT_BUILDING_WALL_HEIGHT = 3;
     const DEFAULT_PROTOTYPE_BUILDING_BITMAP_PADDING_PIXELS = 96;
     const DEFAULT_PROTOTYPE_BUILDING_BITMAP_MAX_DIMENSION = 4096;
+    const BUILDING_BITMAP_GAME_XY_RATIO = 0.66;
+    const BUILDING_BITMAP_CAMERA_DEFAULT_PITCH = Math.PI / 4;
+    const BUILDING_BITMAP_CAMERA_MIN_PITCH = 0;
+    const BUILDING_BITMAP_CAMERA_MAX_PITCH = Math.PI / 2 - 0.001;
+    const BUILDING_BITMAP_CAMERA_PITCH_BASE = Math.SQRT1_2;
+    const INTERIOR_BITMAP_GROUND_PLANE_VISUAL_LIFT = 0.03;
 
     function finiteNumber(value, label) {
         const num = Number(value);
@@ -578,10 +584,46 @@
         if (!buildingData || typeof buildingData !== "object") {
             throw new Error(`building ${placementId} interior bitmap ${floorId} cannot apply object exclusions without building data`);
         }
-        const clone = deepCloneJson(buildingData);
-        const records = Array.isArray(clone.objects) ? clone.objects : [];
-        clone.objects = records.filter((record) => !set.has(Number(record && record.id)));
-        return clone;
+        return buildingData;
+    }
+
+    function buildingDataFloorId(floor) {
+        return String(floor && (floor.id || floor.fragmentId || floor.floorId) || "");
+    }
+
+    function buildingDataFloorLevel(floor) {
+        const level = Number(floor && floor.level);
+        if (Number.isFinite(level)) return Math.round(level);
+        const elevation = Number(floor && floor.elevation);
+        return Number.isFinite(elevation) ? Math.round(elevation / 3) : 0;
+    }
+
+    function buildingDataFloorBaseZ(floor) {
+        const nodeBaseZ = Number(floor && floor.nodeBaseZ);
+        if (Number.isFinite(nodeBaseZ)) return nodeBaseZ;
+        const elevation = Number(floor && floor.elevation);
+        if (Number.isFinite(elevation)) return elevation;
+        throw new Error(`building interior object bake floor ${buildingDataFloorId(floor) || "(unknown)"} requires nodeBaseZ or elevation`);
+    }
+
+    function findBuildingDataFloor(buildingData, floorId) {
+        const id = String(floorId || "");
+        const floors = Array.isArray(buildingData && buildingData.floorFragments) ? buildingData.floorFragments : [];
+        return floors.find((floor) => buildingDataFloorId(floor) === id) || null;
+    }
+
+    function lowerBuildingDataFloorIds(buildingData, sourceFloorId) {
+        const source = findBuildingDataFloor(buildingData, sourceFloorId);
+        if (!source) {
+            throw new Error(`building interior bitmap references missing source floor ${sourceFloorId}`);
+        }
+        const sourceLevel = buildingDataFloorLevel(source);
+        const floors = Array.isArray(buildingData && buildingData.floorFragments) ? buildingData.floorFragments : [];
+        return floors
+            .filter((floor) => buildingDataFloorLevel(floor) < sourceLevel)
+            .sort((a, b) => buildingDataFloorLevel(a) - buildingDataFloorLevel(b))
+            .map((floor) => buildingDataFloorId(floor))
+            .filter((id) => id.length > 0);
     }
 
     function interiorBitmapSettingsSignature(placement, floorId, options = {}, dataSignature = "") {
@@ -604,6 +646,7 @@
             String(placement && placement.contentVersion || ""),
             String(floorId || ""),
             String(options.exclusionSignature || ""),
+            String(options.bakeObjectSignature || ""),
             Number(transform.rotation || 0).toFixed(6),
             pixelsPerWorldUnit.toFixed(3),
             paddingPixels,
@@ -611,6 +654,522 @@
             pitch.toFixed(6),
             String(dataSignature || "")
         ].join("|");
+    }
+
+    function clampInteriorBitmapCameraPitch(value) {
+        const pitch = Number(value);
+        if (!Number.isFinite(pitch)) return BUILDING_BITMAP_CAMERA_DEFAULT_PITCH;
+        return Math.max(BUILDING_BITMAP_CAMERA_MIN_PITCH, Math.min(BUILDING_BITMAP_CAMERA_MAX_PITCH, pitch));
+    }
+
+    function interiorBitmapCameraPitchProjectionFactors(camera) {
+        const pitch = clampInteriorBitmapCameraPitch(camera && camera.pitch !== undefined ? camera.pitch : BUILDING_BITMAP_CAMERA_DEFAULT_PITCH);
+        return {
+            floor: Math.cos(pitch) / BUILDING_BITMAP_CAMERA_PITCH_BASE,
+            height: Math.sin(pitch) / BUILDING_BITMAP_CAMERA_PITCH_BASE
+        };
+    }
+
+    function rotateInteriorBitmapPointForCamera(point, camera) {
+        const rotation = Number(camera && camera.rotation) || 0;
+        if (Math.abs(rotation) < 0.000001) return { x: Number(point.x), y: Number(point.y) };
+        const center = (camera && camera.rotationCenter) || { x: 0, y: 0 };
+        const dx = Number(point.x) - Number(center.x || 0);
+        const dy = Number(point.y) - Number(center.y || 0);
+        const cos = Math.cos(rotation);
+        const sin = Math.sin(rotation);
+        return {
+            x: Number(center.x || 0) + dx * cos - dy * sin,
+            y: Number(center.y || 0) + dx * sin + dy * cos
+        };
+    }
+
+    function buildingInteriorBitmapPointFromWorld(point, transform) {
+        const worldX = Number(point && point.x);
+        const worldY = Number(point && point.y);
+        const tx = Number(transform && transform.x);
+        const ty = Number(transform && transform.y);
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY) || !Number.isFinite(tx) || !Number.isFinite(ty)) {
+            throw new Error("building interior object bake requires finite placement transform and object position");
+        }
+        // Interior bitmap exports rotate the building model itself around the
+        // local origin, so world object positions only need their placement
+        // translation removed. Undoing rotation would put objects back into the
+        // unrotated save coordinate space while the target floor bitmap is
+        // already rotated.
+        return {
+            x: worldX - tx,
+            y: worldY - ty
+        };
+    }
+
+    function projectInteriorBitmapWorldPoint(result, x, y, z = 0, options = {}) {
+        if (!result || !result.camera) {
+            throw new Error("building interior object bake requires bitmap camera metadata");
+        }
+        const camera = result.camera;
+        const width = Number(result.width);
+        const height = Number(result.height);
+        const zoom = Number(camera.zoom);
+        if (!(width > 0) || !(height > 0) || !(zoom > 0)) {
+            throw new Error("building interior object bake requires finite bitmap dimensions and zoom");
+        }
+        const cameraZ = Number.isFinite(Number(camera.z)) ? Number(camera.z) : 0;
+        const rotated = options.skipCameraRotation === true
+            ? { x: Number(x), y: Number(y) }
+            : rotateInteriorBitmapPointForCamera({ x, y }, camera);
+        const pitch = interiorBitmapCameraPitchProjectionFactors(camera);
+        const projectedY = (rotated.y - Number(camera.y || 0)) * pitch.floor - (Number(z) - cameraZ) * pitch.height;
+        return {
+            x: (rotated.x - Number(camera.x || 0)) * zoom + width / 2,
+            y: projectedY * zoom * BUILDING_BITMAP_GAME_XY_RATIO + height / 2
+        };
+    }
+
+    function getInteriorBitmapBakeObjectRecordId(obj) {
+        const id = Number(obj && obj._prototypeRecordId);
+        return Number.isInteger(id) ? id : null;
+    }
+
+    function isInteriorBitmapBakeableFloorObject(obj) {
+        if (!obj || obj.gone || obj.vanishing || obj._prototypeParked === true) return false;
+        if (obj.visible === false) return false;
+        if (obj.type === "powerup") return true;
+        if (
+            Number.isInteger(obj.mountedWallLineGroupId) ||
+            Number.isInteger(obj.mountedSectionId) ||
+            Number.isInteger(obj.mountedWallSectionUnitId)
+        ) {
+            return false;
+        }
+        if (obj.objectType === "placedObject" || obj.isPlacedObject === true) return true;
+        return obj.type === "placedObject";
+    }
+
+    function getInteriorBitmapBakeObjectMembership(obj, options = {}) {
+        const direct = obj && obj._floorMembership && typeof obj._floorMembership === "object"
+            ? obj._floorMembership
+            : (obj && obj.floorMembership && typeof obj.floorMembership === "object" ? obj.floorMembership : null);
+        if (direct) return direct;
+        const floorSupportApi = globalScope && globalScope.FloorSupport;
+        if (floorSupportApi && typeof floorSupportApi.getEntityFloorMembership === "function") {
+            return floorSupportApi.getEntityFloorMembership(obj, { map: options.map || null });
+        }
+        return null;
+    }
+
+    function getInteriorBitmapBakeObjectWorldZ(obj, options = {}) {
+        const recordId = getInteriorBitmapBakeObjectRecordId(obj);
+        const membership = getInteriorBitmapBakeObjectMembership(obj, options);
+        const placementId = String(options.placementId || "");
+        const sourceFloorId = String(options.floorId || "");
+        if (
+            !membership ||
+            membership.ownerType !== "building" ||
+            membership.ownerId !== placementId ||
+            membership.floorId !== sourceFloorId
+        ) {
+            throw new Error(`building interior object bake record ${recordId} requires matching building floor membership`);
+        }
+        const buildingData = options.buildingData || null;
+        const floor = findBuildingDataFloor(buildingData, sourceFloorId);
+        if (!floor) {
+            throw new Error(`building interior object bake record ${recordId} references missing source floor ${sourceFloorId}`);
+        }
+        const localZ = Number.isFinite(Number(obj && obj.z)) ? Number(obj.z) : 0;
+        const hasAbsoluteZ = !!(
+            obj &&
+            (
+                obj.zMode === "absolute" ||
+                Number.isInteger(obj.mountedWallLineGroupId) ||
+                Number.isInteger(obj.mountedSectionId) ||
+                Number.isInteger(obj.mountedWallSectionUnitId)
+            )
+        );
+        return hasAbsoluteZ ? localZ : buildingDataFloorBaseZ(floor) + localZ;
+    }
+
+    function interiorBitmapSpriteIntersectsTexture(sprite, textureWidth, textureHeight) {
+        if (!sprite) return false;
+        const x = Number(sprite.x);
+        const y = Number(sprite.y);
+        const width = Math.abs(Number(sprite.width) || 0);
+        const height = Math.abs(Number(sprite.height) || 0);
+        const anchorX = sprite.anchor && Number.isFinite(Number(sprite.anchor.x)) ? Number(sprite.anchor.x) : 0;
+        const anchorY = sprite.anchor && Number.isFinite(Number(sprite.anchor.y)) ? Number(sprite.anchor.y) : 0;
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !(width > 0) || !(height > 0)) return false;
+        const left = x - anchorX * width;
+        const right = left + width;
+        const top = y - anchorY * height;
+        const bottom = top + height;
+        return right > 0 && bottom > 0 && left < textureWidth && top < textureHeight;
+    }
+
+    function interiorBitmapProjectedQuadIntersectsTexture(points, textureWidth, textureHeight) {
+        if (!Array.isArray(points) || points.length < 3) return false;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (let i = 0; i < points.length; i++) {
+            const x = Number(points[i] && points[i].x);
+            const y = Number(points[i] && points[i].y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+        }
+        return maxX > 0 && maxY > 0 && minX < textureWidth && minY < textureHeight;
+    }
+
+    function isInteriorBitmapBakeObjectGroundPlane(obj) {
+        return String(obj && obj.rotationAxis || "").trim().toLowerCase() === "ground";
+    }
+
+    function projectInteriorBitmapBakeObjectPoint(result, point, z, options = {}) {
+        const localPoint = buildingInteriorBitmapPointFromWorld(point, options.placementTransform);
+        return projectInteriorBitmapWorldPoint(result, localPoint.x, localPoint.y, z, {
+            skipCameraRotation: true
+        });
+    }
+
+    function flipInteriorBitmapBakePointY(point, textureHeight) {
+        return {
+            x: Number(point && point.x),
+            y: Number(textureHeight) - Number(point && point.y)
+        };
+    }
+
+    function createInteriorBitmapGroundPlaneMesh(pixi, texture, points, alpha, tint) {
+        if (!pixi.Geometry || !pixi.Mesh || !pixi.MeshMaterial) {
+            throw new Error("building interior ground object bake requires Pixi Geometry, Mesh, and MeshMaterial");
+        }
+        const geometry = new pixi.Geometry()
+            .addAttribute("aVertexPosition", new Float32Array([
+                points[0].x, points[0].y,
+                points[1].x, points[1].y,
+                points[2].x, points[2].y,
+                points[3].x, points[3].y
+            ]), 2)
+            .addAttribute("aTextureCoord", new Float32Array([
+                0, 1,
+                1, 1,
+                1, 0,
+                0, 0
+            ]), 2)
+            .addIndex(new Uint16Array([0, 1, 2, 0, 2, 3]));
+        const material = new pixi.MeshMaterial(texture);
+        material.tint = tint;
+        const mesh = new pixi.Mesh(
+            geometry,
+            material,
+            undefined,
+            pixi.DRAW_MODES ? pixi.DRAW_MODES.TRIANGLES : undefined
+        );
+        mesh.texture = texture;
+        mesh.tint = tint;
+        mesh.alpha = alpha;
+        return mesh;
+    }
+
+    function getInteriorBitmapBakeObjectTexturePath(obj) {
+        if (!obj || typeof obj !== "object") return "";
+        if (typeof obj.texturePath === "string" && obj.texturePath.length > 0) return obj.texturePath;
+        if (typeof obj.imagePath === "string" && obj.imagePath.length > 0) return obj.imagePath;
+        if (obj.pixiSprite && obj.pixiSprite.texture && obj.pixiSprite.texture.textureCacheIds && obj.pixiSprite.texture.textureCacheIds[0]) {
+            return obj.pixiSprite.texture.textureCacheIds[0];
+        }
+        return "";
+    }
+
+    function interiorBitmapBakeObjectSignature(obj) {
+        const numberOrNull = (value) => Number.isFinite(Number(value)) ? Number(Number(value).toFixed(4)) : null;
+        const membership = obj && obj._floorMembership && typeof obj._floorMembership === "object"
+            ? obj._floorMembership
+            : (obj && obj.floorMembership && typeof obj.floorMembership === "object" ? obj.floorMembership : null);
+        return JSON.stringify({
+            recordId: getInteriorBitmapBakeObjectRecordId(obj),
+            type: typeof (obj && obj.type) === "string" ? obj.type : "",
+            objectType: typeof (obj && obj.objectType) === "string" ? obj.objectType : "",
+            category: typeof (obj && obj.category) === "string" ? obj.category : "",
+            texturePath: getInteriorBitmapBakeObjectTexturePath(obj),
+            x: numberOrNull(obj && obj.x),
+            y: numberOrNull(obj && obj.y),
+            z: numberOrNull(obj && obj.z),
+            width: numberOrNull(obj && obj.width),
+            height: numberOrNull(obj && obj.height),
+            size: numberOrNull(obj && obj.size),
+            anchorX: numberOrNull(obj && (Number.isFinite(obj.anchorX) ? obj.anchorX : obj.placeableAnchorX)),
+            anchorY: numberOrNull(obj && (Number.isFinite(obj.anchorY) ? obj.anchorY : obj.placeableAnchorY)),
+            traversalLayer: numberOrNull(obj && obj.traversalLayer),
+            level: numberOrNull(obj && obj.level),
+            rotationAxis: typeof (obj && obj.rotationAxis) === "string" ? obj.rotationAxis : "",
+            placementRotation: numberOrNull(obj && obj.placementRotation),
+            isOpen: obj && obj.isOpen === true,
+            visible: !(obj && obj.visible === false),
+            ownerType: membership && typeof membership.ownerType === "string" ? membership.ownerType : "",
+            ownerId: membership && typeof membership.ownerId === "string" ? membership.ownerId : "",
+            floorId: membership && typeof membership.floorId === "string" ? membership.floorId : ""
+        });
+    }
+
+    function collectInteriorBitmapBakeObjects(map, state, placementId, floorId) {
+        if (!map || typeof map.getObjectsForFloorMembership !== "function") {
+            throw new Error("building interior object bake requires map.getObjectsForFloorMembership");
+        }
+        const membership = { ownerType: "building", ownerId: placementId, floorId };
+        const objects = map.getObjectsForFloorMembership(membership);
+        if (!Array.isArray(objects)) {
+            throw new Error(`building interior object bake for ${placementId} floor ${floorId} expected floor object list`);
+        }
+        const exclusions = getInteriorBitmapObjectExclusionSet(state, placementId, floorId, false);
+        const out = [];
+        const seenRecords = new Set();
+        const addCandidate = (obj) => {
+            if (!isInteriorBitmapBakeableFloorObject(obj)) return;
+            const recordId = getInteriorBitmapBakeObjectRecordId(obj);
+            if (!Number.isInteger(recordId)) {
+                const label = obj && (obj.scriptingName || obj.objectType || obj.type || obj.imageFileName || obj.texturePath) || "(unknown)";
+                throw new Error(`building interior object bake for ${placementId} floor ${floorId} found bakeable object without prototype record id: ${label}`);
+            }
+            if (exclusions instanceof Set && exclusions.has(recordId)) return;
+            if (obj._prototypeInteriorBitmapExcluded === true) return;
+            if (seenRecords.has(recordId)) return;
+            seenRecords.add(recordId);
+            out.push(obj);
+        };
+        for (let i = 0; i < objects.length; i++) {
+            addCandidate(objects[i]);
+        }
+        const powerupState = map._prototypePowerupState || null;
+        if (powerupState && powerupState.activeRuntimePowerupsByRecordId instanceof Map) {
+            const floorSupportApi = globalScope && globalScope.FloorSupport;
+            if (!floorSupportApi || typeof floorSupportApi.getEntityFloorMembership !== "function") {
+                throw new Error("building interior powerup bake requires FloorSupport floor membership helpers");
+            }
+            for (const powerup of powerupState.activeRuntimePowerupsByRecordId.values()) {
+                const powerupMembership = floorSupportApi.getEntityFloorMembership(powerup, { map });
+                if (
+                    !powerupMembership ||
+                    powerupMembership.ownerType !== "building" ||
+                    powerupMembership.ownerId !== placementId ||
+                    powerupMembership.floorId !== floorId
+                ) {
+                    continue;
+                }
+                if (typeof floorSupportApi.stampEntityFloorMembership === "function") {
+                    floorSupportApi.stampEntityFloorMembership(powerup, powerupMembership);
+                }
+                addCandidate(powerup);
+            }
+        }
+        return out.sort((a, b) => {
+            const ay = Number.isFinite(Number(a && a.y)) ? Number(a.y) : 0;
+            const by = Number.isFinite(Number(b && b.y)) ? Number(b.y) : 0;
+            if (ay !== by) return ay - by;
+            return getInteriorBitmapBakeObjectRecordId(a) - getInteriorBitmapBakeObjectRecordId(b);
+        });
+    }
+
+    function interiorBitmapBakeObjectsSignature(objects) {
+        if (!Array.isArray(objects) || objects.length === 0) return "";
+        return objects.map(interiorBitmapBakeObjectSignature).join("\n");
+    }
+
+    function collectInteriorBitmapBakeObjectTexturePaths(objects) {
+        const paths = [];
+        const seen = new Set();
+        for (let i = 0; i < objects.length; i++) {
+            const path = getInteriorBitmapBakeObjectTexturePath(objects[i]);
+            if (!path || seen.has(path)) continue;
+            seen.add(path);
+            paths.push(path);
+        }
+        return paths;
+    }
+
+    async function loadInteriorBitmapBakeObjectTextures(objects) {
+        const pixi = globalScope.PIXI || globalScope.PIXIJS || null;
+        if (!pixi || !pixi.Texture) {
+            throw new Error("building interior object bake texture preload requires PIXI.Texture");
+        }
+        const paths = collectInteriorBitmapBakeObjectTexturePaths(objects);
+        if (paths.length === 0) return true;
+        await Promise.all(paths.map((path) => {
+            if (pixi.Assets && typeof pixi.Assets.load === "function") {
+                return pixi.Assets.load(path);
+            }
+            const texture = pixi.Texture.from(path);
+            const baseTexture = texture && texture.baseTexture;
+            if (baseTexture && baseTexture.valid === true) return texture;
+            if (!baseTexture || typeof baseTexture.once !== "function") {
+                throw new Error(`building interior object bake could not preload texture ${path}`);
+            }
+            return new Promise((resolve, reject) => {
+                const cleanup = () => {
+                    if (typeof baseTexture.off === "function") {
+                        baseTexture.off("loaded", onLoaded);
+                        baseTexture.off("error", onError);
+                    }
+                };
+                const onLoaded = () => {
+                    cleanup();
+                    resolve(texture);
+                };
+                const onError = (err) => {
+                    cleanup();
+                    reject(new Error(`building interior object bake failed to load texture ${path}: ${err && err.message ? err.message : err || "unknown error"}`));
+                };
+                baseTexture.once("loaded", onLoaded);
+                baseTexture.once("error", onError);
+            });
+        }));
+        return true;
+    }
+
+    function renderPixiDisplayObjectToTexture(rendererRef, displayObject, texture, clear = false) {
+        if (!rendererRef || typeof rendererRef.render !== "function") {
+            throw new Error("building interior object bake requires a Pixi renderer");
+        }
+        const gl = rendererRef.gl || null;
+        const hadDepthTest = !!(gl && typeof gl.isEnabled === "function" && gl.isEnabled(gl.DEPTH_TEST));
+        const previousDepthMask = gl && typeof gl.getParameter === "function" ? gl.getParameter(gl.DEPTH_WRITEMASK) : null;
+        try {
+            if (gl) {
+                if (typeof gl.disable === "function") gl.disable(gl.DEPTH_TEST);
+                if (typeof gl.depthMask === "function") gl.depthMask(false);
+            }
+            if (rendererRef.state && typeof rendererRef.state.reset === "function") {
+                rendererRef.state.reset();
+            }
+            rendererRef.render(displayObject, texture, clear);
+        } finally {
+            if (gl) {
+                if (typeof gl.depthMask === "function" && previousDepthMask !== null) gl.depthMask(!!previousDepthMask);
+                if (typeof gl.enable === "function" && hadDepthTest) gl.enable(gl.DEPTH_TEST);
+                if (typeof gl.disable === "function" && !hadDepthTest) gl.disable(gl.DEPTH_TEST);
+            }
+            if (rendererRef.state && typeof rendererRef.state.reset === "function") {
+                rendererRef.state.reset();
+            }
+        }
+    }
+
+    function bakeInteriorBitmapFloorObjectsIntoTexture(result, objects, options = {}) {
+        if (!Array.isArray(objects) || objects.length === 0) return [];
+        const pixi = globalScope.PIXI || globalScope.PIXIJS || null;
+        if (!pixi || !pixi.Container || !pixi.Sprite || !pixi.Texture) {
+            throw new Error("building interior object bake requires PIXI Container, Sprite, and Texture");
+        }
+        if (!result || !result.texture) {
+            throw new Error("building interior object bake requires a rendered bitmap texture");
+        }
+        const rendererRef = options.renderer || null;
+        const container = new pixi.Container();
+        const zoom = Number(result.camera && result.camera.zoom);
+        if (!(zoom > 0)) {
+            throw new Error("building interior object bake requires positive bitmap zoom");
+        }
+        const textureWidth = Number(result.width || (result.texture && result.texture.width));
+        const textureHeight = Number(result.height || (result.texture && result.texture.height));
+        if (!(textureWidth > 0) || !(textureHeight > 0)) {
+            throw new Error("building interior object bake requires finite bitmap texture dimensions");
+        }
+        const bakedObjects = [];
+        try {
+            const orderedObjects = objects.slice().sort((a, b) => {
+                const ag = isInteriorBitmapBakeObjectGroundPlane(a) ? 0 : 1;
+                const bg = isInteriorBitmapBakeObjectGroundPlane(b) ? 0 : 1;
+                if (ag !== bg) return ag - bg;
+                const ay = Number.isFinite(Number(a && a.y)) ? Number(a.y) : 0;
+                const by = Number.isFinite(Number(b && b.y)) ? Number(b.y) : 0;
+                if (ay !== by) return ay - by;
+                return getInteriorBitmapBakeObjectRecordId(a) - getInteriorBitmapBakeObjectRecordId(b);
+            });
+            for (let i = 0; i < orderedObjects.length; i++) {
+                const obj = orderedObjects[i];
+                const texturePath = getInteriorBitmapBakeObjectTexturePath(obj);
+                if (!texturePath) {
+                    throw new Error(`building interior object bake cannot resolve texture for record ${getInteriorBitmapBakeObjectRecordId(obj)}`);
+                }
+                const x = Number(obj && obj.x);
+                const y = Number(obj && obj.y);
+                const z = getInteriorBitmapBakeObjectWorldZ(obj, options);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                    throw new Error(`building interior object bake requires finite position for record ${getInteriorBitmapBakeObjectRecordId(obj)}`);
+                }
+                const texture = pixi.Texture.from(texturePath);
+                const anchorX = Number.isFinite(Number(obj && obj.anchorX))
+                    ? Number(obj.anchorX)
+                    : (Number.isFinite(Number(obj && obj.placeableAnchorX)) ? Number(obj.placeableAnchorX) : 0.5);
+                const anchorY = Number.isFinite(Number(obj && obj.anchorY))
+                    ? Number(obj.anchorY)
+                    : (Number.isFinite(Number(obj && obj.placeableAnchorY)) ? Number(obj.placeableAnchorY) : 1);
+                const worldWidth = Number.isFinite(Number(obj && obj.width)) ? Math.max(0.01, Number(obj.width)) : 1;
+                const worldHeight = Number.isFinite(Number(obj && obj.height)) ? Math.max(0.01, Number(obj.height)) : worldWidth;
+                const alpha = Number.isFinite(Number(obj && obj.billboardAlpha)) ? Math.max(0, Math.min(1, Number(obj.billboardAlpha))) : 1;
+                const tint = Number.isFinite(Number(obj && obj.billboardTint)) ? Math.max(0, Math.min(0xffffff, Math.floor(Number(obj.billboardTint)))) : 0xffffff;
+                if (isInteriorBitmapBakeObjectGroundPlane(obj)) {
+                    const angleDeg = Number.isFinite(Number(obj && obj.placementRotation)) ? Number(obj.placementRotation) : 0;
+                    const theta = angleDeg * (Math.PI / 180);
+                    const cosT = Math.cos(theta);
+                    const sinT = Math.sin(theta);
+                    const leftOff = -anchorX * worldWidth;
+                    const rightOff = (1 - anchorX) * worldWidth;
+                    const nearOff = (1 - anchorY) * worldHeight;
+                    const farOff = -anchorY * worldHeight;
+                    const projectOffset = (xOff, yOff) => {
+                        const dx = xOff * cosT - yOff * sinT;
+                        const dy = xOff * sinT + yOff * cosT;
+                        return flipInteriorBitmapBakePointY(projectInteriorBitmapBakeObjectPoint(
+                            result,
+                            { x: x + dx, y: y + dy },
+                            z + INTERIOR_BITMAP_GROUND_PLANE_VISUAL_LIFT,
+                            options
+                        ), textureHeight);
+                    };
+                    const points = [
+                        projectOffset(leftOff, nearOff),
+                        projectOffset(rightOff, nearOff),
+                        projectOffset(rightOff, farOff),
+                        projectOffset(leftOff, farOff)
+                    ];
+                    if (!interiorBitmapProjectedQuadIntersectsTexture(points, textureWidth, textureHeight)) {
+                        throw new Error(`building interior object bake record ${getInteriorBitmapBakeObjectRecordId(obj)} projected outside bitmap ${options.placementId || ""} floor ${options.floorId || ""}`);
+                    }
+                    container.addChild(createInteriorBitmapGroundPlaneMesh(pixi, texture, points, alpha, tint));
+                    bakedObjects.push(obj);
+                    continue;
+                }
+                const sprite = new pixi.Sprite(texture);
+                sprite.anchor.set(anchorX, anchorY);
+                sprite.alpha = alpha;
+                sprite.tint = tint;
+                const projected = flipInteriorBitmapBakePointY(
+                    projectInteriorBitmapBakeObjectPoint(result, { x, y }, z, options),
+                    textureHeight
+                );
+                sprite.x = projected.x;
+                sprite.y = projected.y;
+                sprite.width = worldWidth * zoom;
+                sprite.height = worldHeight * zoom;
+                if (!interiorBitmapSpriteIntersectsTexture(sprite, textureWidth, textureHeight)) {
+                    throw new Error(`building interior object bake record ${getInteriorBitmapBakeObjectRecordId(obj)} projected outside bitmap ${options.placementId || ""} floor ${options.floorId || ""}`);
+                }
+                if (sprite.scale && Number.isFinite(Number(sprite.scale.y))) {
+                    sprite.scale.y = -Math.abs(Number(sprite.scale.y));
+                }
+                container.addChild(sprite);
+                bakedObjects.push(obj);
+            }
+            renderPixiDisplayObjectToTexture(rendererRef, container, result.texture, false);
+        } finally {
+            if (typeof container.destroy === "function") {
+                container.destroy({ children: true, texture: false, baseTexture: false });
+            }
+        }
+        return bakedObjects;
     }
 
     function destroyPrototypeBuildingBitmapEntry(entry) {
@@ -627,6 +1186,15 @@
             typeof entry.depthMetricTexture.destroy === "function"
         ) {
             entry.depthMetricTexture.destroy(true);
+        }
+        if (entry && entry.lowerFloorsBitmap) {
+            destroyPrototypeBuildingBitmapEntry(entry.lowerFloorsBitmap);
+            entry.lowerFloorsBitmap = null;
+        }
+        if (entry && entry._replacedReadyEntry) {
+            const replaced = entry._replacedReadyEntry;
+            entry._replacedReadyEntry = null;
+            destroyPrototypeBuildingBitmapEntry(replaced);
         }
     }
 
@@ -3782,6 +4350,14 @@
                 : null;
         };
 
+        map.releasePrototypeBuildingInteriorBitmapReplacement = function releasePrototypeBuildingInteriorBitmapReplacement(entry) {
+            if (!entry || !entry._replacedReadyEntry) return false;
+            const replaced = entry._replacedReadyEntry;
+            entry._replacedReadyEntry = null;
+            destroyPrototypeBuildingBitmapEntry(replaced);
+            return true;
+        };
+
         map.loadPrototypeBuildingEditorSaveData = function loadPrototypeBuildingEditorSaveData(buildingSaveName) {
             const saveName = nonEmptyString(buildingSaveName, "buildingSaveName");
             if (!this._prototypeBuildingState) {
@@ -3947,8 +4523,13 @@
             const state = this._prototypeBuildingState;
             const ref = resolveInteriorBitmapFloorBakeRef(targetOrRef, options);
             const changed = invalidatePrototypeBuildingInteriorBitmapEntry(state, ref.placementId, ref.floorId);
-            if (changed && typeof this.markBuildingRenderCacheDirty === "function") {
-                this.markBuildingRenderCacheDirty();
+            if (globalScope && typeof globalScope.requestPrototypeInteriorInvalidationFrameCapture === "function") {
+                globalScope.requestPrototypeInteriorInvalidationFrameCapture({
+                    operation: "invalidatePrototypeBuildingInteriorBitmap",
+                    placementId: ref.placementId,
+                    floorId: ref.floorId,
+                    changed
+                });
             }
             return { ...ref, changed };
         };
@@ -3964,9 +4545,15 @@
             if (changed) {
                 set.add(ref.recordId);
                 invalidatePrototypeBuildingInteriorBitmapEntry(state, ref.placementId, ref.floorId);
-                if (typeof this.markBuildingRenderCacheDirty === "function") {
-                    this.markBuildingRenderCacheDirty();
-                }
+            }
+            if (globalScope && typeof globalScope.requestPrototypeInteriorInvalidationFrameCapture === "function") {
+                globalScope.requestPrototypeInteriorInvalidationFrameCapture({
+                    operation: "removePrototypeBuildingObjectFromInteriorBitmap",
+                    placementId: ref.placementId,
+                    floorId: ref.floorId,
+                    recordId: ref.recordId,
+                    changed
+                });
             }
             if (targetOrRef && typeof targetOrRef === "object") {
                 targetOrRef._prototypeInteriorBitmapExcluded = true;
@@ -3988,9 +4575,15 @@
             }
             if (changed) {
                 invalidatePrototypeBuildingInteriorBitmapEntry(state, ref.placementId, ref.floorId);
-                if (typeof this.markBuildingRenderCacheDirty === "function") {
-                    this.markBuildingRenderCacheDirty();
-                }
+            }
+            if (globalScope && typeof globalScope.requestPrototypeInteriorInvalidationFrameCapture === "function") {
+                globalScope.requestPrototypeInteriorInvalidationFrameCapture({
+                    operation: "restorePrototypeBuildingObjectToInteriorBitmap",
+                    placementId: ref.placementId,
+                    floorId: ref.floorId,
+                    recordId: ref.recordId,
+                    changed
+                });
             }
             if (targetOrRef && typeof targetOrRef === "object") {
                 targetOrRef._prototypeInteriorBitmapExcluded = false;
@@ -4147,10 +4740,15 @@
             const key = interiorBitmapKey(placementId, sourceFloorId);
             if (!(state.interiorBitmapsByKey instanceof Map)) state.interiorBitmapsByKey = new Map();
             if (!(state.pendingInteriorBitmapLoadsByKey instanceof Map)) state.pendingInteriorBitmapLoadsByKey = new Map();
+            if (typeof this.capturePendingPrototypeObjects === "function") {
+                this.capturePendingPrototypeObjects();
+            }
+            const bakeObjects = collectInteriorBitmapBakeObjects(this, state, placementId, sourceFloorId);
+            const bakeObjectSignature = interiorBitmapBakeObjectsSignature(bakeObjects);
             const cached = state.interiorBitmapsByKey.get(key) || null;
             const pending = state.pendingInteriorBitmapLoadsByKey.get(key) || null;
             const exclusionSignature = getInteriorBitmapObjectExclusionSignature(state, placementId, sourceFloorId);
-            const signatureOptions = { ...options, exclusionSignature };
+            const signatureOptions = { ...options, exclusionSignature, bakeObjectSignature };
             const settingsSignature = interiorBitmapSettingsSignature(placement, sourceFloorId, signatureOptions);
             if (cached && cached.status === "ready" && cached.stale !== true && cached.settingsSignature === settingsSignature) {
                 recordMoveObjectPerfEvent("prototypeInteriorBitmap.cacheHit", {
@@ -4202,6 +4800,7 @@
                         sourceFloorId,
                         buildingData
                     );
+                    const excludedObjectIds = getInteriorBitmapObjectExclusionSet(state, placementId, sourceFloorId, false);
                     const dataSignature = buildingDataSignature(renderBuildingData);
                     const signature = interiorBitmapSettingsSignature(placement, sourceFloorId, signatureOptions, dataSignature);
                     const existing = state.interiorBitmapsByKey.get(key);
@@ -4211,15 +4810,17 @@
                         delete existing.pendingSettingsSignature;
                         return existing;
                     }
-                    const module = await import("/building-editor/BuildingRenderer.js");
-                    if (!module || typeof module.renderBuildingInteriorBitmap !== "function") {
-                        throw new Error("BuildingRenderer.js missing renderBuildingInteriorBitmap export");
+                    const rendererModuleUrl = `/building-editor/BuildingRenderer.js?interiorBitmap=${encodeURIComponent(INTERIOR_BITMAP_RENDER_DATA_VERSION)}`;
+                    const module = await import(rendererModuleUrl);
+                    if (!module || typeof module.renderBuildingBitmap !== "function") {
+                        throw new Error("BuildingRenderer.js missing renderBuildingBitmap export");
                     }
-                    const result = await module.renderBuildingInteriorBitmap(renderBuildingData, {
+                    await loadInteriorBitmapBakeObjectTextures(bakeObjects);
+                    const baseRenderOptions = {
                         app: appRef,
                         renderer: rendererRef,
-                        floorId: sourceFloorId,
                         rotation: Number(placement.transform && placement.transform.rotation) || 0,
+                        rotateModelAroundOrigin: true,
                         pitch: Number.isFinite(Number(options.pitch)) ? Number(options.pitch) : Math.PI / 4,
                         pixelsPerWorldUnit: Number.isFinite(Number(options.pixelsPerWorldUnit))
                             ? Number(options.pixelsPerWorldUnit)
@@ -4229,8 +4830,46 @@
                             : DEFAULT_PROTOTYPE_BUILDING_BITMAP_PADDING_PIXELS,
                         maxDimension: Number.isFinite(Number(options.maxDimension))
                             ? Number(options.maxDimension)
-                            : DEFAULT_PROTOTYPE_BUILDING_BITMAP_MAX_DIMENSION
+                            : DEFAULT_PROTOTYPE_BUILDING_BITMAP_MAX_DIMENSION,
+                        includeDepthMetric: true
+                    };
+                    const lowerFloorIds = lowerBuildingDataFloorIds(renderBuildingData, sourceFloorId);
+                    const lowerFloorsBitmap = lowerFloorIds.length > 0
+                        ? await module.renderBuildingBitmap(renderBuildingData, {
+                            ...baseRenderOptions,
+                            label: "building lower interior",
+                            floorIds: lowerFloorIds,
+                            includeRoofs: true,
+                            roofFloorIds: lowerFloorIds,
+                            fullHeightWallFloorIds: lowerFloorIds,
+                            fullOpacityMountedObjectFloorIds: lowerFloorIds,
+                            excludedObjectIds
+                        })
+                        : null;
+                    const result = await module.renderBuildingBitmap(renderBuildingData, {
+                        ...baseRenderOptions,
+                        label: "building current interior",
+                        floorId: sourceFloorId,
+                        includeRoofs: false,
+                        clipDownStairFloorIds: [sourceFloorId],
+                        excludedObjectIds,
+                        validate(exportRenderer) {
+                            const floor = exportRenderer && exportRenderer.state
+                                ? findBuildingDataFloor(exportRenderer.state.building, sourceFloorId)
+                                : null;
+                            if (!floor) throw new Error(`building current interior bitmap references missing floor ${sourceFloorId}`);
+                            exportRenderer.assertInteriorBitmapRenderableSurfaces(floor);
+                        }
                     });
+                    const bakedObjects = bakeInteriorBitmapFloorObjectsIntoTexture(result, bakeObjects, {
+                        renderer: rendererRef,
+                        map: this,
+                        buildingData: renderBuildingData,
+                        placementTransform: placement.transform,
+                        placementId,
+                        floorId: sourceFloorId
+                    });
+                    result.lowerFloorsBitmap = lowerFloorsBitmap;
                     if (renderStartMs > 0) {
                         recordMoveObjectPerfEvent("prototypeInteriorBitmap.render", {
                             placementId,
@@ -4252,8 +4891,6 @@
                         if (current) return current;
                         throw new Error(`obsolete building interior bitmap render had no current cache for ${placementId} floor ${sourceFloorId}`);
                     }
-                    const previous = state.interiorBitmapsByKey.get(key);
-                    if (previous && previous !== result) destroyPrototypeBuildingBitmapEntry(previous);
                     const entry = {
                         ...result,
                         id: key,
@@ -4266,13 +4903,46 @@
                         buildingSaveName: placement.buildingSaveName,
                         placementRevision: state.contentVersion
                     };
+                    entry.coveredObjects = bakedObjects.slice();
+                    entry.coveredObjectEntries = bakedObjects.map((item) => ({
+                        item,
+                        recordId: getInteriorBitmapBakeObjectRecordId(item),
+                        signature: interiorBitmapBakeObjectSignature(item)
+                    }));
+                    if (entry.lowerFloorsBitmap) {
+                        entry.lowerFloorsBitmap.id = `${key}:lower`;
+                        entry.lowerFloorsBitmap.placementId = placementId;
+                        entry.lowerFloorsBitmap.floorId = sourceFloorId;
+                        entry.lowerFloorsBitmap.status = "ready";
+                        entry.lowerFloorsBitmap.signature = `${signature}:lower`;
+                        entry.lowerFloorsBitmap.settingsSignature = `${settingsSignature}:lower`;
+                        entry.lowerFloorsBitmap.dataSignature = dataSignature;
+                        entry.lowerFloorsBitmap.buildingSaveName = placement.buildingSaveName;
+                        entry.lowerFloorsBitmap.placementRevision = state.contentVersion;
+                    }
+                    const previous = state.interiorBitmapsByKey.get(key);
                     state.interiorBitmapsByKey.set(key, entry);
+                    if (previous && previous !== entry) {
+                        if (previous.status === "ready" && previous.texture) {
+                            entry._replacedReadyEntry = previous;
+                        } else {
+                            destroyPrototypeBuildingBitmapEntry(previous);
+                        }
+                    }
                     setPrototypeBuildingLoadState(state, placement, "interior");
                     return entry;
                 })
                 .catch((error) => {
                     const pendingAtError = state.pendingInteriorBitmapLoadsByKey.get(key) || null;
                     if (!pendingAtError || pendingAtError.promise !== loadPromise) {
+                        throw error;
+                    }
+                    const previous = state.interiorBitmapsByKey.get(key) || null;
+                    if (previous && previous.status === "ready" && previous.texture) {
+                        previous.stale = true;
+                        previous.error = error && error.message ? error.message : String(error);
+                        setPrototypeBuildingLoadState(state, placement, "interior");
+                        console.error("[building interior bitmap]", previous.error);
                         throw error;
                     }
                     const entry = {

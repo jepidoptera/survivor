@@ -142,6 +142,56 @@ function isVanishProtectedPlayerTarget(target, wizardRef = null) {
     return !!(globalWizard && target === globalWizard);
 }
 
+function getVanishPrototypeBuildingInteriorBitmapRef(target) {
+    if (!target || typeof target !== "object") return null;
+    const exclusion = target._prototypeInteriorBitmapExclusion && typeof target._prototypeInteriorBitmapExclusion === "object"
+        ? target._prototypeInteriorBitmapExclusion
+        : null;
+    if (
+        exclusion &&
+        typeof exclusion.placementId === "string" &&
+        exclusion.placementId.length > 0 &&
+        typeof exclusion.floorId === "string" &&
+        exclusion.floorId.length > 0
+    ) {
+        return { placementId: exclusion.placementId, floorId: exclusion.floorId };
+    }
+    const membership = target._floorMembership && typeof target._floorMembership === "object"
+        ? target._floorMembership
+        : (target.floorMembership && typeof target.floorMembership === "object" ? target.floorMembership : null);
+    if (
+        !membership ||
+        membership.ownerType !== "building" ||
+        typeof membership.ownerId !== "string" ||
+        membership.ownerId.length === 0 ||
+        typeof membership.floorId !== "string" ||
+        membership.floorId.length === 0
+    ) {
+        return null;
+    }
+    return { placementId: membership.ownerId, floorId: membership.floorId };
+}
+
+function invalidateVanishPrototypeBuildingInteriorBitmap(target) {
+    const ref = getVanishPrototypeBuildingInteriorBitmapRef(target);
+    if (!ref) return false;
+    const globalWizard = (typeof globalThis !== "undefined" && globalThis.wizard)
+        ? globalThis.wizard
+        : (typeof wizard !== "undefined" ? wizard : null);
+    const mapRef = (target && target.map) ||
+        (globalWizard && globalWizard.map) ||
+        (typeof globalThis !== "undefined" ? globalThis.map : null) ||
+        (typeof map !== "undefined" ? map : null);
+    if (!mapRef || typeof mapRef.invalidatePrototypeBuildingInteriorBitmap !== "function") {
+        throw new Error(`vanishing object on ${ref.placementId} floor ${ref.floorId} cannot invalidate missing prototype interior bitmap cache API`);
+    }
+    mapRef.invalidatePrototypeBuildingInteriorBitmap({
+        placementId: ref.placementId,
+        floorId: ref.floorId
+    });
+    return true;
+}
+
 
 class Vanish extends globalThis.Spell {
     static supportsObjectTargeting = true;
@@ -307,6 +357,7 @@ class Vanish extends globalThis.Spell {
             target.triggerVanishDieEventIfAdventureMode({ cause: "vanish" });
         }
         target.vanishing = true;
+        invalidateVanishPrototypeBuildingInteriorBitmap(target);
         target.vanishStartTime = frameCount;
         target.vanishDuration = 0.25 * frameRate; // 1/4 second fade (after 1-frame flash)
         target.percentVanished = 0;
@@ -478,6 +529,7 @@ class EditorVanish extends Vanish {
             target._disableChunkSplitOnVanish = true;
         }
         target.vanishing = true;
+        invalidateVanishPrototypeBuildingInteriorBitmap(target);
         target.vanishStartTime = frameCount;
         target.vanishDuration = 0;
         target.percentVanished = 1;

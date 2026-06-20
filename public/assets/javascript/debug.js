@@ -6,6 +6,33 @@ let debugMode = false; // Toggle all debug graphics (hitboxes, grid, animal mark
 if (typeof globalThis !== "undefined") {
     globalThis.debugMode = debugMode;
 }
+const debugFreezePrototypeInteriorInvalidationFrame = false;
+if (typeof globalThis !== "undefined") {
+    globalThis.debugFreezePrototypeInteriorInvalidationFrame = debugFreezePrototypeInteriorInvalidationFrame;
+    globalThis.__prototypeInteriorInvalidationFrameCapture = null;
+    globalThis.__prototypeInteriorInvalidationFrameCaptureLast = null;
+    globalThis.requestPrototypeInteriorInvalidationFrameCapture = function requestPrototypeInteriorInvalidationFrameCapture(event = {}) {
+        if (globalThis.debugFreezePrototypeInteriorInvalidationFrame !== true) return null;
+        const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        const current = globalThis.__prototypeInteriorInvalidationFrameCapture;
+        if (current && current.status === "pending") {
+            if (!Array.isArray(current.events)) current.events = [];
+            current.events.push({ ...event, atMs: nowMs });
+            return current;
+        }
+        const capture = {
+            id: `prototype-interior-invalidation-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+            status: "pending",
+            requestedAtMs: nowMs,
+            events: [{ ...event, atMs: nowMs }]
+        };
+        globalThis.__prototypeInteriorInvalidationFrameCapture = capture;
+        console.warn("[prototype interior invalidation capture] armed", capture);
+        return capture;
+    };
+}
 let showHexGrid = false; // Toggle hex grid only (Ctrl+G)
 let showAnimalClearance = false; // Toggle animal clearance hex overlay
 let showTileClearance = false; // Toggle per-tile clearance number overlay (requires hex grid on)

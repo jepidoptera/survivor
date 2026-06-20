@@ -198,6 +198,28 @@
             return true;
         };
 
+        const invalidatePrototypeInteriorBitmapForRuntimeObject = (runtimeObj) => {
+            if (!runtimeObj || !map || typeof map.invalidatePrototypeBuildingInteriorBitmap !== "function") return false;
+            const membership = runtimeObj._floorMembership && typeof runtimeObj._floorMembership === "object"
+                ? runtimeObj._floorMembership
+                : (runtimeObj.floorMembership && typeof runtimeObj.floorMembership === "object" ? runtimeObj.floorMembership : null);
+            if (
+                !membership ||
+                membership.ownerType !== "building" ||
+                typeof membership.ownerId !== "string" ||
+                membership.ownerId.length === 0 ||
+                typeof membership.floorId !== "string" ||
+                membership.floorId.length === 0
+            ) {
+                return false;
+            }
+            map.invalidatePrototypeBuildingInteriorBitmap({
+                placementId: membership.ownerId,
+                floorId: membership.floorId
+            });
+            return true;
+        };
+
         const objectTaskTypeLabel = (entryOrObj) => {
             const type = (entryOrObj && entryOrObj.record && entryOrObj.record.type) || entryOrObj && entryOrObj.type;
             return (typeof type === "string" && type.length > 0) ? type : "unknown";
@@ -820,6 +842,7 @@
                                 map._prototypeSuppressObjectDirtyTracking = false;
                                 map._suppressClearanceUpdates = previousSuppressClearanceUpdates;
                             }
+                            invalidatePrototypeInteriorBitmapForRuntimeObject(runtimeObj);
                             objectState.activeRuntimeObjectsByRecordId.delete(recordId);
                             sync.removedAny = true;
                             sync.removedCount += 1;
@@ -937,6 +960,7 @@
                             runtimeObj._prototypeOwnerSignature = `${runtimeObj._prototypeOwnerType}:${runtimeObj._prototypeOwnerId}`;
                             runtimeObj._prototypeOwnerSectionKey = runtimeObj._prototypeOwnerType === "section" ? entry.sectionKey : "";
                             restorePrototypeBuildingFloorSupportForObject(runtimeObj, entry);
+                            invalidatePrototypeInteriorBitmapForRuntimeObject(runtimeObj);
                             runtimeObj._prototypeDirty = false;
                             objectState.activeRuntimeObjectsByRecordId.set(recordId, runtimeObj);
                             sync.loadedAny = true;

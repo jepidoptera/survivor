@@ -2013,8 +2013,8 @@ class Character {
         this.prevY = this.y;
         this.prevZ = this.z;
 
-        const newX = this.x + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
-        const newY = this.y + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
+        let newX = this.x + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
+        let newY = this.y + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
         const movementRadius = this.getVectorMovementCollisionRadius(options);
 
         if (
@@ -2038,37 +2038,72 @@ class Character {
         }
 
         if (this.map && typeof this.map.resolveActorStairMovementOccupancy === "function") {
-            movementSectionStartMs = movementPerfNow();
-            const stairOccupancy = this.map.resolveActorStairMovementOccupancy(newX, newY, this, options);
-            movementPerfRecord("character.moveDirection.stairOccupancy", movementSectionStartMs);
-            if (stairOccupancy && stairOccupancy.handled === true) {
-                if (stairOccupancy.allowed === true) {
-                    this._pendingVectorMovementSupport = stairOccupancy.support || null;
-                    const supportPoint = stairOccupancy.support &&
-                        stairOccupancy.support.point &&
-                        Number.isFinite(Number(stairOccupancy.support.point.x)) &&
-                        Number.isFinite(Number(stairOccupancy.support.point.y))
-                        ? stairOccupancy.support.point
-                        : null;
-                    movementSectionStartMs = movementPerfNow();
-                    const applied = this._applyVectorMovementPosition(
-                        supportPoint ? Number(supportPoint.x) : newX,
-                        supportPoint ? Number(supportPoint.y) : newY,
-                        options
-                    );
-                    movementPerfRecord("character.moveDirection.applyPosition", movementSectionStartMs);
-                    movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
-                    return applied;
-                }
-                if (stairOccupancy.slideAlongStairFootprint !== true) {
-                    if (this.movementVector && typeof this.movementVector === "object") {
-                        this.movementVector.x = 0;
-                        this.movementVector.y = 0;
+            let stairSlideRetryCount = 0;
+            while (stairSlideRetryCount < 2) {
+                movementSectionStartMs = movementPerfNow();
+                const stairOccupancy = this.map.resolveActorStairMovementOccupancy(newX, newY, this, options);
+                movementPerfRecord("character.moveDirection.stairOccupancy", movementSectionStartMs);
+                if (stairOccupancy && stairOccupancy.handled === true) {
+                    if (stairOccupancy.allowed === true) {
+                        this._pendingVectorMovementSupport = stairOccupancy.support || null;
+                        const supportPoint = stairOccupancy.support &&
+                            stairOccupancy.support.point &&
+                            Number.isFinite(Number(stairOccupancy.support.point.x)) &&
+                            Number.isFinite(Number(stairOccupancy.support.point.y))
+                            ? stairOccupancy.support.point
+                            : null;
+                        movementSectionStartMs = movementPerfNow();
+                        const applied = this._applyVectorMovementPosition(
+                            supportPoint ? Number(supportPoint.x) : newX,
+                            supportPoint ? Number(supportPoint.y) : newY,
+                            options
+                        );
+                        movementPerfRecord("character.moveDirection.applyPosition", movementSectionStartMs);
+                        movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+                        return applied;
                     }
-                    this.moving = false;
-                    movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
-                    return false;
+                    if (
+                        stairOccupancy.blockedByBuildingMovement === true &&
+                        stairSlideRetryCount === 0 &&
+                        this.movementVector &&
+                        typeof this.movementVector === "object" &&
+                        stairOccupancy.buildingBlockerCollision &&
+                        stairOccupancy.buildingBlockerCollision.hasNormal === true
+                    ) {
+                        const normalX = Number(stairOccupancy.buildingBlockerCollision.normalX);
+                        const normalY = Number(stairOccupancy.buildingBlockerCollision.normalY);
+                        const normalLen = Math.hypot(normalX, normalY);
+                        if (normalLen > 1e-9) {
+                            const nx = normalX / normalLen;
+                            const ny = normalY / normalLen;
+                            const vectorX = Number(this.movementVector.x) || 0;
+                            const vectorY = Number(this.movementVector.y) || 0;
+                            const intoWallComponent = vectorX * nx + vectorY * ny;
+                            if (intoWallComponent < -1e-6) {
+                                this.movementVector.x = vectorX - nx * intoWallComponent;
+                                this.movementVector.y = vectorY - ny * intoWallComponent;
+                                if (Math.hypot(this.movementVector.x, this.movementVector.y) >= 0.001) {
+                                    newX = this.x + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
+                                    newY = this.y + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
+                                    stairSlideRetryCount++;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    const canResolveAsSlide = stairOccupancy.slideAlongStairFootprint === true ||
+                        stairOccupancy.blockedByBuildingMovement === true;
+                    if (!canResolveAsSlide) {
+                        if (this.movementVector && typeof this.movementVector === "object") {
+                            this.movementVector.x = 0;
+                            this.movementVector.y = 0;
+                        }
+                        this.moving = false;
+                        movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+                        return false;
+                    }
                 }
+                break;
             }
         }
 

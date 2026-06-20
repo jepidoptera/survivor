@@ -39,6 +39,7 @@ function loadSpellContext() {
         animals: [],
         paused: false,
         frameRate: 60,
+        frameCount: 0,
         setInterval: () => 1,
         clearInterval() {},
         setTimeout: () => 1,
@@ -112,6 +113,10 @@ test("move object drag temporarily excludes prototype building objects from inte
     let removeCalls = 0;
     let restoreCalls = 0;
     let nodeDirtyCalls = 0;
+    const objectState = {
+        dirtyRuntimeObjects: new context.Set(),
+        captureScanNeeded: false
+    };
     const startNode = {
         objects: [],
         removeObject(obj) {
@@ -128,6 +133,7 @@ test("move object drag temporarily excludes prototype building objects from inte
         }
     };
     const map = {
+        _prototypeObjectState: objectState,
         shortestDeltaX(fromX, toX) { return toX - fromX; },
         shortestDeltaY(fromY, toY) { return toY - fromY; },
         wrapWorldX(x) { return x; },
@@ -166,8 +172,11 @@ test("move object drag temporarily excludes prototype building objects from inte
         y: 3,
         map,
         node: startNode,
+        _prototypeRuntimeRecord: true,
+        _prototypeObjectManaged: true,
         _prototypeOwnerType: "building",
         _prototypeOwnerId: "building:test-house",
+        _prototypeOwnerSignature: "building:building:test-house",
         _prototypeRecordId: 77,
         fragmentId: "building:test-house:floor:floor-1",
         surfaceId: "building:test-house:surface:floor-1"
@@ -202,6 +211,9 @@ test("move object drag temporarily excludes prototype building objects from inte
     assert.equal(restoreCalls, 1);
     assert.equal(Object.prototype.hasOwnProperty.call(target, "_suppressBuildingRenderCacheDirty"), false);
     assert.equal(wizard.moveObjectDragState, null);
+    assert.equal(target._prototypeDirty, true);
+    assert.equal(objectState.dirtyRuntimeObjects.has(target), true);
+    assert.equal(objectState.captureScanNeeded, true);
 });
 
 test("move object drag registers fresh prototype building objects before bake exclusion", () => {
@@ -783,6 +795,7 @@ function loadVanishContext() {
         animals: [],
         paused: false,
         frameRate: 60,
+        frameCount: 0,
         setInterval: () => 1,
         clearInterval() {},
         setTimeout: () => 1,
@@ -1562,6 +1575,70 @@ test("vanish cannot target or remove the player wizard", () => {
     assert.equal(context.wizard.vanishing, undefined);
 });
 
+test("vanish invalidates prototype building interior bitmap when target starts vanishing", () => {
+    const context = loadVanishContext();
+    const vanish = new context.Vanish();
+    let invalidation = null;
+    const target = {
+        type: "furniture",
+        gone: false,
+        vanishing: false,
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:placed-1",
+            floorId: "floor-fragment-2"
+        },
+        map: {
+            invalidatePrototypeBuildingInteriorBitmap(ref) {
+                invalidation = ref;
+            }
+        }
+    };
+
+    assert.equal(vanish.beginTargetVanish(target, { x: 1, y: 2 }), true);
+
+    assert.equal(invalidation.placementId, "building:placed-1");
+    assert.equal(invalidation.floorId, "floor-fragment-2");
+    assert.equal(target.vanishing, true);
+});
+
+test("editor vanish invalidates prototype building interior bitmap before removal", () => {
+    const context = loadVanishContext();
+    const vanish = new context.EditorVanish();
+    const calls = [];
+    const target = {
+        type: "furniture",
+        gone: false,
+        vanishing: false,
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:placed-1",
+            floorId: "floor-fragment-2"
+        },
+        map: {
+            invalidatePrototypeBuildingInteriorBitmap(ref) {
+                calls.push({
+                    ref,
+                    vanishing: target.vanishing,
+                    gone: target.gone
+                });
+            }
+        },
+        removeFromGame() {
+            this.gone = true;
+        }
+    };
+
+    vanish.vanishTarget(target, { x: 1, y: 2 });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].ref.placementId, "building:placed-1");
+    assert.equal(calls[0].ref.floorId, "floor-fragment-2");
+    assert.equal(calls[0].vanishing, true);
+    assert.equal(calls[0].gone, false);
+    assert.equal(target.gone, true);
+});
+
 test("floor polygon paint applies selected texture to nonzero fragment and asset record", () => {
     const context = loadSpellContext();
     let presented = 0;
@@ -2169,6 +2246,9 @@ test("placed objects use rendered building floor support under the cursor", () =
             return floorNode;
         },
         setActorCurrentMovementSupport(actor, support) {
+            if (!Number.isFinite(actor.currentLayerBaseZ)) {
+                throw new Error("actor placedObject movement support requires currentLayerBaseZ");
+            }
             const fragment = support.fragment || floorRecord;
             actor.currentMovementSupport = {
                 type: support.type,

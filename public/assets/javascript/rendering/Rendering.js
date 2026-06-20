@@ -49,6 +49,7 @@
     const BUILDING_INTERIOR_OVERLAY_Z = 2147483648;
     const BUILDING_INTERIOR_FOREGROUND_Z = 2147483650;
     const BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS = 32;
+    const BUILDING_INTERIOR_LOWER_FLOOR_LIGHT_FACTOR = 0.62;
     const BUILDING_INTERIOR_WIZARD_HAT_Z = BUILDING_INTERIOR_FOREGROUND_Z + 1;
     const LOS_SHADOW_DEPTH_BIAS_UNITS = 0.004;
     const WIZARD_SHADOW_DEPTH_BIAS_UNITS = 0.02;
@@ -1193,7 +1194,7 @@ void main(void) {
             const opts = options && typeof options === "object" ? options : {};
             const forceInclude = !!opts.forceInclude;
             if (!forceInclude && !displayObj.visible) return;
-            if (!displayObj.parent && !(forceInclude && (item.type === "triggerArea" || item.isTriggerArea === true))) return;
+            if (!displayObj.parent && !forceInclude) return;
             this.pickRenderItems.push({ item, displayObj, forceInclude });
         }
 
@@ -1314,9 +1315,89 @@ void main(void) {
                         state.allowedItems.add(character);
                     }
                 }
+                this.preparePrototypeBuildingInteriorBitmapPickerOverlay(ctx, cutawayState, trigger, state, mapRef);
             }
             state.active = hasActiveInterior;
             return state;
+        }
+
+        preparePrototypeBuildingInteriorBitmapPickerOverlay(ctx, cutawayState, trigger, pickerState, mapRef = null) {
+            if (!trigger || !trigger.activeInteriorRegion || !this.isPrototypeBuildingCutawayTrigger(trigger)) return 0;
+            const map = mapRef || (ctx && ctx.map) || global.map || null;
+            if (!map || typeof map.getPrototypeBuildingInteriorBitmap !== "function") return 0;
+            const placement = trigger.building && trigger.building._prototypeBuildingPlacement;
+            if (!placement || !placement.id) return 0;
+            const floorId = this.getPrototypeBuildingInteriorSourceFloorId(trigger, { required: false });
+            if (!floorId || !this.isPrototypeBuildingInteriorBitmapSourceFloorId(floorId)) return 0;
+            const cache = map.getPrototypeBuildingInteriorBitmap(placement.id, floorId);
+            if (!cache || cache.status !== "ready") return 0;
+            this.ensurePrototypeBuildingInteriorBitmapCoverageMetadata(ctx, trigger, cache);
+            if (!(cache.coveredObjectSet instanceof Set) || cache.coveredObjectSet.size === 0) return 0;
+            if (!(cache.objectRenderSignatures instanceof Map) || !(cache.objectPickerSignatures instanceof Map)) {
+                throw new Error(`prototype building interior ${cache.id || placement.id} coverage is missing object signatures`);
+            }
+            const region = trigger.activeInteriorRegion;
+            const objects = this.collectBuildingInteriorFloorRenderItems(ctx, region, map, trigger);
+            let added = 0;
+            for (let i = 0; i < objects.length; i++) {
+                const item = objects[i];
+                if (!item || item.gone || item.vanishing) continue;
+                if (!cache.coveredObjectSet.has(item)) continue;
+                if (
+                    cache.objectRenderSignatures.get(item) !== this.getFloorObjectRenderSignature(item) ||
+                    cache.objectPickerSignatures.get(item) !== this.getFloorObjectPickerSignature(item)
+                ) {
+                    continue;
+                }
+                if (pickerState && pickerState.buildingItems instanceof Set) pickerState.buildingItems.add(item);
+                if (pickerState && pickerState.allowedItems instanceof Set) pickerState.allowedItems.add(item);
+                if (this.addPrototypeBuildingInteriorBitmapPickerObject(ctx, item, trigger, cache, map)) {
+                    added += 1;
+                }
+            }
+            return added;
+        }
+
+        addPrototypeBuildingInteriorBitmapPickerObject(ctx, item, trigger, cache, mapRef = null) {
+            if (!item || item.gone || item.vanishing) return false;
+            if (!this.camera || typeof item.updateDepthBillboardMesh !== "function") return false;
+            if (typeof item.ensureSprite === "function") item.ensureSprite();
+            if (!item.pixiSprite) return false;
+            const region = trigger && trigger.activeInteriorRegion;
+            const activeLevel = this.getLayerIndexFromValue(region && region.level, this.getLayerIndexForObject(item, 0));
+            item._renderLayerIndex = activeLevel;
+            item._renderLayerFadeAlpha = 1;
+            item._renderLayerAlpha = 1;
+            item._renderLayerBaseZ = this.getLayerBaseZForObject(item, activeLevel);
+            const baseDepthBias = Number.isFinite(Number(item.renderDepthOffset)) ? Number(item.renderDepthOffset) : 0;
+            item._renderDepthBias = baseDepthBias + BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS;
+            if (
+                typeof PIXI !== "undefined" &&
+                PIXI.Sprite &&
+                this.isPlacedObjectEntity(item) &&
+                item.rotationAxis !== "spatial" &&
+                item.pixiSprite instanceof PIXI.Sprite
+            ) {
+                const lodTexturePath = this.resolvePlacedObjectLodTexturePath(item);
+                if (typeof lodTexturePath === "string" && lodTexturePath.length > 0 && lodTexturePath !== item._activeLodTexturePath) {
+                    item.pixiSprite.texture = PIXI.Texture.from(lodTexturePath);
+                    item._activeLodTexturePath = lodTexturePath;
+                }
+            }
+            this.applySpriteTransform(item);
+            const mesh = item.updateDepthBillboardMesh(ctx, this.camera, { alphaCutoff: TREE_ALPHA_CUTOFF });
+            if (!mesh) return false;
+            if (mesh.parent && typeof mesh.parent.removeChild === "function") {
+                mesh.parent.removeChild(mesh);
+            }
+            mesh.visible = false;
+            if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+                mesh.renderable = false;
+            }
+            mesh.alpha = 0;
+            item._prototypeInteriorBitmapPickerMesh = mesh;
+            this.addPickRenderItem(item, mesh, { forceInclude: true });
+            return true;
         }
 
         getLayerIndexFromValue(value, fallback = 0) {
@@ -1353,6 +1434,9 @@ void main(void) {
                     if (fragment && Number.isFinite(Number(fragment.level))) {
                         return this.getLayerIndexFromValue(fragment.level, fallback);
                     }
+                }
+                if (Number.isFinite(Number(membership.level))) {
+                    return this.getLayerIndexFromValue(membership.level, fallback);
                 }
             }
             if (item.type === "wallSection" && item._prototypeBuildingPlacementId && Number.isFinite(item.traversalLayer)) {
@@ -1941,7 +2025,11 @@ void main(void) {
                 ? membership.floorId
                 : (typeof membership.sourceFloorId === "string" ? membership.sourceFloorId : "");
             if (!ownerType || !ownerId || !floorId) return null;
-            return { ownerType, ownerId, floorId };
+            const normalized = { ownerType, ownerId, floorId };
+            if (Number.isFinite(Number(membership.level))) {
+                normalized.level = this.getLayerIndexFromValue(membership.level, 0);
+            }
+            return normalized;
         }
 
         getRenderItemFloorMembership(item, mapRef = null, refs = null) {
@@ -2547,8 +2635,11 @@ void main(void) {
                 }
                 const activeRegionId = typeof activeRegion.id === "string" ? activeRegion.id : "";
                 addDepthBumpRegion(activeRegion);
-                const prototypeInteriorBitmapReady = this.isPrototypeBuildingInteriorBitmapReady(ctx, trigger);
+                const prototypeInteriorBitmapPresentableCache = this.getPresentablePrototypeBuildingInteriorBitmapCache(ctx, trigger);
+                const prototypeInteriorBitmapReady = !!prototypeInteriorBitmapPresentableCache ||
+                    this.isPrototypeBuildingInteriorBitmapReady(ctx, trigger);
                 if (prototypeInteriorBitmapReady) {
+                    const hasExplicitCoverage = this.prototypeBuildingInteriorBitmapHasExplicitCoverage(prototypeInteriorBitmapPresentableCache);
                     const regions = this.getBuildingInteriorOverlayRegionsForTrigger(trigger);
                     for (let regionIndex = 0; regionIndex < regions.length; regionIndex++) {
                         const region = regions[regionIndex];
@@ -2558,32 +2649,21 @@ void main(void) {
                             typeof region.id === "string" &&
                             region.id === activeRegionId
                         );
-                        if (isActiveRegion) {
-                            const entries = Array.isArray(region.staticObjects) ? region.staticObjects : [];
-                            for (let j = 0; j < entries.length; j++) {
-                                const entry = entries[j];
-                                const item = entry && entry.item;
-                                if (
-                                    this.shouldRenderActiveInteriorItemLiveOverReadyBitmap(item, region, entry, ctx, wizardRef) &&
-                                    !this.isPrototypeBuildingInteriorBitmapObjectCovered(item, cutawayState, mapRef, ctx)
-                                ) {
-                                    plan.items.add(item);
-                                    addDepthBumpedItem(item);
-                                }
-                            }
-                            const floorRenderItems = this.collectBuildingInteriorFloorRenderItems(ctx, region, mapRef, trigger);
-                            for (let j = 0; j < floorRenderItems.length; j++) {
-                                const item = floorRenderItems[j];
-                                if (!item || this.isPrototypeBuildingInteriorBitmapObjectCovered(item, cutawayState, mapRef, ctx)) continue;
-                                plan.items.add(item);
-                                addDepthBumpedItem(item);
-                            }
-                        }
                         for (let j = 0; j < dynamicCharacters.length; j++) {
                             const character = dynamicCharacters[j];
                             if (this.shouldRenderBuildingInteriorCharacter(character, region, ctx, wizardRef, mapRef)) {
                                 plan.items.add(character);
                                 if (isActiveRegion) addDepthBumpedItem(character);
+                            }
+                        }
+                        if (hasExplicitCoverage) {
+                            const floorRenderItems = this.collectBuildingInteriorFloorRenderItems(ctx, region, mapRef, trigger);
+                            for (let j = 0; j < floorRenderItems.length; j++) {
+                                const item = floorRenderItems[j];
+                                if (!item) continue;
+                                if (this.isPrototypeBuildingInteriorBitmapObjectCovered(item, cutawayState, mapRef, ctx)) continue;
+                                plan.items.add(item);
+                                if (isActiveRegion) addDepthBumpedItem(item);
                             }
                         }
                     }
@@ -2665,11 +2745,15 @@ void main(void) {
                     }
                 }
             }
-            plan.active = plan.items.size > 0 || plan.depthBumpRegions.length > 0;
+            plan.active = plan.items.size > 0;
             return finishPlan();
         }
 
         isPrototypeBuildingInteriorBitmapReady(ctx, trigger) {
+            return !!this.getReadyPrototypeBuildingInteriorBitmapCache(ctx, trigger);
+        }
+
+        getPresentablePrototypeBuildingInteriorBitmapCache(ctx, trigger) {
             if (!this.isPrototypeBuildingCutawayTrigger(trigger) || !trigger.activeInteriorRegion) return false;
             const mapRef = (ctx && ctx.map) || global.map || null;
             if (!mapRef || typeof mapRef.getPrototypeBuildingInteriorBitmap !== "function") return false;
@@ -2681,11 +2765,27 @@ void main(void) {
             if (!floorId || !this.isPrototypeBuildingInteriorBitmapSourceFloorId(floorId)) return false;
             const cache = mapRef.getPrototypeBuildingInteriorBitmap(placement.id, floorId);
             if (!cache || cache.status !== "ready") return false;
-            if (cache.stale === true) return false;
             if (!cache.texture) {
                 throw new Error(`prototype building interior ${cache.id || placement.id} ready cache is missing its texture`);
             }
-            return true;
+            return cache;
+        }
+
+        getReadyPrototypeBuildingInteriorBitmapCache(ctx, trigger) {
+            const cache = this.getPresentablePrototypeBuildingInteriorBitmapCache(ctx, trigger);
+            if (!cache || cache.stale === true) return false;
+            return cache;
+        }
+
+        prototypeBuildingInteriorBitmapHasExplicitCoverage(cache) {
+            return !!(
+                cache &&
+                (
+                    Array.isArray(cache.coveredObjects) ||
+                    Array.isArray(cache.coveredObjectEntries) ||
+                    cache.coveredObjectSet instanceof Set
+                )
+            );
         }
 
         getCompiledBuildingRenderCache(ctx, map, building) {
@@ -4372,11 +4472,18 @@ void main(void) {
                 objectType: typeof item.objectType === "string" ? item.objectType : "",
                 category: typeof item.category === "string" ? item.category : "",
                 texturePath: typeof item.texturePath === "string" ? item.texturePath : "",
+                imagePath: typeof item.imagePath === "string" ? item.imagePath : "",
+                imageFileName: typeof item.imageFileName === "string" ? item.imageFileName : "",
                 x: numberOrNull(item.x),
                 y: numberOrNull(item.y),
                 z: numberOrNull(item.z),
                 width: numberOrNull(item.width),
                 height: numberOrNull(item.height),
+                size: numberOrNull(item.size),
+                anchorX: numberOrNull(Number.isFinite(item.anchorX) ? item.anchorX : item.placeableAnchorX),
+                anchorY: numberOrNull(Number.isFinite(item.anchorY) ? item.anchorY : item.placeableAnchorY),
+                billboardAlpha: numberOrNull(item.billboardAlpha),
+                billboardTint: numberOrNull(item.billboardTint),
                 traversalLayer: numberOrNull(item.traversalLayer),
                 level: numberOrNull(item.level),
                 rotationAxis: typeof item.rotationAxis === "string" ? item.rotationAxis : "",
@@ -4450,7 +4557,7 @@ void main(void) {
                 const floorId = this.getPrototypeBuildingInteriorSourceFloorId(trigger, { required: false });
                 if (!floorId || !this.isPrototypeBuildingInteriorBitmapSourceFloorId(floorId)) continue;
                 const cache = map.getPrototypeBuildingInteriorBitmap(placement.id, floorId);
-                if (!cache || cache.status !== "ready" || cache.stale === true) continue;
+                if (!cache || cache.status !== "ready") continue;
                 this.ensurePrototypeBuildingInteriorBitmapCoverageMetadata(ctx, trigger, cache);
                 if (!(cache.coveredObjectSet instanceof Set) || !cache.coveredObjectSet.has(item)) continue;
                 if (!(cache.objectRenderSignatures instanceof Map) || !(cache.objectPickerSignatures instanceof Map)) {
@@ -4521,8 +4628,26 @@ void main(void) {
         }
 
         shouldSuppressPrototypeBuildingInteriorLiveRenderItem(item, mapRef = null, cutawayState = null, ctx = null) {
-            if (!item || item.type === "roof") return false;
-            if (this.isBuildingCutawayStructuralItem(item)) return false;
+            if (!item) return false;
+            if (this.isBuildingCutawayStructuralItem(item)) {
+                const state = cutawayState || this.getLayerCutawayState(ctx);
+                const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
+                const renderMap = mapRef || (ctx && ctx.map) || global.map || null;
+                const bitmapCtx = renderMap ? { ...(ctx || {}), map: renderMap } : ctx;
+                const refs = this.collectFloorRefsForRenderItem(item, renderMap);
+                for (let i = 0; i < triggers.length; i++) {
+                    const trigger = triggers[i];
+                    if (!trigger || !trigger.activeInteriorRegion || !this.isPrototypeBuildingCutawayTrigger(trigger)) continue;
+                    if (!this.getPresentablePrototypeBuildingInteriorBitmapCache(bitmapCtx, trigger)) continue;
+                    if (
+                        this.renderItemMatchesCutawayTrigger(item, trigger, renderMap) ||
+                        this.renderItemMembershipMatchesCutawayTrigger(item, trigger, renderMap, refs)
+                    ) {
+                        return true;
+                    }
+                }
+                return false;
+            }
             return this.isPrototypeBuildingInteriorBitmapObjectCovered(item, cutawayState, mapRef, ctx);
         }
 
@@ -7369,7 +7494,7 @@ void main(void) {
                 const trigger = triggers[i];
                 const region = trigger && trigger.activeInteriorRegion;
                 if (!region) continue;
-                if (this.isPrototypeBuildingInteriorBitmapReady(ctx, trigger)) continue;
+                if (this.getPresentablePrototypeBuildingInteriorBitmapCache(ctx, trigger)) continue;
                 const regions = this.getBuildingInteriorOverlayRegionsForTrigger(trigger);
                 const visibleRegions = regions.length > 0 ? regions : [region];
                 for (let regionIndex = 0; regionIndex < visibleRegions.length; regionIndex++) {
@@ -7401,8 +7526,7 @@ void main(void) {
 
         promotePrototypeBuildingInteriorLiveRenderItems(ctx, cutawayState, container, currentDisplayObjects = null, renderItems = [], foregroundPlan = null) {
             const plannedItems = foregroundPlan &&
-                foregroundPlan.items instanceof Set &&
-                foregroundPlan.items.size > 0
+                foregroundPlan.items instanceof Set
                 ? foregroundPlan.items
                 : null;
             const fallbackCandidates = Array.isArray(renderItems) ? renderItems : [];
@@ -20077,7 +20201,7 @@ void main(void) {
             proxy.placementRotation = 0;
             proxy.map = (ctx && ctx.map) || (this.camera && this.camera.map) || global.map || null;
             proxy._renderLayerBaseZ = 0;
-            proxy._renderDepthBias = 0;
+            proxy._renderDepthBias = Number.isFinite(options && options.depthBias) ? Number(options.depthBias) : 0;
             const mesh = proxy.updateDepthBillboardMesh(ctx, this.camera, {
                 alphaCutoff: 0.01,
                 groundPlaneVisualLift: 0,
@@ -20107,6 +20231,18 @@ void main(void) {
                 uniforms.uBuildingExteriorDepthMetricRange[0] = Number(cache.depthMetric.min);
                 uniforms.uBuildingExteriorDepthMetricRange[1] = 1 / Math.max(1e-6, Number(cache.depthMetric.span));
             }
+            const lightFactor = Number.isFinite(options && options.lightFactor)
+                ? Math.max(0, Math.min(1, Number(options.lightFactor)))
+                : 1;
+            if (lightFactor < 0.999) {
+                if (!uniforms.uTint || uniforms.uTint.length < 4) {
+                    throw new Error(`prototype building interior ${cache.id || placement.id} light tint requires uTint support`);
+                }
+                const tint = Number.isFinite(sprite.tint) ? Math.max(0, Math.min(0xffffff, Math.floor(sprite.tint))) : 0xffffff;
+                uniforms.uTint[0] = (((tint >> 16) & 0xff) / 255) * lightFactor;
+                uniforms.uTint[1] = (((tint >> 8) & 0xff) / 255) * lightFactor;
+                uniforms.uTint[2] = ((tint & 0xff) / 255) * lightFactor;
+            }
             const container = this.layers && this.layers.objects3d;
             if (!container) {
                 throw new Error(`prototype building interior ${cache.id || placement.id} requires the 3D objects layer`);
@@ -20129,6 +20265,7 @@ void main(void) {
             const cutawayState = (ctx && ctx._renderingLayerCutawayState) || this.getLayerCutawayState(ctx);
             const triggers = Array.isArray(cutawayState && cutawayState.triggers) ? cutawayState.triggers : [];
             const renderedMeshes = new Set();
+            this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame = new Set();
             const hasPrototypeInterior = triggers.some(trigger => (
                 this.isPrototypeBuildingCutawayTrigger(trigger) &&
                 trigger.activeInteriorRegion
@@ -20149,7 +20286,14 @@ void main(void) {
                 if (cache && cache.status === "error") {
                     throw new Error(`prototype building interior ${cache.id || placement.id} bitmap failed: ${cache.error || "unknown error"}`);
                 }
-                if ((!cache || cache.status === "loading") && typeof mapRef.requestPrototypeBuildingInteriorBitmap === "function") {
+                if (
+                    (
+                        !cache ||
+                        cache.status === "loading" ||
+                        (cache.status === "ready" && cache.stale === true)
+                    ) &&
+                    typeof mapRef.requestPrototypeBuildingInteriorBitmap === "function"
+                ) {
                     this.recordMoveObjectPerf("rendering.prototypeInteriorBitmap.requestCall", {
                         placementId: placement.id || "",
                         floorId,
@@ -20175,7 +20319,31 @@ void main(void) {
                 if (cache && cache.status === "ready") {
                     const movePerfEnabled = !!(typeof globalThis !== "undefined" && globalThis.__moveObjectPerf);
                     const renderStartMs = movePerfEnabled ? performance.now() : 0;
-                    const mesh = this.renderPrototypeBuildingInteriorBitmap(ctx, placement, cache, options);
+                    if (cache.lowerFloorsBitmap) {
+                        if (cache.lowerFloorsBitmap.status !== "ready") {
+                            throw new Error(`prototype building interior ${cache.id || placement.id} lower-floors bitmap is not ready`);
+                        }
+                        const lowerMesh = this.renderPrototypeBuildingInteriorBitmap(ctx, placement, cache.lowerFloorsBitmap, {
+                            alpha: Number.isFinite(options && options.alpha) ? Number(options.alpha) : 1,
+                            zIndexOffset: -0.001,
+                            depthBias: 0,
+                            lightFactor: BUILDING_INTERIOR_LOWER_FLOOR_LIGHT_FACTOR
+                        });
+                        if (lowerMesh) {
+                            activeIds.add(cache.lowerFloorsBitmap.id);
+                            renderedMeshes.add(lowerMesh);
+                            this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame.add(placement.id);
+                        }
+                    }
+                    const mesh = this.renderPrototypeBuildingInteriorBitmap(ctx, placement, cache, {
+                        ...(options || {}),
+                        zIndexOffset: Number.isFinite(options && options.zIndexOffset)
+                            ? Number(options.zIndexOffset)
+                            : 0.002,
+                        depthBias: Number.isFinite(options && options.depthBias)
+                            ? Number(options.depthBias)
+                            : BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS
+                    });
                     if (movePerfEnabled) {
                         this.recordMoveObjectPerf("rendering.prototypeInteriorBitmap.renderMesh", {
                             placementId: placement.id || "",
@@ -20187,6 +20355,10 @@ void main(void) {
                     if (mesh) {
                         activeIds.add(cache.id);
                         renderedMeshes.add(mesh);
+                        this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame.add(placement.id);
+                        if (typeof mapRef.releasePrototypeBuildingInteriorBitmapReplacement === "function") {
+                            mapRef.releasePrototypeBuildingInteriorBitmapReplacement(cache);
+                        }
                     }
                     return mesh;
                 }
@@ -20232,7 +20404,10 @@ void main(void) {
                 renderInteriorFloor(placement, floorId, { alpha: transitionAlphas.toAlpha, zIndexOffset: 0 });
                 if (outgoingSnapshotReady) {
                     const snapshotDisplay = this.renderPrototypeBuildingInteriorFloorSnapshot(ctx, transition);
-                    if (snapshotDisplay) renderedSnapshotThisFrame = true;
+                    if (snapshotDisplay) {
+                        renderedSnapshotThisFrame = true;
+                        this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame.add(placement.id);
+                    }
                 }
             }
             this.hideUnusedPrototypeBuildingInteriors(activeIds);
@@ -20244,6 +20419,46 @@ void main(void) {
 
         isPrototypeBuildingExteriorHiddenByInteriorCutaway(placement, ctx = null) {
             if (!placement || typeof placement.id !== "string") return false;
+            const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
+            const support = wizardRef && wizardRef.currentMovementSupport && typeof wizardRef.currentMovementSupport === "object"
+                ? wizardRef.currentMovementSupport
+                : null;
+            const supportMembership = support && support.floorMembership && typeof support.floorMembership === "object"
+                ? support.floorMembership
+                : null;
+            const wizardMembership = wizardRef && wizardRef._floorMembership && typeof wizardRef._floorMembership === "object"
+                ? wizardRef._floorMembership
+                : null;
+            if (
+                (
+                    support &&
+                    support.ownerType === "building" &&
+                    support.ownerId === placement.id
+                ) ||
+                (
+                    supportMembership &&
+                    supportMembership.ownerType === "building" &&
+                    supportMembership.ownerId === placement.id
+                ) ||
+                (
+                    wizardMembership &&
+                    wizardMembership.ownerType === "building" &&
+                    wizardMembership.ownerId === placement.id
+                )
+            ) {
+                return true;
+            }
+            const mapRef = (ctx && ctx.map) || global.map || null;
+            if (mapRef && typeof mapRef.getPrototypeWorldScope === "function") {
+                const scope = mapRef.getPrototypeWorldScope();
+                if (
+                    scope &&
+                    scope.type === "building" &&
+                    scope.id === placement.id
+                ) {
+                    return true;
+                }
+            }
             const state = (ctx && ctx._renderingLayerCutawayState) || this.getLayerCutawayState(ctx);
             const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
             for (let i = 0; i < triggers.length; i++) {
@@ -20485,9 +20700,13 @@ void main(void) {
             }
             const placements = mapRef.getPrototypeBuildingPlacements();
             const activeIds = new Set();
+            const interiorRenderedIds = this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame instanceof Set
+                ? this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame
+                : null;
             for (let i = 0; i < placements.length; i++) {
                 const placement = placements[i];
                 if (!placement || !placement.id) continue;
+                if (interiorRenderedIds && interiorRenderedIds.has(placement.id)) continue;
                 if (this.isPrototypeBuildingExteriorHiddenByInteriorCutaway(placement, ctx)) continue;
                 let cache = typeof mapRef.getPrototypeBuildingExteriorBitmap === "function"
                     ? mapRef.getPrototypeBuildingExteriorBitmap(placement.id)

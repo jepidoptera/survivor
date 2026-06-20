@@ -50,6 +50,7 @@ import {
     serializeBuilding,
     splitPerimeterWallAtVertex,
     setFloorElevation,
+    syncFloorStackLevels,
     wallMiterEndpointKey,
     wallPoints
 } from "./BuildingModel.js";
@@ -2455,6 +2456,7 @@ export class BuildingEditorState extends EventTarget {
             elevation += Number(floor.floorHeight);
         });
         this.building.floorFragments = floors;
+        syncFloorStackLevels(this.building);
         floors.forEach((floor) => refreshWallSectionEndpoints(this.building, floor));
         this.emitChange();
     }
@@ -4563,6 +4565,7 @@ export class BuildingEditorState extends EventTarget {
             }
         }
         this.building.floorFragments.sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
+        syncFloorStackLevels(this.building);
         getBuildingFloors(this.building).forEach((candidateFloor) => {
             if (changedFloors.has(getFloorId(candidateFloor))) {
                 refreshWallSectionEndpoints(this.building, candidateFloor);
@@ -4743,6 +4746,7 @@ export class BuildingEditorState extends EventTarget {
         }
         setFloorElevation(floor, elevation);
         this.building.floorFragments.sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
+        syncFloorStackLevels(this.building);
         refreshWallSectionEndpoints(this.building, floor);
         this.inputs.floorElevation = elevation;
         if (this.tool === "stair") this.syncStairToolDirectionWithFloor(floor, { emit: false });
@@ -5434,7 +5438,10 @@ export class BuildingEditorState extends EventTarget {
             const groupKey = wallMiterEndpointKey(wall, endpointKey, sharedPoint, floor);
             const layer = Number.isFinite(Number(wall.traversalLayer))
                 ? Math.round(Number(wall.traversalLayer))
-                : Math.round(getFloorElevation(floor) / 3);
+                : (Number.isFinite(Number(floor && floor.level)) ? Math.round(Number(floor.level)) : null);
+            if (!Number.isFinite(layer)) {
+                throw new Error(`wall ${wall && wall.id} cannot resolve miter layer without a floor stack level`);
+            }
             const indexKey = `${groupKey}|layer:${layer}`;
             const lowerVertexKey = isFloorVertexEndpoint(endpoint) &&
                 String(endpoint.fragmentId) === floorId &&

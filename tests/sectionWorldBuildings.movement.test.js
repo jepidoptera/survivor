@@ -671,7 +671,7 @@ test("building interior bitmap object exclusions are floor scoped and retain sta
         recordId: 101
     });
     assert.equal(destroyedTextures, 0);
-    assert.equal(dirtyCount, 1);
+    assert.equal(dirtyCount, 0);
     assert.equal(state.interiorBitmapsByKey.get("building:bake-house|floor-1"), cachedEntry);
     assert.equal(cachedEntry.stale, true);
     assert.equal(cachedEntry.staleReason, "object-bake-membership");
@@ -679,7 +679,7 @@ test("building interior bitmap object exclusions are floor scoped and retain sta
 
     const repeated = map.removePrototypeBuildingObjectFromInteriorBitmap(object);
     assert.equal(repeated.changed, false);
-    assert.equal(dirtyCount, 1);
+    assert.equal(dirtyCount, 0);
 
     const restored = map.restorePrototypeBuildingObjectToInteriorBitmap(object);
     assert.deepEqual(restored, {
@@ -691,7 +691,7 @@ test("building interior bitmap object exclusions are floor scoped and retain sta
     assert.equal(object._prototypeInteriorBitmapExcluded, false);
     assert.equal(object._prototypeInteriorBitmapExclusion, null);
     assert.equal(destroyedTextures, 0);
-    assert.equal(dirtyCount, 2);
+    assert.equal(dirtyCount, 0);
     assert.equal(state.interiorBitmapsByKey.get("building:bake-house|floor-1"), cachedEntry);
     assert.equal(cachedEntry.stale, true);
     assert.equal(state.interiorBitmapObjectExclusionsByKey.has("building:bake-house|floor-1"), false);
@@ -761,7 +761,7 @@ test("building interior bitmap invalidation is floor scoped and blocks obsolete 
     assert.equal(readyEntry.stale, true);
     assert.equal(loadingEntry.stale, true);
     assert.equal(state.pendingInteriorBitmapLoadsByKey.has("building:bake-house|floor-2"), false);
-    assert.equal(dirtyCount, 2);
+    assert.equal(dirtyCount, 0);
 });
 
 test("building interior bitmap object exclusions require building ownership and floor identity", () => {

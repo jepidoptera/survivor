@@ -68,6 +68,7 @@ const saveFilePath = path.join(__dirname, 'public', 'assets', 'saves', 'savefile
 const saveBackupsDir = path.join(__dirname, 'public', 'assets', 'saves', 'backups');
 const sectionWorldSavesRoot = path.join(__dirname, 'public', 'assets', 'saves');
 const buildingEditorSavesDir = path.join(__dirname, 'public', 'assets', 'saves', 'building-editor');
+const debugCapturesDir = path.join(__dirname, 'public', 'assets', 'debug-captures');
 const sectionWorldBuildingDirName = 'buildings';
 const sectionWorldBuildingIndexFileName = 'index.json';
 
@@ -600,6 +601,46 @@ app.get('/api/placeables', (req, res) => {
     } catch (e) {
         console.error('Failed to read placeables directories:', e);
         return res.status(500).json({ ok: false, reason: 'read-failed' });
+    }
+});
+
+function normalizeDebugCaptureId(rawId) {
+    const id = String(rawId === undefined || rawId === null ? '' : rawId).trim();
+    const safe = id.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 160);
+    return safe || `debug-capture-${Date.now()}`;
+}
+
+app.post('/api/debug/frame-capture', (req, res) => {
+    try {
+        const body = req.body || {};
+        const dataUrl = typeof body.dataUrl === 'string' ? body.dataUrl : '';
+        const match = dataUrl.match(/^data:image\/png;base64,([a-zA-Z0-9+/=]+)$/);
+        if (!match) {
+            return res.status(400).json({ ok: false, reason: 'invalid-data-url' });
+        }
+        fs.mkdirSync(debugCapturesDir, { recursive: true });
+        const id = normalizeDebugCaptureId(body.id);
+        const pngName = `${id}.png`;
+        const jsonName = `${id}.json`;
+        const pngPath = path.join(debugCapturesDir, pngName);
+        const jsonPath = path.join(debugCapturesDir, jsonName);
+        const pngBytes = Buffer.from(match[1], 'base64');
+        fs.writeFileSync(pngPath, pngBytes);
+        const metadata = { ...body };
+        delete metadata.dataUrl;
+        metadata.savedAt = new Date().toISOString();
+        metadata.png = `/assets/debug-captures/${pngName}`;
+        fs.writeFileSync(jsonPath, JSON.stringify(metadata, null, 2), 'utf8');
+        return res.json({
+            ok: true,
+            id,
+            url: `/assets/debug-captures/${pngName}`,
+            metadataUrl: `/assets/debug-captures/${jsonName}`,
+            bytes: pngBytes.length
+        });
+    } catch (e) {
+        console.error('Failed to write debug frame capture:', e);
+        return res.status(500).json({ ok: false, reason: 'write-failed' });
     }
 });
 

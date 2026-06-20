@@ -346,6 +346,11 @@ function applyEditorPlacementSupport(entity, mapRef, placementTarget, placementN
     const baseZ = resolveEditorPlacementBaseZ(mapRef, placementTarget, node);
     const hasFloorSupport = !!(fragment || floorTarget || layer !== 0);
     if (mapRef && typeof mapRef.setActorCurrentMovementSupport === "function") {
+        if (!Number.isFinite(entity.currentLayerBaseZ)) {
+            entity.currentLayerBaseZ = baseZ;
+            entity._floorBaseZ = baseZ;
+            entity._renderLayerBaseZ = baseZ;
+        }
         const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
         const support = hasFloorSupport && floorSupportApi && typeof floorSupportApi.createFloorSupport === "function"
             ? floorSupportApi.createFloorSupport({ layer, baseZ, fragment, fragmentId, surfaceId, node })
