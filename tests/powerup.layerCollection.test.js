@@ -101,3 +101,22 @@ test("powerups do not intersect a wizard in a different owner scope on the same 
     assert.equal(powerup.intersectsWizard(wizard), false);
     restoreGlobals();
 });
+
+test("loadJson defaults missing currentLayerBaseZ to ground baseZ 0", () => {
+    const Powerup = loadPowerupModule();
+
+    const powerup = Powerup.loadJson({
+        id: 46,
+        file: "black diamond.png",
+        x: 2,
+        y: 3,
+        z: 0,
+        traversalLayer: 0
+    });
+
+    assert.ok(powerup);
+    assert.equal(powerup.currentLayerBaseZ, 0);
+    assert.equal(powerup._floorBaseZ, 0);
+
+    restoreGlobals();
+});

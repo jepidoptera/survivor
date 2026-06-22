@@ -21,6 +21,7 @@
     const FLOOR_LEVEL0_BAKED_SURFACE_ENABLED = true;
     const FLOOR_LEVEL0_FORCE_BAKED_SURFACE = true;
     const FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED = true;
+    const FLOOR_LEVEL0_BAKE_ROAD_PATHS = false;
     const FLOOR_LEVEL0_CHUNK_TEXTURE_SIZE = 1024;
     const FLOOR_LEVEL0_CHUNK_TEXTURE_PX_PER_WORLD = 32;
     const FLOOR_LEVEL0_CHUNK_BUILDS_PER_FRAME = 1;
@@ -91,6 +92,44 @@ void main(void) {
     vWorldZ = uBaseZ;
 }
 `;
+    const ROAD_PATH_DEPTH_VS = `
+precision highp float;
+attribute vec2 aVertexPosition;
+attribute vec2 aUvs;
+attribute float aEdgeAlpha;
+uniform vec2 uScreenSize;
+uniform vec2 uCameraWorld;
+uniform float uCameraZ;
+uniform float uBaseZ;
+uniform float uDepthBias;
+uniform float uViewScale;
+uniform float uXyRatio;
+uniform vec2 uDepthRange;
+varying vec2 vUvs;
+varying float vWorldZ;
+varying float vEdgeAlpha;
+void main(void) {
+    float camDx = aVertexPosition.x - uCameraWorld.x;
+    float camDy = aVertexPosition.y - uCameraWorld.y;
+    float camDz = uBaseZ - uCameraZ;
+    float sx = max(1.0, uScreenSize.x);
+    float sy = max(1.0, uScreenSize.y);
+    float screenX = camDx * uViewScale;
+    float screenY = (camDy - camDz) * uViewScale * uXyRatio;
+    float depthMetric = camDy + camDz + uDepthBias;
+    float farMetric = uDepthRange.x;
+    float invSpan = max(1e-6, uDepthRange.y);
+    float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
+    vec2 clip = vec2(
+        (screenX / sx) * 2.0 - 1.0,
+        1.0 - (screenY / sy) * 2.0
+    );
+    gl_Position = vec4(clip, nd * 2.0 - 1.0, 1.0);
+    vUvs = aUvs;
+    vWorldZ = uBaseZ;
+    vEdgeAlpha = clamp(aEdgeAlpha, 0.0, 1.0);
+}
+`;
     const LOS_SHADOW_DEPTH_VS = `
 precision highp float;
 attribute vec2 aWorldPosition;
@@ -154,13 +193,16 @@ void main(void) {
 precision highp float;
 varying vec2 vUvs;
 varying float vWorldZ;
+varying float vEdgeAlpha;
 uniform sampler2D uSampler;
 uniform vec4 uTint;
 uniform float uAlphaCutoff;
 uniform float uBuildingCutawayDataPass;
 uniform vec2 uBuildingCutawayDataZRange;
 void main(void) {
-    vec4 outColor = texture2D(uSampler, fract(vUvs)) * uTint;
+    vec4 sampleColor = texture2D(uSampler, fract(vUvs));
+    float fadeAlpha = clamp(uTint.a * vEdgeAlpha, 0.0, 1.0);
+    vec4 outColor = vec4(sampleColor.rgb * uTint.rgb * fadeAlpha, sampleColor.a * fadeAlpha);
     if (outColor.a < uAlphaCutoff) discard;
     if (uBuildingCutawayDataPass > 0.5) {
         float minZ = uBuildingCutawayDataZRange.x;
@@ -949,6 +991,39 @@ void main(void) {
         };
     }
 
+    function getWizardBodyFrameIndex(wizard, ctx = {}) {
+        if (!wizard) return 0;
+        const visualSpeed = Math.hypot(
+            Number(wizard?.movementVector?.x) || 0,
+            Number(wizard?.movementVector?.y) || 0
+        );
+        const wizardDead = !!wizard.dead;
+        const isVisuallyMoving = !wizardDead && (!!wizard.moving || visualSpeed > 0.02);
+        const rowIndex = Number.isInteger(wizard.lastDirectionRow)
+            ? ((wizard.lastDirectionRow % 12) + 12) % 12
+            : 0;
+
+        let frameIndex = rowIndex * 9;
+        if (!wizardDead && wizard.isJumping) {
+            frameIndex = rowIndex * 9 + 2;
+        } else if (isVisuallyMoving) {
+            const speedRatio = (wizard.speed > 0)
+                ? (visualSpeed / wizard.speed)
+                : 0;
+            const nowMs = Number.isFinite(ctx.renderNowMs) ? ctx.renderNowMs : performance.now();
+            const simFrameRate = Number.isFinite(ctx.frameRate) ? ctx.frameRate : 60;
+            const animSpeed = Number.isFinite(wizard.animationSpeedMultiplier)
+                ? wizard.animationSpeedMultiplier
+                : 1;
+            const simTicks = (nowMs / 1000) * simFrameRate;
+            const animFrame = Math.floor(simTicks * animSpeed * speedRatio / 2) % 8;
+            const effectiveAnimFrame = wizard.isMovingBackward ? (7 - animFrame) : animFrame;
+            frameIndex = rowIndex * 9 + 1 + effectiveAnimFrame;
+        }
+
+        return frameIndex;
+    }
+
     function buildPixiDisplayObjectCrashSignature(summary) {
         if (!summary) return "unknown";
         const tex = summary.texture || {};
@@ -1111,6 +1186,7 @@ void main(void) {
             this.groundVisibleNodeKeys = new Set();
             this.groundSpritePool = [];
             this.floorVisualContainer = null;
+            this.roadPathDepthContainer = null;
             this.floorVisualMeshByKey = new Map();
             this.floorVisualVisibleKeys = new Set();
             this.floorVisualCaveTexture = null;
@@ -1118,6 +1194,7 @@ void main(void) {
             this.floorVisualTextureConfigCache = null;
             this.floorVisualTextureConfigPromise = null;
             this.floorVisualDepthState = null;
+            this.roadPathDepthState = null;
             this.stairRenderObjectById = new Map();
             this.stairMeshById = new Map();
             this.stairDepthState = null;
@@ -1220,6 +1297,29 @@ void main(void) {
             if (!forceInclude && !displayObj.visible) return;
             if (!displayObj.parent && !forceInclude) return;
             this.pickRenderItems.push({ item, displayObj, forceInclude });
+        }
+
+        getGroundHitboxPickProxyForItem(item, layerRank = 1) {
+            if (!item) return null;
+            const hitbox = item.groundPlaneHitbox || item.visualHitbox || item.hitbox || null;
+            if (!hitbox) return null;
+            if (!(this.groundHitboxPickProxyByObject instanceof Map)) {
+                this.groundHitboxPickProxyByObject = new Map();
+            }
+            let proxy = this.groundHitboxPickProxyByObject.get(item) || null;
+            if (!proxy) {
+                proxy = {
+                    name: "renderingGroundHitboxPickProxy",
+                    visible: true,
+                    destroyed: false,
+                    _pickGroundHitboxProxy: true
+                };
+                this.groundHitboxPickProxyByObject.set(item, proxy);
+            }
+            proxy.visible = true;
+            proxy.destroyed = false;
+            proxy._pickLayerRank = Number.isFinite(layerRank) ? Number(layerRank) : 1;
+            return proxy;
         }
 
         getBuildingInteriorPickerFrameState() {
@@ -4651,6 +4751,33 @@ void main(void) {
             return true;
         }
 
+        shouldRenderUnreferencedOutdoorItemThroughExteriorBuildingCutaway(item, cutawayState = null) {
+            if (!item || this.isBuildingCutawayStructuralItem(item) || item.type === "roof") return false;
+            const type = typeof item.type === "string" ? item.type.trim().toLowerCase() : "";
+            const category = typeof item.category === "string" ? item.category.trim().toLowerCase() : "";
+            if (!(type === "tree" || type === "flower" || category === "trees" || category === "flowers")) {
+                return false;
+            }
+            const triggers = Array.isArray(cutawayState && cutawayState.triggers) ? cutawayState.triggers : [];
+            for (let i = 0; i < triggers.length; i++) {
+                const trigger = triggers[i];
+                if (trigger && trigger.building && !trigger.activeInteriorRegion) return true;
+            }
+            return false;
+        }
+
+        getCutawayStateWithoutExteriorBuildingTriggers(cutawayState = null) {
+            const state = cutawayState || this.getLayerCutawayState(null);
+            if (!state || !Array.isArray(state.triggers) || state.triggers.length === 0) return state;
+            const triggers = state.triggers.filter(trigger => !(trigger && trigger.building && !trigger.activeInteriorRegion));
+            if (triggers.length === state.triggers.length) return state;
+            return {
+                ...state,
+                active: triggers.length > 0 || Number.isFinite(state.globalHiddenFromLevel),
+                triggers
+            };
+        }
+
         shouldSuppressPrototypeBuildingInteriorLiveRenderItem(item, mapRef = null, cutawayState = null, ctx = null) {
             if (!item) return false;
             if (this.isBuildingCutawayStructuralItem(item)) {
@@ -4834,10 +4961,13 @@ void main(void) {
                 : (item && item.type === "wallSection" && Number.isFinite(item.bottomZ)
                     ? Number(item.bottomZ)
                     : this.getLayerBaseZForLevel(itemLevel));
+            const worldPointCutawayState = this.shouldRenderUnreferencedOutdoorItemThroughExteriorBuildingCutaway(item, state)
+                ? this.getCutawayStateWithoutExteriorBuildingTriggers(state)
+                : state;
             const samples = this.getCutawaySamplePointsForRenderItem(item, mapRef || global.map || null);
             for (let i = 0; i < samples.length; i++) {
                 const sample = samples[i];
-                if (this.isWorldPointHiddenByLayerCutaway(sample.x, sample.y, itemLevel, state, sourceBaseZ)) return true;
+                if (this.isWorldPointHiddenByLayerCutaway(sample.x, sample.y, itemLevel, worldPointCutawayState, sourceBaseZ)) return true;
             }
             return false;
         }
@@ -10474,26 +10604,89 @@ void main(void) {
         }
 
         getCameraWorldViewportBounds(ctx = null, margin = 0) {
+            return this.getCameraScreenSpaceWorldBoundsAtZ(ctx, margin, 0);
+        }
+
+        getCameraScreenSpaceWorldBoundsAtZ(ctx = null, margin = 0, worldZ = 0) {
             const cameraRef = (ctx && ctx.camera) || this.camera || {};
             const viewportRef = (ctx && ctx.viewport) || global.viewport || {};
             const x = Number(cameraRef.x);
             const y = Number(cameraRef.y);
+            const cameraZ = Number.isFinite(cameraRef.z)
+                ? Number(cameraRef.z)
+                : (Number.isFinite(viewportRef.z) ? Number(viewportRef.z) : 0);
             const width = Number.isFinite(cameraRef.width)
                 ? Number(cameraRef.width)
                 : Number(viewportRef.width);
             const height = Number.isFinite(cameraRef.height)
                 ? Number(cameraRef.height)
                 : Number(viewportRef.height);
-            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+            const z = Number.isFinite(Number(worldZ)) ? Number(worldZ) : cameraZ;
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height) || !Number.isFinite(cameraZ)) {
                 return null;
             }
             const pad = Number.isFinite(margin) ? Math.max(0, Number(margin)) : 0;
+            const projectedMinY = y + (z - cameraZ);
             return {
                 minX: x - pad,
-                minY: y - pad,
+                minY: projectedMinY - pad,
                 maxX: x + Math.max(0, width) + pad,
-                maxY: y + Math.max(0, height) + pad
+                maxY: projectedMinY + Math.max(0, height) + pad,
+                cameraZ,
+                worldZ: z
             };
+        }
+
+        getCameraScreenSpaceIndexBounds(ctx = null, margin = 0, zRange = null) {
+            const cameraRef = (ctx && ctx.camera) || this.camera || {};
+            const viewportRef = (ctx && ctx.viewport) || global.viewport || {};
+            const cameraZ = Number.isFinite(cameraRef.z)
+                ? Number(cameraRef.z)
+                : (Number.isFinite(viewportRef.z) ? Number(viewportRef.z) : 0);
+            const minZ = Number.isFinite(zRange && zRange.minZ) ? Number(zRange.minZ) : cameraZ;
+            const maxZ = Number.isFinite(zRange && zRange.maxZ) ? Number(zRange.maxZ) : cameraZ;
+            const lowBounds = this.getCameraScreenSpaceWorldBoundsAtZ(ctx, margin, Math.min(minZ, maxZ));
+            const highBounds = this.getCameraScreenSpaceWorldBoundsAtZ(ctx, margin, Math.max(minZ, maxZ));
+            if (!lowBounds || !highBounds) return null;
+            return {
+                minX: Math.min(lowBounds.minX, highBounds.minX),
+                maxX: Math.max(lowBounds.maxX, highBounds.maxX),
+                minY: Math.min(lowBounds.minY, highBounds.minY),
+                maxY: Math.max(lowBounds.maxY, highBounds.maxY),
+                cameraZ,
+                minZ: Math.min(minZ, maxZ),
+                maxZ: Math.max(minZ, maxZ)
+            };
+        }
+
+        getRenderableZRangeForViewportCull(ctx = null, mapRef = null) {
+            const cameraRef = (ctx && ctx.camera) || this.camera || {};
+            const viewportRef = (ctx && ctx.viewport) || global.viewport || {};
+            let minZ = Number.isFinite(cameraRef.z)
+                ? Number(cameraRef.z)
+                : (Number.isFinite(viewportRef.z) ? Number(viewportRef.z) : 0);
+            let maxZ = minZ;
+            const includeZ = (z) => {
+                const n = Number(z);
+                if (!Number.isFinite(n)) return;
+                minZ = Math.min(minZ, n);
+                maxZ = Math.max(maxZ, n);
+            };
+            includeZ(0);
+            const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
+            if (wizardRef) {
+                includeZ(this.getWizardVisualLayerBaseZ(wizardRef, this.getWizardVisualLayerIndex(wizardRef, 0)));
+                includeZ(this.getWizardContinuousWorldZ(wizardRef, maxZ));
+            }
+            const map = mapRef || (ctx && ctx.map) || null;
+            if (map && map.floorsById instanceof Map) {
+                for (const fragment of map.floorsById.values()) {
+                    if (fragment && Number.isFinite(Number(fragment.nodeBaseZ))) {
+                        includeZ(Number(fragment.nodeBaseZ));
+                    }
+                }
+            }
+            return { minZ, maxZ };
         }
 
         getCachedFloorFragmentOuter(fragment) {
@@ -10594,7 +10787,12 @@ void main(void) {
                 if (!section) return;
                 considered += 1;
                 const bounds = this.getCachedPrototypeSectionWorldBounds(section, state);
-                if (!this.floorFragmentBoundsIntersectViewport(bounds, viewportBounds)) return;
+                const sectionViewportBounds = this.getCameraScreenSpaceWorldBoundsAtZ(
+                    ctx,
+                    viewportBounds && Number.isFinite(viewportBounds.margin) ? viewportBounds.margin : 4,
+                    viewportBounds && Number.isFinite(viewportBounds.worldZ) ? viewportBounds.worldZ : (viewportBounds && Number.isFinite(viewportBounds.cameraZ) ? viewportBounds.cameraZ : 0)
+                ) || viewportBounds;
+                if (!this.floorFragmentBoundsIntersectViewport(bounds, sectionViewportBounds)) return;
                 inFrame += 1;
                 sectionKeys.add(sectionKey);
             });
@@ -10659,8 +10857,12 @@ void main(void) {
                     skippedInvalid += 1;
                     return;
                 }
+                const fragmentBaseZ = Number.isFinite(Number(fragment.nodeBaseZ))
+                    ? Number(fragment.nodeBaseZ)
+                    : this.getLayerBaseZForLevel(level);
+                const fragmentViewportBounds = this.getCameraScreenSpaceWorldBoundsAtZ(ctx, 4, fragmentBaseZ);
                 const bounds = this.getCachedFloorFragmentOuterBounds(fragment, outer);
-                if (!this.floorFragmentBoundsIntersectViewport(bounds, viewportBounds)) {
+                if (!this.floorFragmentBoundsIntersectViewport(bounds, fragmentViewportBounds)) {
                     skippedOffscreen += 1;
                     return;
                 }
@@ -10698,11 +10900,25 @@ void main(void) {
             const xScale = 0.866;
             const padX = 4;
             const padY = 4;
-            const minX = Math.floor((Number(cameraRef.x) || 0) / xScale) - padX;
-            const maxX = Math.ceil(((Number(cameraRef.x) || 0) + (Number(viewportRef.width) || 0)) / xScale) + padX;
-            const minY = Math.floor(Number(cameraRef.y) || 0) - padY;
-            const maxY = Math.ceil((Number(cameraRef.y) || 0) + (Number(viewportRef.height) || 0)) + padY;
-            const viewportBounds = this.getCameraWorldViewportBounds(ctx, 4);
+            const zRange = this.getRenderableZRangeForViewportCull(ctx, map);
+            const indexBounds = this.getCameraScreenSpaceIndexBounds(ctx, 4, zRange);
+            const minX = indexBounds
+                ? Math.floor(indexBounds.minX / xScale) - padX
+                : Math.floor((Number(cameraRef.x) || 0) / xScale) - padX;
+            const maxX = indexBounds
+                ? Math.ceil(indexBounds.maxX / xScale) + padX
+                : Math.ceil(((Number(cameraRef.x) || 0) + (Number(viewportRef.width) || 0)) / xScale) + padX;
+            const minY = indexBounds
+                ? Math.floor(indexBounds.minY) - padY
+                : Math.floor(Number(cameraRef.y) || 0) - padY;
+            const maxY = indexBounds
+                ? Math.ceil(indexBounds.maxY) + padY
+                : Math.ceil((Number(cameraRef.y) || 0) + (Number(viewportRef.height) || 0)) + padY;
+            const viewportBounds = this.getCameraScreenSpaceWorldBoundsAtZ(
+                ctx,
+                4,
+                Number.isFinite(cameraRef.z) ? Number(cameraRef.z) : (Number.isFinite(viewportRef.z) ? Number(viewportRef.z) : 0)
+            );
             const viewportSectionKeys = this.collectViewportFloorSectionKeys(ctx, map, viewportBounds);
             const useViewportSectionFilter = !!(map.floorsById instanceof Map && viewportBounds);
             const activeSectionKeys = (
@@ -10956,6 +11172,20 @@ void main(void) {
                     }
                     return;
                 }
+                const nodeBaseZ = this.getLayerBaseZForNode(node);
+                const nodeViewportBounds = this.getCameraScreenSpaceWorldBoundsAtZ(ctx, 4, nodeBaseZ);
+                if (
+                    nodeViewportBounds &&
+                    (
+                        Number(node.x) < nodeViewportBounds.minX ||
+                        Number(node.x) > nodeViewportBounds.maxX ||
+                        Number(node.y) < nodeViewportBounds.minY ||
+                        Number(node.y) > nodeViewportBounds.maxY
+                    )
+                ) {
+                    skippedOffscreen += 1;
+                    return;
+                }
                 const key = typeof node.id === "string" && node.id.length > 0
                     ? node.id
                     : `${node.xindex},${node.yindex},${Number.isFinite(node.traversalLayer) ? Number(node.traversalLayer) : 0}`;
@@ -11159,10 +11389,20 @@ void main(void) {
             const padX = 4;
             const padY = 4;
             const xScale = 0.866;
-            const minX = Math.floor((Number(cam.x) || 0) / xScale) - padX;
-            const maxX = Math.ceil(((Number(cam.x) || 0) + (Number(ctx.viewport && ctx.viewport.width) || 0)) / xScale) + padX;
-            const minY = Math.floor(Number(cam.y) || 0) - padY;
-            const maxY = Math.ceil((Number(cam.y) || 0) + (Number(ctx.viewport && ctx.viewport.height) || 0)) + padY;
+            const zRange = this.getRenderableZRangeForViewportCull(ctx, map);
+            const indexBounds = this.getCameraScreenSpaceIndexBounds(ctx, 4, zRange);
+            const minX = indexBounds
+                ? Math.floor(indexBounds.minX / xScale) - padX
+                : Math.floor((Number(cam.x) || 0) / xScale) - padX;
+            const maxX = indexBounds
+                ? Math.ceil(indexBounds.maxX / xScale) + padX
+                : Math.ceil(((Number(cam.x) || 0) + (Number(ctx.viewport && ctx.viewport.width) || 0)) / xScale) + padX;
+            const minY = indexBounds
+                ? Math.floor(indexBounds.minY) - padY
+                : Math.floor(Number(cam.y) || 0) - padY;
+            const maxY = indexBounds
+                ? Math.ceil(indexBounds.maxY) + padY
+                : Math.ceil((Number(cam.y) || 0) + (Number(ctx.viewport && ctx.viewport.height) || 0)) + padY;
             let added = 0;
             for (const floorNodes of map.floorNodesById.values()) {
                 if (!Array.isArray(floorNodes) || floorNodes.length === 0) continue;
@@ -11175,6 +11415,19 @@ void main(void) {
                     const yi = Number(node.yindex);
                     if (!Number.isFinite(xi) || !Number.isFinite(yi)) continue;
                     if (xi < minX || xi > maxX || yi < minY || yi > maxY) continue;
+                    const nodeBaseZ = this.getLayerBaseZForNode(node);
+                    const nodeViewportBounds = this.getCameraScreenSpaceWorldBoundsAtZ(ctx, 4, nodeBaseZ);
+                    if (
+                        nodeViewportBounds &&
+                        (
+                            Number(node.x) < nodeViewportBounds.minX ||
+                            Number(node.x) > nodeViewportBounds.maxX ||
+                            Number(node.y) < nodeViewportBounds.minY ||
+                            Number(node.y) > nodeViewportBounds.maxY
+                        )
+                    ) {
+                        continue;
+                    }
                     if (addVisibleNode(node)) added += 1;
                 }
             }
@@ -12914,6 +13167,40 @@ void main(void) {
             container.scale.set(1, 1);
         }
 
+        ensureRoadPathDepthContainer() {
+            const parent = this.layers && this.layers.depthObjects;
+            if (!parent || typeof PIXI === "undefined") return null;
+            const floorContainer = this.ensureFloorVisualContainer();
+            if (!this.roadPathDepthContainer) {
+                this.roadPathDepthContainer = new PIXI.Container();
+                this.roadPathDepthContainer.name = "renderingRoadPathDepthMeshes";
+                this.roadPathDepthContainer.interactiveChildren = false;
+            }
+            if (this.roadPathDepthContainer.parent !== parent) {
+                parent.addChild(this.roadPathDepthContainer);
+            }
+            if (
+                floorContainer &&
+                floorContainer.parent === parent &&
+                this.roadPathDepthContainer.parent === parent &&
+                typeof parent.getChildIndex === "function" &&
+                typeof parent.setChildIndex === "function"
+            ) {
+                const floorIndex = parent.getChildIndex(floorContainer);
+                const desiredIndex = Math.min(floorIndex + 1, parent.children.length - 1);
+                if (parent.getChildIndex(this.roadPathDepthContainer) !== desiredIndex) {
+                    parent.setChildIndex(this.roadPathDepthContainer, desiredIndex);
+                }
+            }
+            this.roadPathDepthContainer.position.set(0, 0);
+            this.roadPathDepthContainer.scale.set(1, 1);
+            this.roadPathDepthContainer.visible = true;
+            if (Object.prototype.hasOwnProperty.call(this.roadPathDepthContainer, "renderable")) {
+                this.roadPathDepthContainer.renderable = true;
+            }
+            return this.roadPathDepthContainer;
+        }
+
         getSelectedFloorVisualLevel() {
             return Number.isFinite(global.selectedFloorEditLevel)
                 ? Math.round(Number(global.selectedFloorEditLevel))
@@ -12987,8 +13274,15 @@ void main(void) {
             return out;
         }
 
-        getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY) {
+        getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY, map = null) {
             const tileCoordKeys = Array.isArray(asset && asset.tileCoordKeys) ? asset.tileCoordKeys : [];
+            const state = map && map._prototypeSectionState ? map._prototypeSectionState : null;
+            const prototypeNodeCount = state && state.allNodesByCoordKey instanceof Map
+                ? state.allNodesByCoordKey.size
+                : 0;
+            const prototypeSectionNodeCount = state && state.nodesBySectionKey instanceof Map
+                ? state.nodesBySectionKey.size
+                : 0;
             return [
                 Math.floor(Number(chunkX) || 0),
                 Math.floor(Number(chunkY) || 0),
@@ -12997,7 +13291,10 @@ void main(void) {
                 Number(asset && asset._level0RoadSurfaceVersion) || 0,
                 Number(asset && asset._level0GroundSurfaceVersion) || 0,
                 Number(asset && asset._level0SurfaceTextureReadyVersion) || 0,
-                tileCoordKeys.length
+                FLOOR_LEVEL0_BAKE_ROAD_PATHS ? 1 : 0,
+                tileCoordKeys.length,
+                prototypeNodeCount,
+                prototypeSectionNodeCount
             ].join(":");
         }
 
@@ -13008,7 +13305,7 @@ void main(void) {
                 this.level0GroundSurfaceChunkCache = new Map();
             }
             const cacheKey = this.getLevel0GroundSurfaceChunkKey(sectionKey, chunkX, chunkY);
-            const signature = this.getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY);
+            const signature = this.getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY, map);
             let cache = this.level0GroundSurfaceChunkCache.get(cacheKey);
             if (cache && cache.signature === signature && cache.ready === true && cache.texture && cache.bounds) {
                 cache.lastUsedTick = ++this.level0GroundSurfaceChunkTick;
@@ -13276,12 +13573,161 @@ void main(void) {
                 const cache = this.level0GroundSurfaceChunkCache instanceof Map
                     ? this.level0GroundSurfaceChunkCache.get(key)
                     : null;
-                const signature = this.getLevel0GroundSurfaceChunkSignature(asset, coord.chunkX, coord.chunkY);
+                const signature = this.getLevel0GroundSurfaceChunkSignature(asset, coord.chunkX, coord.chunkY, map);
                 if (!cache || cache.ready !== true || cache.signature !== signature || !cache.texture || !cache.bounds) {
                     return false;
                 }
             }
             return true;
+        }
+
+        getRoadPathVisualBounds(roadPath) {
+            const geometry = roadPath && roadPath.generatedGeometry;
+            const points = geometry && Array.isArray(geometry.outline)
+                ? geometry.outline
+                : (Array.isArray(roadPath && roadPath.outlinePolygon) ? roadPath.outlinePolygon : null);
+            if (!Array.isArray(points) || points.length < 3) {
+                throw new Error("Cannot resolve road path bake bounds without outline geometry.");
+            }
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            for (let i = 0; i < points.length; i++) {
+                const pt = points[i];
+                const x = Number(pt && pt.x);
+                const y = Number(pt && pt.y);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                    throw new Error("Cannot resolve road path bake bounds with non-finite outline point.");
+                }
+                minX = Math.min(minX, x);
+                minY = Math.min(minY, y);
+                maxX = Math.max(maxX, x);
+                maxY = Math.max(maxY, y);
+            }
+            return { minX, minY, maxX, maxY };
+        }
+
+        getRoadPathEndpointPair(roadPath) {
+            const geometry = roadPath && roadPath.generatedGeometry;
+            const points = geometry && Array.isArray(geometry.points)
+                ? geometry.points
+                : (Array.isArray(roadPath && roadPath.pathPoints) ? roadPath.pathPoints : null);
+            if (!Array.isArray(points) || points.length < 2) {
+                throw new Error("Cannot resolve road path endpoint continuity without path points.");
+            }
+            const normalizeEndpoint = (point, label) => {
+                const x = Number(point && point.x);
+                const y = Number(point && point.y);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                    throw new Error(`Cannot resolve road path endpoint continuity with non-finite ${label} point.`);
+                }
+                return { x, y };
+            };
+            return {
+                start: normalizeEndpoint(points[0], "start"),
+                end: normalizeEndpoint(points[points.length - 1], "end")
+            };
+        }
+
+        getRoadPathContinuityTextureKey(roadPath) {
+            const RoadClass = (typeof global !== "undefined" && global && global.Road)
+                ? global.Road
+                : ((typeof Road !== "undefined" && Road) ? Road : null);
+            const defaultTexturePath = RoadClass && typeof RoadClass._defaultFillTexturePath === "string"
+                ? RoadClass._defaultFillTexturePath
+                : "/assets/images/flooring/dirt.jpg";
+            const rawTexturePath = typeof (roadPath && roadPath.fillTexturePath) === "string" && roadPath.fillTexturePath.length > 0
+                ? roadPath.fillTexturePath
+                : defaultTexturePath;
+            if (RoadClass && typeof RoadClass._normalizeFillTexturePath === "function") {
+                return RoadClass._normalizeFillTexturePath(rawTexturePath);
+            }
+            return rawTexturePath;
+        }
+
+        getRoadPathContinuityMaterialKey(roadPath) {
+            const fallbackNode = typeof (roadPath && roadPath.getNode) === "function" ? roadPath.getNode() : (roadPath && roadPath.node);
+            const roadLayer = this.getLayerIndexForObject(roadPath, this.getLayerIndexForNode(fallbackNode || roadPath));
+            return `${roadLayer}:${this.getRoadPathContinuityTextureKey(roadPath)}`;
+        }
+
+        buildRoadPathEndpointContinuity(roadPaths) {
+            const out = new Map();
+            const buckets = new Map();
+            const eps = 1e-4;
+            const epsSq = eps * eps;
+            const bucketCoord = (value) => Math.floor(Number(value) / eps);
+            const bucketKey = (materialKey, bx, by) => `${materialKey}:${bx}:${by}`;
+            const markConnected = (a, b) => {
+                if (a.roadPath === b.roadPath || a.materialKey !== b.materialKey) return;
+                const dx = a.point.x - b.point.x;
+                const dy = a.point.y - b.point.y;
+                if ((dx * dx) + (dy * dy) > epsSq) return;
+                const aContinuity = out.get(a.roadPath);
+                const bContinuity = out.get(b.roadPath);
+                if (aContinuity) aContinuity[a.end === "start" ? "startConnected" : "endConnected"] = true;
+                if (bContinuity) bContinuity[b.end === "start" ? "startConnected" : "endConnected"] = true;
+            };
+            const addEndpoint = (endpoint) => {
+                const bx = bucketCoord(endpoint.point.x);
+                const by = bucketCoord(endpoint.point.y);
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        const existing = buckets.get(bucketKey(endpoint.materialKey, bx + dx, by + dy));
+                        if (!Array.isArray(existing)) continue;
+                        for (let i = 0; i < existing.length; i++) markConnected(endpoint, existing[i]);
+                    }
+                }
+                const key = bucketKey(endpoint.materialKey, bx, by);
+                let bucket = buckets.get(key);
+                if (!bucket) {
+                    bucket = [];
+                    buckets.set(key, bucket);
+                }
+                bucket.push(endpoint);
+            };
+            const iterable = roadPaths && typeof roadPaths[Symbol.iterator] === "function" ? roadPaths : [];
+            for (const roadPath of iterable) {
+                if (!roadPath || roadPath.gone || roadPath.type !== "roadPath") continue;
+                if (!out.has(roadPath)) out.set(roadPath, { startConnected: false, endConnected: false });
+                const pair = this.getRoadPathEndpointPair(roadPath);
+                const materialKey = this.getRoadPathContinuityMaterialKey(roadPath);
+                addEndpoint({ roadPath, end: "start", point: pair.start, materialKey });
+                addEndpoint({ roadPath, end: "end", point: pair.end, materialKey });
+            }
+            return out;
+        }
+
+        collectRoadPathContinuityObjectsFromNodes(nodes) {
+            const out = new Set();
+            const sourceNodes = Array.isArray(nodes) ? nodes : [];
+            for (let i = 0; i < sourceNodes.length; i++) {
+                const node = sourceNodes[i];
+                if (!node || !Array.isArray(node.objects)) continue;
+                for (let j = 0; j < node.objects.length; j++) {
+                    const obj = node.objects[j];
+                    if (!obj || obj.gone || obj.type !== "roadPath") continue;
+                    out.add(obj);
+                }
+            }
+            return out;
+        }
+
+        isRoadPathCoveredByReadyLevel0Chunks(ctx, roadPath) {
+            if (!FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED || !roadPath) return false;
+            const map = ctx && ctx.map;
+            const fallbackNode = typeof roadPath.getNode === "function" ? roadPath.getNode() : roadPath.node;
+            const roadLayer = this.getLayerIndexForObject(roadPath, this.getLayerIndexForNode(fallbackNode || roadPath));
+            if (roadLayer !== 0) return false;
+            const sectionKey = fallbackNode && typeof fallbackNode._prototypeSectionKey === "string" ? fallbackNode._prototypeSectionKey : "";
+            const state = map && map._prototypeSectionState;
+            const asset = sectionKey && state && state.sectionAssetsByKey instanceof Map
+                ? state.sectionAssetsByKey.get(sectionKey)
+                : null;
+            if (!asset) return false;
+            const bounds = this.getRoadPathVisualBounds(roadPath);
+            return this.isLevel0GroundSurfaceChunkReadyForBounds(sectionKey, asset, bounds, null, map);
         }
 
         getLevel0GroundSurfaceAssetTileCoordSet(asset) {
@@ -13298,7 +13744,7 @@ void main(void) {
             return set;
         }
 
-        isLevel0GroundSurfaceChunkReadyForBounds(sectionKey, asset, bounds, readyCache = null) {
+        isLevel0GroundSurfaceChunkReadyForBounds(sectionKey, asset, bounds, readyCache = null, map = null) {
             if (!FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED || !sectionKey || !asset || !bounds) return false;
             const coords = this.getLevel0GroundSurfaceChunkCoordsForBounds(bounds);
             if (coords.length === 0) return false;
@@ -13312,7 +13758,7 @@ void main(void) {
                 const cache = this.level0GroundSurfaceChunkCache instanceof Map
                     ? this.level0GroundSurfaceChunkCache.get(cacheKey)
                     : null;
-                const signature = this.getLevel0GroundSurfaceChunkSignature(asset, coord.chunkX, coord.chunkY);
+                const signature = this.getLevel0GroundSurfaceChunkSignature(asset, coord.chunkX, coord.chunkY, map);
                 const ready = !!(
                     cache &&
                     cache.ready === true &&
@@ -13370,7 +13816,8 @@ void main(void) {
                     maxX: x + width * 0.5,
                     maxY: y + height * 0.5
                 },
-                readyCache
+                readyCache,
+                map
             );
         }
 
@@ -13461,6 +13908,7 @@ void main(void) {
                 Number(asset && asset._level0RoadSurfaceVersion) || 0,
                 Number(asset && asset._level0GroundSurfaceVersion) || 0,
                 Number(asset && asset._level0SurfaceTextureReadyVersion) || 0,
+                FLOOR_LEVEL0_BAKE_ROAD_PATHS ? 1 : 0,
                 tileCoordKeys.length,
                 Array.isArray(nodes) ? nodes.length : 0
             ].join(":");
@@ -13477,6 +13925,23 @@ void main(void) {
                 return this.isRoadCoveredByReadyLevel0Chunks(ctx, road);
             }
             const sectionKey = this.getRoadSectionKey(road);
+            if (!sectionKey) return false;
+            const sectionKeys = bakedSectionKeys instanceof Set
+                ? bakedSectionKeys
+                : this.getBakedLevel0SectionKeys(ctx);
+            return sectionKeys instanceof Set && sectionKeys.has(sectionKey);
+        }
+
+        isRoadPathBakedIntoLevel0Surface(ctx, roadPath, bakedSectionKeys = null) {
+            if (!FLOOR_LEVEL0_BAKE_ROAD_PATHS) return false;
+            if (!roadPath || roadPath.type !== "roadPath") return false;
+            const fallbackNode = typeof roadPath.getNode === "function" ? roadPath.getNode() : roadPath.node;
+            const roadLayer = this.getLayerIndexForObject(roadPath, this.getLayerIndexForNode(fallbackNode || roadPath));
+            if (roadLayer !== 0) return false;
+            if (FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED) {
+                return this.isRoadPathCoveredByReadyLevel0Chunks(ctx, roadPath);
+            }
+            const sectionKey = this.getRoadSectionKey(roadPath);
             if (!sectionKey) return false;
             const sectionKeys = bakedSectionKeys instanceof Set
                 ? bakedSectionKeys
@@ -13583,9 +14048,216 @@ void main(void) {
             return { baked: 1, pending: false };
         }
 
+        drawRoadPathToLevel0GroundSurfaceCanvas(ctx2d, roadPath, node, bounds, scale, sectionKey = "", asset = null, options = null) {
+            if (!ctx2d || !roadPath || roadPath.gone || roadPath.type !== "roadPath" || !bounds || !Number.isFinite(scale)) {
+                return { baked: 0, pending: false };
+            }
+            const fallbackNode = node || (typeof roadPath.getNode === "function" ? roadPath.getNode() : roadPath.node);
+            const roadLayer = this.getLayerIndexForObject(roadPath, this.getLayerIndexForNode(fallbackNode || roadPath));
+            if (roadLayer !== 0) return { baked: 0, pending: false };
+            const geometry = roadPath.generatedGeometry || null;
+            const outline = geometry && Array.isArray(geometry.outline) ? geometry.outline : roadPath.outlinePolygon;
+            if (!Array.isArray(outline) || outline.length < 3) {
+                throw new Error("Cannot bake road path without outline geometry.");
+            }
+            const RoadClass = typeof global.Road !== "undefined" ? global.Road : null;
+            if (
+                !RoadClass ||
+                typeof RoadClass._getFillTexture !== "function" ||
+                !Number.isFinite(RoadClass._edgeFadePx) ||
+                !Number.isFinite(RoadClass._pixelsPerWorldUnit) ||
+                !(RoadClass._pixelsPerWorldUnit > 0)
+            ) {
+                throw new Error("Cannot bake road path without road texture and edge fade metrics.");
+            }
+            const fillTexturePath = (typeof roadPath.fillTexturePath === "string" && roadPath.fillTexturePath.length > 0)
+                ? roadPath.fillTexturePath
+                : RoadClass._defaultFillTexturePath;
+            const fillTexture = RoadClass._getFillTexture(fillTexturePath);
+            const fillBase = fillTexture && fillTexture.baseTexture ? fillTexture.baseTexture : null;
+            if (fillBase && fillBase.valid !== true) {
+                this.markLevel0GroundSurfacePendingTexture(sectionKey, fillBase, asset);
+                return { baked: 0, pending: true };
+            }
+            const source = this.getLevel0BakeImageSource(fillTexture);
+            if (!source) return { baked: 0, pending: true };
+            const textureRepeat = this.getFloorVisualTextureRepeat(fillTexturePath);
+            const repeatX = textureRepeat && Number.isFinite(textureRepeat.x) ? Math.max(0.0001, Number(textureRepeat.x)) : FLOOR_VISUAL_TEXTURE_WORLD_SCALE;
+            const repeatY = textureRepeat && Number.isFinite(textureRepeat.y) ? Math.max(0.0001, Number(textureRepeat.y)) : FLOOR_VISUAL_TEXTURE_WORLD_SCALE;
+            const tileWorldW = 1 / repeatX;
+            const tileWorldH = 1 / repeatY;
+            const tilePxW = Math.max(1, tileWorldW * scale);
+            const tilePxH = Math.max(1, tileWorldH * scale);
+            const fadePx = Math.max(0.0001, Number(RoadClass._edgeFadePx) / Number(RoadClass._pixelsPerWorldUnit)) * scale;
+            const canvasPoints = outline.map((pt, index) => {
+                const x = Number(pt && pt.x);
+                const y = Number(pt && pt.y);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                    throw new Error(`Cannot bake road path with non-finite outline point ${index}.`);
+                }
+                return {
+                    x: (x - bounds.minX) * scale,
+                    y: (y - bounds.minY) * scale,
+                    worldX: x,
+                    worldY: y
+                };
+            });
+            const pathBounds = this.getRoadPathVisualBounds(roadPath);
+            const drawMinX = Math.max(Number(bounds.minX), pathBounds.minX);
+            const drawMinY = Math.max(Number(bounds.minY), pathBounds.minY);
+            const drawMaxX = Math.min(Number(bounds.maxX), pathBounds.maxX);
+            const drawMaxY = Math.min(Number(bounds.maxY), pathBounds.maxY);
+            if (!(drawMaxX > drawMinX) || !(drawMaxY > drawMinY)) {
+                return { baked: 0, pending: false };
+            }
+            const sourceWidth = Number(source.naturalWidth || source.videoWidth || source.width) || 0;
+            const sourceHeight = Number(source.naturalHeight || source.videoHeight || source.height) || 0;
+            if (!(sourceWidth > 0) || !(sourceHeight > 0)) return { baked: 0, pending: true };
+            const pointInPolygon = (px, py, points) => {
+                let inside = false;
+                for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+                    const xi = points[i].x;
+                    const yi = points[i].y;
+                    const xj = points[j].x;
+                    const yj = points[j].y;
+                    const intersects = ((yi > py) !== (yj > py)) &&
+                        (px < ((xj - xi) * (py - yi)) / ((yj - yi) || 1e-7) + xi);
+                    if (intersects) inside = !inside;
+                }
+                return inside;
+            };
+            const targetCanvas = ctx2d.canvas || null;
+            const targetWidth = Math.max(1, Math.floor(Number(targetCanvas && targetCanvas.width) || 0));
+            const targetHeight = Math.max(1, Math.floor(Number(targetCanvas && targetCanvas.height) || 0));
+            if (!(targetWidth > 0) || !(targetHeight > 0)) {
+                throw new Error("Cannot bake road path without a target canvas.");
+            }
+            if (typeof document === "undefined" || !document || typeof document.createElement !== "function") {
+                throw new Error("Cannot bake road path alpha fade without canvas creation support.");
+            }
+            const fadePadPx = Math.max(2, Math.ceil(fadePx * 2));
+            const clipX = Math.max(0, Math.floor((drawMinX - bounds.minX) * scale - fadePadPx));
+            const clipY = Math.max(0, Math.floor((drawMinY - bounds.minY) * scale - fadePadPx));
+            const clipMaxX = Math.min(targetWidth, Math.ceil((drawMaxX - bounds.minX) * scale + fadePadPx));
+            const clipMaxY = Math.min(targetHeight, Math.ceil((drawMaxY - bounds.minY) * scale + fadePadPx));
+            const clipW = Math.max(0, clipMaxX - clipX);
+            const clipH = Math.max(0, clipMaxY - clipY);
+            if (!(clipW > 0) || !(clipH > 0)) return { baked: 0, pending: false };
+            const roadCanvas = document.createElement("canvas");
+            roadCanvas.width = clipW;
+            roadCanvas.height = clipH;
+            const roadCtx = roadCanvas.getContext("2d");
+            if (!roadCtx) {
+                throw new Error("Cannot bake road path without a temporary road canvas context.");
+            }
+            const localPoints = canvasPoints.map(pt => ({
+                x: pt.x - clipX,
+                y: pt.y - clipY
+            }));
+            const pathPointCount = geometry && Array.isArray(geometry.points)
+                ? geometry.points.length
+                : (Array.isArray(roadPath.pathPoints) ? roadPath.pathPoints.length : 0);
+            if (!(pathPointCount >= 2) || localPoints.length !== pathPointCount * 2) {
+                throw new Error("Cannot bake road path endpoint continuity without matching outline and path point geometry.");
+            }
+            const endpointContinuity = options && options.endpointContinuity ? options.endpointContinuity : null;
+            const suppressStartCapFade = !!(endpointContinuity && endpointContinuity.startConnected);
+            const suppressEndCapFade = !!(endpointContinuity && endpointContinuity.endConnected);
+            const endCapEdgeIndex = pathPointCount - 1;
+            const startCapEdgeIndex = localPoints.length - 1;
+            roadCtx.save();
+            roadCtx.beginPath();
+            for (let i = 0; i < localPoints.length; i++) {
+                const pt = localPoints[i];
+                if (i === 0) roadCtx.moveTo(pt.x, pt.y);
+                else roadCtx.lineTo(pt.x, pt.y);
+            }
+            roadCtx.closePath();
+            roadCtx.clip();
+            roadCtx.globalAlpha = Number.isFinite(roadPath.alpha) ? Math.max(0, Math.min(1, Number(roadPath.alpha))) : 1;
+            const startWorldX = Math.floor(drawMinX / tileWorldW) * tileWorldW;
+            const endWorldX = Math.ceil(drawMaxX / tileWorldW) * tileWorldW;
+            const startWorldY = Math.floor(drawMinY / tileWorldH) * tileWorldH;
+            const endWorldY = Math.ceil(drawMaxY / tileWorldH) * tileWorldH;
+            for (let wx = startWorldX; wx <= endWorldX; wx += tileWorldW) {
+                const dx = (wx - bounds.minX) * scale - clipX;
+                for (let wy = startWorldY; wy <= endWorldY; wy += tileWorldH) {
+                    const dy = (wy - bounds.minY) * scale - clipY;
+                    roadCtx.drawImage(source, 0, 0, sourceWidth, sourceHeight, dx, dy, tilePxW, tilePxH);
+                }
+            }
+            roadCtx.globalAlpha = 1;
+            roadCtx.globalCompositeOperation = "destination-out";
+            const centroid = localPoints.reduce((acc, pt) => {
+                acc.x += pt.x;
+                acc.y += pt.y;
+                return acc;
+            }, { x: 0, y: 0 });
+            centroid.x /= localPoints.length;
+            centroid.y /= localPoints.length;
+            for (let i = 0; i < localPoints.length; i++) {
+                if (
+                    (suppressEndCapFade && i === endCapEdgeIndex) ||
+                    (suppressStartCapFade && i === startCapEdgeIndex)
+                ) {
+                    continue;
+                }
+                const p0 = localPoints[i];
+                const p1 = localPoints[(i + 1) % localPoints.length];
+                const ex = p1.x - p0.x;
+                const ey = p1.y - p0.y;
+                const edgeLen = Math.hypot(ex, ey);
+                if (!(edgeLen > 0.0001)) continue;
+                const tx = ex / edgeLen;
+                const ty = ey / edgeLen;
+                let nx = -ey / edgeLen;
+                let ny = ex / edgeLen;
+                const mx = (p0.x + p1.x) * 0.5;
+                const my = (p0.y + p1.y) * 0.5;
+                const probe = Math.max(2, fadePx * 0.35);
+                const scoreA = pointInPolygon(mx + nx * probe, my + ny * probe, localPoints) ? 1 : 0;
+                const scoreB = pointInPolygon(mx - nx * probe, my - ny * probe, localPoints) ? 1 : 0;
+                if (scoreB > scoreA) {
+                    nx = -nx;
+                    ny = -ny;
+                } else if (scoreA === scoreB && ((centroid.x - mx) * nx + (centroid.y - my) * ny) < 0) {
+                    nx = -nx;
+                    ny = -ny;
+                }
+                const ext = fadePx * 1.5;
+                const a0 = { x: p0.x - tx * ext, y: p0.y - ty * ext };
+                const a1 = { x: p1.x + tx * ext, y: p1.y + ty * ext };
+                const b0 = { x: a0.x + nx * fadePx, y: a0.y + ny * fadePx };
+                const b1 = { x: a1.x + nx * fadePx, y: a1.y + ny * fadePx };
+                const grad = roadCtx.createLinearGradient(mx, my, mx + nx * fadePx, my + ny * fadePx);
+                grad.addColorStop(0, "rgba(0,0,0,1)");
+                grad.addColorStop(1, "rgba(0,0,0,0)");
+                roadCtx.fillStyle = grad;
+                roadCtx.beginPath();
+                roadCtx.moveTo(a0.x, a0.y);
+                roadCtx.lineTo(a1.x, a1.y);
+                roadCtx.lineTo(b1.x, b1.y);
+                roadCtx.lineTo(b0.x, b0.y);
+                roadCtx.closePath();
+                roadCtx.fill();
+            }
+            roadCtx.restore();
+
+            ctx2d.save();
+            ctx2d.globalAlpha = 1;
+            ctx2d.globalCompositeOperation = "source-over";
+            ctx2d.drawImage(roadCanvas, clipX, clipY);
+            ctx2d.restore();
+            return { baked: 1, pending: false };
+        }
+
         addRoadsToLevel0GroundSurfaceCanvas(ctx2d, nodes, bounds, scale, sectionKey = "", asset = null) {
             if (!ctx2d || !Array.isArray(nodes) || !bounds || typeof PIXI === "undefined") return { baked: 0, pending: false };
             const seenRoads = new Set();
+            const seenRoadPaths = new Set();
+            const roadPathContinuity = FLOOR_LEVEL0_BAKE_ROAD_PATHS
+                ? this.buildRoadPathEndpointContinuity(this.collectRoadPathContinuityObjectsFromNodes(nodes))
+                : null;
             let baked = 0;
             let pending = false;
             for (let i = 0; i < nodes.length; i++) {
@@ -13593,10 +14265,21 @@ void main(void) {
                 if (!node || !Array.isArray(node.objects)) continue;
                 for (let j = 0; j < node.objects.length; j++) {
                     const road = node.objects[j];
-                    if (!road || road.gone || road.type !== "road" || seenRoads.has(road)) continue;
-                    seenRoads.add(road);
-                    const roadBake = this.drawRoadToLevel0GroundSurfaceCanvas(ctx2d, road, node, bounds, scale, sectionKey, asset, {
-                        refreshTexture: true
+                    if (!road || road.gone) continue;
+                    if (road.type === "road") {
+                        if (seenRoads.has(road)) continue;
+                        seenRoads.add(road);
+                        const roadBake = this.drawRoadToLevel0GroundSurfaceCanvas(ctx2d, road, node, bounds, scale, sectionKey, asset, {
+                            refreshTexture: true
+                        });
+                        baked += roadBake && Number.isFinite(roadBake.baked) ? roadBake.baked : 0;
+                        pending = pending || !!(roadBake && roadBake.pending);
+                        continue;
+                    }
+                    if (!FLOOR_LEVEL0_BAKE_ROAD_PATHS || road.type !== "roadPath" || seenRoadPaths.has(road)) continue;
+                    seenRoadPaths.add(road);
+                    const roadBake = this.drawRoadPathToLevel0GroundSurfaceCanvas(ctx2d, road, node, bounds, scale, sectionKey, asset, {
+                        endpointContinuity: roadPathContinuity.get(road) || null
                     });
                     baked += roadBake && Number.isFinite(roadBake.baked) ? roadBake.baked : 0;
                     pending = pending || !!(roadBake && roadBake.pending);
@@ -13731,42 +14414,58 @@ void main(void) {
             const sectionNodes = state && state.nodesBySectionKey instanceof Map
                 ? (state.nodesBySectionKey.get(sectionKey) || [])
                 : [];
+            const out = [];
+            const seen = new Set();
+            const pushCandidateNode = (node) => {
+                if (!node || node._prototypeVoid === true) return;
+                const key = `${Number(node.xindex)},${Number(node.yindex)}`;
+                if (seen.has(key)) return;
+                seen.add(key);
+                out.push(node);
+            };
+            const padX = (Number(bounds.tileWorldW) || 1.2) * 3;
+            const padY = (Number(bounds.tileWorldH) || 1) * 3;
+            const minX = Number(rect.minX) - padX;
+            const maxX = Number(rect.maxX) + padX;
+            const minY = Number(rect.minY) - padY;
+            const maxY = Number(rect.maxY) + padY;
+            const nodeOverlapsCandidateBounds = (node) => {
+                const x = Number(node && node.x);
+                const y = Number(node && node.y);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+                return x >= minX && x <= maxX && y >= minY && y <= maxY;
+            };
+            const xScale = 0.866;
+            const padXi = Math.ceil((Number(bounds.tileWorldW) || 1.2) / xScale) + 2;
+            const padYi = Math.ceil(Number(bounds.tileWorldH) || 1) + 2;
+            const minXi = Math.floor(Number(rect.minX) / xScale) - padXi;
+            const maxXi = Math.ceil(Number(rect.maxX) / xScale) + padXi;
+            const minYi = Math.floor(Number(rect.minY)) - padYi;
+            const maxYi = Math.ceil(Number(rect.maxY)) + padYi;
+            if (state && state.allNodesByCoordKey instanceof Map && state.allNodesByCoordKey.size > 0) {
+                for (let xi = minXi; xi <= maxXi; xi++) {
+                    for (let yi = minYi; yi <= maxYi; yi++) {
+                        const node = state.allNodesByCoordKey.get(`${xi},${yi}`) || null;
+                        if (!node || !nodeOverlapsCandidateBounds(node)) continue;
+                        pushCandidateNode(node);
+                    }
+                }
+                return out;
+            }
             if (Array.isArray(sectionNodes) && sectionNodes.length > 0) {
-                const out = [];
-                const padX = (Number(bounds.tileWorldW) || 1.2) * 3;
-                const padY = (Number(bounds.tileWorldH) || 1) * 3;
-                const minX = Number(rect.minX) - padX;
-                const maxX = Number(rect.maxX) + padX;
-                const minY = Number(rect.minY) - padY;
-                const maxY = Number(rect.maxY) + padY;
                 for (let i = 0; i < sectionNodes.length; i++) {
                     const node = sectionNodes[i];
-                    const x = Number(node && node.x);
-                    const y = Number(node && node.y);
-                    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-                    if (x < minX || x > maxX || y < minY || y > maxY) continue;
-                    out.push(node);
+                    if (!nodeOverlapsCandidateBounds(node)) continue;
+                    pushCandidateNode(node);
                 }
                 return out;
             }
             if (typeof map.getNode !== "function") return [];
-            const out = [];
-            const seen = new Set();
-            const xScale = 0.866;
-            const padX = Math.ceil((Number(bounds.tileWorldW) || 1.2) / xScale) + 2;
-            const padY = Math.ceil(Number(bounds.tileWorldH) || 1) + 2;
-            const minXi = Math.floor(Number(rect.minX) / xScale) - padX;
-            const maxXi = Math.ceil(Number(rect.maxX) / xScale) + padX;
-            const minYi = Math.floor(Number(rect.minY)) - padY;
-            const maxYi = Math.ceil(Number(rect.maxY)) + padY;
             for (let xi = minXi; xi <= maxXi; xi++) {
                 for (let yi = minYi; yi <= maxYi; yi++) {
                     const node = map.getNode(xi, yi);
-                    if (!node || typeof node._prototypeSectionKey !== "string" || node._prototypeSectionKey !== sectionKey) continue;
-                    const key = `${node.xindex},${node.yindex}`;
-                    if (seen.has(key)) continue;
-                    seen.add(key);
-                    out.push(node);
+                    if (!node || !nodeOverlapsCandidateBounds(node)) continue;
+                    pushCandidateNode(node);
                 }
             }
             return out;
@@ -13826,6 +14525,10 @@ void main(void) {
                 ctx2d.clip();
                 ctx2d.clearRect(x, y, w, h);
                 const seenRoads = new Set();
+                const seenRoadPaths = new Set();
+                const roadPathContinuity = FLOOR_LEVEL0_BAKE_ROAD_PATHS
+                    ? this.buildRoadPathEndpointContinuity(this.collectRoadPathContinuityObjectsFromNodes(groundCandidateNodes))
+                    : null;
                 for (let i = 0; i < groundCandidateNodes.length; i++) {
                     if (this.drawLevel0GroundTileToCanvas(ctx2d, map, groundCandidateNodes[i], bounds, scale, sectionKey, asset)) {
                         bakedGroundTiles += 1;
@@ -13841,11 +14544,23 @@ void main(void) {
                     if (!node || !Array.isArray(node.objects)) continue;
                     for (let j = 0; j < node.objects.length; j++) {
                         const road = node.objects[j];
-                        if (!road || road.gone || road.type !== "road" || seenRoads.has(road)) continue;
-                        seenRoads.add(road);
-                        const roadBake = this.drawRoadToLevel0GroundSurfaceCanvas(ctx2d, road, node, bounds, scale, sectionKey, asset, {
-                            refreshTexture: false
-                        });
+                        if (!road || road.gone) continue;
+                        let roadBake = null;
+                        if (road.type === "road") {
+                            if (seenRoads.has(road)) continue;
+                            seenRoads.add(road);
+                            roadBake = this.drawRoadToLevel0GroundSurfaceCanvas(ctx2d, road, node, bounds, scale, sectionKey, asset, {
+                                refreshTexture: false
+                            });
+                        } else if (FLOOR_LEVEL0_BAKE_ROAD_PATHS && road.type === "roadPath") {
+                            if (seenRoadPaths.has(road)) continue;
+                            seenRoadPaths.add(road);
+                            roadBake = this.drawRoadPathToLevel0GroundSurfaceCanvas(ctx2d, road, node, bounds, scale, sectionKey, asset, {
+                                endpointContinuity: roadPathContinuity.get(road) || null
+                            });
+                        } else {
+                            continue;
+                        }
                         bakedRoads += roadBake && Number.isFinite(roadBake.baked) ? roadBake.baked : 0;
                         if (roadBake && roadBake.pending) {
                             pendingTexture = true;
@@ -14182,6 +14897,24 @@ void main(void) {
             state.blend = true;
             state.culling = false;
             this.floorVisualDepthState = state;
+            return state;
+        }
+
+        getRoadPathDepthState() {
+            if (this.roadPathDepthState) return this.roadPathDepthState;
+            if (typeof PIXI === "undefined" || !PIXI.State) {
+                throw new Error("road path alpha fade requires PIXI.State");
+            }
+            if (!PIXI.BLEND_MODES || !Object.prototype.hasOwnProperty.call(PIXI.BLEND_MODES, "NORMAL")) {
+                throw new Error("road path alpha fade requires PIXI.BLEND_MODES.NORMAL");
+            }
+            const state = new PIXI.State();
+            state.depthTest = true;
+            state.depthMask = false;
+            state.blend = true;
+            state.blendMode = PIXI.BLEND_MODES.NORMAL;
+            state.culling = false;
+            this.roadPathDepthState = state;
             return state;
         }
 
@@ -15481,36 +16214,111 @@ void main(void) {
                     : Math.max(roadScreenWidth, roadScreenHeight);
                 return RoadClass.resolveFillTexturePathForSize(texturePath, lodMetric);
             };
-            const buildRoadPathMeshData = (roadPath, segments, textureRepeat) => {
+            const getRoadPathEdgeFadeWorldUnits = () => {
+                const RoadClass = (typeof Road !== "undefined" && Road)
+                    ? Road
+                    : ((global && global.Road) ? global.Road : null);
+                if (
+                    !RoadClass ||
+                    !Number.isFinite(RoadClass._edgeFadePx) ||
+                    !Number.isFinite(RoadClass._pixelsPerWorldUnit) ||
+                    !(RoadClass._pixelsPerWorldUnit > 0)
+                ) {
+                    throw new Error("Cannot render road path alpha fade without road edge fade metrics.");
+                }
+                return Math.max(0.0001, Number(RoadClass._edgeFadePx) / Number(RoadClass._pixelsPerWorldUnit));
+            };
+            const buildRoadPathMeshData = (roadPath, segments, textureRepeat, endpointContinuity = null) => {
                 const repeatX = textureRepeat && Number.isFinite(textureRepeat.x)
                     ? Number(textureRepeat.x)
                     : FLOOR_VISUAL_TEXTURE_WORLD_SCALE;
                 const repeatY = textureRepeat && Number.isFinite(textureRepeat.y)
                     ? Number(textureRepeat.y)
                     : FLOOR_VISUAL_TEXTURE_WORLD_SCALE;
+                const edgeFadeWorldUnits = getRoadPathEdgeFadeWorldUnits();
                 const maxUvSpanPerQuad = 0.5;
                 const emitted = [];
                 let pathDistance = 0;
+                const suppressStartFade = !!(endpointContinuity && endpointContinuity.startConnected);
+                const suppressEndFade = !!(endpointContinuity && endpointContinuity.endConnected);
                 const lerpPoint = (from, to, t) => ({
                     x: Number(from.x) + (Number(to.x) - Number(from.x)) * t,
                     y: Number(from.y) + (Number(to.y) - Number(from.y)) * t
                 });
-                const emitVertex = (point, u, v) => {
+                let totalPathLength = 0;
+                for (let s = 0; s < segments.length; s++) {
+                    const segment = segments[s];
+                    const polygon = segment && Array.isArray(segment.polygon) ? segment.polygon : null;
+                    if (!polygon || polygon.length !== 4) {
+                        throw new Error(`Cannot render road path segment ${s} without four-point polygon geometry.`);
+                    }
+                    const leftStart = polygon[0];
+                    const leftEnd = polygon[1];
+                    const rightEnd = polygon[2];
+                    const rightStart = polygon[3];
+                    const startPoint = segment && segment.startPoint ? segment.startPoint : {
+                        x: (Number(leftStart.x) + Number(rightStart.x)) * 0.5,
+                        y: (Number(leftStart.y) + Number(rightStart.y)) * 0.5
+                    };
+                    const endPoint = segment && segment.endPoint ? segment.endPoint : {
+                        x: (Number(leftEnd.x) + Number(rightEnd.x)) * 0.5,
+                        y: (Number(leftEnd.y) + Number(rightEnd.y)) * 0.5
+                    };
+                    const length = Math.hypot(
+                        Number(endPoint.x) - Number(startPoint.x),
+                        Number(endPoint.y) - Number(startPoint.y)
+                    );
+                    if (!(length > 0)) {
+                        throw new Error(`Cannot render road path segment ${s} with zero visual length.`);
+                    }
+                    totalPathLength += length;
+                }
+                if (!(totalPathLength > 0)) {
+                    throw new Error("Cannot render road path with zero total visual length.");
+                }
+                const addSortedUniqueCut = (cuts, value) => {
+                    if (!Number.isFinite(value)) {
+                        throw new Error("Cannot render road path mesh with non-finite fade cut.");
+                    }
+                    const clamped = Math.max(0, Math.min(1, Number(value)));
+                    for (let i = 0; i < cuts.length; i++) {
+                        if (Math.abs(cuts[i] - clamped) < 1e-5) return;
+                    }
+                    cuts.push(clamped);
+                    cuts.sort((a, b) => a - b);
+                };
+                const computeRoadPathEdgeAlpha = (widthAtPoint, crossT, distanceAlongPath) => {
+                    if (!Number.isFinite(widthAtPoint) || !(widthAtPoint > 0)) {
+                        throw new Error("Cannot render road path alpha fade with invalid segment width.");
+                    }
+                    if (!Number.isFinite(distanceAlongPath)) {
+                        throw new Error("Cannot render road path alpha fade with non-finite path distance.");
+                    }
+                    const lateralDistance = Math.min(crossT, 1 - crossT) * widthAtPoint;
+                    let endDistance = Infinity;
+                    if (!suppressStartFade) endDistance = Math.min(endDistance, distanceAlongPath);
+                    if (!suppressEndFade) endDistance = Math.min(endDistance, totalPathLength - distanceAlongPath);
+                    return Math.max(0, Math.min(1, Math.min(lateralDistance, endDistance) / edgeFadeWorldUnits));
+                };
+                const emitVertex = (point, u, v, edgeAlpha) => {
                     if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
                         throw new Error("Cannot render road path mesh with non-finite point.");
                     }
                     if (!Number.isFinite(u) || !Number.isFinite(v)) {
                         throw new Error("Cannot render road path mesh with non-finite texture coordinates.");
                     }
-                    emitted.push({ x: Number(point.x), y: Number(point.y), u, v });
+                    if (!Number.isFinite(edgeAlpha)) {
+                        throw new Error("Cannot render road path mesh with non-finite edge alpha.");
+                    }
+                    emitted.push({ x: Number(point.x), y: Number(point.y), u, v, edgeAlpha: Math.max(0, Math.min(1, Number(edgeAlpha))) });
                 };
-                const emitQuad = (left0, left1, right1, right0, u0, u1, v0, v1) => {
-                    emitVertex(left0, u0, v0);
-                    emitVertex(left1, u1, v0);
-                    emitVertex(right1, u1, v1);
-                    emitVertex(left0, u0, v0);
-                    emitVertex(right1, u1, v1);
-                    emitVertex(right0, u0, v1);
+                const emitQuad = (v00, v10, v11, v01) => {
+                    emitVertex(v00.point, v00.u, v00.v, v00.edgeAlpha);
+                    emitVertex(v10.point, v10.u, v10.v, v10.edgeAlpha);
+                    emitVertex(v11.point, v11.u, v11.v, v11.edgeAlpha);
+                    emitVertex(v00.point, v00.u, v00.v, v00.edgeAlpha);
+                    emitVertex(v11.point, v11.u, v11.v, v11.edgeAlpha);
+                    emitVertex(v01.point, v01.u, v01.v, v01.edgeAlpha);
                 };
                 for (let s = 0; s < segments.length; s++) {
                     const segment = segments[s];
@@ -15551,16 +16359,48 @@ void main(void) {
                     if (subdivisions > 4096) {
                         throw new Error(`Cannot render road path segment ${s}; visual tessellation would require ${subdivisions} subdivisions.`);
                     }
-                    for (let i = 0; i < subdivisions; i++) {
-                        const t0 = i / subdivisions;
-                        const t1 = (i + 1) / subdivisions;
-                        const left0 = lerpPoint(leftStart, leftEnd, t0);
-                        const left1 = lerpPoint(leftStart, leftEnd, t1);
-                        const right0 = lerpPoint(rightStart, rightEnd, t0);
-                        const right1 = lerpPoint(rightStart, rightEnd, t1);
-                        const u0 = (pathDistance + length * t0) * repeatX;
-                        const u1 = (pathDistance + length * t1) * repeatX;
-                        emitQuad(left0, left1, right1, right0, u0, u1, 0, width * repeatY);
+                    const lengthCuts = [];
+                    for (let i = 0; i <= subdivisions; i++) {
+                        addSortedUniqueCut(lengthCuts, i / subdivisions);
+                    }
+                    addSortedUniqueCut(lengthCuts, edgeFadeWorldUnits / length);
+                    addSortedUniqueCut(lengthCuts, 1 - (edgeFadeWorldUnits / length));
+                    addSortedUniqueCut(lengthCuts, 0.5);
+                    const widthCuts = [0, 1];
+                    addSortedUniqueCut(widthCuts, edgeFadeWorldUnits / width);
+                    addSortedUniqueCut(widthCuts, 1 - (edgeFadeWorldUnits / width));
+                    addSortedUniqueCut(widthCuts, 0.5);
+                    const makeVertex = (t, crossT) => {
+                        const left = lerpPoint(leftStart, leftEnd, t);
+                        const right = lerpPoint(rightStart, rightEnd, t);
+                        const widthAtPoint = Math.hypot(right.x - left.x, right.y - left.y);
+                        const point = {
+                            x: left.x + (right.x - left.x) * crossT,
+                            y: left.y + (right.y - left.y) * crossT
+                        };
+                        const distanceAlongPath = pathDistance + length * t;
+                        return {
+                            point,
+                            u: distanceAlongPath * repeatX,
+                            v: crossT * width * repeatY,
+                            edgeAlpha: computeRoadPathEdgeAlpha(widthAtPoint, crossT, distanceAlongPath)
+                        };
+                    };
+                    for (let i = 0; i < lengthCuts.length - 1; i++) {
+                        const t0 = lengthCuts[i];
+                        const t1 = lengthCuts[i + 1];
+                        if (!(t1 - t0 > 1e-6)) continue;
+                        for (let j = 0; j < widthCuts.length - 1; j++) {
+                            const c0 = widthCuts[j];
+                            const c1 = widthCuts[j + 1];
+                            if (!(c1 - c0 > 1e-6)) continue;
+                            emitQuad(
+                                makeVertex(t0, c0),
+                                makeVertex(t1, c0),
+                                makeVertex(t1, c1),
+                                makeVertex(t0, c1)
+                            );
+                        }
                     }
                     pathDistance += length;
                 }
@@ -15571,6 +16411,7 @@ void main(void) {
                 const vertexData = new Float32Array(vertexCount * 2);
                 const worldPositionData = new Float32Array(vertexCount * 3);
                 const uvData = new Float32Array(vertexCount * 2);
+                const edgeAlphaData = new Float32Array(vertexCount);
                 const indexData = vertexCount > 65535
                     ? new Uint32Array(vertexCount)
                     : new Uint16Array(vertexCount);
@@ -15591,9 +16432,10 @@ void main(void) {
                     worldPositionData[i * 3 + 2] = 0;
                     uvData[i * 2] = point.u - uvOffsetX;
                     uvData[i * 2 + 1] = point.v - uvOffsetY;
+                    edgeAlphaData[i] = point.edgeAlpha;
                     indexData[i] = i;
                 }
-                return { vertexData, worldPositionData, uvData, indexData, vertexCount };
+                return { vertexData, worldPositionData, uvData, edgeAlphaData, indexData, vertexCount };
             };
             const createRoadPathMesh = (meshData) => {
                 if (
@@ -15609,8 +16451,9 @@ void main(void) {
                     .addAttribute("aVertexPosition", meshData.vertexData, 2)
                     .addAttribute("aWorldPosition", meshData.worldPositionData, 3)
                     .addAttribute("aUvs", meshData.uvData, 2)
+                    .addAttribute("aEdgeAlpha", meshData.edgeAlphaData, 1)
                     .addIndex(meshData.indexData);
-                const shader = PIXI.Shader.from(FLOOR_VISUAL_DEPTH_VS, ROAD_PATH_DEPTH_FS, {
+                const shader = PIXI.Shader.from(ROAD_PATH_DEPTH_VS, ROAD_PATH_DEPTH_FS, {
                     uScreenSize: new Float32Array([1, 1]),
                     uCameraWorld: new Float32Array([0, 0]),
                     uCameraZ: 0,
@@ -15631,7 +16474,7 @@ void main(void) {
                     ]),
                     uSampler: PIXI.Texture.WHITE
                 });
-                const state = this.getFloorVisualDepthState();
+                const state = this.getRoadPathDepthState();
                 const mesh = new PIXI.Mesh(
                     geometry,
                     shader,
@@ -15640,6 +16483,7 @@ void main(void) {
                 );
                 mesh.name = "renderingRoadPathPolygon";
                 mesh.interactive = false;
+                mesh.blendMode = PIXI.BLEND_MODES.NORMAL;
                 mesh.tint = 0x9b8162;
                 mesh._roadPathVertexCount = meshData.vertexCount;
                 return mesh;
@@ -15651,6 +16495,9 @@ void main(void) {
                     : null;
                 const uvBuffer = geometry && typeof geometry.getBuffer === "function"
                     ? geometry.getBuffer("aUvs")
+                    : null;
+                const edgeAlphaBuffer = geometry && typeof geometry.getBuffer === "function"
+                    ? geometry.getBuffer("aEdgeAlpha")
                     : null;
                 const worldPositionBuffer = geometry && typeof geometry.getBuffer === "function"
                     ? geometry.getBuffer("aWorldPosition")
@@ -15667,6 +16514,14 @@ void main(void) {
                 if (uvBuffer && uvBuffer.data && uvBuffer.data.length === meshData.uvData.length) {
                     uvBuffer.data.set(meshData.uvData);
                     uvBuffer.update();
+                } else {
+                    return false;
+                }
+                if (edgeAlphaBuffer && edgeAlphaBuffer.data && edgeAlphaBuffer.data.length === meshData.edgeAlphaData.length) {
+                    edgeAlphaBuffer.data.set(meshData.edgeAlphaData);
+                    edgeAlphaBuffer.update();
+                } else {
+                    return false;
                 }
                 mesh._roadPathVertexCount = meshData.vertexCount;
                 return true;
@@ -15713,6 +16568,7 @@ void main(void) {
 
             const visibleRoadObjects = new Set();
             const visibleRoadPathObjects = new Set();
+            const continuityRoadPathObjects = new Set();
             const nodes = Array.isArray(visibleNodes) ? visibleNodes : [];
             const bakedLevel0SectionKeys = this.getBakedLevel0SectionKeys(ctx);
             let roadsSkippedForLevel0Bake = 0;
@@ -15728,6 +16584,27 @@ void main(void) {
                     if (mazeLayerOnly && roadLayer !== wizardLayer && !this.isFallRevealHiddenLayer(roadLayer)) continue;
                     if (this.isRenderItemHiddenByLayerCutaway(obj, roadLayer, cutawayState, map)) continue;
                     if (obj.type === "roadPath") {
+                        continuityRoadPathObjects.add(obj);
+                        if (this.isRoadPathBakedIntoLevel0Surface(ctx, obj, bakedLevel0SectionKeys)) {
+                            const bakedMesh = this.roadPathMeshByObject instanceof Map
+                                ? this.roadPathMeshByObject.get(obj)
+                                : null;
+                            if (bakedMesh) {
+                                bakedMesh.visible = false;
+                                if (Object.prototype.hasOwnProperty.call(bakedMesh, "renderable")) {
+                                    bakedMesh.renderable = false;
+                                }
+                            }
+                            if (obj._renderingDisplayObject === bakedMesh) {
+                                obj._renderingDisplayObject = null;
+                            }
+                            const pickProxy = this.getGroundHitboxPickProxyForItem(obj, 1);
+                            if (pickProxy) {
+                                this.addPickRenderItem(obj, pickProxy, { forceInclude: true });
+                            }
+                            roadsSkippedForLevel0Bake += 1;
+                            continue;
+                        }
                         visibleRoadPathObjects.add(obj);
                         continue;
                     }
@@ -15748,9 +16625,16 @@ void main(void) {
                     visibleRoadObjects.add(obj);
                 }
             }
+            const roadPathEndpointContinuity = this.buildRoadPathEndpointContinuity(continuityRoadPathObjects);
 
             if (!(this.roadPathMeshByObject instanceof Map)) {
                 this.roadPathMeshByObject = new Map();
+            }
+            const roadPathContainer = visibleRoadPathObjects.size > 0
+                ? this.ensureRoadPathDepthContainer()
+                : null;
+            if (visibleRoadPathObjects.size > 0 && !roadPathContainer) {
+                throw new Error("Cannot render road path alpha fade without a depth-layer road path container.");
             }
             for (const roadPath of visibleRoadPathObjects) {
                 const geometry = roadPath && roadPath.generatedGeometry;
@@ -15769,7 +16653,12 @@ void main(void) {
                 );
                 const fillTexture = getRoadPathFillTexture(fillTexturePath);
                 const textureRepeat = getRoadPathTextureRepeat(fillTexturePath);
-                const meshData = buildRoadPathMeshData(roadPath, segments, textureRepeat);
+                const meshData = buildRoadPathMeshData(
+                    roadPath,
+                    segments,
+                    textureRepeat,
+                    roadPathEndpointContinuity.get(roadPath) || null
+                );
                 let mesh = this.roadPathMeshByObject.get(roadPath);
                 const textureRepeatSignature = this.getFloorVisualTextureRepeatSignature(textureRepeat);
                 if (
@@ -15790,8 +16679,8 @@ void main(void) {
                     mesh = createRoadPathMesh(meshData);
                     this.roadPathMeshByObject.set(roadPath, mesh);
                 }
-                if (mesh.parent !== container) {
-                    container.addChild(mesh);
+                if (mesh.parent !== roadPathContainer) {
+                    roadPathContainer.addChild(mesh);
                 }
                 const alpha = (Number.isFinite(roadPath.alpha) ? roadPath.alpha : 1) * this.getLiveLayerFadeMultiplier(
                     roadLayer,
@@ -17060,32 +17949,7 @@ void main(void) {
                 wizardSprite.parent.removeChild(wizardSprite);
             }
 
-            const visualSpeed = Math.hypot(
-                Number(wizard?.movementVector?.x) || 0,
-                Number(wizard?.movementVector?.y) || 0
-            );
-            const isVisuallyMoving = !!wizard.moving || visualSpeed > 0.02;
-            const rowIndex = Number.isInteger(wizard.lastDirectionRow)
-                ? ((wizard.lastDirectionRow % 12) + 12) % 12
-                : 0;
-
-            let frameIndex = rowIndex * 9;
-            if (wizard.isJumping) {
-                frameIndex = rowIndex * 9 + 2;
-            } else if (isVisuallyMoving) {
-                const speedRatio = (wizard.speed > 0)
-                    ? (visualSpeed / wizard.speed)
-                    : 0;
-                const nowMs = Number.isFinite(ctx.renderNowMs) ? ctx.renderNowMs : performance.now();
-                const simFrameRate = Number.isFinite(ctx.frameRate) ? ctx.frameRate : 60;
-                const animSpeed = Number.isFinite(wizard.animationSpeedMultiplier)
-                    ? wizard.animationSpeedMultiplier
-                    : 1;
-                const simTicks = (nowMs / 1000) * simFrameRate;
-                const animFrame = Math.floor(simTicks * animSpeed * speedRatio / 2) % 8;
-                const effectiveAnimFrame = wizard.isMovingBackward ? (7 - animFrame) : animFrame;
-                frameIndex = rowIndex * 9 + 1 + effectiveAnimFrame;
-            }
+            const frameIndex = getWizardBodyFrameIndex(wizard, ctx);
 
             if (Array.isArray(ctx.wizardFrames) && ctx.wizardFrames[frameIndex]) {
                 try {
@@ -18500,11 +19364,91 @@ void main(void) {
             const RoadPathClass = (typeof global.RoadPath !== "undefined") ? global.RoadPath : null;
             const draft = wizard && wizard.roadPathDraft ? wizard.roadPathDraft : null;
             const draftPoints = draft && Array.isArray(draft.points) ? draft.points : [];
+            const selectedRoadPath = (
+                wizard &&
+                wizard.currentSpell === "buildroad" &&
+                wizard.selectedRoadPath &&
+                !wizard.selectedRoadPath.gone &&
+                wizard.selectedRoadPath.type === "roadPath"
+            ) ? wizard.selectedRoadPath : null;
+            const hasActivePlacementDraft = !!(
+                wizard &&
+                wizard.currentSpell === "buildroad" &&
+                wizard.roadLayoutMode &&
+                draftPoints.length >= 1
+            );
             if (
                 !wizard ||
                 wizard.currentSpell !== "buildroad" ||
-                !wizard.roadLayoutMode ||
-                draftPoints.length < 1 ||
+                (!hasActivePlacementDraft && !selectedRoadPath)
+            ) {
+                this.clearRoadPlacementPreview();
+                return;
+            }
+
+            const renderZ = 0.001;
+            const drawPointMarker = (point, color, radius = 4, strokeColor = 0x1d140c) => {
+                const screen = this.camera.worldToScreen(Number(point.x), Number(point.y), renderZ);
+                g.lineStyle(2, strokeColor, 0.9);
+                g.beginFill(color, 0.96);
+                g.drawCircle(screen.x, screen.y, radius);
+                g.endFill();
+            };
+            const drawPathLine = (points, color, alpha = 0.95, width = 2) => {
+                if (!Array.isArray(points) || points.length < 2) return;
+                g.lineStyle(width, color, alpha);
+                for (let i = 0; i < points.length; i++) {
+                    const point = points[i];
+                    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+                        throw new Error(`Cannot draw road path edit line because point ${i} is invalid.`);
+                    }
+                    const screen = this.camera.worldToScreen(Number(point.x), Number(point.y), renderZ);
+                    if (i === 0) g.moveTo(screen.x, screen.y);
+                    else g.lineTo(screen.x, screen.y);
+                }
+            };
+            const drawOutlinePolygon = (outline, color, alpha = 0.95, width = 2) => {
+                if (!Array.isArray(outline) || outline.length < 3) {
+                    throw new Error("Cannot draw selected road path without polygon outline geometry.");
+                }
+                g.lineStyle(width, color, alpha);
+                for (let i = 0; i < outline.length; i++) {
+                    const point = outline[i];
+                    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+                        throw new Error(`Cannot draw selected road path outline because point ${i} is invalid.`);
+                    }
+                    const screen = this.camera.worldToScreen(Number(point.x), Number(point.y), renderZ);
+                    if (i === 0) g.moveTo(screen.x, screen.y);
+                    else g.lineTo(screen.x, screen.y);
+                }
+                const first = this.camera.worldToScreen(Number(outline[0].x), Number(outline[0].y), renderZ);
+                g.lineTo(first.x, first.y);
+            };
+            const drawSelectedRoadPathOverlay = (roadPath) => {
+                const geometry = roadPath && roadPath.generatedGeometry;
+                const outline = geometry && Array.isArray(geometry.outline)
+                    ? geometry.outline
+                    : (Array.isArray(roadPath && roadPath.outlinePolygon) ? roadPath.outlinePolygon : null);
+                const points = geometry && Array.isArray(geometry.points)
+                    ? geometry.points
+                    : (Array.isArray(roadPath && roadPath.pathPoints) ? roadPath.pathPoints : null);
+                if (!Array.isArray(points) || points.length < 2) {
+                    throw new Error("Cannot draw selected road path without editable path points.");
+                }
+                drawOutlinePolygon(outline, 0x7bdcff, 0.95, 2);
+                drawPathLine(points, 0xffffff, 0.72, 1);
+                for (let i = 0; i < points.length; i++) {
+                    const endpoint = i === 0 || i === points.length - 1;
+                    drawPointMarker(points[i], endpoint ? 0x7bdcff : 0xf4efe5, endpoint ? 6 : 4, 0x102a36);
+                }
+            };
+
+            if (selectedRoadPath) {
+                drawSelectedRoadPathOverlay(selectedRoadPath);
+            }
+
+            if (
+                !hasActivePlacementDraft ||
                 !mapRef ||
                 !RoadPathClass ||
                 typeof RoadPathClass.computeGeometry !== "function" ||
@@ -18512,7 +19456,9 @@ void main(void) {
                 !Number.isFinite(mousePosRef.worldX) ||
                 !Number.isFinite(mousePosRef.worldY)
             ) {
-                this.clearRoadPlacementPreview();
+                g.visible = !!selectedRoadPath;
+                previewContainer.visible = !!selectedRoadPath;
+                if (previewContainer.visible) this.promoteInteriorPresentationDisplayObject(previewContainer, ctx);
                 return;
             }
 
@@ -18571,7 +19517,6 @@ void main(void) {
             const previewPoints = pointsMatch(lastPoint, candidatePoint)
                 ? committedPoints.slice()
                 : committedPoints.concat(candidatePoint);
-            const renderZ = 0.001;
             const drawGeometry = (geometry, fillAlpha, strokeColor, strokeAlpha) => {
                 if (!geometry || !Array.isArray(geometry.segments)) return;
                 g.beginFill(0x9b8162, fillAlpha);
@@ -18589,13 +19534,6 @@ void main(void) {
                     const first = this.camera.worldToScreen(Number(polygon[0].x), Number(polygon[0].y), renderZ);
                     g.lineTo(first.x, first.y);
                 }
-                g.endFill();
-            };
-            const drawPointMarker = (point, color, radius = 4) => {
-                const screen = this.camera.worldToScreen(Number(point.x), Number(point.y), renderZ);
-                g.lineStyle(2, 0x1d140c, 0.85);
-                g.beginFill(color, 0.95);
-                g.drawCircle(screen.x, screen.y, radius);
                 g.endFill();
             };
 
@@ -20941,6 +21879,12 @@ void main(void) {
             return alpha;
         }
 
+        shouldPickPrototypeBuildingExteriorAtAlpha(alpha) {
+            const value = Number(alpha);
+            if (!Number.isFinite(value)) return true;
+            return value > BUILDING_CUTAWAY_GHOST_ALPHA + 0.001;
+        }
+
         renderPrototypeBuildingExteriorBitmap(ctx, placement, cache, options = null) {
             if (!placement || !cache || cache.status !== "ready" || !cache.texture) return null;
             if (!cache.depthMetricTexture || !cache.depthMetric || !(Number(cache.depthMetric.span) > 0)) {
@@ -21024,7 +21968,9 @@ void main(void) {
             if (!pickTarget) {
                 throw new Error(`prototype building exterior ${cache.id || placement.id} could not create its picker target`);
             }
-            this.addPickRenderItem(pickTarget, mesh, { forceInclude: true });
+            if (this.shouldPickPrototypeBuildingExteriorAtAlpha(alpha)) {
+                this.addPickRenderItem(pickTarget, mesh, { forceInclude: true });
+            }
             return mesh;
         }
 
@@ -22257,6 +23203,9 @@ void main(void) {
     let singleton = null;
 
     const renderingApi = {
+        getWizardBodyFrameIndex(wizard, ctx = {}) {
+            return getWizardBodyFrameIndex(wizard, ctx);
+        },
         renderFrame(ctx) {
             if (!global.RenderingCamera || !global.RenderingLayers || typeof PIXI === "undefined") {
                 return false;

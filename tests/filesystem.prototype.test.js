@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const filesystem = require("../public/assets/javascript/filesystem.js");
+const sectionWorldApiInstallers = require("../public/assets/javascript/prototypes/sectionWorldApiInstallers.js");
 
 const GLOBAL_KEYS = [
     "wizard",
@@ -327,6 +328,365 @@ test("saveGameState splits road paths on section edges", () => {
         { x: 0, y: 0 },
         { x: 5, y: 0 }
     ]);
+});
+
+test("saveGameState splits road paths into inactive neighbor sections", () => {
+    const sectionA = {
+        id: "section-a",
+        key: "0,0",
+        coord: { q: 0, r: 0 },
+        centerAxial: { q: 0, r: 0 },
+        centerOffset: { x: -5, y: 0 },
+        neighborKeys: ["1,0"],
+        tileCoordKeys: ["0,0"],
+        groundTextureId: 0,
+        walls: [],
+        objects: [
+            {
+                type: "roadPath",
+                id: 100,
+                x: -5,
+                y: 0,
+                width: 4,
+                textureId: "road",
+                points: [
+                    { x: -5, y: 0 },
+                    { x: 5, y: 0 }
+                ]
+            }
+        ],
+        animals: [],
+        powerups: []
+    };
+    const sectionB = {
+        id: "section-b",
+        key: "1,0",
+        coord: { q: 1, r: 0 },
+        centerAxial: { q: 1, r: 0 },
+        centerOffset: { x: 5, y: 0 },
+        neighborKeys: ["0,0"],
+        tileCoordKeys: ["1,0"],
+        groundTextureId: 0,
+        walls: [],
+        objects: [],
+        animals: [],
+        powerups: []
+    };
+    const assets = new Map([
+        ["0,0", sectionA],
+        ["1,0", sectionB]
+    ]);
+    const map = createRectMap();
+    map._prototypeSectionState = {
+        radius: 10,
+        sectionGraphRadius: 1,
+        anchorCenter: { q: 0, r: 0 },
+        activeCenterKey: "0,0",
+        activeSectionKeys: new Set(["0,0"]),
+        basis: {},
+        nodesBySectionKey: new Map([["0,0", [map.nodes[0][0]]]]),
+        sectionAssetsByKey: assets,
+        orderedSectionAssets: [sectionA, sectionB]
+    };
+    map.getPrototypeActiveSectionKeys = () => new Set(["0,0"]);
+    map.getPrototypeSectionAsset = (key) => assets.get(key) || null;
+    map.getPrototypeSectionKeyForWorldPoint = (x) => (x < 0 ? "0,0" : null);
+    map.syncPrototypeWalls = () => false;
+    map.syncPrototypeObjects = () => false;
+    map.syncPrototypeAnimals = () => false;
+    map.syncPrototypePowerups = () => false;
+
+    globalThis.__sectionGeometry = {
+        makeSectionKey(coord) {
+            return `${Number(coord && coord.q) || 0},${Number(coord && coord.r) || 0}`;
+        },
+        resolvePrototypeSectionCoordForWorldPosition(_state, x) {
+            return x < 0 ? { q: 0, r: 0 } : { q: 1, r: 0 };
+        },
+        getSectionHexagonCorners(centerAxial) {
+            if (centerAxial.q === 0) {
+                return [
+                    { x: -10, y: -10 },
+                    { x: 0, y: -10 },
+                    { x: 0, y: 10 },
+                    { x: -10, y: 10 }
+                ];
+            }
+            return [
+                { x: 0, y: -10 },
+                { x: 10, y: -10 },
+                { x: 10, y: 10 },
+                { x: 0, y: 10 }
+            ];
+        }
+    };
+    globalThis.map = map;
+    globalThis.wizard = {
+        saveJson() {
+            return { name: "Merlin" };
+        }
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.LOSVisualSettings = { mazeMode: false };
+
+    const saveData = filesystem.saveGameState();
+    const sectionsByKey = new Map(saveData.prototypeSectionWorld.sections.map((section) => [section.key, section]));
+
+    assert.equal(saveData.prototypeSectionWorld.sections.length, 2);
+    assert.deepEqual(sectionsByKey.get("0,0").objects[0].points, [
+        { x: -5, y: 0 },
+        { x: 0, y: 0 }
+    ]);
+    assert.deepEqual(sectionsByKey.get("1,0").objects[0].points, [
+        { x: 0, y: 0 },
+        { x: 5, y: 0 }
+    ]);
+});
+
+test("exportPrototypeSectionAssets splits road paths into inactive neighbor sections", () => {
+    const sectionA = {
+        id: "section-a",
+        key: "0,0",
+        coord: { q: 0, r: 0 },
+        centerAxial: { q: 0, r: 0 },
+        centerOffset: { x: -5, y: 0 },
+        neighborKeys: ["1,0"],
+        tileCoordKeys: ["0,0"],
+        groundTextureId: 0,
+        groundTiles: {},
+        floors: [],
+        floorHoles: [],
+        floorVoids: [],
+        walls: [],
+        blockedEdges: [],
+        clearanceByTile: {},
+        objects: [
+            {
+                type: "roadPath",
+                id: 100,
+                x: -5,
+                y: 0,
+                width: 4,
+                textureId: "road",
+                points: [
+                    { x: -5, y: 0 },
+                    { x: 5, y: 0 }
+                ]
+            }
+        ],
+        animals: [],
+        powerups: [],
+        buildingRefs: []
+    };
+    const sectionB = {
+        id: "section-b",
+        key: "1,0",
+        coord: { q: 1, r: 0 },
+        centerAxial: { q: 1, r: 0 },
+        centerOffset: { x: 5, y: 0 },
+        neighborKeys: ["0,0"],
+        tileCoordKeys: ["1,0"],
+        groundTextureId: 0,
+        groundTiles: {},
+        floors: [],
+        floorHoles: [],
+        floorVoids: [],
+        walls: [],
+        blockedEdges: [],
+        clearanceByTile: {},
+        objects: [],
+        animals: [],
+        powerups: [],
+        buildingRefs: []
+    };
+    const assets = new Map([
+        ["0,0", sectionA],
+        ["1,0", sectionB]
+    ]);
+    const map = {
+        _prototypeSectionState: {
+            radius: 10,
+            basis: {},
+            sectionAssetsByKey: assets,
+            orderedSectionAssets: [sectionA, sectionB]
+        },
+        getPrototypeSectionKeyForWorldPoint(x) {
+            return x < 0 ? "0,0" : null;
+        }
+    };
+    sectionWorldApiInstallers.installSectionWorldSectionApis(map, {
+        globalScope: globalThis,
+        rebuildPrototypeAssetObjectNameRegistry: () => new Map(),
+        ensurePrototypeBlockedEdges: () => {},
+        rebuildPrototypeSectionClearance: () => {},
+        clonePrototypeFloorRecords: (floors) => Array.isArray(floors) ? floors.map((floor) => ({ ...floor })) : [],
+        clonePrototypeFloorHoleRecords: (holes) => Array.isArray(holes) ? holes.map((hole) => ({ ...hole })) : [],
+        clonePrototypeFloorVoidRecords: (voids) => Array.isArray(voids) ? voids.map((record) => ({ ...record })) : [],
+        clonePrototypeBlockedEdges: (edges) => Array.isArray(edges) ? edges.map((edge) => ({ ...edge })) : [],
+        clonePrototypeClearanceByTile: (clearance) => clearance && typeof clearance === "object" ? { ...clearance } : {},
+        clonePrototypeFloorTransitions: (transitions) => Array.isArray(transitions) ? transitions.map((transition) => ({ ...transition })) : []
+    });
+    globalThis.__sectionGeometry = {
+        makeSectionKey(coord) {
+            return `${Number(coord && coord.q) || 0},${Number(coord && coord.r) || 0}`;
+        },
+        resolvePrototypeSectionCoordForWorldPosition(_state, x) {
+            return x < 0 ? { q: 0, r: 0 } : { q: 1, r: 0 };
+        },
+        getSectionHexagonCorners(centerAxial) {
+            if (centerAxial.q === 0) {
+                return [
+                    { x: -10, y: -10 },
+                    { x: 0, y: -10 },
+                    { x: 0, y: 10 },
+                    { x: -10, y: 10 }
+                ];
+            }
+            return [
+                { x: 0, y: -10 },
+                { x: 10, y: -10 },
+                { x: 10, y: 10 },
+                { x: 0, y: 10 }
+            ];
+        }
+    };
+
+    const exported = map.exportPrototypeSectionAssets(["0,0"]);
+    const sectionsByKey = new Map(exported.map((section) => [section.key, section]));
+
+    assert.equal(exported.length, 2);
+    assert.deepEqual(sectionsByKey.get("0,0").objects[0].points, [
+        { x: -5, y: 0 },
+        { x: 0, y: 0 }
+    ]);
+    assert.deepEqual(sectionsByKey.get("1,0").objects[0].points, [
+        { x: 0, y: 0 },
+        { x: 5, y: 0 }
+    ]);
+    assert.deepEqual(sectionA.objects.map((record) => record.points), [
+        [
+            { x: -5, y: 0 },
+            { x: 5, y: 0 }
+        ]
+    ]);
+    assert.deepEqual(sectionB.objects.map((record) => record.points), []);
+
+    const exportedAgain = map.exportPrototypeSectionAssets(["0,0"]);
+    const sectionsByKeyAgain = new Map(exportedAgain.map((section) => [section.key, section]));
+    assert.equal(exportedAgain.length, 2);
+    assert.equal(sectionsByKeyAgain.get("0,0").objects.length, 1);
+    assert.equal(sectionsByKeyAgain.get("1,0").objects.length, 1);
+});
+
+test("saveGameState does not serialize unhydrated road neighbor placeholders", () => {
+    const sectionA = {
+        id: "section-a",
+        key: "0,0",
+        coord: { q: 0, r: 0 },
+        centerAxial: { q: 0, r: 0 },
+        centerOffset: { x: -5, y: 0 },
+        neighborKeys: ["1,0"],
+        tileCoordKeys: ["0,0"],
+        groundTextureId: 0,
+        walls: [],
+        objects: [
+            {
+                type: "roadPath",
+                id: 100,
+                x: -8,
+                y: 0,
+                width: 4,
+                textureId: "road",
+                points: [
+                    { x: -8, y: 0 },
+                    { x: -2, y: 0 }
+                ]
+            }
+        ],
+        animals: [],
+        powerups: []
+    };
+    const sectionB = {
+        id: "section-b",
+        key: "1,0",
+        coord: { q: 1, r: 0 },
+        centerAxial: { q: 1, r: 0 },
+        centerOffset: { x: 5, y: 0 },
+        neighborKeys: ["0,0"],
+        tileCoordKeys: ["1,0"],
+        groundTextureId: 0,
+        walls: [],
+        objects: [],
+        animals: [],
+        powerups: [],
+        _prototypeSectionHydrated: false
+    };
+    const assets = new Map([
+        ["0,0", sectionA],
+        ["1,0", sectionB]
+    ]);
+    const map = createRectMap();
+    map._prototypeSectionState = {
+        radius: 10,
+        sectionGraphRadius: 1,
+        anchorCenter: { q: 0, r: 0 },
+        activeCenterKey: "0,0",
+        activeSectionKeys: new Set(["0,0"]),
+        basis: {},
+        nodesBySectionKey: new Map([["0,0", [map.nodes[0][0]]]]),
+        sectionAssetsByKey: assets,
+        orderedSectionAssets: [sectionA, sectionB]
+    };
+    map.getPrototypeActiveSectionKeys = () => new Set(["0,0"]);
+    map.getPrototypeSectionAsset = (key) => assets.get(key) || null;
+    map.getPrototypeSectionKeyForWorldPoint = (x) => (x < 0 ? "0,0" : "1,0");
+    map.syncPrototypeWalls = () => false;
+    map.syncPrototypeObjects = () => false;
+    map.syncPrototypeAnimals = () => false;
+    map.syncPrototypePowerups = () => false;
+
+    globalThis.__sectionGeometry = {
+        makeSectionKey(coord) {
+            return `${Number(coord && coord.q) || 0},${Number(coord && coord.r) || 0}`;
+        },
+        resolvePrototypeSectionCoordForWorldPosition(_state, x) {
+            return x < 0 ? { q: 0, r: 0 } : { q: 1, r: 0 };
+        },
+        getSectionHexagonCorners(centerAxial) {
+            if (centerAxial.q === 0) {
+                return [
+                    { x: -10, y: -10 },
+                    { x: 0, y: -10 },
+                    { x: 0, y: 10 },
+                    { x: -10, y: 10 }
+                ];
+            }
+            return [
+                { x: 0, y: -10 },
+                { x: 10, y: -10 },
+                { x: 10, y: 10 },
+                { x: 0, y: 10 }
+            ];
+        }
+    };
+    globalThis.map = map;
+    globalThis.wizard = {
+        saveJson() {
+            return { name: "Merlin" };
+        }
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.LOSVisualSettings = { mazeMode: false };
+
+    const saveData = filesystem.saveGameState();
+    const sectionKeys = saveData.prototypeSectionWorld.sections.map((section) => section.key);
+
+    assert.deepEqual(sectionKeys, ["0,0"]);
+    assert.equal(sectionB.objects.length, 0);
 });
 
 test("saveGameState refuses to save without section-world runtime", () => {

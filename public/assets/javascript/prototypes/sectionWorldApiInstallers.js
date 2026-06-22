@@ -504,6 +504,118 @@
             }
             return polygon.map((point, index) => normalizeRoadPathExportPoint(point, `section ${sectionKey} polygon point ${index}`));
         };
+        const getRoadPathExportSectionPolygonCached = (mapRef, sectionKey, polygonCache) => {
+            if (polygonCache instanceof Map && polygonCache.has(sectionKey)) return polygonCache.get(sectionKey);
+            const polygon = getRoadPathExportSectionPolygon(mapRef, sectionKey);
+            if (polygonCache instanceof Map) polygonCache.set(sectionKey, polygon);
+            return polygon;
+        };
+        const roadPathExportPointOnSegment = (point, a, b, eps = 1e-6) => {
+            const px = Number(point && point.x);
+            const py = Number(point && point.y);
+            const ax = Number(a && a.x);
+            const ay = Number(a && a.y);
+            const bx = Number(b && b.x);
+            const by = Number(b && b.y);
+            if (![px, py, ax, ay, bx, by].every(Number.isFinite)) return false;
+            const cross = ((px - ax) * (by - ay)) - ((py - ay) * (bx - ax));
+            if (Math.abs(cross) > eps) return false;
+            const dot = ((px - ax) * (bx - ax)) + ((py - ay) * (by - ay));
+            if (dot < -eps) return false;
+            const lenSq = ((bx - ax) * (bx - ax)) + ((by - ay) * (by - ay));
+            return dot <= lenSq + eps;
+        };
+        const roadPathExportPointInPolygon = (point, polygon, eps = 1e-6) => {
+            if (!Array.isArray(polygon) || polygon.length < 3) return false;
+            const x = Number(point && point.x);
+            const y = Number(point && point.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+            for (let i = 0; i < polygon.length; i++) {
+                if (roadPathExportPointOnSegment(point, polygon[i], polygon[(i + 1) % polygon.length], eps)) {
+                    return true;
+                }
+            }
+            let inside = false;
+            for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                const xi = Number(polygon[i].x);
+                const yi = Number(polygon[i].y);
+                const xj = Number(polygon[j].x);
+                const yj = Number(polygon[j].y);
+                if (![xi, yi, xj, yj].every(Number.isFinite)) continue;
+                const intersects = ((yi > y) !== (yj > y)) &&
+                    (x < (((xj - xi) * (y - yi)) / ((yj - yi) || 1e-12)) + xi);
+                if (intersects) inside = !inside;
+            }
+            return inside;
+        };
+        const getRoadPathExportSectionCenterDistanceSq = (mapRef, sectionKey, point) => {
+            const asset = mapRef && typeof mapRef.getPrototypeSectionAsset === "function"
+                ? mapRef.getPrototypeSectionAsset(sectionKey)
+                : null;
+            const center = asset && asset.centerOffset ? asset.centerOffset : null;
+            const cx = Number(center && center.x);
+            const cy = Number(center && center.y);
+            const px = Number(point && point.x);
+            const py = Number(point && point.y);
+            if (![cx, cy, px, py].every(Number.isFinite)) return Infinity;
+            return ((px - cx) * (px - cx)) + ((py - cy) * (py - cy));
+        };
+        const resolveRoadPathExportSectionKeyForPoint = (mapRef, point, candidateKeys, polygonCache, label) => {
+            const candidates = new Set();
+            if (candidateKeys instanceof Set) {
+                candidateKeys.forEach((key) => {
+                    if (typeof key === "string" && key.length > 0) candidates.add(key);
+                });
+            }
+            const runtimeKey = (
+                mapRef &&
+                typeof mapRef.getPrototypeSectionKeyForWorldPoint === "function"
+            ) ? mapRef.getPrototypeSectionKeyForWorldPoint(point.x, point.y) : null;
+            if (typeof runtimeKey === "string" && runtimeKey.length > 0) candidates.add(runtimeKey);
+
+            const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+            const geometry = runtimeGlobalScope && runtimeGlobalScope.__sectionGeometry
+                ? runtimeGlobalScope.__sectionGeometry
+                : null;
+            let geometricKey = "";
+            if (
+                state &&
+                geometry &&
+                typeof geometry.resolvePrototypeSectionCoordForWorldPosition === "function" &&
+                typeof geometry.makeSectionKey === "function"
+            ) {
+                const coord = geometry.resolvePrototypeSectionCoordForWorldPosition(state, point.x, point.y);
+                geometricKey = geometry.makeSectionKey(coord);
+                if (typeof geometricKey === "string" && geometricKey.length > 0) candidates.add(geometricKey);
+            }
+
+            const matches = [];
+            candidates.forEach((sectionKey) => {
+                const asset = typeof mapRef.getPrototypeSectionAsset === "function"
+                    ? mapRef.getPrototypeSectionAsset(sectionKey)
+                    : null;
+                if (!asset) return;
+                const polygon = getRoadPathExportSectionPolygonCached(mapRef, sectionKey, polygonCache);
+                if (!roadPathExportPointInPolygon(point, polygon)) return;
+                matches.push({
+                    key: sectionKey,
+                    priority: sectionKey === geometricKey ? 0 : (sectionKey === runtimeKey ? 1 : 2),
+                    distanceSq: getRoadPathExportSectionCenterDistanceSq(mapRef, sectionKey, point)
+                });
+            });
+            if (matches.length > 0) {
+                matches.sort((a, b) => {
+                    if (a.priority !== b.priority) return a.priority - b.priority;
+                    if (a.distanceSq !== b.distanceSq) return a.distanceSq - b.distanceSq;
+                    return a.key.localeCompare(b.key);
+                });
+                return matches[0].key;
+            }
+            const checked = Array.from(candidates).join(", ");
+            throw new Error(
+                `Cannot export road path ${label || "split span"} at (${Number(point.x).toFixed(3)}, ${Number(point.y).toFixed(3)}) without an owning section; checked ${checked || "no"} section candidates.`
+            );
+        };
         const roadPathExportSegmentIntersectionT = (a, b, c, d) => {
             const ax = Number(a.x);
             const ay = Number(a.y);
@@ -571,13 +683,20 @@
             if (points.length < 2) {
                 throw new Error(`Cannot export road path in section ${ownerSectionKey}; at least two points are required.`);
             }
-            if (!mapRef || typeof mapRef.getPrototypeSectionKeyForWorldPoint !== "function") {
-                throw new Error("Cannot split exported road path; section lookup is unavailable.");
+            if (!mapRef || typeof mapRef.getPrototypeSectionAsset !== "function") {
+                throw new Error("Cannot split exported road path; section asset lookup is unavailable.");
             }
+            const polygonCache = new Map();
             const candidateKeys = new Set();
             if (typeof ownerSectionKey === "string" && ownerSectionKey.length > 0) candidateKeys.add(ownerSectionKey);
             const addCandidate = (point) => {
-                const key = mapRef.getPrototypeSectionKeyForWorldPoint(point.x, point.y);
+                const key = resolveRoadPathExportSectionKeyForPoint(
+                    mapRef,
+                    point,
+                    candidateKeys,
+                    polygonCache,
+                    "candidate point"
+                );
                 if (typeof key === "string" && key.length > 0) candidateKeys.add(key);
             };
             for (let i = 0; i < points.length; i++) addCandidate(points[i]);
@@ -610,7 +729,7 @@
             for (const sectionKey of candidateKeys) {
                 splitPoints = splitRoadPathExportPointsAtPolygon(
                     splitPoints,
-                    getRoadPathExportSectionPolygon(mapRef, sectionKey)
+                    getRoadPathExportSectionPolygonCached(mapRef, sectionKey, polygonCache)
                 );
             }
             const sequentialPieces = [];
@@ -619,10 +738,13 @@
                 const b = splitPoints[i + 1];
                 if (Math.hypot(b.x - a.x, b.y - a.y) <= 1e-7) continue;
                 const mid = { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 };
-                const sectionKey = mapRef.getPrototypeSectionKeyForWorldPoint(mid.x, mid.y);
-                if (typeof sectionKey !== "string" || sectionKey.length === 0) {
-                    throw new Error("Cannot export road path split span without an owning section.");
-                }
+                const sectionKey = resolveRoadPathExportSectionKeyForPoint(
+                    mapRef,
+                    mid,
+                    candidateKeys,
+                    polygonCache,
+                    "split span"
+                );
                 const current = sequentialPieces[sequentialPieces.length - 1] || null;
                 if (current && current.sectionKey === sectionKey) {
                     current.points.push(b);
@@ -645,6 +767,126 @@
                 throw new Error(`Cannot export road path in section ${ownerSectionKey}; no section-owned spans were produced.`);
             }
             return pieces;
+        };
+        const buildRoadPathCanonicalSignature = (record) => {
+            if (!record || record.type !== "roadPath") return "";
+            const rawPoints = Array.isArray(record.points)
+                ? record.points
+                : (Array.isArray(record.pathPoints) ? record.pathPoints : []);
+            const points = rawPoints.map((point) => {
+                const x = Number(point && point.x);
+                const y = Number(point && point.y);
+                return `${Number.isFinite(x) ? x.toFixed(6) : "NaN"},${Number.isFinite(y) ? y.toFixed(6) : "NaN"}`;
+            }).join("|");
+            const width = Number.isFinite(Number(record.width))
+                ? Number(record.width)
+                : (Number.isFinite(Number(record.roadWidth)) ? Number(record.roadWidth) : "");
+            const layer = Number.isFinite(Number(record.traversalLayer))
+                ? Math.round(Number(record.traversalLayer))
+                : (Number.isFinite(Number(record.level)) ? Math.round(Number(record.level)) : "");
+            const fillTexturePath = typeof record.fillTexturePath === "string" ? record.fillTexturePath : "";
+            const textureId = typeof record.textureId === "string" ? record.textureId : "";
+            const scriptingName = typeof record.scriptingName === "string" ? record.scriptingName : "";
+            return [
+                "roadPath",
+                points,
+                Number.isFinite(width) ? Number(width).toFixed(6) : "",
+                layer,
+                fillTexturePath,
+                textureId,
+                scriptingName
+            ].join("::");
+        };
+        const pushCanonicalObjectRecord = (recordsBySectionKey, roadSignaturesBySectionKey, sectionKey, record) => {
+            if (typeof sectionKey !== "string" || sectionKey.length === 0) {
+                throw new Error("Cannot canonicalize section object without a target section key.");
+            }
+            if (!recordsBySectionKey.has(sectionKey)) recordsBySectionKey.set(sectionKey, []);
+            if (record && record.type === "roadPath") {
+                let signatures = roadSignaturesBySectionKey.get(sectionKey);
+                if (!signatures) {
+                    signatures = new Set();
+                    roadSignaturesBySectionKey.set(sectionKey, signatures);
+                }
+                const signature = buildRoadPathCanonicalSignature(record);
+                if (signature && signatures.has(signature)) return;
+                if (signature) signatures.add(signature);
+            }
+            recordsBySectionKey.get(sectionKey).push(clonePrototypeExportObjectRecord(record));
+        };
+        const canonicalizePrototypeRoadPathSectionRecords = (mapRef, sectionKeys = null) => {
+            const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+            if (!state || !(state.sectionAssetsByKey instanceof Map)) {
+                return { changed: false, sectionKeys: [] };
+            }
+            const keys = Array.isArray(sectionKeys)
+                ? sectionKeys.filter((key) => typeof key === "string" && key.length > 0)
+                : Array.from(state.sectionAssetsByKey.keys());
+            const seenKeys = new Set(keys);
+            const processedKeys = new Set();
+            const recordsBySectionKey = new Map();
+            const roadSignaturesBySectionKey = new Map();
+            let changed = false;
+            for (let i = 0; i < keys.length; i++) {
+                const sectionKey = keys[i];
+                if (processedKeys.has(sectionKey)) continue;
+                processedKeys.add(sectionKey);
+                const asset = mapRef.getPrototypeSectionAsset(sectionKey);
+                if (!asset) continue;
+                if (asset._prototypeSectionHydrated === false) {
+                    throw new Error(`Cannot canonicalize road paths for unhydrated section ${sectionKey}.`);
+                }
+                const records = Array.isArray(asset.objects) ? asset.objects : [];
+                for (let r = 0; r < records.length; r++) {
+                    const record = records[r];
+                    if (record && record.type === "roadPath") {
+                        const pieces = splitRoadPathExportRecord(mapRef, record, sectionKey);
+                        if (pieces.length !== 1 || pieces[0].sectionKey !== sectionKey) changed = true;
+                        for (let p = 0; p < pieces.length; p++) {
+                            const targetSectionKey = pieces[p].sectionKey;
+                            const targetAsset = mapRef.getPrototypeSectionAsset(targetSectionKey);
+                            if (!targetAsset) {
+                                throw new Error(`Cannot canonicalize road path split for missing section ${targetSectionKey}.`);
+                            }
+                            if (targetAsset._prototypeSectionHydrated === false) {
+                                throw new Error(`Cannot canonicalize road path split for unhydrated section ${targetSectionKey}.`);
+                            }
+                            if (!seenKeys.has(targetSectionKey)) {
+                                seenKeys.add(targetSectionKey);
+                                keys.push(targetSectionKey);
+                            }
+                            pushCanonicalObjectRecord(
+                                recordsBySectionKey,
+                                roadSignaturesBySectionKey,
+                                targetSectionKey,
+                                pieces[p].record
+                            );
+                        }
+                    } else {
+                        pushCanonicalObjectRecord(recordsBySectionKey, roadSignaturesBySectionKey, sectionKey, record);
+                    }
+                }
+            }
+            for (const sectionKey of seenKeys) {
+                if (!recordsBySectionKey.has(sectionKey)) continue;
+                const asset = mapRef.getPrototypeSectionAsset(sectionKey);
+                if (!asset) continue;
+                if (asset._prototypeSectionHydrated === false) {
+                    throw new Error(`Cannot canonicalize road paths for unhydrated section ${sectionKey}.`);
+                }
+                const nextObjects = recordsBySectionKey.has(sectionKey) ? recordsBySectionKey.get(sectionKey) : [];
+                const previousObjects = Array.isArray(asset.objects) ? asset.objects : [];
+                const previousSignature = JSON.stringify(previousObjects);
+                const nextSignature = JSON.stringify(nextObjects);
+                if (previousSignature === nextSignature) continue;
+                asset.objects = nextObjects;
+                rebuildPrototypeAssetObjectNameRegistry(asset);
+                changed = true;
+            }
+            return { changed, sectionKeys: Array.from(seenKeys) };
+        };
+        map.canonicalizePrototypeRoadPathSectionRecords = function canonicalizePrototypeRoadPathSectionRecordsForMap(sectionKeys = null) {
+            return canonicalizePrototypeRoadPathSectionRecords(this, sectionKeys);
         };
         map.exportPrototypeSectionAssets = function exportPrototypeSectionAssets(sectionKeys = null) {
             const state = this._prototypeSectionState;
@@ -700,6 +942,7 @@
                 .filter((asset) => {
                     if (!asset) return false;
                     if (keyFilter && !keyFilter.has(asset.key)) return false;
+                    if (asset._prototypeSectionHydrated === false) return false;
                     return true;
                 })
                 .map(cloneExportSectionAsset);
@@ -726,6 +969,9 @@
                                 : null;
                             if (!targetAsset) {
                                 throw new Error(`Cannot export road path split for missing section ${pieces[p].sectionKey}.`);
+                            }
+                            if (targetAsset._prototypeSectionHydrated === false) {
+                                throw new Error(`Cannot export road path split for unhydrated section ${pieces[p].sectionKey}.`);
                             }
                             targetSection = cloneExportSectionAsset(targetAsset);
                             targetSection._unsplitObjects = Array.isArray(targetSection.objects) ? targetSection.objects : [];
@@ -909,52 +1155,42 @@
             const loadedNodes = (state && Array.isArray(state.loadedNodes)) ? state.loadedNodes : [];
             if (loadedNodes.length === 0) return [];
             const cameraRef = camera || runtimeGlobalScope.viewport || {};
-            const cameraWidth = Number.isFinite(cameraRef.width) ? cameraRef.width : 0;
-            const cameraHeight = Number.isFinite(cameraRef.height) ? cameraRef.height : 0;
+            const viewportRef = runtimeGlobalScope.viewport || {};
+            const cameraWidth = Number.isFinite(cameraRef.width)
+                ? Number(cameraRef.width)
+                : (Number.isFinite(viewportRef.width) ? Number(viewportRef.width) : 0);
+            const cameraHeight = Number.isFinite(cameraRef.height)
+                ? Number(cameraRef.height)
+                : (Number.isFinite(viewportRef.height) ? Number(viewportRef.height) : 0);
+            const cameraZ = Number.isFinite(cameraRef.z)
+                ? Number(cameraRef.z)
+                : (Number.isFinite(viewportRef.z) ? Number(viewportRef.z) : 0);
             const padXWorld = Math.max(0, Number(xPadding) || 0) * 0.866;
             const padYWorld = Math.max(0, Number(yPadding) || 0);
             const minX = Number(cameraRef.x) - padXWorld;
             const maxX = Number(cameraRef.x) + cameraWidth + padXWorld;
-            const minY = Number(cameraRef.y) - padYWorld;
-            const maxY = Number(cameraRef.y) + cameraHeight + padYWorld;
+            const minProjectedY = Number(cameraRef.y) - padYWorld;
+            const maxProjectedY = Number(cameraRef.y) + cameraHeight + padYWorld;
             if (!this._visibleNodesReuse) this._visibleNodesReuse = [];
             const visible = this._visibleNodesReuse;
             visible.length = 0;
             if (
-                Number.isFinite(minX) &&
-                Number.isFinite(maxX) &&
-                Number.isFinite(minY) &&
-                Number.isFinite(maxY)
+                !Number.isFinite(minX) ||
+                !Number.isFinite(maxX) ||
+                !Number.isFinite(minProjectedY) ||
+                !Number.isFinite(maxProjectedY)
             ) {
-                const minYi = Math.floor(minY) - 1;
-                const maxYi = Math.ceil(maxY) + 1;
-                let low = 0;
-                let high = loadedNodes.length;
-                while (low < high) {
-                    const mid = (low + high) >> 1;
-                    const nodeYIndex = Number(loadedNodes[mid] && loadedNodes[mid].yindex) || 0;
-                    if (nodeYIndex < minYi) {
-                        low = mid + 1;
-                    } else {
-                        high = mid;
-                    }
-                }
-                for (let i = low; i < loadedNodes.length; i++) {
-                    const node = loadedNodes[i];
-                    if (!node) continue;
-                    const nodeYIndex = Number(node.yindex) || 0;
-                    if (nodeYIndex > maxYi) break;
-                    if (node.x < minX || node.x > maxX) continue;
-                    if (node.y < minY || node.y > maxY) continue;
-                    visible.push(node);
-                }
-                return visible;
+                throw new Error("Cannot collect visible prototype nodes with a non-finite screen-space viewport.");
             }
             for (let i = 0; i < loadedNodes.length; i++) {
                 const node = loadedNodes[i];
                 if (!node) continue;
                 if (node.x < minX || node.x > maxX) continue;
-                if (node.y < minY || node.y > maxY) continue;
+                const nodeBaseZ = typeof this.getNodeBaseZ === "function"
+                    ? this.getNodeBaseZ(node)
+                    : (Number.isFinite(node.baseZ) ? Number(node.baseZ) : 0);
+                const projectedY = Number(node.y) - (nodeBaseZ - cameraZ);
+                if (projectedY < minProjectedY || projectedY > maxProjectedY) continue;
                 visible.push(node);
             }
             return visible;

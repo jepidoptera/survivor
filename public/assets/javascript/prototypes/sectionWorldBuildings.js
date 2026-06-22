@@ -734,7 +734,7 @@
     function isInteriorBitmapBakeableFloorObject(obj) {
         if (!obj || obj.gone || obj.vanishing || obj._prototypeParked === true) return false;
         if (obj.visible === false) return false;
-        if (obj.type === "powerup") return true;
+        if (obj.type === "powerup") return false;
         if (
             Number.isInteger(obj.mountedWallLineGroupId) ||
             Number.isInteger(obj.mountedSectionId) ||
@@ -941,28 +941,6 @@
         };
         for (let i = 0; i < objects.length; i++) {
             addCandidate(objects[i]);
-        }
-        const powerupState = map._prototypePowerupState || null;
-        if (powerupState && powerupState.activeRuntimePowerupsByRecordId instanceof Map) {
-            const floorSupportApi = globalScope && globalScope.FloorSupport;
-            if (!floorSupportApi || typeof floorSupportApi.getEntityFloorMembership !== "function") {
-                throw new Error("building interior powerup bake requires FloorSupport floor membership helpers");
-            }
-            for (const powerup of powerupState.activeRuntimePowerupsByRecordId.values()) {
-                const powerupMembership = floorSupportApi.getEntityFloorMembership(powerup, { map });
-                if (
-                    !powerupMembership ||
-                    powerupMembership.ownerType !== "building" ||
-                    powerupMembership.ownerId !== placementId ||
-                    powerupMembership.floorId !== floorId
-                ) {
-                    continue;
-                }
-                if (typeof floorSupportApi.stampEntityFloorMembership === "function") {
-                    floorSupportApi.stampEntityFloorMembership(powerup, powerupMembership);
-                }
-                addCandidate(powerup);
-            }
         }
         return out.sort((a, b) => {
             const ay = Number.isFinite(Number(a && a.y)) ? Number(a.y) : 0;

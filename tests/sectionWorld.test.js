@@ -775,44 +775,33 @@ test("loadPrototypeSectionWorld canonicalizes section and tile draw order to y-t
     );
 });
 
-test("prototype viewport visible node lookup scans only the sorted y band in draw order", () => {
+test("prototype viewport visible node lookup uses screen-space projection for node baseZ", () => {
     const map = createPrototypeMap();
     const state = createEmptyPrototypeState();
     attachPrototypeApis(map, state);
 
-    let offscreenCoordinateReads = 0;
-    const sentinelLoadedNode = { xindex: -100, yindex: -100 };
-    Object.defineProperty(sentinelLoadedNode, "x", {
-        get() {
-            offscreenCoordinateReads += 1;
-            return -100;
-        }
-    });
-    Object.defineProperty(sentinelLoadedNode, "y", {
-        get() {
-            offscreenCoordinateReads += 1;
-            return -100;
-        }
-    });
-
     const nodeA = new TestNode(1, 0);
     const nodeB = new TestNode(2, 0);
     const nodeC = new TestNode(0, 1);
+    const upperProjectedNode = new TestNode(1, 7);
+    upperProjectedNode.baseZ = 7;
+    const groundNodeAtSameY = new TestNode(2, 7);
     const hiddenNode = new TestNode(12, 12);
-    state.loadedNodes = [sentinelLoadedNode, nodeA, nodeB, nodeC, hiddenNode];
+    state.loadedNodes = [nodeA, nodeB, nodeC, upperProjectedNode, groundNodeAtSameY, hiddenNode];
     state.loadedNodesByCoordKey = new Map([
         [`${nodeB.xindex},${nodeB.yindex}`, nodeB],
         [`${nodeA.xindex},${nodeA.yindex}`, nodeA],
         [`${nodeC.xindex},${nodeC.yindex}`, nodeC],
+        [`${upperProjectedNode.xindex},${upperProjectedNode.yindex}`, upperProjectedNode],
+        [`${groundNodeAtSameY.xindex},${groundNodeAtSameY.yindex}`, groundNodeAtSameY],
         [`${hiddenNode.xindex},${hiddenNode.yindex}`, hiddenNode]
     ]);
 
-    const visible = map.getVisibleNodesInViewport({ x: 0, y: 0, width: 3, height: 2 }, 0, 0);
+    const visible = map.getVisibleNodesInViewport({ x: 0, y: 0, z: 0, width: 3, height: 2 }, 0, 0);
 
-    assert.equal(offscreenCoordinateReads, 0);
     assert.deepEqual(
         visible.map((node) => `${node.xindex},${node.yindex}`),
-        ["1,0", "2,0", "0,1"]
+        ["1,0", "2,0", "0,1", "1,7"]
     );
 });
 

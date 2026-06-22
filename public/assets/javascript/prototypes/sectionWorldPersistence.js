@@ -812,12 +812,21 @@
             if (!obj || obj.gone || obj.vanishing) return false;
             if (typeof obj.saveJson !== "function") return false;
             if (obj.type === "wallSection") return false;
+            if (obj.type === "powerup") return false;
             if (isPrototypeWizardRuntimeObject(obj)) return false;
             return true;
         };
 
         const resolvePrototypeObjectOwnerSectionKey = (runtimeObj) => {
             if (!runtimeObj || typeof runtimeObj !== "object") return "";
+
+            if (
+                runtimeObj.type === "roadPath" &&
+                typeof runtimeObj._prototypeOwnerSectionKey === "string" &&
+                runtimeObj._prototypeOwnerSectionKey.length > 0
+            ) {
+                return runtimeObj._prototypeOwnerSectionKey;
+            }
 
             const primaryNode = (typeof runtimeObj.getNode === "function")
                 ? runtimeObj.getNode()

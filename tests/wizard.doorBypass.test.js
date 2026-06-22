@@ -116,11 +116,47 @@ function loadWizardClass() {
         vm.runInContext(source, context, { filename: filePath });
     }
 
-    vm.runInContext("globalThis.__testExports = { Wizard, PolygonHitbox, wizardFrames };", context);
+    vm.runInContext("globalThis.__testExports = { Wizard, PolygonHitbox };", context);
     return context.__testExports;
 }
 
-const { Wizard, PolygonHitbox, wizardFrames } = loadWizardClass();
+function loadRenderingApi() {
+    const context = {
+        console,
+        Math,
+        Date,
+        JSON,
+        Map,
+        Set,
+        WeakMap,
+        WeakSet,
+        Array,
+        Object,
+        Number,
+        String,
+        Boolean,
+        RegExp,
+        Error,
+        Infinity,
+        NaN,
+        parseInt,
+        parseFloat,
+        isFinite,
+        performance: { now: () => 1000 }
+    };
+    context.window = context;
+    context.globalThis = context;
+    vm.createContext(context);
+    const source = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/rendering/Rendering.js"),
+        "utf8"
+    );
+    vm.runInContext(source, context, { filename: "Rendering.js" });
+    return context.Rendering;
+}
+
+const { Wizard, PolygonHitbox } = loadWizardClass();
+const Rendering = loadRenderingApi();
 
 function createWizardMap(node) {
     return {
@@ -727,32 +763,27 @@ test("wizard load restores stale generated outdoor ground fragment as ground sup
     assert.match(warnings[0][0], /generated outdoor ground fragment/);
 });
 
-test("wizard draw keeps dead wizard on standing frame", () => {
-    const wizard = Object.create(Wizard.prototype);
-    wizard.pixiSprite = null;
-    wizard.shadowGraphics = {
-        parent: true,
-        clear() {},
-        beginFill() {},
-        drawEllipse() {},
-        endFill() {}
+test("wizard renderer keeps dead wizard on standing frame", () => {
+    const wizard = {
+        movementVector: { x: 2, y: 0 },
+        moving: true,
+        dead: false,
+        hp: 100,
+        lastDirectionRow: 1,
+        isJumping: false,
+        isMovingBackward: false,
+        animationSpeedMultiplier: 1,
+        speed: 2.5
     };
-    wizard.getInterpolatedPosition = () => ({ x: 12, y: 8, z: 0 });
-    wizard.drawShield = () => {};
-    wizard.drawHat = () => {};
-    wizard.movementVector = { x: 2, y: 0 };
-    wizard.moving = true;
+
+    assert.equal(Rendering.getWizardBodyFrameIndex(wizard, { renderNowMs: 1000, frameRate: 60 }), 10);
+
     wizard.dead = true;
     wizard.hp = 0;
-    wizard.lastDirectionRow = 1;
-    wizard.isJumping = false;
-    wizard.isMovingBackward = false;
-    wizard.animationSpeedMultiplier = 1;
-    wizard.speed = 2.5;
+    wizard.movementVector = { x: 2, y: 0 };
+    wizard.moving = true;
 
-    wizard.draw();
-
-    assert.deepEqual(wizard.pixiSprite.texture, wizardFrames[9]);
+    assert.equal(Rendering.getWizardBodyFrameIndex(wizard, { renderNowMs: 1000, frameRate: 60 }), 9);
 });
 
 test("wizard can enter a thin mounted door opening before the center reaches the wall plane", () => {

@@ -497,10 +497,13 @@
         const xPadding = Math.max(0, Math.floor(Number(paddingTiles) || 0));
         const yPadding = Math.max(0, Math.floor(Number(paddingTiles) || 0));
         const xScale = 0.866;
+        const cameraZ = Number.isFinite(viewportRef.z) ? Number(viewportRef.z) : 0;
+        const groundMinY = (Number(viewportRef.y) || 0) - cameraZ;
+        const groundMaxY = groundMinY + (Number(viewportRef.height) || 0);
         const xStart = Math.floor((Number(viewportRef.x) || 0) / xScale) - xPadding;
         const xEnd = Math.ceil(((Number(viewportRef.x) || 0) + (Number(viewportRef.width) || 0)) / xScale) + xPadding;
-        const yStart = Math.floor(Number(viewportRef.y) || 0) - yPadding;
-        const yEnd = Math.ceil((Number(viewportRef.y) || 0) + (Number(viewportRef.height) || 0)) + yPadding;
+        const yStart = Math.floor(groundMinY) - yPadding;
+        const yEnd = Math.ceil(groundMaxY) + yPadding;
         const xRanges = getWrappedIndexRanges(xStart, xEnd, mapRef.width, mapRef.wrapX);
         const yRanges = getWrappedIndexRanges(yStart, yEnd, mapRef.height, mapRef.wrapY);
         for (let yr = 0; yr < yRanges.length; yr++) {

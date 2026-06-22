@@ -1786,6 +1786,10 @@ void main(void) {
             return { proxy: graphics, type: "graphics" };
         }
 
+        isPickGroundHitboxProxy(displayObj) {
+            return !!(displayObj && displayObj._pickGroundHitboxProxy === true);
+        }
+
         getRenderableTexture(texture, fallback = null) {
             if (!texture || texture.destroyed) return fallback;
             if (texture.valid === false) return fallback;
@@ -1802,6 +1806,7 @@ void main(void) {
 
         isRenderablePickDisplayObject(displayObj) {
             if (!displayObj || displayObj.destroyed) return false;
+            if (this.isPickGroundHitboxProxy(displayObj)) return true;
             if (displayObj instanceof PIXI.Sprite) {
                 return !!this.getRenderableTexture(displayObj.texture, null);
             }
@@ -1814,7 +1819,11 @@ void main(void) {
             // Roofs submit many child meshes for one item and each needs its own proxy.
             let record = this.pickProxyByObject.get(displayObj) || null;
             if (!record) {
-                if (item && item.type === "triggerArea") {
+                if (this.isPickGroundHitboxProxy(displayObj)) {
+                    const created = this.createPickGraphicsProxy();
+                    if (!created) return null;
+                    record = { ...created, sourceType: PIXI.Graphics };
+                } else if (item && item.type === "triggerArea") {
                     const created = this.createPickTriggerAreaMeshProxy(item);
                     if (!created) return null;
                     record = { ...created, sourceType: PIXI.Mesh };
@@ -2450,6 +2459,9 @@ void main(void) {
         }
 
         getDisplayObjectPickLayerRank(displayObj) {
+            if (displayObj && Number.isFinite(displayObj._pickLayerRank)) {
+                return Number(displayObj._pickLayerRank);
+            }
             let node = displayObj || null;
             while (node) {
                 const name = (typeof node.name === "string") ? node.name : "";
