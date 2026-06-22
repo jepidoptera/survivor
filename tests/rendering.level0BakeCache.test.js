@@ -859,6 +859,155 @@ test("non-character render items still use local z plus layer base", () => {
     assert.equal(renderer.getLayerBaseZForObject(item), -6);
 });
 
+test("script messages project non-character items with layer base z", () => {
+    class TextStub {
+        constructor(text, style) {
+            this.text = text;
+            this.style = { ...style };
+            this.anchor = { set: (x, y) => { this.anchor.x = x; this.anchor.y = y; } };
+            this.visible = false;
+            this.destroyed = false;
+        }
+        destroy() {
+            this.destroyed = true;
+        }
+    }
+    const RenderingImpl = loadRenderingImpl({ PIXI: { Text: TextStub } });
+    const renderer = new RenderingImpl();
+    const screenCalls = [];
+    const messageLayer = {
+        children: [],
+        addChild(child) {
+            this.children.push(child);
+            child.parent = this;
+        }
+    };
+    const item = {
+        x: 10,
+        y: 20,
+        z: 0.75,
+        traversalLayer: 1,
+        visible: true,
+        _scriptMessages: [{ text: "upstairs", x: 0.25, y: -0.5 }]
+    };
+    RenderingImpl.__testContext._scriptMessageTargets = new Set([item]);
+    const wizard = { currentLayer: 1 };
+    renderer.layers.scriptMessages = messageLayer;
+    renderer.camera = {
+        worldToScreen(x, y, z = 0) {
+            screenCalls.push({ x, y, z });
+            return { x: x * 10, y: y * 10 - z };
+        }
+    };
+    renderer.isWorldPointUnderRoof = () => false;
+    renderer.isLosMazeModeEnabled = () => false;
+
+    renderer.renderScriptMessages({ map: {}, wizard });
+
+    assert.deepEqual(screenCalls, [{ x: 10.25, y: 19.5, z: 3.75 }]);
+    assert.equal(messageLayer.children.length, 1);
+    assert.equal(messageLayer.children[0].visible, true);
+});
+
+test("script messages hide when the wizard is on a different floor", () => {
+    class TextStub {
+        constructor(text, style) {
+            this.text = text;
+            this.style = { ...style };
+            this.anchor = { set: (x, y) => { this.anchor.x = x; this.anchor.y = y; } };
+            this.visible = false;
+            this.destroyed = false;
+        }
+        destroy() {
+            this.destroyed = true;
+        }
+    }
+    const RenderingImpl = loadRenderingImpl({ PIXI: { Text: TextStub } });
+    const renderer = new RenderingImpl();
+    const screenCalls = [];
+    renderer.layers.scriptMessages = {
+        children: [],
+        addChild(child) {
+            this.children.push(child);
+            child.parent = this;
+        }
+    };
+    const item = {
+        x: 10,
+        y: 20,
+        z: 0,
+        traversalLayer: 1,
+        visible: true,
+        _scriptMessages: [{ text: "upstairs" }]
+    };
+    RenderingImpl.__testContext._scriptMessageTargets = new Set([item]);
+    renderer.camera = {
+        worldToScreen(x, y, z = 0) {
+            screenCalls.push({ x, y, z });
+            return { x, y };
+        }
+    };
+    renderer.isWorldPointUnderRoof = () => false;
+    renderer.isLosMazeModeEnabled = () => false;
+
+    renderer.renderScriptMessages({ map: {}, wizard: { currentLayer: 0 } });
+
+    assert.deepEqual(screenCalls, []);
+    assert.equal(renderer.layers.scriptMessages.children.length, 0);
+});
+
+test("script messages hide on same layer with different floor membership", () => {
+    class TextStub {
+        constructor(text, style) {
+            this.text = text;
+            this.style = { ...style };
+            this.anchor = { set: (x, y) => { this.anchor.x = x; this.anchor.y = y; } };
+            this.visible = false;
+            this.destroyed = false;
+        }
+        destroy() {
+            this.destroyed = true;
+        }
+    }
+    const RenderingImpl = loadRenderingImpl({ PIXI: { Text: TextStub } });
+    const renderer = new RenderingImpl();
+    const screenCalls = [];
+    renderer.layers.scriptMessages = {
+        children: [],
+        addChild(child) {
+            this.children.push(child);
+            child.parent = this;
+        }
+    };
+    const item = {
+        x: 10,
+        y: 20,
+        z: 0,
+        traversalLayer: 1,
+        visible: true,
+        _floorMembership: { ownerType: "building", ownerId: "house-a", floorId: "upper" },
+        _scriptMessages: [{ text: "other house" }]
+    };
+    const wizard = {
+        currentLayer: 1,
+        _floorMembership: { ownerType: "building", ownerId: "house-b", floorId: "upper" }
+    };
+    RenderingImpl.__testContext._scriptMessageTargets = new Set([item]);
+    renderer.camera = {
+        worldToScreen(x, y, z = 0) {
+            screenCalls.push({ x, y, z });
+            return { x, y };
+        }
+    };
+    renderer.isWorldPointUnderRoof = () => false;
+    renderer.isLosMazeModeEnabled = () => false;
+
+    renderer.renderScriptMessages({ map: {}, wizard });
+
+    assert.deepEqual(screenCalls, []);
+    assert.equal(renderer.layers.scriptMessages.children.length, 0);
+});
+
 test("upper layer fade does not globally hide layers above the wizard", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -3070,6 +3219,131 @@ test("prototype building exterior remains hidden while wizard support is inside 
     ), false);
 });
 
+test("prototype building exterior stays visible while first interior floor bitmap is loading", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const placement = {
+        id: "building:placed-test-house",
+        transform: { x: 0, y: 0, rotation: 0 }
+    };
+    const exteriorCache = {
+        id: placement.id,
+        status: "ready",
+        texture: {},
+        depthMetricTexture: {},
+        depthMetric: { min: 0, span: 1 }
+    };
+    const trigger = {
+        buildingId: placement.id,
+        building: {
+            buildingId: placement.id,
+            _prototypeBuildingPlacement: placement
+        },
+        activeInteriorRegion: {
+            fragmentId: `${placement.id}:floor:floor-1`,
+            fragment: {
+                _prototypeBuildingSourceFragmentId: "floor-1"
+            }
+        }
+    };
+    const cutawayState = {
+        active: true,
+        triggers: [trigger]
+    };
+    const map = {
+        getPrototypeBuildingPlacements() {
+            return [placement];
+        },
+        getPrototypeBuildingExteriorBitmap(id) {
+            assert.equal(id, placement.id);
+            return exteriorCache;
+        }
+    };
+    const rendered = [];
+    let activeExteriorIds = null;
+    renderer.renderPrototypeBuildingExteriorBitmap = (ctx, renderedPlacement, cache, options) => {
+        rendered.push({ ctx, renderedPlacement, cache, alpha: options && options.alpha });
+        return { name: "exterior shell mesh" };
+    };
+    renderer.hideUnusedPrototypeBuildingExteriors = (activeIds) => {
+        activeExteriorIds = new Set(activeIds);
+    };
+
+    renderer._prototypeBuildingInteriorRenderedPlacementIdsThisFrame = new Set();
+    renderer._prototypeBuildingInteriorPendingPlacementIdsThisFrame = new Set([placement.id]);
+    renderer.renderPrototypeBuildingExteriors({
+        map,
+        wizard: {
+            currentMovementSupport: {
+                ownerType: "building",
+                ownerId: placement.id
+            }
+        },
+        _renderingLayerCutawayState: cutawayState
+    });
+
+    assert.equal(renderer.isPrototypeBuildingExteriorHiddenByInteriorCutaway(
+        placement,
+        { _renderingLayerCutawayState: cutawayState }
+    ), true);
+    assert.deepEqual(rendered.map(entry => ({
+        placementId: entry.renderedPlacement.id,
+        cacheId: entry.cache.id,
+        alpha: entry.alpha
+    })), [{
+        placementId: placement.id,
+        cacheId: exteriorCache.id,
+        alpha: 0.5
+    }]);
+    assert.deepEqual([...activeExteriorIds], [placement.id]);
+    assert.equal(renderer.getPrototypeBuildingExteriorCutawayAlpha(placement, {
+        _renderingLayerCutawayState: cutawayState
+    }), 0.5);
+
+    rendered.length = 0;
+    renderer._prototypeBuildingInteriorRenderedPlacementIdsThisFrame = new Set([placement.id]);
+    renderer._prototypeBuildingInteriorPendingPlacementIdsThisFrame = new Set([placement.id]);
+    renderer.renderPrototypeBuildingExteriors({
+        map,
+        _renderingLayerCutawayState: cutawayState
+    });
+
+    assert.deepEqual(rendered.map(entry => ({
+        placementId: entry.renderedPlacement.id,
+        cacheId: entry.cache.id,
+        alpha: entry.alpha
+    })), [{
+        placementId: placement.id,
+        cacheId: exteriorCache.id,
+        alpha: 0.5
+    }]);
+    assert.deepEqual([...activeExteriorIds], [placement.id]);
+
+    rendered.length = 0;
+    renderer._prototypeBuildingInteriorRenderedPlacementIdsThisFrame = new Set([placement.id]);
+    renderer._prototypeBuildingInteriorPendingPlacementIdsThisFrame = new Set([placement.id]);
+    renderer._prototypeBuildingInteriorHeldPlacementIdsThisFrame = new Set([placement.id]);
+    renderer.renderPrototypeBuildingExteriors({
+        map,
+        _renderingLayerCutawayState: cutawayState
+    });
+
+    assert.deepEqual(rendered, []);
+    assert.deepEqual([...activeExteriorIds], []);
+
+    rendered.length = 0;
+    renderer._prototypeBuildingInteriorRenderedPlacementIdsThisFrame = new Set([placement.id]);
+    renderer._prototypeBuildingInteriorPendingPlacementIdsThisFrame = new Set();
+    renderer._prototypeBuildingInteriorHeldPlacementIdsThisFrame = new Set();
+    renderer.renderPrototypeBuildingExteriors({
+        map,
+        _renderingLayerCutawayState: cutawayState
+    });
+
+    assert.deepEqual(rendered, []);
+    assert.deepEqual([...activeExteriorIds], []);
+});
+
 test("prototype building exterior fade sampling matches the displayed outline vertical orientation", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -4034,7 +4308,8 @@ test("prototype building interior floor transitions fade upper floor bitmaps in 
         "building:placed-test-house|floor-1"
     ]);
     assert.deepEqual([...renderedMeshes].map((mesh) => mesh.name), [
-        "interior bitmap mesh floor-1"
+        "interior bitmap mesh floor-1",
+        "snapshot:floor-0"
     ]);
 
     requested.length = 0;
@@ -4101,6 +4376,127 @@ test("prototype building interior floor transitions fade upper floor bitmaps in 
     ]);
     assert.deepEqual(renderedSnapshots, []);
     assert.equal(hiddenSnapshots, 1);
+});
+
+test("prototype interior floor transition holds outgoing bitmap live while incoming bitmap loads", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    const placement = {
+        id: "building:placed-loading-transition",
+        buildingSaveName: "test house",
+        transform: { x: 3, y: 4, rotation: 0.25 }
+    };
+    const readyCache = {
+        id: `${placement.id}|floor-0`,
+        placementId: placement.id,
+        floorId: "floor-0",
+        status: "ready",
+        texture: {},
+        depthMetricTexture: {},
+        depthMetric: { min: -1, span: 2 },
+        bounds: { worldWidth: 8, worldHeight: 6 }
+    };
+    const loadingCache = {
+        id: `${placement.id}|floor-1`,
+        placementId: placement.id,
+        floorId: "floor-1",
+        status: "loading"
+    };
+    const requested = [];
+    const rendered = [];
+    const renderedSnapshots = [];
+    let hiddenSnapshots = 0;
+    let hiddenIds = null;
+    const map = {
+        getPrototypeBuildingInteriorBitmap(id, floorId) {
+            requested.push({ phase: "get", id, floorId });
+            if (floorId === "floor-0") return readyCache;
+            if (floorId === "floor-1") return loadingCache;
+            return null;
+        },
+        requestPrototypeBuildingInteriorBitmap(requestPlacement, floorId) {
+            requested.push({ phase: "request", id: requestPlacement && requestPlacement.id, floorId });
+            return loadingCache;
+        }
+    };
+    const trigger = {
+        buildingId: placement.id,
+        building: {
+            buildingId: placement.id,
+            _prototypeBuildingPlacement: placement
+        },
+        activeInteriorRegion: {
+            fragmentId: `${placement.id}:floor:floor-1`,
+            fragment: {
+                _prototypeBuildingSourceFragmentId: "floor-1"
+            }
+        },
+        interiorFloorTransition: {
+            fromTriggerLevel: 1,
+            toTriggerLevel: 2,
+            fromSourceFloorId: "floor-0",
+            toSourceFloorId: "floor-1",
+            progress: 0.75
+        }
+    };
+    renderer.getLayerCutawayState = () => ({
+        active: true,
+        triggers: [trigger]
+    });
+    renderer.renderPrototypeBuildingInteriorBitmap = (_ctx, _placement, renderedCache, options) => {
+        rendered.push({
+            floorId: renderedCache.floorId,
+            alpha: options && options.alpha
+        });
+        return { name: `interior bitmap mesh ${renderedCache.floorId}` };
+    };
+    renderer.capturePrototypeBuildingInteriorFloorSnapshot = (ctx, renderedPlacement, renderedCache, transition) => {
+        renderer.prototypeBuildingInteriorFloorSnapshot = {
+            active: true,
+            signature: renderer.getPrototypeBuildingInteriorFloorSnapshotSignature(ctx, renderedPlacement, transition)
+        };
+        renderer.prototypeBuildingInteriorFloorSnapshotSprite = { visible: true };
+        assert.equal(renderedCache.floorId, "floor-0");
+        return true;
+    };
+    renderer.renderPrototypeBuildingInteriorFloorSnapshot = (_ctx, transition) => {
+        renderedSnapshots.push({
+            fromSourceFloorId: transition && transition.fromSourceFloorId,
+            toSourceFloorId: transition && transition.toSourceFloorId,
+            progress: transition && transition.progress,
+            alpha: renderer.getPrototypeBuildingInteriorBitmapTransitionAlphas(transition).fromAlpha
+        });
+        return { name: `snapshot:${transition && transition.fromSourceFloorId}` };
+    };
+    renderer.hidePrototypeBuildingInteriorFloorSnapshot = () => {
+        hiddenSnapshots += 1;
+        renderer.prototypeBuildingInteriorFloorSnapshot = null;
+    };
+    renderer.hideUnusedPrototypeBuildingInteriors = (activeIds) => {
+        hiddenIds = new Set(activeIds);
+    };
+
+    const renderedMeshes = renderer.renderPrototypeBuildingInteriors({
+        map,
+        app: { renderer: {} }
+    });
+
+    assert.deepEqual(requested.map(entry => `${entry.phase}:${entry.floorId}`), [
+        "get:floor-0",
+        "get:floor-1",
+        "request:floor-1"
+    ]);
+    assert.deepEqual(rendered, [{
+        floorId: "floor-0",
+        alpha: 1
+    }]);
+    assert.deepEqual(renderedSnapshots, []);
+    assert.equal(hiddenSnapshots, 1);
+    assert.deepEqual([...hiddenIds], ["building:placed-loading-transition|floor-0"]);
+    assert.deepEqual([...renderedMeshes].map((mesh) => mesh.name), ["interior bitmap mesh floor-0"]);
+    assert.equal(renderer._prototypeBuildingInteriorRenderedPlacementIdsThisFrame.has(placement.id), true);
+    assert.equal(renderer._prototypeBuildingInteriorPendingPlacementIdsThisFrame.has(placement.id), true);
+    assert.equal(renderer._prototypeBuildingInteriorHeldPlacementIdsThisFrame.has(placement.id), true);
 });
 
 test("building interior visual region switches one meter below the upper floor", () => {

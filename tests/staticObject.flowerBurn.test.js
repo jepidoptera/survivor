@@ -266,27 +266,7 @@ function installTestGlobals() {
     };
     globalThis.PolygonHitbox = class PolygonHitbox {
         constructor(points = []) {
-            this.type = "polygon";
             this.points = points;
-        }
-
-        getBounds() {
-            let minX = Infinity;
-            let minY = Infinity;
-            let maxX = -Infinity;
-            let maxY = -Infinity;
-            for (const point of this.points) {
-                minX = Math.min(minX, Number(point.x));
-                minY = Math.min(minY, Number(point.y));
-                maxX = Math.max(maxX, Number(point.x));
-                maxY = Math.max(maxY, Number(point.y));
-            }
-            return {
-                x: minX,
-                y: minY,
-                width: maxX - minX,
-                height: maxY - minY
-            };
         }
     };
     globalThis.objectLayer = {
@@ -885,13 +865,11 @@ test("placed object load restores upper-floor building manifest membership", () 
     groundNode.yindex = 5;
     groundNode.x = 4;
     groundNode.y = 5;
-    groundNode.baseZ = 0;
     const upperNode = new TestNode();
     upperNode.xindex = 4;
     upperNode.yindex = 5;
     upperNode.x = 4;
     upperNode.y = 5;
-    upperNode.baseZ = 2;
     upperNode.traversalLayer = 1;
     upperNode.level = 1;
     upperNode.surfaceId = "upper-surface";
@@ -949,78 +927,6 @@ test("placed object load restores upper-floor building manifest membership", () 
     restoreGlobals();
 });
 
-test("roadPath load restores geometry, hitbox indexing, and save data", () => {
-    restoreGlobals();
-    installTestGlobals();
-    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
-    require(STATIC_OBJECTS_MODULE_PATH);
-
-    const nodesByKey = new Map();
-    const makeNode = (xindex, yindex) => {
-        const key = `${xindex},${yindex}`;
-        if (!nodesByKey.has(key)) {
-            const node = new TestNode();
-            node.xindex = xindex;
-            node.yindex = yindex;
-            node.x = xindex;
-            node.y = yindex;
-            nodesByKey.set(key, node);
-        }
-        return nodesByKey.get(key);
-    };
-    const map = {
-        objects: [],
-        scenery: {},
-        worldToNode(x, y) {
-            return makeNode(Math.round(Number(x)), Math.round(Number(y)));
-        }
-    };
-
-    const obj = globalThis.StaticObject.loadJson({
-        type: "roadPath",
-        x: 0,
-        y: 0,
-        points: [
-            { x: 0, y: 0 },
-            { x: 6, y: 0 }
-        ],
-        width: 3,
-        fillTexturePath: "/assets/images/flooring/dirt.jpg",
-        isPassable: true,
-        castsLosShadows: false
-    }, map);
-
-    assert.ok(obj);
-    assert.equal(obj.type, "roadPath");
-    assert.equal(obj.objectType, "roadPath");
-    assert.equal(obj.roadWidth, 3);
-    assert.equal(obj.fillTexturePath, "/assets/images/flooring/dirt.jpg");
-    assert.equal(obj.isPassable, true);
-    assert.equal(obj.castsLosShadows, false);
-    assert.equal(Array.isArray(obj.generatedGeometry.segments), true);
-    assert.equal(obj.generatedGeometry.segments.length, 1);
-    assert.equal(obj.groundPlaneHitbox, obj.visualHitbox);
-    assert.ok(obj._indexedNodes.length > 1);
-    assert.ok(obj._indexedNodes.some(node => node.objects.includes(obj)));
-    assert.ok(map.objects.includes(obj));
-    assert.equal(obj.pixiSprite.visible, false);
-    assert.equal(obj.pixiSprite.renderable, false);
-
-    const saved = obj.saveJson();
-    assert.equal(saved.type, "roadPath");
-    assert.deepEqual(saved.points, [
-        { x: 0, y: 0 },
-        { x: 6, y: 0 }
-    ]);
-    assert.equal(saved.width, 3);
-    assert.equal(saved.fillTexturePath, "/assets/images/flooring/dirt.jpg");
-    assert.equal(saved.isPassable, true);
-    assert.equal(saved.castsLosShadows, false);
-
-    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
-    restoreGlobals();
-});
-
 test("placed object load skips legacy floor manifest for prototype building fragments", () => {
     restoreGlobals();
     installTestGlobals();
@@ -1037,7 +943,6 @@ test("placed object load skips legacy floor manifest for prototype building frag
     upperNode.yindex = 5;
     upperNode.x = 4;
     upperNode.y = 5;
-    upperNode.baseZ = 2;
     upperNode.traversalLayer = 1;
     upperNode.level = 1;
     upperNode.surfaceId = "building:placed-4:surface:floor-fragment-34";

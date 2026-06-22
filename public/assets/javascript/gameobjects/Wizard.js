@@ -250,7 +250,7 @@ class Wizard extends Character {
         super('human', location, 1, map, { useExternalScheduler: true });
         this.useExternalScheduler = true;
         this.useAStarPathfinding = true;
-        this.speed = 3;
+        this.speed = 3.75;
         this.roadSpeedMultiplier = 1.3;
         this.backwardSpeedMultiplier = 0.667; // Configurable backward movement speed
         this.frameRate = 60;
@@ -829,18 +829,88 @@ class Wizard extends Character {
     }
 
     isOnRoad() {
-        const node = this.map.worldToNode(this.x, this.y);
-        if (!node || !node.objects) return false;
-        if (node.objects.some(obj => {
+        if (!this.map || typeof this.map.worldToNode !== "function") return false;
+        const movementLayer = typeof this.getCurrentMovementLayer === "function"
+            ? this.getCurrentMovementLayer()
+            : (Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0);
+        const wizardRadius = Number.isFinite(this.groundRadius) ? Math.max(0, Number(this.groundRadius)) : 0;
+        const wizardRoadHitbox = {
+            type: "circle",
+            x: Number(this.x) || 0,
+            y: Number(this.y) || 0,
+            radius: wizardRadius
+        };
+        const getNodeLayer = (node) => Number.isFinite(node && node.traversalLayer)
+            ? Math.round(Number(node.traversalLayer))
+            : (Number.isFinite(node && node.level) ? Math.round(Number(node.level)) : 0);
+        const objectMatchesLayer = (obj, node) => {
+            const objLayer = Number.isFinite(obj && obj.traversalLayer)
+                ? Math.round(Number(obj.traversalLayer))
+                : (Number.isFinite(obj && obj.level) ? Math.round(Number(obj.level)) : getNodeLayer(node));
+            return objLayer === movementLayer;
+        };
+        const roadHitboxTouchesWizard = (hitbox) => {
+            if (!hitbox) return false;
+            if (typeof hitbox.containsPoint === "function" && hitbox.containsPoint(this.x, this.y)) return true;
+            if (typeof hitbox.intersects === "function") return !!hitbox.intersects(wizardRoadHitbox);
+            return false;
+        };
+        const isRoadObjectUnderWizard = (obj, node) => {
             if (!obj || obj.gone || obj.vanishing) return false;
-            if (obj.type === "road") return true;
-            if (obj.type !== "roadPath") return false;
+            if (!objectMatchesLayer(obj, node)) return false;
             const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || null;
-            return !!(hitbox && typeof hitbox.containsPoint === "function" && hitbox.containsPoint(this.x, this.y));
-        })) {
-            return true;
-        }
+            if (obj.type === "road") return roadHitboxTouchesWizard(hitbox);
+            if (obj.type === "roadPath") return roadHitboxTouchesWizard(hitbox);
+            return false;
+        };
+        const seenObjects = new Set();
+        const testNode = (rawNode) => {
+            const node = movementLayer !== 0 && typeof this.resolveNodeForMovementLayer === "function"
+                ? this.resolveNodeForMovementLayer(rawNode)
+                : rawNode;
+            if (!node || !Array.isArray(node.objects)) return false;
+            if (getNodeLayer(node) !== movementLayer) return false;
+            for (let i = 0; i < node.objects.length; i++) {
+                const obj = node.objects[i];
+                if (seenObjects.has(obj)) continue;
+                seenObjects.add(obj);
+                if (isRoadObjectUnderWizard(obj, node)) return true;
+            }
+            return false;
+        };
 
+        const padding = Math.max(1.5, wizardRadius + 0.75);
+        const searchNodes = typeof this.getVectorMovementSearchNodes === "function"
+            ? this.getVectorMovementSearchNodes(this.x, this.y, padding)
+            : [this.map.worldToNode(this.x, this.y)];
+        if (searchNodes.length > 0) {
+            const xIndices = searchNodes.map(node => Number(node && node.xindex)).filter(Number.isFinite);
+            const yIndices = searchNodes.map(node => Number(node && node.yindex)).filter(Number.isFinite);
+            if (
+                xIndices.length > 0 &&
+                yIndices.length > 0 &&
+                typeof this.map.getNodesInIndexWindow === "function"
+            ) {
+                const nearbyNodes = this.map.getNodesInIndexWindow(
+                    Math.min(...xIndices) - 1,
+                    Math.max(...xIndices) + 1,
+                    Math.min(...yIndices) - 1,
+                    Math.max(...yIndices) + 1
+                );
+                for (let i = 0; i < nearbyNodes.length; i++) {
+                    if (testNode(nearbyNodes[i])) return true;
+                }
+                if (nearbyNodes.length > 0) return false;
+            }
+            for (let i = 0; i < searchNodes.length; i++) {
+                const node = searchNodes[i];
+                if (testNode(node)) return true;
+                const neighbors = Array.isArray(node && node.neighbors) ? node.neighbors : [];
+                for (let n = 0; n < neighbors.length; n++) {
+                    if (testNode(neighbors[n])) return true;
+                }
+            }
+        }
         return false;
     }
 

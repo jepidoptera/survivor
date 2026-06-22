@@ -2067,12 +2067,14 @@ void main(void) {
                             record.shader.uniforms.uCameraRotationCenter[1] = Number(rotationCenter && rotationCenter.y) || 0;
                         }
                         if (Number.isFinite(record.shader.uniforms.uLayerBaseZ)) {
-                            const sourceLayerBaseZ = Number(
-                                displayObj &&
-                                displayObj.shader &&
-                                displayObj.shader.uniforms &&
-                                displayObj.shader.uniforms.uLayerBaseZ
-                            );
+                            const sourceUniforms = displayObj && displayObj.shader && displayObj.shader.uniforms
+                                ? displayObj.shader.uniforms
+                                : null;
+                            const sourceLayerBaseZ = Number(sourceUniforms && (
+                                Number.isFinite(sourceUniforms.uLayerBaseZ)
+                                    ? sourceUniforms.uLayerBaseZ
+                                    : sourceUniforms.uBaseZ
+                            ));
                             record.shader.uniforms.uLayerBaseZ = Number.isFinite(sourceLayerBaseZ)
                                 ? sourceLayerBaseZ
                                 : 0;

@@ -29,6 +29,7 @@
     const FLOOR_VISUAL_DEPTH_NEAR_METRIC = -128;
     const FLOOR_VISUAL_DEPTH_FAR_METRIC = 256;
     const FLOOR_VISUAL_DEPTH_BIAS_UNITS = 0.001;
+    const ROAD_PATH_DEPTH_BIAS_UNITS = FLOOR_VISUAL_DEPTH_BIAS_UNITS + 0.035;
     const FLOOR_VISUAL_HOLE_DEPTH_BIAS_UNITS = 0.02;
     const FLOOR_BELOW_CURRENT_DARKNESS_MULTIPLIER = 0.8;
     const BUILDING_CUTAWAY_GHOST_ALPHA = 0.1;
@@ -138,6 +139,28 @@ uniform float uBuildingCutawayDataPass;
 uniform vec2 uBuildingCutawayDataZRange;
 void main(void) {
     vec4 outColor = texture2D(uSampler, vUvs) * uTint;
+    if (outColor.a < uAlphaCutoff) discard;
+    if (uBuildingCutawayDataPass > 0.5) {
+        float minZ = uBuildingCutawayDataZRange.x;
+        float invSpan = uBuildingCutawayDataZRange.y;
+        float encodedZ = clamp((vWorldZ - minZ) * invSpan, 0.0, 1.0);
+        gl_FragColor = vec4(encodedZ, 0.0, 0.0, 1.0);
+        return;
+    }
+    gl_FragColor = outColor;
+}
+`;
+    const ROAD_PATH_DEPTH_FS = `
+precision highp float;
+varying vec2 vUvs;
+varying float vWorldZ;
+uniform sampler2D uSampler;
+uniform vec4 uTint;
+uniform float uAlphaCutoff;
+uniform float uBuildingCutawayDataPass;
+uniform vec2 uBuildingCutawayDataZRange;
+void main(void) {
+    vec4 outColor = texture2D(uSampler, fract(vUvs)) * uTint;
     if (outColor.a < uAlphaCutoff) discard;
     if (uBuildingCutawayDataPass > 0.5) {
         float minZ = uBuildingCutawayDataZRange.x;
@@ -1112,7 +1135,7 @@ void main(void) {
             this.bakedLevel0SectionSignature = "";
             this.level0GroundSurfacePendingLoads = new Set();
             this.roadSpriteByObject = new Map();
-            this.roadPathGraphicsByObject = new Map();
+            this.roadPathMeshByObject = new Map();
             this.lastSectionInputItems = [];
             this.activeObjectDisplayObjects = new Set();
             this.activeDepthBillboardMeshes = new Set();
@@ -12423,6 +12446,15 @@ void main(void) {
             for (let i = 0; i < renderItems.length; i++) {
                 const item = renderItems[i];
                 if (!item || item.gone || item.vanishing) continue;
+                if (item.type === "roadPath") {
+                    if (item.pixiSprite) {
+                        item.pixiSprite.visible = false;
+                        if (Object.prototype.hasOwnProperty.call(item.pixiSprite, "renderable")) {
+                            item.pixiSprite.renderable = false;
+                        }
+                    }
+                    continue;
+                }
                 if (item.rotationAxis !== "ground") continue;
                 if (item.type === "triggerArea" || item.isTriggerArea === true) continue;
                 if (alreadyRenderedItems && alreadyRenderedItems.has(item)) {
@@ -15338,18 +15370,345 @@ void main(void) {
                 this.roadSpriteByObject.delete(road);
                 roadDestroyedSprites += 1;
             };
-            const destroyRoadPathGraphics = (roadPath, graphics) => {
-                if (graphics) {
-                    if (graphics.parent) {
-                        graphics.parent.removeChild(graphics);
+            const destroyRoadPathMesh = (roadPath, mesh) => {
+                if (mesh) {
+                    if (mesh.parent) {
+                        mesh.parent.removeChild(mesh);
                     }
-                    if (graphics.destroyed !== true && typeof graphics.destroy === "function") {
-                        graphics.destroy({ children: false });
+                    if (roadPath && roadPath._renderingDisplayObject === mesh) {
+                        roadPath._renderingDisplayObject = null;
+                    }
+                    if (
+                        mesh.destroyed !== true &&
+                        typeof mesh.destroy === "function" &&
+                        mesh.geometry &&
+                        Number.isFinite(mesh.geometry.refCount)
+                    ) {
+                        try {
+                            mesh.destroy({ children: false, texture: false, baseTexture: false });
+                        } catch (error) {
+                            const message = error && error.message ? String(error.message) : "";
+                            if (!message.includes("refCount")) throw error;
+                            mesh.geometry = null;
+                            mesh.shader = null;
+                            mesh.state = null;
+                        }
+                    } else {
+                        mesh.visible = false;
+                        if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+                            mesh.renderable = false;
+                        }
                     }
                 }
-                if (this.roadPathGraphicsByObject instanceof Map) {
-                    this.roadPathGraphicsByObject.delete(roadPath);
+                if (this.roadPathMeshByObject instanceof Map) {
+                    this.roadPathMeshByObject.delete(roadPath);
                 }
+            };
+            const getRoadPathFillTexturePath = (roadPath) => {
+                const RoadClass = (typeof Road !== "undefined" && Road)
+                    ? Road
+                    : ((global && global.Road) ? global.Road : null);
+                const defaultTexturePath = RoadClass && typeof RoadClass._defaultFillTexturePath === "string"
+                    ? RoadClass._defaultFillTexturePath
+                    : "/assets/images/flooring/dirt.jpg";
+                const normalizeTexturePath = (texturePath) => {
+                    if (typeof texturePath !== "string" || texturePath.length === 0) return "";
+                    if (RoadClass && typeof RoadClass._normalizeFillTexturePath === "function") {
+                        return RoadClass._normalizeFillTexturePath(texturePath);
+                    }
+                    return texturePath;
+                };
+                const defaultNormalized = normalizeTexturePath(defaultTexturePath) || defaultTexturePath;
+                const selectedTexturePath = wizard && typeof wizard.selectedFlooringTexture === "string" && wizard.selectedFlooringTexture.length > 0
+                    ? normalizeTexturePath(wizard.selectedFlooringTexture)
+                    : "";
+                const objectTexturePath = roadPath && typeof roadPath.fillTexturePath === "string" && roadPath.fillTexturePath.length > 0
+                    ? normalizeTexturePath(roadPath.fillTexturePath)
+                    : "";
+                if (
+                    selectedTexturePath &&
+                    selectedTexturePath !== defaultNormalized &&
+                    (!objectTexturePath || objectTexturePath === defaultNormalized)
+                ) {
+                    return selectedTexturePath;
+                }
+                return objectTexturePath || selectedTexturePath || defaultNormalized;
+            };
+            const getRoadPathFillTexture = (texturePath) => {
+                const texture = this.getFloorVisualTexture({ texturePath });
+                const baseTexture = texture && texture.baseTexture ? texture.baseTexture : null;
+                if (baseTexture) {
+                    if (PIXI.WRAP_MODES) baseTexture.wrapMode = PIXI.WRAP_MODES.REPEAT;
+                    if (PIXI.SCALE_MODES) baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR;
+                    if (
+                        baseTexture &&
+                        baseTexture.valid !== true &&
+                        typeof baseTexture.once === "function" &&
+                        baseTexture._roadPathTextureRefreshPending !== true
+                    ) {
+                        baseTexture._roadPathTextureRefreshPending = true;
+                        baseTexture.once("loaded", () => {
+                            baseTexture._roadPathTextureRefreshPending = false;
+                            if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                                globalThis.presentGameFrame();
+                            }
+                        });
+                    }
+                }
+                return texture || PIXI.Texture.WHITE;
+            };
+            const getRoadPathTextureRepeat = (texturePath) => {
+                const repeat = this.getFloorVisualTextureRepeat(texturePath);
+                return {
+                    x: repeat && Number.isFinite(repeat.x) ? Number(repeat.x) : FLOOR_VISUAL_TEXTURE_WORLD_SCALE,
+                    y: repeat && Number.isFinite(repeat.y) ? Number(repeat.y) : FLOOR_VISUAL_TEXTURE_WORLD_SCALE
+                };
+            };
+            const resolveRoadPathFillTexturePathForView = (roadPath, texturePath) => {
+                const RoadClass = (typeof Road !== "undefined" && Road)
+                    ? Road
+                    : ((global && global.Road) ? global.Road : null);
+                if (!RoadClass || typeof RoadClass.resolveFillTexturePathForSize !== "function") {
+                    return texturePath;
+                }
+                const roadWidth = Number.isFinite(roadPath && roadPath.roadWidth)
+                    ? Math.max(0.001, Number(roadPath.roadWidth))
+                    : (Number.isFinite(roadPath && roadPath.width) ? Math.max(0.001, Number(roadPath.width)) : 1);
+                const roadScreenWidth = roadWidth * (Number(cam.viewscale) || 1) * 1.1547;
+                const roadScreenHeight = roadWidth * (Number(cam.viewscale) || 1) * (Number(cam.xyratio) || 1);
+                const lodMetric = typeof RoadClass.getFillTextureLodMetric === "function"
+                    ? RoadClass.getFillTextureLodMetric(texturePath, roadScreenWidth, roadScreenHeight)
+                    : Math.max(roadScreenWidth, roadScreenHeight);
+                return RoadClass.resolveFillTexturePathForSize(texturePath, lodMetric);
+            };
+            const buildRoadPathMeshData = (roadPath, segments, textureRepeat) => {
+                const repeatX = textureRepeat && Number.isFinite(textureRepeat.x)
+                    ? Number(textureRepeat.x)
+                    : FLOOR_VISUAL_TEXTURE_WORLD_SCALE;
+                const repeatY = textureRepeat && Number.isFinite(textureRepeat.y)
+                    ? Number(textureRepeat.y)
+                    : FLOOR_VISUAL_TEXTURE_WORLD_SCALE;
+                const maxUvSpanPerQuad = 0.5;
+                const emitted = [];
+                let pathDistance = 0;
+                const lerpPoint = (from, to, t) => ({
+                    x: Number(from.x) + (Number(to.x) - Number(from.x)) * t,
+                    y: Number(from.y) + (Number(to.y) - Number(from.y)) * t
+                });
+                const emitVertex = (point, u, v) => {
+                    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+                        throw new Error("Cannot render road path mesh with non-finite point.");
+                    }
+                    if (!Number.isFinite(u) || !Number.isFinite(v)) {
+                        throw new Error("Cannot render road path mesh with non-finite texture coordinates.");
+                    }
+                    emitted.push({ x: Number(point.x), y: Number(point.y), u, v });
+                };
+                const emitQuad = (left0, left1, right1, right0, u0, u1, v0, v1) => {
+                    emitVertex(left0, u0, v0);
+                    emitVertex(left1, u1, v0);
+                    emitVertex(right1, u1, v1);
+                    emitVertex(left0, u0, v0);
+                    emitVertex(right1, u1, v1);
+                    emitVertex(right0, u0, v1);
+                };
+                for (let s = 0; s < segments.length; s++) {
+                    const segment = segments[s];
+                    const polygon = segment && Array.isArray(segment.polygon) ? segment.polygon : null;
+                    if (!polygon || polygon.length !== 4) {
+                        throw new Error(`Cannot render road path segment ${s} without four-point polygon geometry.`);
+                    }
+                    const leftStart = polygon[0];
+                    const leftEnd = polygon[1];
+                    const rightEnd = polygon[2];
+                    const rightStart = polygon[3];
+                    const startPoint = segment && segment.startPoint ? segment.startPoint : {
+                        x: (Number(leftStart.x) + Number(rightStart.x)) * 0.5,
+                        y: (Number(leftStart.y) + Number(rightStart.y)) * 0.5
+                    };
+                    const endPoint = segment && segment.endPoint ? segment.endPoint : {
+                        x: (Number(leftEnd.x) + Number(rightEnd.x)) * 0.5,
+                        y: (Number(leftEnd.y) + Number(rightEnd.y)) * 0.5
+                    };
+                    const length = Math.hypot(
+                        Number(endPoint.x) - Number(startPoint.x),
+                        Number(endPoint.y) - Number(startPoint.y)
+                    );
+                    if (!(length > 0)) {
+                        throw new Error(`Cannot render road path segment ${s} with zero visual length.`);
+                    }
+                    const startWidth = Math.hypot(
+                        Number(rightStart.x) - Number(leftStart.x),
+                        Number(rightStart.y) - Number(leftStart.y)
+                    );
+                    const endWidth = Math.hypot(
+                        Number(rightEnd.x) - Number(leftEnd.x),
+                        Number(rightEnd.y) - Number(leftEnd.y)
+                    );
+                    const width = Math.max(0.001, startWidth, endWidth);
+                    const uvSpan = Math.max(length * repeatX, width * repeatY);
+                    const subdivisions = Math.max(1, Math.ceil(uvSpan / maxUvSpanPerQuad));
+                    if (subdivisions > 4096) {
+                        throw new Error(`Cannot render road path segment ${s}; visual tessellation would require ${subdivisions} subdivisions.`);
+                    }
+                    for (let i = 0; i < subdivisions; i++) {
+                        const t0 = i / subdivisions;
+                        const t1 = (i + 1) / subdivisions;
+                        const left0 = lerpPoint(leftStart, leftEnd, t0);
+                        const left1 = lerpPoint(leftStart, leftEnd, t1);
+                        const right0 = lerpPoint(rightStart, rightEnd, t0);
+                        const right1 = lerpPoint(rightStart, rightEnd, t1);
+                        const u0 = (pathDistance + length * t0) * repeatX;
+                        const u1 = (pathDistance + length * t1) * repeatX;
+                        emitQuad(left0, left1, right1, right0, u0, u1, 0, width * repeatY);
+                    }
+                    pathDistance += length;
+                }
+                const vertexCount = emitted.length;
+                if (vertexCount <= 0) {
+                    throw new Error("Cannot render road path without generated visual mesh vertices.");
+                }
+                const vertexData = new Float32Array(vertexCount * 2);
+                const worldPositionData = new Float32Array(vertexCount * 3);
+                const uvData = new Float32Array(vertexCount * 2);
+                const indexData = vertexCount > 65535
+                    ? new Uint32Array(vertexCount)
+                    : new Uint16Array(vertexCount);
+                let minUx = Infinity;
+                let minUy = Infinity;
+                for (let i = 0; i < emitted.length; i++) {
+                    minUx = Math.min(minUx, emitted[i].u);
+                    minUy = Math.min(minUy, emitted[i].v);
+                }
+                const uvOffsetX = Number.isFinite(minUx) ? Math.floor(minUx) : 0;
+                const uvOffsetY = Number.isFinite(minUy) ? Math.floor(minUy) : 0;
+                for (let i = 0; i < emitted.length; i++) {
+                    const point = emitted[i];
+                    vertexData[i * 2] = point.x;
+                    vertexData[i * 2 + 1] = point.y;
+                    worldPositionData[i * 3] = point.x;
+                    worldPositionData[i * 3 + 1] = point.y;
+                    worldPositionData[i * 3 + 2] = 0;
+                    uvData[i * 2] = point.u - uvOffsetX;
+                    uvData[i * 2 + 1] = point.v - uvOffsetY;
+                    indexData[i] = i;
+                }
+                return { vertexData, worldPositionData, uvData, indexData, vertexCount };
+            };
+            const createRoadPathMesh = (meshData) => {
+                if (
+                    typeof PIXI === "undefined" ||
+                    !PIXI.Geometry ||
+                    !PIXI.Mesh ||
+                    !PIXI.Shader ||
+                    !PIXI.Texture
+                ) {
+                    throw new Error("Cannot render road path polygon mesh because Pixi mesh support is unavailable.");
+                }
+                const geometry = new PIXI.Geometry()
+                    .addAttribute("aVertexPosition", meshData.vertexData, 2)
+                    .addAttribute("aWorldPosition", meshData.worldPositionData, 3)
+                    .addAttribute("aUvs", meshData.uvData, 2)
+                    .addIndex(meshData.indexData);
+                const shader = PIXI.Shader.from(FLOOR_VISUAL_DEPTH_VS, ROAD_PATH_DEPTH_FS, {
+                    uScreenSize: new Float32Array([1, 1]),
+                    uCameraWorld: new Float32Array([0, 0]),
+                    uCameraZ: 0,
+                    uBaseZ: 0,
+                    uDepthBias: ROAD_PATH_DEPTH_BIAS_UNITS,
+                    uViewScale: 1,
+                    uXyRatio: 1,
+                    uDepthRange: new Float32Array([
+                        FLOOR_VISUAL_DEPTH_FAR_METRIC,
+                        1 / Math.max(1e-6, FLOOR_VISUAL_DEPTH_FAR_METRIC - FLOOR_VISUAL_DEPTH_NEAR_METRIC)
+                    ]),
+                    uTint: new Float32Array([1, 1, 1, 1]),
+                    uAlphaCutoff: 0.001,
+                    uBuildingCutawayDataPass: 0,
+                    uBuildingCutawayDataZRange: new Float32Array([
+                        BUILDING_CUTAWAY_DATA_MIN_Z,
+                        1 / Math.max(1e-6, BUILDING_CUTAWAY_DATA_MAX_Z - BUILDING_CUTAWAY_DATA_MIN_Z)
+                    ]),
+                    uSampler: PIXI.Texture.WHITE
+                });
+                const state = this.getFloorVisualDepthState();
+                const mesh = new PIXI.Mesh(
+                    geometry,
+                    shader,
+                    state || undefined,
+                    PIXI.DRAW_MODES ? PIXI.DRAW_MODES.TRIANGLES : undefined
+                );
+                mesh.name = "renderingRoadPathPolygon";
+                mesh.interactive = false;
+                mesh.tint = 0x9b8162;
+                mesh._roadPathVertexCount = meshData.vertexCount;
+                return mesh;
+            };
+            const updateRoadPathMeshGeometry = (mesh, meshData) => {
+                const geometry = mesh && mesh.geometry ? mesh.geometry : null;
+                const positionBuffer = geometry && typeof geometry.getBuffer === "function"
+                    ? geometry.getBuffer("aVertexPosition")
+                    : null;
+                const uvBuffer = geometry && typeof geometry.getBuffer === "function"
+                    ? geometry.getBuffer("aUvs")
+                    : null;
+                const worldPositionBuffer = geometry && typeof geometry.getBuffer === "function"
+                    ? geometry.getBuffer("aWorldPosition")
+                    : null;
+                if (!positionBuffer || !positionBuffer.data || positionBuffer.data.length !== meshData.vertexData.length) {
+                    return false;
+                }
+                positionBuffer.data.set(meshData.vertexData);
+                positionBuffer.update();
+                if (worldPositionBuffer && worldPositionBuffer.data && worldPositionBuffer.data.length === meshData.worldPositionData.length) {
+                    worldPositionBuffer.data.set(meshData.worldPositionData);
+                    worldPositionBuffer.update();
+                }
+                if (uvBuffer && uvBuffer.data && uvBuffer.data.length === meshData.uvData.length) {
+                    uvBuffer.data.set(meshData.uvData);
+                    uvBuffer.update();
+                }
+                mesh._roadPathVertexCount = meshData.vertexCount;
+                return true;
+            };
+            const updateRoadPathMeshUniforms = (mesh, tint, alpha, baseZ, texture) => {
+                const uniforms = mesh && mesh.shader && mesh.shader.uniforms ? mesh.shader.uniforms : null;
+                if (!uniforms) return false;
+                const appRef = (ctx && ctx.app) || (typeof app !== "undefined" && app) || global.app || null;
+                const screenW = (appRef && appRef.screen && Number.isFinite(appRef.screen.width))
+                    ? Number(appRef.screen.width)
+                    : 1;
+                const screenH = (appRef && appRef.screen && Number.isFinite(appRef.screen.height))
+                    ? Number(appRef.screen.height)
+                    : 1;
+                if (uniforms.uScreenSize) {
+                    uniforms.uScreenSize[0] = Math.max(1, screenW);
+                    uniforms.uScreenSize[1] = Math.max(1, screenH);
+                }
+                if (uniforms.uCameraWorld) {
+                    uniforms.uCameraWorld[0] = Number(cam.x) || 0;
+                    uniforms.uCameraWorld[1] = Number(cam.y) || 0;
+                }
+                uniforms.uCameraZ = Number(cam.z) || 0;
+                uniforms.uBaseZ = Number.isFinite(baseZ) ? Number(baseZ) : 0;
+                uniforms.uDepthBias = ROAD_PATH_DEPTH_BIAS_UNITS;
+                uniforms.uViewScale = Number(cam.viewscale) || 1;
+                uniforms.uXyRatio = Number(cam.xyratio) || 1;
+                if (uniforms.uDepthRange) {
+                    uniforms.uDepthRange[0] = FLOOR_VISUAL_DEPTH_FAR_METRIC;
+                    uniforms.uDepthRange[1] = 1 / Math.max(1e-6, FLOOR_VISUAL_DEPTH_FAR_METRIC - FLOOR_VISUAL_DEPTH_NEAR_METRIC);
+                }
+                if (uniforms.uTint) {
+                    const color = Number.isFinite(tint) ? Math.max(0, Math.min(0xffffff, Math.floor(tint))) : 0xffffff;
+                    uniforms.uTint[0] = ((color >> 16) & 0xff) / 255;
+                    uniforms.uTint[1] = ((color >> 8) & 0xff) / 255;
+                    uniforms.uTint[2] = (color & 0xff) / 255;
+                    uniforms.uTint[3] = Number.isFinite(alpha) ? Math.max(0, Math.min(1, Number(alpha))) : 1;
+                }
+                uniforms.uAlphaCutoff = 0.001;
+                uniforms.uBuildingCutawayDataPass = 0;
+                uniforms.uSampler = texture || PIXI.Texture.WHITE;
+                return true;
             };
 
             const visibleRoadObjects = new Set();
@@ -15390,80 +15749,86 @@ void main(void) {
                 }
             }
 
-            if (!(this.roadPathGraphicsByObject instanceof Map)) {
-                this.roadPathGraphicsByObject = new Map();
+            if (!(this.roadPathMeshByObject instanceof Map)) {
+                this.roadPathMeshByObject = new Map();
             }
-            const pathFillColor = 0x9b8162;
             for (const roadPath of visibleRoadPathObjects) {
                 const geometry = roadPath && roadPath.generatedGeometry;
                 const segments = geometry && Array.isArray(geometry.segments) ? geometry.segments : null;
                 if (!segments || segments.length === 0) {
                     throw new Error("Cannot render road path without generated segment geometry.");
                 }
-                let graphics = this.roadPathGraphicsByObject.get(roadPath);
-                if (!graphics) {
-                    graphics = new PIXI.Graphics();
-                    graphics.name = "renderingRoadPath";
-                    graphics.interactive = false;
-                    this.roadPathGraphicsByObject.set(roadPath, graphics);
-                }
-                if (graphics.parent !== container) {
-                    container.addChild(graphics);
-                }
-                graphics.clear();
-                graphics.beginFill(pathFillColor, 1);
                 const roadPathRenderZ = Number.isFinite(roadPath.renderZ)
                     ? Number(roadPath.renderZ)
                     : 0.001;
-                for (let i = 0; i < segments.length; i++) {
-                    const polygon = segments[i] && Array.isArray(segments[i].polygon) ? segments[i].polygon : null;
-                    if (!polygon || polygon.length < 3) {
-                        throw new Error(`Cannot render road path segment ${i} without polygon geometry.`);
-                    }
-                    for (let p = 0; p < polygon.length; p++) {
-                        const point = polygon[p];
-                        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
-                            throw new Error(`Cannot render road path segment ${i} with non-finite polygon point.`);
-                        }
-                        const screen = cam.worldToScreen(Number(point.x), Number(point.y), roadPathRenderZ);
-                        if (p === 0) graphics.moveTo(screen.x, screen.y);
-                        else graphics.lineTo(screen.x, screen.y);
-                    }
-                    const firstScreen = cam.worldToScreen(Number(polygon[0].x), Number(polygon[0].y), roadPathRenderZ);
-                    graphics.lineTo(firstScreen.x, firstScreen.y);
+                const roadLayer = this.getLayerIndexForNode(roadPath && roadPath.node ? roadPath.node : roadPath);
+                const roadBaseZ = this.getLayerBaseZForNode(roadPath && roadPath.node ? roadPath.node : roadPath);
+                const fillTexturePath = resolveRoadPathFillTexturePathForView(
+                    roadPath,
+                    getRoadPathFillTexturePath(roadPath)
+                );
+                const fillTexture = getRoadPathFillTexture(fillTexturePath);
+                const textureRepeat = getRoadPathTextureRepeat(fillTexturePath);
+                const meshData = buildRoadPathMeshData(roadPath, segments, textureRepeat);
+                let mesh = this.roadPathMeshByObject.get(roadPath);
+                const textureRepeatSignature = this.getFloorVisualTextureRepeatSignature(textureRepeat);
+                if (
+                    mesh &&
+                    (
+                        Number(mesh._roadPathVertexCount) !== meshData.vertexCount ||
+                        mesh._roadPathTextureRepeatSignature !== textureRepeatSignature
+                    )
+                ) {
+                    destroyRoadPathMesh(roadPath, mesh);
+                    mesh = null;
                 }
-                graphics.endFill();
-                graphics.alpha = (Number.isFinite(roadPath.alpha) ? roadPath.alpha : 1) * this.getLiveLayerFadeMultiplier(
-                    this.getLayerIndexForNode(roadPath && roadPath.node ? roadPath.node : roadPath),
+                if (!mesh) {
+                    mesh = createRoadPathMesh(meshData);
+                    this.roadPathMeshByObject.set(roadPath, mesh);
+                } else if (!updateRoadPathMeshGeometry(mesh, meshData)) {
+                    destroyRoadPathMesh(roadPath, mesh);
+                    mesh = createRoadPathMesh(meshData);
+                    this.roadPathMeshByObject.set(roadPath, mesh);
+                }
+                if (mesh.parent !== container) {
+                    container.addChild(mesh);
+                }
+                const alpha = (Number.isFinite(roadPath.alpha) ? roadPath.alpha : 1) * this.getLiveLayerFadeMultiplier(
+                    roadLayer,
                     nowMs
                 );
-                graphics.visible = true;
-                if (Object.prototype.hasOwnProperty.call(graphics, "renderable")) {
-                    graphics.renderable = true;
+                mesh._roadPathTextureRepeatSignature = textureRepeatSignature;
+                mesh._roadPathFillTexturePath = fillTexturePath;
+                updateRoadPathMeshUniforms(mesh, 0xffffff, alpha, roadBaseZ + roadPathRenderZ, fillTexture);
+                mesh.tint = 0xffffff;
+                mesh.alpha = 1;
+                mesh.position.set(0, 0);
+                mesh.scale.set(1, 1);
+                mesh.visible = true;
+                if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+                    mesh.renderable = true;
                 }
-                graphics._lastVisibleAtMs = nowMs;
-                roadPath._renderingDisplayObject = graphics;
-                this.applyLayerDarknessToDisplayObject(graphics, this.getLayerDarknessMultiplier(
-                    this.getLayerIndexForNode(roadPath && roadPath.node ? roadPath.node : roadPath)
-                ));
-                this.addPickRenderItem(roadPath, graphics);
+                mesh._lastVisibleAtMs = nowMs;
+                roadPath._renderingDisplayObject = mesh;
+                this.applyLayerDarknessToDisplayObject(mesh, this.getLayerDarknessMultiplier(roadLayer));
+                this.addPickRenderItem(roadPath, mesh);
             }
-            for (const [roadPath, graphics] of this.roadPathGraphicsByObject.entries()) {
+            for (const [roadPath, mesh] of this.roadPathMeshByObject.entries()) {
                 if (!roadPath || roadPath.gone) {
-                    destroyRoadPathGraphics(roadPath, graphics);
+                    destroyRoadPathMesh(roadPath, mesh);
                     continue;
                 }
-                if (!visibleRoadPathObjects.has(roadPath) && graphics) {
-                    const lastVisibleAtMs = Number.isFinite(graphics._lastVisibleAtMs)
-                        ? Number(graphics._lastVisibleAtMs)
+                if (!visibleRoadPathObjects.has(roadPath) && mesh) {
+                    const lastVisibleAtMs = Number.isFinite(mesh._lastVisibleAtMs)
+                        ? Number(mesh._lastVisibleAtMs)
                         : 0;
                     if (lastVisibleAtMs > 0 && (nowMs - lastVisibleAtMs) > hiddenSpriteGraceMs) {
-                        destroyRoadPathGraphics(roadPath, graphics);
+                        destroyRoadPathMesh(roadPath, mesh);
                         continue;
                     }
-                    graphics.visible = false;
-                    if (Object.prototype.hasOwnProperty.call(graphics, "renderable")) {
-                        graphics.renderable = false;
+                    mesh.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+                        mesh.renderable = false;
                     }
                 }
             }
@@ -16358,6 +16723,15 @@ void main(void) {
                 if (!item) continue;
                 if (depthBillboardRenderedItems.has(item)) continue;
                 if (groundObjectsRenderedItems.has(item)) continue;
+                if (item.type === "roadPath") {
+                    if (item.pixiSprite) {
+                        item.pixiSprite.visible = false;
+                        if (Object.prototype.hasOwnProperty.call(item.pixiSprite, "renderable")) {
+                            item.pixiSprite.renderable = false;
+                        }
+                    }
+                    continue;
+                }
                 if (item.type === "triggerArea") {
                     const triggerOverlayContainer = (!showPickerScreen && this.layers && this.layers.ui)
                         ? this.layers.ui
@@ -17441,6 +17815,8 @@ void main(void) {
             }
 
             const activeKeys = new Set();
+            const wizardLayerIndex = wizard ? this.getWizardVisualLayerIndex(wizard, 0) : null;
+            const wizardFloorMembership = wizard ? this.getRenderItemFloorMembership(wizard, mapRef) : null;
             const parseScriptMessageColor = (value, fallback = 0xFFFFFF) => {
                 if (Number.isFinite(value)) {
                     return Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(value))));
@@ -17468,6 +17844,23 @@ void main(void) {
 
                 const worldPos = this.resolveInterpolatedItemWorldPosition(item, mapRef);
                 if (!worldPos) continue;
+                const itemLayerIndex = this.getLayerIndexForObject(
+                    item,
+                    Number.isFinite(wizardLayerIndex) ? wizardLayerIndex : 0
+                );
+                if (wizard && itemLayerIndex !== wizardLayerIndex) {
+                    continue;
+                }
+                const itemFloorMembership = this.getRenderItemFloorMembership(item, mapRef);
+                if (
+                    wizard &&
+                    itemFloorMembership &&
+                    wizardFloorMembership &&
+                    !this.floorMembershipsMatchForRender(itemFloorMembership, wizardFloorMembership)
+                ) {
+                    continue;
+                }
+                const itemLayerBaseZ = this.getLayerBaseZForObject(item, itemLayerIndex);
                 if (
                     mazeLosActive &&
                     this.isWorldPointInLosShadow(worldPos.x, worldPos.y, wizard, mapRef)
@@ -17528,7 +17921,7 @@ void main(void) {
                     // is centred on its appearance rather than its anchor point.
                     let visCenterX = worldPos.x;
                     let visCenterY = worldPos.y;
-                    let visCenterZ = Number.isFinite(item.z) ? item.z : 0;
+                    let visCenterZ = Number.isFinite(item.z) ? Number(item.z) : 0;
 
                     const itemW = Number.isFinite(item.width) ? item.width : 0;
                     const itemH = Number.isFinite(item.height) ? item.height : 0;
@@ -17569,7 +17962,7 @@ void main(void) {
                     const screenPos = this.camera.worldToScreen(
                         visCenterX + offsetX,
                         visCenterY + offsetY,
-                        visCenterZ
+                        itemLayerBaseZ + visCenterZ
                     );
                     entry.textObj.x = screenPos.x;
                     entry.textObj.y = screenPos.y;
@@ -19330,6 +19723,13 @@ void main(void) {
             const g = this.buildingPlacementPreviewGraphics;
             g.clear();
             const wizard = (ctx && ctx.wizard) || global.wizard || null;
+            if (wizard && this.getWizardVisualLayerIndex(wizard, 0) < 0) {
+                g.visible = false;
+                if (Object.prototype.hasOwnProperty.call(g, "renderable")) {
+                    g.renderable = false;
+                }
+                return;
+            }
             const mapRef = (ctx && ctx.map) || (wizard && wizard.map) || global.map || null;
             const spellSystemRef = (typeof SpellSystem !== "undefined")
                 ? SpellSystem
@@ -19418,6 +19818,9 @@ void main(void) {
             }
 
             g.visible = drawn > 0;
+            if (Object.prototype.hasOwnProperty.call(g, "renderable")) {
+                g.renderable = g.visible;
+            }
             if (g.visible) {
                 this.promoteInteriorPresentationDisplayObject(g, ctx);
             }
@@ -20279,6 +20682,8 @@ void main(void) {
             const triggers = Array.isArray(cutawayState && cutawayState.triggers) ? cutawayState.triggers : [];
             const renderedMeshes = new Set();
             this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame = new Set();
+            this._prototypeBuildingInteriorPendingPlacementIdsThisFrame = new Set();
+            this._prototypeBuildingInteriorHeldPlacementIdsThisFrame = new Set();
             const hasPrototypeInterior = triggers.some(trigger => (
                 this.isPrototypeBuildingCutawayTrigger(trigger) &&
                 trigger.activeInteriorRegion
@@ -20326,9 +20731,9 @@ void main(void) {
                 }
                 return cache;
             };
-            const renderInteriorFloor = (placement, floorId, options = null) => {
+            const renderInteriorFloor = (placement, floorId, options = null, cacheOverride = null) => {
                 if (!this.isPrototypeBuildingInteriorBitmapSourceFloorId(floorId)) return null;
-                const cache = resolveInteriorCache(placement, floorId);
+                const cache = cacheOverride || resolveInteriorCache(placement, floorId);
                 if (cache && cache.status === "ready") {
                     const movePerfEnabled = !!(typeof globalThis !== "undefined" && globalThis.__moveObjectPerf);
                     const renderStartMs = movePerfEnabled ? performance.now() : 0;
@@ -20375,6 +20780,9 @@ void main(void) {
                     }
                     return mesh;
                 }
+                if (cache && cache.status === "loading") {
+                    this._prototypeBuildingInteriorPendingPlacementIdsThisFrame.add(placement.id);
+                }
                 return null;
             };
             let renderedSnapshotThisFrame = false;
@@ -20392,7 +20800,6 @@ void main(void) {
                     ? transition.fromSourceFloorId
                     : "";
                 const progress = Number(transition && transition.progress);
-                const transitionAlphas = this.getPrototypeBuildingInteriorBitmapTransitionAlphas(transition);
                 const hasOutgoingSnapshot = !!(
                     fromFloorId &&
                     fromFloorId !== floorId &&
@@ -20401,9 +20808,10 @@ void main(void) {
                     progress < 1
                 );
                 let outgoingSnapshotReady = false;
+                let fromCache = null;
                 if (hasOutgoingSnapshot) {
                     const snapshotSignature = this.getPrototypeBuildingInteriorFloorSnapshotSignature(ctx, placement, transition);
-                    const fromCache = resolveInteriorCache(placement, fromFloorId);
+                    fromCache = resolveInteriorCache(placement, fromFloorId);
                     if (fromCache && fromCache.status === "ready") {
                         this.capturePrototypeBuildingInteriorFloorSnapshot(ctx, placement, fromCache, transition);
                     }
@@ -20414,12 +20822,35 @@ void main(void) {
                         snapshot.signature === snapshotSignature
                     );
                 }
-                renderInteriorFloor(placement, floorId, { alpha: transitionAlphas.toAlpha, zIndexOffset: 0 });
+                const incomingCache = this.isPrototypeBuildingInteriorBitmapSourceFloorId(floorId)
+                    ? resolveInteriorCache(placement, floorId)
+                    : null;
+                const incomingReady = !!(incomingCache && incomingCache.status === "ready");
+                if (incomingCache && incomingCache.status === "loading") {
+                    this._prototypeBuildingInteriorPendingPlacementIdsThisFrame.add(placement.id);
+                }
+                if (!incomingReady && hasOutgoingSnapshot && fromCache && fromCache.status === "ready") {
+                    const heldMesh = renderInteriorFloor(placement, fromFloorId, {
+                        alpha: 1,
+                        zIndexOffset: 0
+                    }, fromCache);
+                    if (heldMesh) this._prototypeBuildingInteriorHeldPlacementIdsThisFrame.add(placement.id);
+                    continue;
+                }
+                const snapshotTransition = incomingReady
+                    ? transition
+                    : (hasOutgoingSnapshot ? { ...transition, progress: 0 } : transition);
+                const transitionAlphas = this.getPrototypeBuildingInteriorBitmapTransitionAlphas(snapshotTransition);
+                if (!hasOutgoingSnapshot || incomingReady) {
+                    renderInteriorFloor(placement, floorId, { alpha: transitionAlphas.toAlpha, zIndexOffset: 0 }, incomingCache);
+                }
                 if (outgoingSnapshotReady) {
-                    const snapshotDisplay = this.renderPrototypeBuildingInteriorFloorSnapshot(ctx, transition);
+                    const snapshotDisplay = this.renderPrototypeBuildingInteriorFloorSnapshot(ctx, snapshotTransition);
                     if (snapshotDisplay) {
                         renderedSnapshotThisFrame = true;
+                        renderedMeshes.add(snapshotDisplay);
                         this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame.add(placement.id);
+                        this._prototypeBuildingInteriorHeldPlacementIdsThisFrame.add(placement.id);
                     }
                 }
             }
@@ -20498,7 +20929,10 @@ void main(void) {
                 const trigger = triggers[i];
                 const triggerPlacement = trigger && trigger.building && trigger.building._prototypeBuildingPlacement;
                 if (!triggerPlacement || triggerPlacement.id !== placement.id) continue;
-                if (trigger.activeInteriorRegion) continue;
+                if (trigger.activeInteriorRegion) {
+                    alpha = Math.min(alpha, BUILDING_CUTAWAY_INTERIOR_ALPHA);
+                    continue;
+                }
                 const triggerAlpha = Number.isFinite(trigger.alpha)
                     ? Math.max(0, Math.min(1, Number(trigger.alpha)))
                     : BUILDING_CUTAWAY_GHOST_ALPHA;
@@ -20713,16 +21147,37 @@ void main(void) {
                 this.hideUnusedPrototypeBuildingExteriors(new Set());
                 return;
             }
+            const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
+            if (wizardRef && this.getWizardVisualLayerIndex(wizardRef, 0) < 0) {
+                this.hideUnusedPrototypeBuildingExteriors(new Set());
+                return;
+            }
             const placements = mapRef.getPrototypeBuildingPlacements();
             const activeIds = new Set();
             const interiorRenderedIds = this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame instanceof Set
                 ? this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame
                 : null;
+            const interiorPendingIds = this._prototypeBuildingInteriorPendingPlacementIdsThisFrame instanceof Set
+                ? this._prototypeBuildingInteriorPendingPlacementIdsThisFrame
+                : null;
+            const interiorHeldIds = this._prototypeBuildingInteriorHeldPlacementIdsThisFrame instanceof Set
+                ? this._prototypeBuildingInteriorHeldPlacementIdsThisFrame
+                : null;
             for (let i = 0; i < placements.length; i++) {
                 const placement = placements[i];
                 if (!placement || !placement.id) continue;
-                if (interiorRenderedIds && interiorRenderedIds.has(placement.id)) continue;
-                if (this.isPrototypeBuildingExteriorHiddenByInteriorCutaway(placement, ctx)) continue;
+                const waitingForPrototypeInterior = !!(
+                    interiorPendingIds &&
+                    interiorPendingIds.has(placement.id)
+                );
+                if (
+                    interiorRenderedIds &&
+                    interiorRenderedIds.has(placement.id) &&
+                    (!waitingForPrototypeInterior || (interiorHeldIds && interiorHeldIds.has(placement.id)))
+                ) continue;
+                if (this.isPrototypeBuildingExteriorHiddenByInteriorCutaway(placement, ctx)) {
+                    if (!waitingForPrototypeInterior) continue;
+                }
                 let cache = typeof mapRef.getPrototypeBuildingExteriorBitmap === "function"
                     ? mapRef.getPrototypeBuildingExteriorBitmap(placement.id)
                     : null;
