@@ -360,7 +360,7 @@
       "groundPlaneHitbox": {
         "type": "circle",
         "xOffset": 0.0,
-        "yOffset": 0.0,
+        "yOffset": -0.15,
         "radiusFromSizeMultiplier": 0.05
       },
       "visualHitbox": {
@@ -472,11 +472,11 @@
       "groundPlaneHitbox": {
         "type": "polygon",
         "points": [
-          { "x": -0.35, "y": 0.1 },
-          { "x": 0.3, "y": 0.1 },
-          { "x": 0.3, "y": -0.05 },
-          { "x": 0.1, "y": -0.3 },
-          { "x": -0.2, "y": -0.3 }
+          { "x": -0.35, "y": -0.1 },
+          { "x": 0.3, "y": -0.1 },
+          { "x": 0.3, "y": -0.25 },
+          { "x": 0.1, "y": -0.5 },
+          { "x": -0.2, "y": -0.5 }
         ]
       },
       "visualHitbox": {
@@ -504,7 +504,7 @@
       "groundPlaneHitbox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffset": 0,
+        "yOffset": -0.2,
         "radiusFromSizeMultiplier": 0.04
       },
       "visualHitbox": {
@@ -532,7 +532,7 @@
       "groundPlaneHitbox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffset": 0,
+        "yOffset": -0.05,
         "radiusFromSizeMultiplier": 0.035
       },
       "visualHitbox": {
