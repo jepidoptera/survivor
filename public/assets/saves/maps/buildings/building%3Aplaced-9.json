@@ -78911,41 +78911,6 @@
     },
     {
       "type": "placedObject",
-      "x": -41.21632625422278,
-      "y": 123.65391069869803,
-      "hp": 100,
-      "burned": false,
-      "_wasOnFire": false,
-      "z": 0,
-      "traversalLayer": 8,
-      "surfaceId": "building:placed-9:surface:floor-fragment-71",
-      "fragmentId": "building:placed-9:floor:floor-fragment-71",
-      "floorMembership": {
-        "ownerType": "building",
-        "ownerId": "building:placed-9",
-        "floorId": "floor-fragment-71"
-      },
-      "scriptingName": "furniture2",
-      "texturePath": "/assets/images/furniture/crystal%20ball.png",
-      "category": "furniture",
-      "width": 1.372,
-      "height": 1.372,
-      "renderDepthOffset": 0,
-      "rotationAxis": "visual",
-      "placementRotation": 30,
-      "isPassable": false,
-      "blocksTile": false,
-      "doorFallAngle": 0,
-      "doorFallNormalSign": 1,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "castsLosShadows": false,
-      "zMode": "local",
-      "currentLayerBaseZ": 30,
-      "id": 11398
-    },
-    {
-      "type": "placedObject",
       "x": -43.384287999590384,
       "y": 112.98536028119364,
       "hp": 100,
@@ -79013,11 +78978,50 @@
       "zMode": "local",
       "currentLayerBaseZ": 30,
       "id": 11401
+    },
+    {
+      "type": "placedObject",
+      "x": -41.21632625422278,
+      "y": 123.65391069869803,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "z": 0,
+      "traversalLayer": 8,
+      "surfaceId": "building:placed-9:surface:floor-fragment-71",
+      "fragmentId": "building:placed-9:floor:floor-fragment-71",
+      "floorMembership": {
+        "ownerType": "building",
+        "ownerId": "building:placed-9",
+        "floorId": "floor-fragment-71"
+      },
+      "script": {
+        "playerTouches": "scrollMessage(title=\"Wonderful news\", text=\"Your 150 years' house arrest, punishment for the reckless and irresponsible use of highly unstable magic, has been ended by the wizard council. You are now free to go!\n   bye!\");\n   this.message(\"\");\n   player.inventory.set(\"spellCredits\", 6 - player.difficulty);\n   trade(\n      title=\"Choose Your Starting Spells\",\n      currency=\"spellCredits\",\n      currencyLabel=\"Choose:\",\n      entries=[{\n         \"type\":\"magic\",\n         \"id\":\"fireball\",\n         \"image\":\"/assets/images/thumbnails/fireball.png\",\n         \"label\":\"Fireball\",\n         \"buy\":1,\n         \"sell\":1\n      }, {\n         \"type\":\"magic\",\n         \"id\":\"freeze\",\n         \"image\":\"/assets/images/magic/iceball.png\",\n         \"label\":\"Freeze\",\n         \"buy\":1,\n         \"sell\":1\n      }, {\n         \"type\":\"magic\",\n         \"id\":\"spikes\",\n         \"image\":\"/assets/images/magic/spike.png\",\n         \"label\":\"Spikes\",\n         \"buy\":1,\n         \"sell\":1\n      }, {\n         \"type\":\"magic\",\n         \"id\":\"teleport\",\n         \"image\":\"/assets/images/magic/teleport.png\",\n         \"label\":\"Teleport\",\n         \"buy\":1,\n         \"sell\":1\n      }, {\n         \"type\":\"magic\",\n         \"id\":\"invisibility\",\n         \"image\":\"/assets/images/magic/invisible.png\",\n         \"label\":\"Invisibility\",\n         \"buy\":1,\n         \"sell\":1\n      }, {\n         \"type\":\"magic\",\n         \"id\":\"shield\",\n         \"image\":\"/assets/images/magic/shield.png\",\n         \"label\":\"Shield\",\n         \"buy\":1,\n         \"sell\":1\n      }, {\n         \"type\":\"magic\",\n         \"id\":\"omnivision\",\n         \"image\":\"/assets/images/thumbnails/eye.png\",\n         \"label\":\"Omnivision\",\n         \"buy\":1,\n         \"sell\":1\n      }, {\n         \"type\":\"magic\",\n         \"id\":\"healing\",\n         \"image\":\"/assets/images/thumbnails/cross.png\",\n         \"label\":\"Healing\",\n         \"buy\":1,\n         \"sell\":1\n      }, {\n         \"type\":\"magic\",\n         \"id\":\"speed\",\n         \"image\":\"/assets/images/thumbnails/speed.png\",\n         \"label\":\"Speed\",\n         \"buy\":1,\n         \"sell\":1\n      }, {\n         \"type\": \"magic\",\n         \"id\":\"maze\",\n         \"image\": \"/assets/images/thumbnails/maze.png\",\n         \"label\":\"Pathfinder\",\n         \"buy\":1,\n         \"sell\":1\n      }\n   ]);\n   this.deactivate();",
+        "__init": "this.message(\n   text=\"incoming message\",\n   x=0,\n   y=-1,\n   color=\"#4488ff\",\n   fontsize=18\n);\nthis.message(\"\")"
+      },
+      "scriptingName": "furniture2",
+      "texturePath": "/assets/images/furniture/crystal%20ball.png",
+      "category": "furniture",
+      "width": 1.372,
+      "height": 1.372,
+      "renderDepthOffset": 0,
+      "rotationAxis": "visual",
+      "placementRotation": 30,
+      "isPassable": false,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "castsLosShadows": false,
+      "zMode": "local",
+      "currentLayerBaseZ": 30,
+      "id": 11398
     }
   ],
   "animals": [],
   "powerups": [],
   "triggers": [],
   "loadState": "interior",
-  "contentVersion": 7
+  "contentVersion": 25
 }
