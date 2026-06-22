@@ -978,6 +978,7 @@ class GameMap {
         if (!Array.isArray(this.gameObjects)) this.gameObjects = [];
         if (!this.gameObjects.includes(obj)) {
             this.gameObjects.push(obj);
+            this._gameObjectRegistryVersion = (Number(this._gameObjectRegistryVersion) || 0) + 1;
             this.markBuildingRenderCacheDirty();
             return true;
         }
@@ -989,6 +990,7 @@ class GameMap {
         const idx = this.gameObjects.indexOf(obj);
         if (idx < 0) return false;
         this.gameObjects.splice(idx, 1);
+        this._gameObjectRegistryVersion = (Number(this._gameObjectRegistryVersion) || 0) + 1;
         this.markBuildingRenderCacheDirty();
         return true;
     }
@@ -1097,13 +1099,21 @@ class GameMap {
             addObject(wizardRef);
         }
 
+        this._gameObjectRegistryFloorObjectVersion = Number(this._floorObjectNodeCacheVersion) || 0;
+        this._gameObjectRegistryVersion = (Number(this._gameObjectRegistryVersion) || 0) + 1;
         return this.gameObjects;
     }
 
     getGameObjects(options = null) {
         const opts = (options && typeof options === "object") ? options : {};
         if (!Array.isArray(this.gameObjects)) this.gameObjects = [];
-        if (opts.refresh === true || this.gameObjects.length === 0) {
+        const floorObjectVersion = Number(this._floorObjectNodeCacheVersion) || 0;
+        const registryFloorObjectVersion = Number(this._gameObjectRegistryFloorObjectVersion) || 0;
+        if (
+            opts.refresh === true ||
+            this.gameObjects.length === 0 ||
+            registryFloorObjectVersion !== floorObjectVersion
+        ) {
             this.rebuildGameObjectRegistry();
         }
         return this.gameObjects;

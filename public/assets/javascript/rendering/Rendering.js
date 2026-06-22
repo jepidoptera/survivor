@@ -1222,6 +1222,9 @@ void main(void) {
             this.activePowerupDisplayObjects = new Set();
             this.activeProjectileDisplayObjects = new Set();
             this.scriptMessageTextObjects = new Map();
+            this.scriptScreenColorOverlay = null;
+            this.scriptScreenColorOverlayGraphics = null;
+            this.scriptScreenColorOverlayRefreshHandle = null;
             this.pickRenderItems = [];
             this._buildingInteriorPickerFrame = null;
             this.losShadowGraphics = null;
@@ -18226,6 +18229,83 @@ void main(void) {
             }
         }
 
+        applyPowerupPremultipliedDisplayAlpha(powerup, depthMesh, displayAlpha) {
+            if (!powerup || !depthMesh) return;
+            const alpha = Math.max(0, Math.min(1, Number.isFinite(displayAlpha) ? Number(displayAlpha) : 1));
+            const sprite = powerup.pixiSprite || null;
+            const baseAlpha = Math.max(0, Math.min(1, Number.isFinite(sprite && sprite.alpha)
+                ? Number(sprite.alpha)
+                : (Number.isFinite(powerup.billboardAlpha) ? Number(powerup.billboardAlpha) : 1)));
+            const uniforms = depthMesh.shader && depthMesh.shader.uniforms ? depthMesh.shader.uniforms : null;
+            const uTint = uniforms && uniforms.uTint && uniforms.uTint.length >= 4 ? uniforms.uTint : null;
+            if (!uTint) {
+                if (alpha < 0.999 || baseAlpha < 0.999) {
+                    throw new Error(`powerup ${powerup.id || powerup.scriptingName || powerup.imageFileName || "(unknown)"} fade requires depth billboard uTint uniform`);
+                }
+                return;
+            }
+            const finalAlpha = baseAlpha * alpha;
+            uTint[0] *= finalAlpha;
+            uTint[1] *= finalAlpha;
+            uTint[2] *= finalAlpha;
+            uTint[3] = finalAlpha;
+        }
+
+        isPowerupBillboardTextureReady(texture) {
+            if (!texture) return false;
+            if (typeof PIXI !== "undefined" && PIXI.Texture) {
+                if (texture === PIXI.Texture.WHITE || texture === PIXI.Texture.EMPTY) return false;
+            }
+            const baseTexture = texture.baseTexture || null;
+            if (!baseTexture || baseTexture.valid !== true) return false;
+            const frame = texture.frame || texture.orig || null;
+            const width = Number(frame && frame.width);
+            const height = Number(frame && frame.height);
+            return width > 0 && height > 0;
+        }
+
+        watchPowerupPendingTexture(texture) {
+            const baseTexture = texture && texture.baseTexture ? texture.baseTexture : null;
+            if (!baseTexture || baseTexture.valid === true || typeof baseTexture.once !== "function") return;
+            if (!(this._powerupPendingBaseTextures instanceof Set)) {
+                this._powerupPendingBaseTextures = new Set();
+            }
+            if (this._powerupPendingBaseTextures.has(baseTexture)) return;
+            this._powerupPendingBaseTextures.add(baseTexture);
+            let completed = false;
+            const onReady = () => {
+                if (completed) return;
+                completed = true;
+                this._powerupPendingBaseTextures.delete(baseTexture);
+                if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                    globalThis.presentGameFrame();
+                }
+            };
+            baseTexture.once("loaded", onReady);
+            baseTexture.once("error", onReady);
+        }
+
+        hidePowerupDisplayObjects(powerup, sprite = null) {
+            const spriteRef = sprite || (powerup && powerup.pixiSprite) || null;
+            if (spriteRef) {
+                spriteRef.visible = false;
+                if (Object.prototype.hasOwnProperty.call(spriteRef, "renderable")) {
+                    spriteRef.renderable = false;
+                }
+            }
+            const depthMesh = powerup && powerup._renderingDepthMesh ? powerup._renderingDepthMesh : null;
+            if (depthMesh) {
+                depthMesh.visible = false;
+                if (Object.prototype.hasOwnProperty.call(depthMesh, "renderable")) {
+                    depthMesh.renderable = false;
+                }
+            }
+            if (powerup) {
+                powerup._renderingDepthMesh = null;
+                powerup._renderingDisplayObject = null;
+            }
+        }
+
         renderPowerups(ctx) {
             const depthContainer = this.layers.depthObjects;
             if (!depthContainer) return;
@@ -18237,6 +18317,7 @@ void main(void) {
                 !this.isOmnivisionActive(wizard) &&
                 wizard
             );
+            const renderNowMs = Number.isFinite(ctx && ctx.renderNowMs) ? Number(ctx.renderNowMs) : Date.now();
             const wizardLayer = this.getWizardVisualLayerIndex(wizard, 0);
             const cutawayState = this.getLayerCutawayState(ctx);
             const buildingInteriorRenderPlan = this.buildBuildingInteriorRenderPlan(ctx, cutawayState);
@@ -18248,7 +18329,6 @@ void main(void) {
             this._powerupDisplayObjectIdx = ((this._powerupDisplayObjectIdx || 0) + 1) % 2;
             const currentDisplayObjects = this._powerupDisplayObjectSets[this._powerupDisplayObjectIdx];
             currentDisplayObjects.clear();
-            const renderNowMs = Number.isFinite(ctx && ctx.renderNowMs) ? Number(ctx.renderNowMs) : Date.now();
 
             for (let i = 0; i < list.length; i++) {
                 const powerup = list[i];
@@ -18263,30 +18343,28 @@ void main(void) {
                 if (typeof powerup.updateSpriteAnimation === "function") {
                     powerup.updateSpriteAnimation();
                 }
+                const basePowerupAlpha = Math.max(0, Math.min(1, Number.isFinite(powerup.billboardAlpha)
+                    ? Number(powerup.billboardAlpha)
+                    : (Number.isFinite(sprite.alpha) ? Number(sprite.alpha) : 1)));
+                sprite.alpha = basePowerupAlpha;
                 const powerupLayer = this.getLayerIndexForObject(powerup, 0);
                 powerup._renderLayerIndex = powerupLayer;
                 const powerupOnFallRevealLayer = this.isFallRevealHiddenLayer(powerupLayer);
                 const powerupLayerAlpha = this.getLiveLayerFadeMultiplier(powerupLayer, renderNowMs);
-                const insideBuildingUpperFloor = !!(cutawayState && cutawayState.active && wizardLayer > 0);
-                const upperFloorPowerupOnWrongLayer = powerupLayer > 0 && powerupLayer !== wizardLayer;
+                const activeLayerTransition = this._layerFadeTransition || null;
+                const powerupLayerIsUpwardTransitionDestination = !!(
+                    activeLayerTransition &&
+                    powerupLayer === this.getLayerIndexFromValue(activeLayerTransition.toLayer, powerupLayer) &&
+                    powerupLayer === wizardLayer &&
+                    this.getLayerIndexFromValue(activeLayerTransition.toLayer, powerupLayer) >
+                        this.getLayerIndexFromValue(activeLayerTransition.fromLayer, powerupLayer)
+                );
                 if (
-                    ((mazeLosActive || insideBuildingUpperFloor) && powerupLayer !== wizardLayer && !powerupOnFallRevealLayer) ||
-                    (upperFloorPowerupOnWrongLayer && !powerupOnFallRevealLayer) ||
-                    !(powerupLayerAlpha > 0.001) ||
+                    (mazeLosActive && powerupLayer !== wizardLayer && !powerupOnFallRevealLayer) ||
+                    (!(powerupLayerAlpha > 0.001) && !powerupLayerIsUpwardTransitionDestination) ||
                     this.isRenderItemHiddenByLayerCutaway(powerup, powerupLayer, cutawayState, mapRef)
                 ) {
-                    sprite.visible = false;
-                    if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
-                        sprite.renderable = false;
-                    }
-                    if (powerup._renderingDepthMesh) {
-                        powerup._renderingDepthMesh.visible = false;
-                        if (Object.prototype.hasOwnProperty.call(powerup._renderingDepthMesh, "renderable")) {
-                            powerup._renderingDepthMesh.renderable = false;
-                        }
-                    }
-                    powerup._renderingDepthMesh = null;
-                    powerup._renderingDisplayObject = null;
+                    this.hidePowerupDisplayObjects(powerup, sprite);
                     continue;
                 }
 
@@ -18296,18 +18374,7 @@ void main(void) {
                     (mazeLosActive || !this.isForceVisible(powerup)) &&
                     this.isRadialItemHiddenByLos(powerup, wizard, mapRef)
                 ) {
-                    sprite.visible = false;
-                    if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
-                        sprite.renderable = false;
-                    }
-                    if (powerup._renderingDepthMesh) {
-                        powerup._renderingDepthMesh.visible = false;
-                        if (Object.prototype.hasOwnProperty.call(powerup._renderingDepthMesh, "renderable")) {
-                            powerup._renderingDepthMesh.renderable = false;
-                        }
-                    }
-                    powerup._renderingDepthMesh = null;
-                    powerup._renderingDisplayObject = null;
+                    this.hidePowerupDisplayObjects(powerup, sprite);
                     continue;
                 }
 
@@ -18344,6 +18411,11 @@ void main(void) {
                     sprite.texture = PIXI.Texture.from(lodTexturePath);
                     powerup._activeLodTexturePath = lodTexturePath;
                 }
+                if (!this.isPowerupBillboardTextureReady(sprite.texture)) {
+                    this.watchPowerupPendingTexture(sprite.texture);
+                    this.hidePowerupDisplayObjects(powerup, sprite);
+                    continue;
+                }
                 sprite.x = point.x;
                 sprite.y = point.y;
                 sprite.width = w * this.camera.viewscale;
@@ -18355,12 +18427,7 @@ void main(void) {
                 }
 
                 if (!depthMesh) {
-                    sprite.visible = false;
-                    if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
-                        sprite.renderable = false;
-                    }
-                    powerup._renderingDepthMesh = null;
-                    powerup._renderingDisplayObject = null;
+                    this.hidePowerupDisplayObjects(powerup, sprite);
                     continue;
                 }
 
@@ -18370,7 +18437,7 @@ void main(void) {
                 if (depthMesh.parent !== targetContainer) {
                     targetContainer.addChild(depthMesh);
                 }
-                depthMesh.alpha = powerupLayerAlpha;
+                depthMesh.alpha = 1;
                 depthMesh.visible = true;
                 if (Object.prototype.hasOwnProperty.call(depthMesh, "renderable")) {
                     depthMesh.renderable = true;
@@ -18383,6 +18450,7 @@ void main(void) {
                 powerup._renderingDepthMesh = depthMesh;
                 powerup._renderingDisplayObject = depthMesh;
                 this.applyLayerDarknessForItem(powerup, powerupLayer, depthMesh);
+                this.applyPowerupPremultipliedDisplayAlpha(powerup, depthMesh, 1);
                 if (this.applySinkClip(powerup, depthMesh)) {
                     currentDisplayObjects.add(depthMesh);
                     this.addPickRenderItem(powerup, depthMesh, { forceInclude: true });
@@ -18845,6 +18913,165 @@ void main(void) {
                     this.scriptMessageTextObjects.delete(key);
                 }
             }
+        }
+
+        parseScriptScreenColor(value) {
+            if (Number.isFinite(value)) {
+                const numeric = Math.floor(Number(value));
+                if (numeric < 0 || numeric > 0xFFFFFF) {
+                    throw new Error(`screenColor color number out of range: ${value}`);
+                }
+                return numeric;
+            }
+            const text = String(value === undefined || value === null ? "" : value).trim();
+            if (/^#?[0-9a-fA-F]{6}$/.test(text)) {
+                return parseInt(text.replace(/^#/, ""), 16);
+            }
+            if (/^0x[0-9a-fA-F]{6}$/.test(text)) {
+                return parseInt(text.slice(2), 16);
+            }
+            throw new Error(`invalid screenColor color '${text}'`);
+        }
+
+        startScriptScreenColorOverlay(color, opacity, duration, fade) {
+            const parsedColor = this.parseScriptScreenColor(color);
+            const parsedOpacity = Number(opacity);
+            const parsedDuration = Number(duration);
+            const parsedFade = Number(fade);
+            if (!Number.isFinite(parsedOpacity)) {
+                throw new Error("screenColor opacity must be a finite number");
+            }
+            if (!Number.isFinite(parsedDuration)) {
+                throw new Error("screenColor duration must be a finite number of seconds");
+            }
+            if (!Number.isFinite(parsedFade)) {
+                throw new Error("screenColor fade must be a finite number of seconds");
+            }
+            const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now();
+            this.scriptScreenColorOverlay = {
+                color: parsedColor,
+                opacity: Math.max(0, Math.min(1, parsedOpacity)),
+                startedAtMs: nowMs,
+                durationMs: Math.max(0, parsedDuration * 1000),
+                fadeMs: Math.max(0, parsedFade * 1000)
+            };
+            this.scheduleScriptScreenColorOverlayRefresh();
+            if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                globalThis.presentGameFrame();
+            }
+            return true;
+        }
+
+        scheduleScriptScreenColorOverlayRefresh() {
+            if (this.scriptScreenColorOverlayRefreshHandle !== null) return;
+            if (typeof requestAnimationFrame !== "function") return;
+            this.scriptScreenColorOverlayRefreshHandle = requestAnimationFrame(() => {
+                this.scriptScreenColorOverlayRefreshHandle = null;
+                if (!this.scriptScreenColorOverlay) return;
+                if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                    globalThis.presentGameFrame();
+                }
+                if (this.scriptScreenColorOverlay) {
+                    this.scheduleScriptScreenColorOverlayRefresh();
+                }
+            });
+        }
+
+        clearScriptScreenColorOverlay() {
+            this.scriptScreenColorOverlay = null;
+            if (this.scriptScreenColorOverlayRefreshHandle !== null && typeof cancelAnimationFrame === "function") {
+                cancelAnimationFrame(this.scriptScreenColorOverlayRefreshHandle);
+            }
+            this.scriptScreenColorOverlayRefreshHandle = null;
+            const gfx = this.scriptScreenColorOverlayGraphics;
+            if (gfx) {
+                gfx.visible = false;
+                if (gfx.parent) gfx.parent.removeChild(gfx);
+                if (typeof gfx.clear === "function") gfx.clear();
+            }
+        }
+
+        getScriptScreenColorOverlayOpacity(nowMs) {
+            const overlay = this.scriptScreenColorOverlay;
+            if (!overlay) return 0;
+            const elapsedMs = Math.max(0, nowMs - overlay.startedAtMs);
+            const opacity = Math.max(0, Math.min(1, Number(overlay.opacity) || 0));
+            if (elapsedMs <= overlay.durationMs) {
+                return opacity;
+            }
+            if (overlay.fadeMs <= 0) {
+                return 0;
+            }
+            const fadeElapsedMs = elapsedMs - overlay.durationMs;
+            const fadeProgress = Math.max(0, Math.min(1, fadeElapsedMs / overlay.fadeMs));
+            return opacity * (1 - fadeProgress);
+        }
+
+        renderScriptScreenColorOverlay(ctx) {
+            if (!this.scriptScreenColorOverlay) {
+                this.clearScriptScreenColorOverlay();
+                return;
+            }
+            if (typeof PIXI === "undefined" || !PIXI.Graphics) {
+                throw new Error("screenColor overlay requires PIXI.Graphics");
+            }
+            const appRef = (ctx && ctx.app) || global.app || null;
+            const stage = appRef && appRef.stage ? appRef.stage : null;
+            if (!stage) {
+                throw new Error("screenColor overlay requires the Pixi app stage");
+            }
+            const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now();
+            const alpha = this.getScriptScreenColorOverlayOpacity(nowMs);
+            if (!(alpha > 0)) {
+                this.clearScriptScreenColorOverlay();
+                return;
+            }
+            let gfx = this.scriptScreenColorOverlayGraphics;
+            if (!gfx) {
+                gfx = new PIXI.Graphics();
+                gfx.name = "scriptScreenColorOverlay";
+                gfx.interactive = false;
+                gfx.interactiveChildren = false;
+                this.scriptScreenColorOverlayGraphics = gfx;
+            }
+            const screen = appRef.screen || {};
+            const renderer = appRef.renderer || {};
+            const width = Math.max(1, Number(screen.width) || Number(renderer.width) || Number(global.innerWidth) || 1);
+            const height = Math.max(1, Number(screen.height) || Number(renderer.height) || Number(global.innerHeight) || 1);
+            gfx.clear();
+            gfx.beginFill(this.scriptScreenColorOverlay.color, 1);
+            gfx.drawRect(0, 0, width, height);
+            gfx.endFill();
+            gfx.alpha = alpha;
+            gfx.visible = true;
+            gfx.position.set(0, 0);
+            gfx.scale.set(1, 1);
+            if (gfx.parent !== stage) {
+                stage.addChild(gfx);
+            }
+            const cursorLayerRef = global.cursorLayer || null;
+            if (
+                cursorLayerRef &&
+                cursorLayerRef.parent === stage &&
+                typeof stage.getChildIndex === "function" &&
+                typeof stage.setChildIndex === "function"
+            ) {
+                const gfxIndex = stage.getChildIndex(gfx);
+                const cursorIndex = stage.getChildIndex(cursorLayerRef);
+                const targetIndex = gfxIndex < cursorIndex
+                    ? Math.max(0, cursorIndex - 1)
+                    : Math.max(0, cursorIndex);
+                if (gfxIndex !== targetIndex) {
+                    stage.setChildIndex(gfx, targetIndex);
+                }
+            } else if (typeof stage.setChildIndex === "function" && Array.isArray(stage.children)) {
+                stage.setChildIndex(gfx, Math.max(0, stage.children.length - 1));
+            }
+            this.scheduleScriptScreenColorOverlayRefresh();
         }
 
         getMousePosRef(ctx) {
@@ -23195,6 +23422,9 @@ void main(void) {
                     drawNodeInspectorOverlay(this.layers.ui, this.camera);
                 }
             });
+            this.profileDrawPassSection("renderScriptScreenColorOverlay", () => {
+                this.renderScriptScreenColorOverlay(ctx);
+            });
             this._activeDrawFrameId = 0;
             return true;
         }
@@ -23229,6 +23459,13 @@ void main(void) {
         },
         getLayers() {
             return singleton && singleton.layers ? singleton.layers : null;
+        },
+        screenColor(color, opacity, duration, fade) {
+            if (!global.RenderingCamera || !global.RenderingLayers || typeof PIXI === "undefined") {
+                throw new Error("screenColor requires the Rendering runtime");
+            }
+            if (!singleton) singleton = new RenderingImpl();
+            return singleton.startScriptScreenColorOverlay(color, opacity, duration, fade);
         },
         isBuildingInteriorPresentationActive(ctx = null) {
             if (!singleton || typeof singleton.isBuildingInteriorPresentationActive !== "function") return false;

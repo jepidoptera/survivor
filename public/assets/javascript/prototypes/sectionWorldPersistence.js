@@ -1203,7 +1203,6 @@
                     if (nextRecords.length === records.length) continue;
                     removed = true;
                     instance.powerups = nextRecords;
-                    instance.contentVersion = (Number(instance.contentVersion) || 1) + 1;
                     markPrototypeBuildingUnitDirtyForPersistence(buildingId);
                 }
             }
@@ -1234,7 +1233,6 @@
                     ...recordData,
                     id: recordId
                 });
-                instance.contentVersion = (Number(instance.contentVersion) || 1) + 1;
                 markPrototypeBuildingUnitDirtyForPersistence(owner.id);
             } else {
                 ownerSectionKey = owner.id;
