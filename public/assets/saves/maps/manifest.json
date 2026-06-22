@@ -1,15 +1,15 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -42.221311310156096,
-    "y": 117.80791972826862,
+    "x": -43.39482660709585,
+    "y": 117.0824304961417,
     "z": 0,
     "currentLayer": 8,
     "traversalLayer": 8,
     "currentLayerBaseZ": 30,
     "surfaceId": "building:placed-9:surface:floor-fragment-71",
     "fragmentId": "building:placed-9:floor:floor-fragment-71",
-    "hp": 48.24999999999868,
+    "hp": 45.458333333331396,
     "maxHp": 100,
     "mp": 100,
     "maxMp": 100,
@@ -24,16 +24,18 @@
     "shieldHp": 0,
     "maxShieldHp": 0,
     "food": 0,
-    "currentSpell": "editscript",
-    "activeAura": null,
-    "activeAuras": [],
+    "currentSpell": "blackdiamond",
+    "activeAura": "speed",
+    "activeAuras": [
+      "speed"
+    ],
     "unlockedMagic": [],
     "selectedFlooringTexture": "/assets/images/flooring/dirt.jpg",
     "selectedTreeTextureVariant": "random",
-    "selectedPlaceableCategory": "furniture",
-    "selectedPlaceableTexturePath": "/assets/images/furniture/armor.png",
+    "selectedPlaceableCategory": "flowers",
+    "selectedPlaceableTexturePath": "/assets/images/flowers/white%20rosebush.png",
     "selectedPlaceableByCategory": {
-      "flowers": "/assets/images/flowers/thornflowers.png",
+      "flowers": "/assets/images/flowers/white%20rosebush.png",
       "windows": "/assets/images/windows/very%20plain%20arch.png",
       "doors": "/assets/images/doors/door2.png",
       "furniture": "/assets/images/furniture/armor.png",
@@ -60,9 +62,10 @@
       "/assets/images/furniture/table.png": 0,
       "/assets/images/furniture/bed.png": 0,
       "/assets/images/furniture/bed2.png": 0,
-      "/assets/images/furniture/armor.png": 0
+      "/assets/images/furniture/armor.png": 0,
+      "/assets/images/flowers/white%20rosebush.png": 0
     },
-    "selectedPlaceableScale": 1.5,
+    "selectedPlaceableScale": 2.773,
     "selectedPlaceableScaleByTexture": {
       "/assets/images/doors/door5.png": 1,
       "/assets/images/windows/window.png": 0.997,
@@ -82,7 +85,8 @@
       "/assets/images/furniture/table.png": 2.733,
       "/assets/images/furniture/bed.png": 6.196,
       "/assets/images/furniture/bed2.png": 3.657,
-      "/assets/images/furniture/armor.png": 1.5
+      "/assets/images/furniture/armor.png": 1.5,
+      "/assets/images/flowers/white%20rosebush.png": 2.773
     },
     "selectedPlaceableRotation": 0,
     "selectedPlaceableRotationByTexture": {
@@ -104,7 +108,8 @@
       "/assets/images/furniture/table.png": 30,
       "/assets/images/furniture/bed.png": 0,
       "/assets/images/furniture/bed2.png": 0,
-      "/assets/images/furniture/armor.png": 0
+      "/assets/images/furniture/armor.png": 0,
+      "/assets/images/flowers/white%20rosebush.png": 0
     },
     "selectedPlaceableRotationAxis": "none",
     "selectedPlaceableRotationAxisByTexture": {
@@ -126,10 +131,11 @@
       "/assets/images/furniture/table.png": "visual",
       "/assets/images/furniture/bed.png": "visual",
       "/assets/images/furniture/bed2.png": "visual",
-      "/assets/images/furniture/armor.png": "none"
+      "/assets/images/furniture/armor.png": "none",
+      "/assets/images/flowers/white%20rosebush.png": "none"
     },
     "selectedPlaceableAnchorX": 0.5,
-    "selectedPlaceableAnchorY": 0.9,
+    "selectedPlaceableAnchorY": 0.5,
     "selectedPlaceableAnchorXByTexture": {
       "/assets/images/doors/door5.png": 0.5,
       "/assets/images/windows/window.png": 0.5,
@@ -149,7 +155,8 @@
       "/assets/images/furniture/table.png": 0.5,
       "/assets/images/furniture/bed.png": 0.5,
       "/assets/images/furniture/bed2.png": 0.5,
-      "/assets/images/furniture/armor.png": 0.5
+      "/assets/images/furniture/armor.png": 0.5,
+      "/assets/images/flowers/white%20rosebush.png": 0.5
     },
     "selectedPlaceableAnchorYByTexture": {
       "/assets/images/doors/door5.png": 1,
@@ -170,11 +177,12 @@
       "/assets/images/furniture/table.png": 0.5,
       "/assets/images/furniture/bed.png": 0.5,
       "/assets/images/furniture/bed2.png": 0.5,
-      "/assets/images/furniture/armor.png": 0.9
+      "/assets/images/furniture/armor.png": 0.9,
+      "/assets/images/flowers/white%20rosebush.png": 0.5
     },
-    "selectedPowerupPlacementScale": 2.043,
-    "selectedPowerupFileName": "chalice.png",
-    "selectedEditorCategory": "furniture",
+    "selectedPowerupPlacementScale": 1.269,
+    "selectedPowerupFileName": "spellbook2.png",
+    "selectedEditorCategory": "powerups",
     "selectedFloorEditLevel": 8,
     "selectedWallHeight": 6,
     "selectedWallThickness": 0.25,
@@ -255,8 +263,8 @@
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -57.717307840253945,
-      "y": 104.30765671852654
+      "x": -58.89482660709585,
+      "y": 103.57594159766009
     }
   },
   "los": {

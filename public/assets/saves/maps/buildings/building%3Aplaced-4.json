@@ -3504,37 +3504,11 @@
       "surfaceId": "building:placed-4:surface:floor-fragment-34"
     }
   ],
-  "animals": [
-    {
-      "type": "squirrel",
-      "x": -133.14750000000004,
-      "y": 201.87500000000009,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.5521505999139358,
-      "inventory": {},
-      "traversalLayer": 1,
-      "surfaceId": "building:placed-4:surface:floor-fragment-34",
-      "fragmentId": "building:placed-4:floor:floor-fragment-34",
-      "floorMembership": {
-        "ownerType": "building",
-        "ownerId": "building:placed-4",
-        "floorId": "floor-fragment-34"
-      },
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel1",
-      "id": 262
-    }
-  ],
+  "animals": [],
   "powerups": [],
   "triggers": [],
   "loadState": "interior",
-  "contentVersion": 726,
+  "contentVersion": 727,
   "movementBlockedEdges": [
     {
       "id": "building:placed-4:movement-edge:0",
