@@ -3936,23 +3936,10 @@ void main(void) {
                     });
                     break;
                 case 'roadPath':
-                    obj = new RoadPath(
-                        Array.isArray(data.points) ? data.points : data.pathPoints,
-                        map,
-                        {
-                            width: Number.isFinite(data.width) ? Number(data.width) : undefined,
-                            fillTexturePath: (typeof data.fillTexturePath === 'string' && data.fillTexturePath.length > 0)
-                                ? data.fillTexturePath
-                                : undefined,
-                            traversalLayer: Number.isFinite(data.traversalLayer)
-                                ? Math.round(Number(data.traversalLayer))
-                                : (Number.isFinite(data.level) ? Math.round(Number(data.level)) : undefined),
-                            level: Number.isFinite(data.level)
-                                ? Math.round(Number(data.level))
-                                : (Number.isFinite(data.traversalLayer) ? Math.round(Number(data.traversalLayer)) : undefined),
-                            suppressAutoScriptingName: !!options.suppressAutoScriptingName
-                        }
-                    );
+                    if (typeof RoadPath !== 'function') return null;
+                    obj = RoadPath.loadJson(data, map, {
+                        suppressAutoScriptingName: !!options.suppressAutoScriptingName
+                    });
                     break;
                 case 'firewall':
                     if (typeof FirewallEmitter === 'function') {
@@ -6849,37 +6836,48 @@ class RoadPath extends StaticObject {
 
     saveJson() {
         const data = super.saveJson();
+        const points = Array.isArray(this.pathPoints) ? this.pathPoints : [];
         data.type = "roadPath";
-        data.points = this.pathPoints.map(point => ({
-            x: Number(point.x),
-            y: Number(point.y)
-        }));
-        data.width = Number(this.roadWidth);
+        data.points = points.map((point, index) => RoadPath.normalizePoint(point, `road path save point ${index}`));
+        data.width = RoadPath.normalizeWidth(this.roadWidth);
         data.fillTexturePath = RoadPath.normalizeFillTexturePath(this.fillTexturePath);
         data.isPassable = true;
+        data.blocksTile = false;
         data.castsLosShadows = false;
         return data;
     }
 
     static loadJson(data, map, options = {}) {
-        if (!data || !map) return null;
-        return new RoadPath(
-            Array.isArray(data.points) ? data.points : data.pathPoints,
-            map,
-            {
-                width: Number.isFinite(data.width) ? Number(data.width) : undefined,
-                fillTexturePath: (typeof data.fillTexturePath === "string" && data.fillTexturePath.length > 0)
-                    ? data.fillTexturePath
-                    : undefined,
-                traversalLayer: Number.isFinite(data.traversalLayer)
-                    ? Math.round(Number(data.traversalLayer))
-                    : (Number.isFinite(data.level) ? Math.round(Number(data.level)) : undefined),
-                level: Number.isFinite(data.level)
-                    ? Math.round(Number(data.level))
-                    : (Number.isFinite(data.traversalLayer) ? Math.round(Number(data.traversalLayer)) : undefined),
-                suppressAutoScriptingName: !!options.suppressAutoScriptingName
-            }
-        );
+        if (!data || typeof data !== "object" || !map) return null;
+        const rawPoints = Array.isArray(data.points)
+            ? data.points
+            : (Array.isArray(data.pathPoints) ? data.pathPoints : null);
+        if (!rawPoints) {
+            throw new Error("Cannot load road path without points.");
+        }
+        const width = Number.isFinite(data.width)
+            ? Number(data.width)
+            : (Number.isFinite(data.roadWidth) ? Number(data.roadWidth) : RoadPath.DEFAULT_WIDTH);
+        const traversalLayer = Number.isFinite(data.traversalLayer)
+            ? Math.round(Number(data.traversalLayer))
+            : (Number.isFinite(data.level) ? Math.round(Number(data.level)) : undefined);
+        const roadPath = new RoadPath(rawPoints, map, {
+            width,
+            fillTexturePath: data.fillTexturePath,
+            traversalLayer,
+            level: traversalLayer,
+            suppressAutoScriptingName: !!options.suppressAutoScriptingName
+        });
+        if (typeof data.scriptingName === "string" && data.scriptingName.trim().length > 0) {
+            roadPath.scriptingName = data.scriptingName.trim();
+        }
+        if (Number.isFinite(data.renderZ)) {
+            roadPath.renderZ = Number(data.renderZ);
+        }
+        if (Number.isFinite(data.alpha)) {
+            roadPath.alpha = Math.max(0, Math.min(1, Number(data.alpha)));
+        }
+        return roadPath;
     }
 }
 

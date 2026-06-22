@@ -469,6 +469,183 @@
         map.ensurePrototypeSectionClearance = function ensurePrototypeSectionClearanceForMap(sectionKeys = null) {
             return rebuildPrototypeSectionClearance(this, sectionKeys);
         };
+        const clonePrototypeExportObjectRecord = (obj) => {
+            return obj && typeof obj === "object" ? JSON.parse(JSON.stringify(obj)) : obj;
+        };
+        const normalizeRoadPathExportPoint = (raw, label) => {
+            const x = Number(raw && raw.x);
+            const y = Number(raw && raw.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                throw new Error(`${label} requires finite x/y`);
+            }
+            return { x, y };
+        };
+        const getRoadPathExportSectionPolygon = (mapRef, sectionKey) => {
+            const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+            const asset = mapRef && typeof mapRef.getPrototypeSectionAsset === "function"
+                ? mapRef.getPrototypeSectionAsset(sectionKey)
+                : null;
+            const geometry = runtimeGlobalScope && runtimeGlobalScope.__sectionGeometry
+                ? runtimeGlobalScope.__sectionGeometry
+                : null;
+            if (
+                !state ||
+                !state.basis ||
+                !asset ||
+                !asset.centerAxial ||
+                !geometry ||
+                typeof geometry.getSectionHexagonCorners !== "function"
+            ) {
+                throw new Error(`Cannot split exported road path for section ${sectionKey}; section polygon geometry is unavailable.`);
+            }
+            const polygon = geometry.getSectionHexagonCorners(asset.centerAxial, state.basis);
+            if (!Array.isArray(polygon) || polygon.length < 3) {
+                throw new Error(`Cannot split exported road path for section ${sectionKey}; section polygon is invalid.`);
+            }
+            return polygon.map((point, index) => normalizeRoadPathExportPoint(point, `section ${sectionKey} polygon point ${index}`));
+        };
+        const roadPathExportSegmentIntersectionT = (a, b, c, d) => {
+            const ax = Number(a.x);
+            const ay = Number(a.y);
+            const bx = Number(b.x);
+            const by = Number(b.y);
+            const cx = Number(c.x);
+            const cy = Number(c.y);
+            const dx = Number(d.x);
+            const dy = Number(d.y);
+            const rx = bx - ax;
+            const ry = by - ay;
+            const sx = dx - cx;
+            const sy = dy - cy;
+            const denom = (rx * sy) - (ry * sx);
+            if (Math.abs(denom) <= 1e-9) return null;
+            const qpx = cx - ax;
+            const qpy = cy - ay;
+            const t = ((qpx * sy) - (qpy * sx)) / denom;
+            const u = ((qpx * ry) - (qpy * rx)) / denom;
+            const eps = 1e-9;
+            if (t <= eps || t >= 1 - eps || u < -eps || u > 1 + eps) return null;
+            return Math.max(0, Math.min(1, t));
+        };
+        const splitRoadPathExportPointsAtPolygon = (points, polygon) => {
+            const out = [];
+            for (let i = 0; i < points.length - 1; i++) {
+                const start = points[i];
+                const end = points[i + 1];
+                if (i === 0) out.push({ x: start.x, y: start.y });
+                const cuts = [];
+                for (let e = 0; e < polygon.length; e++) {
+                    const t = roadPathExportSegmentIntersectionT(start, end, polygon[e], polygon[(e + 1) % polygon.length]);
+                    if (t === null) continue;
+                    if (!cuts.some((existing) => Math.abs(existing - t) <= 1e-7)) cuts.push(t);
+                }
+                cuts.sort((a, b) => a - b);
+                for (let c = 0; c < cuts.length; c++) {
+                    const t = cuts[c];
+                    out.push({
+                        x: start.x + ((end.x - start.x) * t),
+                        y: start.y + ((end.y - start.y) * t)
+                    });
+                }
+                out.push({ x: end.x, y: end.y });
+            }
+            const deduped = [];
+            for (let i = 0; i < out.length; i++) {
+                const point = out[i];
+                const prev = deduped[deduped.length - 1];
+                if (!prev || Math.hypot(point.x - prev.x, point.y - prev.y) > 1e-7) deduped.push(point);
+            }
+            return deduped;
+        };
+        const splitRoadPathExportRecord = (mapRef, record, ownerSectionKey) => {
+            if (!record || record.type !== "roadPath") {
+                return [{ sectionKey: ownerSectionKey, record: clonePrototypeExportObjectRecord(record) }];
+            }
+            const rawPoints = Array.isArray(record.points)
+                ? record.points
+                : (Array.isArray(record.pathPoints) ? record.pathPoints : null);
+            if (!rawPoints) {
+                throw new Error(`Cannot export road path in section ${ownerSectionKey}; points are missing.`);
+            }
+            const points = rawPoints.map((point, index) => normalizeRoadPathExportPoint(point, `road path export point ${index}`));
+            if (points.length < 2) {
+                throw new Error(`Cannot export road path in section ${ownerSectionKey}; at least two points are required.`);
+            }
+            if (!mapRef || typeof mapRef.getPrototypeSectionKeyForWorldPoint !== "function") {
+                throw new Error("Cannot split exported road path; section lookup is unavailable.");
+            }
+            const candidateKeys = new Set();
+            if (typeof ownerSectionKey === "string" && ownerSectionKey.length > 0) candidateKeys.add(ownerSectionKey);
+            const addCandidate = (point) => {
+                const key = mapRef.getPrototypeSectionKeyForWorldPoint(point.x, point.y);
+                if (typeof key === "string" && key.length > 0) candidateKeys.add(key);
+            };
+            for (let i = 0; i < points.length; i++) addCandidate(points[i]);
+            const state = mapRef._prototypeSectionState || null;
+            for (let i = 0; i < points.length - 1; i++) {
+                const a = points[i];
+                const b = points[i + 1];
+                const mid = { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 };
+                addCandidate(mid);
+                const length = Math.hypot(b.x - a.x, b.y - a.y);
+                const sampleStride = Math.max(1, Math.floor(Number(state && state.radius) || 12) * 0.75);
+                const steps = Math.max(1, Math.ceil(length / sampleStride));
+                for (let step = 1; step < steps; step++) {
+                    const t = step / steps;
+                    addCandidate({
+                        x: a.x + ((b.x - a.x) * t),
+                        y: a.y + ((b.y - a.y) * t)
+                    });
+                }
+            }
+            const withNeighbors = Array.from(candidateKeys);
+            for (let i = 0; i < withNeighbors.length; i++) {
+                const asset = mapRef.getPrototypeSectionAsset(withNeighbors[i]);
+                const neighbors = Array.isArray(asset && asset.neighborKeys) ? asset.neighborKeys : [];
+                for (let n = 0; n < neighbors.length; n++) {
+                    if (typeof neighbors[n] === "string" && neighbors[n].length > 0) candidateKeys.add(neighbors[n]);
+                }
+            }
+            let splitPoints = points;
+            for (const sectionKey of candidateKeys) {
+                splitPoints = splitRoadPathExportPointsAtPolygon(
+                    splitPoints,
+                    getRoadPathExportSectionPolygon(mapRef, sectionKey)
+                );
+            }
+            const sequentialPieces = [];
+            for (let i = 0; i < splitPoints.length - 1; i++) {
+                const a = splitPoints[i];
+                const b = splitPoints[i + 1];
+                if (Math.hypot(b.x - a.x, b.y - a.y) <= 1e-7) continue;
+                const mid = { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 };
+                const sectionKey = mapRef.getPrototypeSectionKeyForWorldPoint(mid.x, mid.y);
+                if (typeof sectionKey !== "string" || sectionKey.length === 0) {
+                    throw new Error("Cannot export road path split span without an owning section.");
+                }
+                const current = sequentialPieces[sequentialPieces.length - 1] || null;
+                if (current && current.sectionKey === sectionKey) {
+                    current.points.push(b);
+                } else {
+                    sequentialPieces.push({ sectionKey, points: [a, b] });
+                }
+            }
+            const pieces = [];
+            for (let i = 0; i < sequentialPieces.length; i++) {
+                const piece = sequentialPieces[i];
+                const cloned = clonePrototypeExportObjectRecord(record);
+                cloned.points = piece.points.map((point, index) => normalizeRoadPathExportPoint(point, `road path export split ${i} point ${index}`));
+                delete cloned.pathPoints;
+                cloned.x = cloned.points[0].x;
+                cloned.y = cloned.points[0].y;
+                if (i > 0) delete cloned.id;
+                pieces.push({ sectionKey: piece.sectionKey, record: cloned });
+            }
+            if (pieces.length === 0) {
+                throw new Error(`Cannot export road path in section ${ownerSectionKey}; no section-owned spans were produced.`);
+            }
+            return pieces;
+        };
         map.exportPrototypeSectionAssets = function exportPrototypeSectionAssets(sectionKeys = null) {
             const state = this._prototypeSectionState;
             if (!state || !Array.isArray(state.orderedSectionAssets)) return [];
@@ -481,50 +658,87 @@
             const keyFilter = sectionKeys instanceof Set
                 ? sectionKeys
                 : (Array.isArray(sectionKeys) ? new Set(sectionKeys) : null);
-            return state.orderedSectionAssets
+            const cloneExportSectionAsset = (asset) => ({
+                id: asset.id,
+                key: asset.key,
+                coord: { q: asset.coord.q, r: asset.coord.r },
+                centerAxial: { q: asset.centerAxial.q, r: asset.centerAxial.r },
+                centerOffset: { x: asset.centerOffset.x, y: asset.centerOffset.y },
+                neighborKeys: Array.isArray(asset.neighborKeys) ? asset.neighborKeys.slice() : [],
+                tileCoordKeys: Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys.slice() : [],
+                groundTextureId: Number.isFinite(asset.groundTextureId) ? Number(asset.groundTextureId) : 0,
+                groundTiles: (asset.groundTiles && typeof asset.groundTiles === "object") ? { ...asset.groundTiles } : {},
+                floors: clonePrototypeFloorRecords(asset.floors, asset.key),
+                floorHoles: typeof clonePrototypeFloorHoleRecords === "function" ? clonePrototypeFloorHoleRecords(asset.floorHoles) : [],
+                floorVoids: typeof clonePrototypeFloorVoidRecords === "function" ? clonePrototypeFloorVoidRecords(asset.floorVoids) : [],
+                walls: Array.isArray(asset.walls) ? asset.walls.map((wall) => ({ ...wall })) : [],
+                blockedEdges: clonePrototypeBlockedEdges(asset.blockedEdges),
+                clearanceByTile: clonePrototypeClearanceByTile(asset.clearanceByTile),
+                objects: Array.isArray(asset.objects) ? asset.objects.map((obj) => ({ ...obj })) : [],
+                animals: Array.isArray(asset.animals) ? asset.animals.map((animal) => ({ ...animal })) : [],
+                powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : [],
+                buildingRefs: (() => {
+                    if (!Array.isArray(asset.buildingRefs)) return [];
+                    const refs = [];
+                    const seen = new Set();
+                    for (let i = 0; i < asset.buildingRefs.length; i++) {
+                        const ref = asset.buildingRefs[i];
+                        const id = String(ref && ref.id || "").trim();
+                        if (!/^building:[A-Za-z0-9_.:-]+$/.test(id)) {
+                            throw new Error(`section ${asset.key} buildingRefs ${i} requires a valid building id`);
+                        }
+                        if (seen.has(id)) {
+                            throw new Error(`section ${asset.key} buildingRefs contains duplicate building ref ${id}`);
+                        }
+                        seen.add(id);
+                        refs.push({ id, shell: ref && ref.shell === false ? false : true });
+                    }
+                    return refs;
+                })()
+            });
+            const exportedSections = state.orderedSectionAssets
                 .filter((asset) => {
                     if (!asset) return false;
                     if (keyFilter && !keyFilter.has(asset.key)) return false;
                     return true;
                 })
-                .map((asset) => ({
-                    id: asset.id,
-                    key: asset.key,
-                    coord: { q: asset.coord.q, r: asset.coord.r },
-                    centerAxial: { q: asset.centerAxial.q, r: asset.centerAxial.r },
-                    centerOffset: { x: asset.centerOffset.x, y: asset.centerOffset.y },
-                    neighborKeys: Array.isArray(asset.neighborKeys) ? asset.neighborKeys.slice() : [],
-                    tileCoordKeys: Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys.slice() : [],
-                    groundTextureId: Number.isFinite(asset.groundTextureId) ? Number(asset.groundTextureId) : 0,
-                    groundTiles: (asset.groundTiles && typeof asset.groundTiles === "object") ? { ...asset.groundTiles } : {},
-                    floors: clonePrototypeFloorRecords(asset.floors, asset.key),
-                    floorHoles: typeof clonePrototypeFloorHoleRecords === "function" ? clonePrototypeFloorHoleRecords(asset.floorHoles) : [],
-                    floorVoids: typeof clonePrototypeFloorVoidRecords === "function" ? clonePrototypeFloorVoidRecords(asset.floorVoids) : [],
-                    walls: Array.isArray(asset.walls) ? asset.walls.map((wall) => ({ ...wall })) : [],
-                    blockedEdges: clonePrototypeBlockedEdges(asset.blockedEdges),
-                    clearanceByTile: clonePrototypeClearanceByTile(asset.clearanceByTile),
-                    objects: Array.isArray(asset.objects) ? asset.objects.map((obj) => ({ ...obj })) : [],
-                    animals: Array.isArray(asset.animals) ? asset.animals.map((animal) => ({ ...animal })) : [],
-                    powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : [],
-                    buildingRefs: (() => {
-                        if (!Array.isArray(asset.buildingRefs)) return [];
-                        const refs = [];
-                        const seen = new Set();
-                        for (let i = 0; i < asset.buildingRefs.length; i++) {
-                            const ref = asset.buildingRefs[i];
-                            const id = String(ref && ref.id || "").trim();
-                            if (!/^building:[A-Za-z0-9_.:-]+$/.test(id)) {
-                                throw new Error(`section ${asset.key} buildingRefs ${i} requires a valid building id`);
+                .map(cloneExportSectionAsset);
+            const exportedByKey = new Map();
+            for (let i = 0; i < exportedSections.length; i++) {
+                const section = exportedSections[i];
+                if (section && typeof section.key === "string" && section.key.length > 0) {
+                    section._unsplitObjects = Array.isArray(section.objects) ? section.objects : [];
+                    section.objects = [];
+                    exportedByKey.set(section.key, section);
+                }
+            }
+            for (let i = 0; i < exportedSections.length; i++) {
+                const section = exportedSections[i];
+                if (!section || typeof section.key !== "string" || section.key.length === 0) continue;
+                const records = Array.isArray(section._unsplitObjects) ? section._unsplitObjects : [];
+                for (let r = 0; r < records.length; r++) {
+                    const pieces = splitRoadPathExportRecord(this, records[r], section.key);
+                    for (let p = 0; p < pieces.length; p++) {
+                        let targetSection = exportedByKey.get(pieces[p].sectionKey);
+                        if (!targetSection) {
+                            const targetAsset = typeof this.getPrototypeSectionAsset === "function"
+                                ? this.getPrototypeSectionAsset(pieces[p].sectionKey)
+                                : null;
+                            if (!targetAsset) {
+                                throw new Error(`Cannot export road path split for missing section ${pieces[p].sectionKey}.`);
                             }
-                            if (seen.has(id)) {
-                                throw new Error(`section ${asset.key} buildingRefs contains duplicate building ref ${id}`);
-                            }
-                            seen.add(id);
-                            refs.push({ id, shell: ref && ref.shell === false ? false : true });
+                            targetSection = cloneExportSectionAsset(targetAsset);
+                            targetSection._unsplitObjects = Array.isArray(targetSection.objects) ? targetSection.objects : [];
+                            targetSection.objects = [];
+                            exportedSections.push(targetSection);
+                            exportedByKey.set(targetSection.key, targetSection);
                         }
-                        return refs;
-                    })()
-                }));
+                        targetSection.objects.push(pieces[p].record);
+                    }
+                }
+                delete section._unsplitObjects;
+            }
+            return exportedSections;
         };
         map.exportPrototypeFloorTransitions = function exportPrototypeFloorTransitions() {
             const state = this._prototypeSectionState;

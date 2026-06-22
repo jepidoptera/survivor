@@ -667,6 +667,304 @@ function clonePrototypeBuildingSectionRefs(refs, label = "section buildingRefs")
     return out;
 }
 
+function clonePrototypeSectionWorldObjectRecord(obj) {
+    return obj && typeof obj === "object" ? JSON.parse(JSON.stringify(obj)) : obj;
+}
+
+function normalizeRoadPathSavePoint(raw, label) {
+    const x = Number(raw && raw.x);
+    const y = Number(raw && raw.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        throw new Error(`${label} requires finite x/y`);
+    }
+    return { x, y };
+}
+
+function getSectionWorldSaveGeometryApi() {
+    return (typeof globalThis !== "undefined" && globalThis.__sectionGeometry)
+        ? globalThis.__sectionGeometry
+        : null;
+}
+
+function getPrototypeSectionSavePolygon(mapRef, sectionKey) {
+    const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+    const asset = mapRef && typeof mapRef.getPrototypeSectionAsset === "function"
+        ? mapRef.getPrototypeSectionAsset(sectionKey)
+        : null;
+    const geometry = getSectionWorldSaveGeometryApi();
+    if (
+        !asset ||
+        !asset.centerAxial ||
+        !state ||
+        !state.basis ||
+        !geometry ||
+        typeof geometry.getSectionHexagonCorners !== "function"
+    ) {
+        throw new Error(`Cannot split road path for section ${sectionKey}; section polygon geometry is unavailable.`);
+    }
+    const polygon = geometry.getSectionHexagonCorners(asset.centerAxial, state.basis);
+    if (!Array.isArray(polygon) || polygon.length < 3) {
+        throw new Error(`Cannot split road path for section ${sectionKey}; section polygon is invalid.`);
+    }
+    return polygon.map((point, index) => normalizeRoadPathSavePoint(point, `section ${sectionKey} polygon point ${index}`));
+}
+
+function roadPathSaveSegmentIntersectionT(a, b, c, d) {
+    const ax = Number(a.x);
+    const ay = Number(a.y);
+    const bx = Number(b.x);
+    const by = Number(b.y);
+    const cx = Number(c.x);
+    const cy = Number(c.y);
+    const dx = Number(d.x);
+    const dy = Number(d.y);
+    const rx = bx - ax;
+    const ry = by - ay;
+    const sx = dx - cx;
+    const sy = dy - cy;
+    const denom = (rx * sy) - (ry * sx);
+    if (Math.abs(denom) <= 1e-9) return null;
+    const qpx = cx - ax;
+    const qpy = cy - ay;
+    const t = ((qpx * sy) - (qpy * sx)) / denom;
+    const u = ((qpx * ry) - (qpy * rx)) / denom;
+    const eps = 1e-9;
+    if (t <= eps || t >= 1 - eps || u < -eps || u > 1 + eps) return null;
+    return Math.max(0, Math.min(1, t));
+}
+
+function splitRoadPathSavePointsAtSectionPolygon(points, polygon) {
+    const out = [];
+    for (let i = 0; i < points.length - 1; i++) {
+        const start = points[i];
+        const end = points[i + 1];
+        if (i === 0) out.push({ x: start.x, y: start.y });
+        const cuts = [];
+        for (let e = 0; e < polygon.length; e++) {
+            const t = roadPathSaveSegmentIntersectionT(start, end, polygon[e], polygon[(e + 1) % polygon.length]);
+            if (t === null) continue;
+            if (!cuts.some((existing) => Math.abs(existing - t) <= 1e-7)) cuts.push(t);
+        }
+        cuts.sort((a, b) => a - b);
+        for (let c = 0; c < cuts.length; c++) {
+            const t = cuts[c];
+            out.push({
+                x: start.x + ((end.x - start.x) * t),
+                y: start.y + ((end.y - start.y) * t)
+            });
+        }
+        out.push({ x: end.x, y: end.y });
+    }
+    const deduped = [];
+    for (let i = 0; i < out.length; i++) {
+        const point = out[i];
+        const prev = deduped[deduped.length - 1];
+        if (!prev || Math.hypot(point.x - prev.x, point.y - prev.y) > 1e-7) {
+            deduped.push(point);
+        }
+    }
+    return deduped;
+}
+
+function cloneRoadPathSaveRecordForPoints(record, points, sectionKey, pieceIndex) {
+    const cloned = clonePrototypeSectionWorldObjectRecord(record);
+    cloned.points = points.map((point, index) => normalizeRoadPathSavePoint(point, `road path split ${pieceIndex} point ${index}`));
+    delete cloned.pathPoints;
+    cloned.x = cloned.points[0].x;
+    cloned.y = cloned.points[0].y;
+    if (typeof cloned.scriptingName === "string" && cloned.scriptingName.length > 0) {
+        cloned.scriptingName = `${cloned.scriptingName}_${sectionKey.replace(/[^A-Za-z0-9_$]/g, "_")}_${pieceIndex}`;
+    }
+    return cloned;
+}
+
+function splitRoadPathSaveRecordBySection(mapRef, record, ownerSectionKey) {
+    if (!record || record.type !== "roadPath") return [{ sectionKey: ownerSectionKey, record: clonePrototypeSectionWorldObjectRecord(record) }];
+    const rawPoints = Array.isArray(record.points)
+        ? record.points
+        : (Array.isArray(record.pathPoints) ? record.pathPoints : null);
+    if (!rawPoints) {
+        throw new Error(`Cannot save road path in section ${ownerSectionKey}; points are missing.`);
+    }
+    const points = rawPoints.map((point, index) => normalizeRoadPathSavePoint(point, `road path save point ${index}`));
+    if (points.length < 2) {
+        throw new Error(`Cannot save road path in section ${ownerSectionKey}; at least two points are required.`);
+    }
+    if (!mapRef || typeof mapRef.getPrototypeSectionKeyForWorldPoint !== "function") {
+        throw new Error("Cannot split road path for save; section lookup is unavailable.");
+    }
+    const candidateKeys = new Set();
+    if (typeof ownerSectionKey === "string" && ownerSectionKey.length > 0) candidateKeys.add(ownerSectionKey);
+    for (let i = 0; i < points.length; i++) {
+        const key = mapRef.getPrototypeSectionKeyForWorldPoint(points[i].x, points[i].y);
+        if (typeof key === "string" && key.length > 0) candidateKeys.add(key);
+    }
+    const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+    const addSectionKeyForPoint = (point) => {
+        const key = mapRef.getPrototypeSectionKeyForWorldPoint(point.x, point.y);
+        if (typeof key === "string" && key.length > 0) candidateKeys.add(key);
+    };
+    for (let i = 0; i < points.length - 1; i++) {
+        const mid = {
+            x: (points[i].x + points[i + 1].x) * 0.5,
+            y: (points[i].y + points[i + 1].y) * 0.5
+        };
+        addSectionKeyForPoint(points[i]);
+        addSectionKeyForPoint(mid);
+        addSectionKeyForPoint(points[i + 1]);
+        const length = Math.hypot(points[i + 1].x - points[i].x, points[i + 1].y - points[i].y);
+        const sampleStride = Math.max(1, Math.floor(Number(state && state.radius) || 12) * 0.75);
+        const steps = Math.max(1, Math.ceil(length / sampleStride));
+        for (let step = 1; step < steps; step++) {
+            const t = step / steps;
+            addSectionKeyForPoint({
+                x: points[i].x + ((points[i + 1].x - points[i].x) * t),
+                y: points[i].y + ((points[i + 1].y - points[i].y) * t)
+            });
+        }
+    }
+    const withNeighbors = Array.from(candidateKeys);
+    for (let i = 0; i < withNeighbors.length; i++) {
+        const asset = mapRef.getPrototypeSectionAsset(withNeighbors[i]);
+        const neighbors = Array.isArray(asset && asset.neighborKeys) ? asset.neighborKeys : [];
+        for (let n = 0; n < neighbors.length; n++) {
+            if (typeof neighbors[n] === "string" && neighbors[n].length > 0) candidateKeys.add(neighbors[n]);
+        }
+    }
+    let splitPoints = points;
+    for (const sectionKey of candidateKeys) {
+        splitPoints = splitRoadPathSavePointsAtSectionPolygon(
+            splitPoints,
+            getPrototypeSectionSavePolygon(mapRef, sectionKey)
+        );
+    }
+    const sequentialPieces = [];
+    const pushSpan = (sectionKey, a, b) => {
+        if (typeof sectionKey !== "string" || sectionKey.length === 0) {
+            throw new Error("Cannot save road path split span without an owning section.");
+        }
+        const current = sequentialPieces[sequentialPieces.length - 1] || null;
+        if (current && current.sectionKey === sectionKey) {
+            current.points.push(b);
+        } else {
+            sequentialPieces.push({ sectionKey, points: [a, b] });
+        }
+    };
+    for (let i = 0; i < splitPoints.length - 1; i++) {
+        const a = splitPoints[i];
+        const b = splitPoints[i + 1];
+        if (Math.hypot(b.x - a.x, b.y - a.y) <= 1e-7) continue;
+        const midpoint = { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 };
+        const sectionKey = mapRef.getPrototypeSectionKeyForWorldPoint(midpoint.x, midpoint.y);
+        pushSpan(sectionKey, a, b);
+    }
+    const pieces = [];
+    for (let pieceIndex = 0; pieceIndex < sequentialPieces.length; pieceIndex++) {
+        const piece = sequentialPieces[pieceIndex];
+        const sectionPoints = piece.points;
+        const deduped = [];
+        for (let i = 0; i < sectionPoints.length; i++) {
+            const point = sectionPoints[i];
+            const prev = deduped[deduped.length - 1];
+            if (!prev || Math.hypot(point.x - prev.x, point.y - prev.y) > 1e-7) deduped.push(point);
+        }
+        if (deduped.length < 2) continue;
+        pieces.push({
+            sectionKey: piece.sectionKey,
+            record: cloneRoadPathSaveRecordForPoints(record, deduped, piece.sectionKey, pieceIndex)
+        });
+    }
+    if (pieces.length === 0) {
+        throw new Error(`Cannot save road path in section ${ownerSectionKey}; no section-owned spans were produced.`);
+    }
+    if (pieces.length > 1) {
+        for (let i = 1; i < pieces.length; i++) {
+            delete pieces[i].record.id;
+        }
+    }
+    return pieces;
+}
+
+function splitPrototypeSectionObjectsForSave(mapRef, sectionKey, objects) {
+    const records = Array.isArray(objects) ? objects : [];
+    const bySectionKey = new Map();
+    const pushRecord = (targetSectionKey, record) => {
+        if (typeof targetSectionKey !== "string" || targetSectionKey.length === 0) {
+            throw new Error("Cannot save section object without a target section key.");
+        }
+        if (!bySectionKey.has(targetSectionKey)) bySectionKey.set(targetSectionKey, []);
+        bySectionKey.get(targetSectionKey).push(record);
+    };
+    for (let i = 0; i < records.length; i++) {
+        const record = records[i];
+        if (record && record.type === "roadPath") {
+            const pieces = splitRoadPathSaveRecordBySection(mapRef, record, sectionKey);
+            for (let p = 0; p < pieces.length; p++) {
+                pushRecord(pieces[p].sectionKey, pieces[p].record);
+            }
+        } else {
+            pushRecord(sectionKey, clonePrototypeSectionWorldObjectRecord(record));
+        }
+    }
+    return bySectionKey;
+}
+
+function buildPrototypeSectionObjectSaveMap(mapRef, sectionKeys) {
+    if (!mapRef || typeof mapRef.getPrototypeSectionAsset !== "function") {
+        throw new Error("Cannot prepare section objects for save; section asset lookup is unavailable.");
+    }
+    const keys = Array.isArray(sectionKeys)
+        ? sectionKeys.filter((key) => typeof key === "string" && key.length > 0)
+        : [];
+    const seenKeys = new Set(keys);
+    const objectsBySectionKey = new Map();
+    for (let i = 0; i < keys.length; i++) {
+        const sectionKey = keys[i];
+        const asset = mapRef.getPrototypeSectionAsset(sectionKey);
+        if (!asset) continue;
+        const splitBySection = splitPrototypeSectionObjectsForSave(mapRef, sectionKey, asset.objects);
+        for (const [targetSectionKey, objects] of splitBySection.entries()) {
+            const targetAsset = mapRef.getPrototypeSectionAsset(targetSectionKey);
+            if (!targetAsset) {
+                throw new Error(`Cannot save road path split for missing section ${targetSectionKey}.`);
+            }
+            if (!seenKeys.has(targetSectionKey)) {
+                seenKeys.add(targetSectionKey);
+                keys.push(targetSectionKey);
+            }
+            if (!objectsBySectionKey.has(targetSectionKey)) objectsBySectionKey.set(targetSectionKey, []);
+            objectsBySectionKey.get(targetSectionKey).push(...objects);
+        }
+    }
+    return { loadedSectionKeys: keys, objectsBySectionKey };
+}
+
+function applyRoadPathSectionSplitsToExportedSections(mapRef, sections) {
+    if (!Array.isArray(sections) || sections.length === 0) return sections;
+    const sectionsByKey = new Map();
+    for (let i = 0; i < sections.length; i++) {
+        const section = sections[i];
+        if (!section || typeof section !== "object" || typeof section.key !== "string" || section.key.length === 0) continue;
+        sectionsByKey.set(section.key, section);
+        section._unsplitObjects = Array.isArray(section.objects) ? section.objects : [];
+        section.objects = [];
+    }
+    for (let i = 0; i < sections.length; i++) {
+        const section = sections[i];
+        if (!section || typeof section.key !== "string" || section.key.length === 0) continue;
+        const splitBySection = splitPrototypeSectionObjectsForSave(mapRef, section.key, section._unsplitObjects || []);
+        for (const [targetSectionKey, objects] of splitBySection.entries()) {
+            const target = sectionsByKey.get(targetSectionKey);
+            if (!target) {
+                throw new Error(`Cannot save road path split for unloaded section ${targetSectionKey}.`);
+            }
+            target.objects.push(...objects);
+        }
+        delete section._unsplitObjects;
+    }
+    return sections;
+}
+
 function buildPrototypeSaveSlotMetadata(saveData, options = {}) {
     const slotData = JSON.parse(JSON.stringify(saveData || {}));
     const world = (slotData.prototypeSectionWorld && typeof slotData.prototypeSectionWorld === "object")
@@ -1516,21 +1814,27 @@ function saveGameState(options = {}) {
             ? map.exportPrototypeSectionWorld()
             : null;
         const clonePrototypeSection = (section) => JSON.parse(JSON.stringify(section));
-        const loadedSectionKeys = includeAllPrototypeSections
+        let loadedSectionKeys = includeAllPrototypeSections
             ? ((state.sectionAssetsByKey instanceof Map)
                 ? Array.from(state.sectionAssetsByKey.keys())
                 : ((Array.isArray(exportedSections) ? exportedSections.map(section => section && section.key) : [])
                     .filter((key) => typeof key === "string" && key.length > 0)))
             : activeKeys.filter((key) => typeof key === "string" && key.length > 0);
         const sections = [];
+        let objectSaveMap = null;
 
         if (includeAllPrototypeSections && Array.isArray(exportedSections) && exportedSections.length > 0) {
+            const clonedSections = [];
             for (let i = 0; i < exportedSections.length; i++) {
                 const section = exportedSections[i];
                 if (!section || typeof section !== "object") continue;
-                sections.push(clonePrototypeSection(section));
+                clonedSections.push(clonePrototypeSection(section));
             }
+            applyRoadPathSectionSplitsToExportedSections(map, clonedSections);
+            sections.push(...clonedSections);
         } else {
+            objectSaveMap = buildPrototypeSectionObjectSaveMap(map, loadedSectionKeys);
+            loadedSectionKeys = objectSaveMap.loadedSectionKeys;
             for (let i = 0; i < loadedSectionKeys.length; i++) {
                 const sectionKey = loadedSectionKeys[i];
                 const asset = (typeof map.getPrototypeSectionAsset === "function")
@@ -1561,10 +1865,9 @@ function saveGameState(options = {}) {
                     groundTextureId: Number.isFinite(asset.groundTextureId) ? Number(asset.groundTextureId) : 0,
                     groundTiles,
                     walls: Array.isArray(asset.walls) ? asset.walls.map((wall) => ({ ...wall })) : [],
-                    objects: Array.isArray(asset.objects)
-                        ? asset.objects
-                            .map((obj) => ({ ...obj }))
-                        : [],
+                    objects: objectSaveMap && objectSaveMap.objectsBySectionKey instanceof Map
+                        ? (objectSaveMap.objectsBySectionKey.get(sectionKey) || [])
+                        : (Array.isArray(asset.objects) ? asset.objects.map((obj) => ({ ...obj })) : []),
                     animals: Array.isArray(asset.animals) ? asset.animals.map((animal) => ({ ...animal })) : [],
                     powerups: Array.isArray(asset.powerups) ? asset.powerups.map((powerup) => ({ ...powerup })) : [],
                     buildingRefs: clonePrototypeBuildingSectionRefs(asset.buildingRefs, `section ${asset.key} buildingRefs`)
@@ -1742,7 +2045,7 @@ function logPrototypeLoadDetail(mapInstance, label = "post-sync") {
 
 function isPrototypeLegacyStaticRecord(objData) {
     const type = (objData && typeof objData.type === "string") ? objData.type : "";
-    return type === "road" || type === "tree" || type === "roof" || type === "wallSection";
+    return type === "road" || type === "roadPath" || type === "tree" || type === "roof" || type === "wallSection";
 }
 
 function getSavedStaticObjectTraversalLayer(objData) {
@@ -2718,7 +3021,7 @@ async function savePrototypeSectionWorldToServerSlot(slotName) {
     const wizardData = activeWizard ? activeWizard.saveJson() : null;
     sanitizeWizardSaveMovementSupport(wizardData);
 
-    const exportedSections = map.exportPrototypeSectionAssets();
+    const exportedSections = applyRoadPathSectionSplitsToExportedSections(map, map.exportPrototypeSectionAssets());
     const payload = {
         manifest: {
             wizard: wizardData,
