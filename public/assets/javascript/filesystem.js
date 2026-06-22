@@ -228,13 +228,35 @@ function getLazyTreeHydrationEnvelope(record) {
     };
 }
 
+function getViewportProjectedWorldCenter() {
+    const camera = viewport;
+    const cameraZ = Number.isFinite(camera && camera.z) ? Number(camera.z) : 0;
+    const cameraX = Number.isFinite(camera && camera.x) ? Number(camera.x) : 0;
+    const cameraY = Number.isFinite(camera && camera.y) ? Number(camera.y) : 0;
+    const cameraWidth = Number.isFinite(camera && camera.width) ? Number(camera.width) : 0;
+    const cameraHeight = Number.isFinite(camera && camera.height) ? Number(camera.height) : 0;
+    return {
+        x: cameraX + cameraWidth * 0.5,
+        y: cameraY + cameraHeight * 0.5,
+        cameraZ
+    };
+}
+
+function getProjectedWorldYForScreenSpace(worldY, worldZ, cameraZ) {
+    const y = Number(worldY);
+    const z = Number(worldZ);
+    const camZ = Number(cameraZ);
+    if (!Number.isFinite(y) || !Number.isFinite(z) || !Number.isFinite(camZ)) return NaN;
+    return y - (z - camZ);
+}
+
 function hydrateVisibleLazyRoads(options = {}) {
     if (!map || !viewport || lazyRoadStore.recordsByKey.size === 0) return 0;
     const maxPerFrame = Number.isFinite(options.maxPerFrame) ? Math.max(1, Math.floor(options.maxPerFrame)) : 48;
     const paddingWorld = Number.isFinite(options.paddingWorld) ? Math.max(0, options.paddingWorld) : 8;
-    const camera = viewport;
-    const centerX = camera.x + viewport.width * 0.5;
-    const centerY = camera.y + viewport.height * 0.5;
+    const projectedCenter = getViewportProjectedWorldCenter();
+    const centerX = projectedCenter.x;
+    const centerY = projectedCenter.y;
     const maxX = viewport.width * 0.5 + paddingWorld;
     const maxY = viewport.height * 0.5 + paddingWorld;
 
@@ -244,9 +266,10 @@ function hydrateVisibleLazyRoads(options = {}) {
         const dx = (map && typeof map.shortestDeltaX === "function")
             ? map.shortestDeltaX(centerX, record.x)
             : (record.x - centerX);
+        const projectedY = getProjectedWorldYForScreenSpace(record.y, 0, projectedCenter.cameraZ);
         const dy = (map && typeof map.shortestDeltaY === "function")
-            ? map.shortestDeltaY(centerY, record.y)
-            : (record.y - centerY);
+            ? map.shortestDeltaY(centerY, projectedY)
+            : (projectedY - centerY);
         if (Math.abs(dx) > maxX || Math.abs(dy) > maxY) continue;
         const created = StaticObject.loadJson(record, map);
         if (created) {
@@ -261,9 +284,9 @@ function hydrateVisibleLazyTrees(options = {}) {
     if (!map || !viewport || lazyTreeStore.recordsByKey.size === 0) return 0;
     const maxPerFrame = Number.isFinite(options.maxPerFrame) ? Math.max(1, Math.floor(options.maxPerFrame)) : 48;
     const paddingWorld = Number.isFinite(options.paddingWorld) ? Math.max(0, options.paddingWorld) : 8;
-    const camera = viewport;
-    const centerX = camera.x + viewport.width * 0.5;
-    const centerY = camera.y + viewport.height * 0.5;
+    const projectedCenter = getViewportProjectedWorldCenter();
+    const centerX = projectedCenter.x;
+    const centerY = projectedCenter.y;
     const maxX = viewport.width * 0.5 + paddingWorld;
     const maxY = viewport.height * 0.5 + paddingWorld;
 
@@ -274,11 +297,19 @@ function hydrateVisibleLazyTrees(options = {}) {
         const dx = (map && typeof map.shortestDeltaX === "function")
             ? map.shortestDeltaX(centerX, record.x)
             : (record.x - centerX);
-        const dy = (map && typeof map.shortestDeltaY === "function")
-            ? map.shortestDeltaY(centerY, record.y)
-            : (record.y - centerY);
+        const projectedBaseY = getProjectedWorldYForScreenSpace(record.y, 0, projectedCenter.cameraZ);
+        const projectedTopY = getProjectedWorldYForScreenSpace(record.y, envelope.aboveBase, projectedCenter.cameraZ);
+        const projectedBottomY = getProjectedWorldYForScreenSpace(record.y, -envelope.belowBase, projectedCenter.cameraZ);
+        const projectedMinY = Math.min(projectedBaseY, projectedTopY, projectedBottomY);
+        const projectedMaxY = Math.max(projectedBaseY, projectedTopY, projectedBottomY);
+        const dyMin = (map && typeof map.shortestDeltaY === "function")
+            ? map.shortestDeltaY(centerY, projectedMinY)
+            : (projectedMinY - centerY);
+        const dyMax = (map && typeof map.shortestDeltaY === "function")
+            ? map.shortestDeltaY(centerY, projectedMaxY)
+            : (projectedMaxY - centerY);
         const withinX = Math.abs(dx) <= (maxX + envelope.halfWidth);
-        const withinY = (dy - envelope.aboveBase) <= maxY && (dy + envelope.belowBase) >= -maxY;
+        const withinY = dyMin <= maxY && dyMax >= -maxY;
         if (!withinX || !withinY) continue;
         const created = StaticObject.loadJson(record, map);
         if (created) {
@@ -709,6 +740,121 @@ function getPrototypeSectionSavePolygon(mapRef, sectionKey) {
     return polygon.map((point, index) => normalizeRoadPathSavePoint(point, `section ${sectionKey} polygon point ${index}`));
 }
 
+function getPrototypeSectionSavePolygonCached(mapRef, sectionKey, polygonCache) {
+    if (polygonCache instanceof Map && polygonCache.has(sectionKey)) return polygonCache.get(sectionKey);
+    const polygon = getPrototypeSectionSavePolygon(mapRef, sectionKey);
+    if (polygonCache instanceof Map) polygonCache.set(sectionKey, polygon);
+    return polygon;
+}
+
+function roadPathSavePointOnSegment(point, a, b, eps = 1e-6) {
+    const px = Number(point && point.x);
+    const py = Number(point && point.y);
+    const ax = Number(a && a.x);
+    const ay = Number(a && a.y);
+    const bx = Number(b && b.x);
+    const by = Number(b && b.y);
+    if (![px, py, ax, ay, bx, by].every(Number.isFinite)) return false;
+    const cross = ((px - ax) * (by - ay)) - ((py - ay) * (bx - ax));
+    if (Math.abs(cross) > eps) return false;
+    const dot = ((px - ax) * (bx - ax)) + ((py - ay) * (by - ay));
+    if (dot < -eps) return false;
+    const lenSq = ((bx - ax) * (bx - ax)) + ((by - ay) * (by - ay));
+    return dot <= lenSq + eps;
+}
+
+function roadPathSavePointInPolygon(point, polygon, eps = 1e-6) {
+    if (!Array.isArray(polygon) || polygon.length < 3) return false;
+    const x = Number(point && point.x);
+    const y = Number(point && point.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    for (let i = 0; i < polygon.length; i++) {
+        if (roadPathSavePointOnSegment(point, polygon[i], polygon[(i + 1) % polygon.length], eps)) {
+            return true;
+        }
+    }
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        const xi = Number(polygon[i].x);
+        const yi = Number(polygon[i].y);
+        const xj = Number(polygon[j].x);
+        const yj = Number(polygon[j].y);
+        if (![xi, yi, xj, yj].every(Number.isFinite)) continue;
+        const intersects = ((yi > y) !== (yj > y)) &&
+            (x < (((xj - xi) * (y - yi)) / ((yj - yi) || 1e-12)) + xi);
+        if (intersects) inside = !inside;
+    }
+    return inside;
+}
+
+function getRoadPathSaveSectionCenterDistanceSq(mapRef, sectionKey, point) {
+    const asset = mapRef && typeof mapRef.getPrototypeSectionAsset === "function"
+        ? mapRef.getPrototypeSectionAsset(sectionKey)
+        : null;
+    const center = asset && asset.centerOffset ? asset.centerOffset : null;
+    const cx = Number(center && center.x);
+    const cy = Number(center && center.y);
+    const px = Number(point && point.x);
+    const py = Number(point && point.y);
+    if (![cx, cy, px, py].every(Number.isFinite)) return Infinity;
+    return ((px - cx) * (px - cx)) + ((py - cy) * (py - cy));
+}
+
+function resolveRoadPathSaveSectionKeyForPoint(mapRef, point, candidateKeys, polygonCache, label) {
+    const candidates = new Set();
+    if (candidateKeys instanceof Set) {
+        candidateKeys.forEach((key) => {
+            if (typeof key === "string" && key.length > 0) candidates.add(key);
+        });
+    }
+    const runtimeKey = (
+        mapRef &&
+        typeof mapRef.getPrototypeSectionKeyForWorldPoint === "function"
+    ) ? mapRef.getPrototypeSectionKeyForWorldPoint(point.x, point.y) : null;
+    if (typeof runtimeKey === "string" && runtimeKey.length > 0) candidates.add(runtimeKey);
+
+    const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+    const geometry = getSectionWorldSaveGeometryApi();
+    let geometricKey = "";
+    if (
+        state &&
+        geometry &&
+        typeof geometry.resolvePrototypeSectionCoordForWorldPosition === "function" &&
+        typeof geometry.makeSectionKey === "function"
+    ) {
+        const coord = geometry.resolvePrototypeSectionCoordForWorldPosition(state, point.x, point.y);
+        geometricKey = geometry.makeSectionKey(coord);
+        if (typeof geometricKey === "string" && geometricKey.length > 0) candidates.add(geometricKey);
+    }
+
+    const matches = [];
+    candidates.forEach((sectionKey) => {
+        const asset = typeof mapRef.getPrototypeSectionAsset === "function"
+            ? mapRef.getPrototypeSectionAsset(sectionKey)
+            : null;
+        if (!asset) return;
+        const polygon = getPrototypeSectionSavePolygonCached(mapRef, sectionKey, polygonCache);
+        if (!roadPathSavePointInPolygon(point, polygon)) return;
+        matches.push({
+            key: sectionKey,
+            priority: sectionKey === geometricKey ? 0 : (sectionKey === runtimeKey ? 1 : 2),
+            distanceSq: getRoadPathSaveSectionCenterDistanceSq(mapRef, sectionKey, point)
+        });
+    });
+    if (matches.length > 0) {
+        matches.sort((a, b) => {
+            if (a.priority !== b.priority) return a.priority - b.priority;
+            if (a.distanceSq !== b.distanceSq) return a.distanceSq - b.distanceSq;
+            return a.key.localeCompare(b.key);
+        });
+        return matches[0].key;
+    }
+    const checked = Array.from(candidates).join(", ");
+    throw new Error(
+        `Cannot save road path ${label || "split span"} at (${Number(point.x).toFixed(3)}, ${Number(point.y).toFixed(3)}) without an owning section; checked ${checked || "no"} section candidates.`
+    );
+}
+
 function roadPathSaveSegmentIntersectionT(a, b, c, d) {
     const ax = Number(a.x);
     const ay = Number(a.y);
@@ -790,18 +936,31 @@ function splitRoadPathSaveRecordBySection(mapRef, record, ownerSectionKey) {
     if (points.length < 2) {
         throw new Error(`Cannot save road path in section ${ownerSectionKey}; at least two points are required.`);
     }
-    if (!mapRef || typeof mapRef.getPrototypeSectionKeyForWorldPoint !== "function") {
-        throw new Error("Cannot split road path for save; section lookup is unavailable.");
+    if (!mapRef || typeof mapRef.getPrototypeSectionAsset !== "function") {
+        throw new Error("Cannot split road path for save; section asset lookup is unavailable.");
     }
+    const polygonCache = new Map();
     const candidateKeys = new Set();
     if (typeof ownerSectionKey === "string" && ownerSectionKey.length > 0) candidateKeys.add(ownerSectionKey);
     for (let i = 0; i < points.length; i++) {
-        const key = mapRef.getPrototypeSectionKeyForWorldPoint(points[i].x, points[i].y);
+        const key = resolveRoadPathSaveSectionKeyForPoint(
+            mapRef,
+            points[i],
+            candidateKeys,
+            polygonCache,
+            "candidate point"
+        );
         if (typeof key === "string" && key.length > 0) candidateKeys.add(key);
     }
     const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
     const addSectionKeyForPoint = (point) => {
-        const key = mapRef.getPrototypeSectionKeyForWorldPoint(point.x, point.y);
+        const key = resolveRoadPathSaveSectionKeyForPoint(
+            mapRef,
+            point,
+            candidateKeys,
+            polygonCache,
+            "candidate point"
+        );
         if (typeof key === "string" && key.length > 0) candidateKeys.add(key);
     };
     for (let i = 0; i < points.length - 1; i++) {
@@ -835,7 +994,7 @@ function splitRoadPathSaveRecordBySection(mapRef, record, ownerSectionKey) {
     for (const sectionKey of candidateKeys) {
         splitPoints = splitRoadPathSavePointsAtSectionPolygon(
             splitPoints,
-            getPrototypeSectionSavePolygon(mapRef, sectionKey)
+            getPrototypeSectionSavePolygonCached(mapRef, sectionKey, polygonCache)
         );
     }
     const sequentialPieces = [];
@@ -855,7 +1014,13 @@ function splitRoadPathSaveRecordBySection(mapRef, record, ownerSectionKey) {
         const b = splitPoints[i + 1];
         if (Math.hypot(b.x - a.x, b.y - a.y) <= 1e-7) continue;
         const midpoint = { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 };
-        const sectionKey = mapRef.getPrototypeSectionKeyForWorldPoint(midpoint.x, midpoint.y);
+        const sectionKey = resolveRoadPathSaveSectionKeyForPoint(
+            mapRef,
+            midpoint,
+            candidateKeys,
+            polygonCache,
+            "split span"
+        );
         pushSpan(sectionKey, a, b);
     }
     const pieces = [];
@@ -883,6 +1048,10 @@ function splitRoadPathSaveRecordBySection(mapRef, record, ownerSectionKey) {
         }
     }
     return pieces;
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.splitRoadPathSaveRecordBySection = splitRoadPathSaveRecordBySection;
 }
 
 function splitPrototypeSectionObjectsForSave(mapRef, sectionKey, objects) {
@@ -927,6 +1096,9 @@ function buildPrototypeSectionObjectSaveMap(mapRef, sectionKeys) {
             const targetAsset = mapRef.getPrototypeSectionAsset(targetSectionKey);
             if (!targetAsset) {
                 throw new Error(`Cannot save road path split for missing section ${targetSectionKey}.`);
+            }
+            if (targetAsset._prototypeSectionHydrated === false) {
+                throw new Error(`Cannot save road path split for unhydrated section ${targetSectionKey}.`);
             }
             if (!seenKeys.has(targetSectionKey)) {
                 seenKeys.add(targetSectionKey);
@@ -1841,6 +2013,9 @@ function saveGameState(options = {}) {
                     ? map.getPrototypeSectionAsset(sectionKey)
                     : null;
                 if (!asset) continue;
+                if (asset._prototypeSectionHydrated === false) {
+                    throw new Error(`Cannot save unhydrated section ${sectionKey}.`);
+                }
 
                 const sectionNodes = state.nodesBySectionKey instanceof Map
                     ? (state.nodesBySectionKey.get(sectionKey) || [])

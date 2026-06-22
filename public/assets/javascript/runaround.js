@@ -6250,6 +6250,18 @@ jQuery(() => {
             const rect = app.view.getBoundingClientRect();
             const dragScreenX = Number.isFinite(mousePos.screenX) ? mousePos.screenX : (event.clientX - rect.left);
             const dragScreenY = Number.isFinite(mousePos.screenY) ? mousePos.screenY : (event.clientY - rect.top);
+            const worldCoors = (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
+                ? {x: mousePos.worldX, y: mousePos.worldY}
+                : screenToWorld(dragScreenX, dragScreenY);
+            if (
+                wizard.currentSpell === "buildroad" &&
+                event.shiftKey &&
+                typeof SpellSystem.insertRoadPathPointAt === "function" &&
+                SpellSystem.insertRoadPathPointAt(wizard, worldCoors.x, worldCoors.y)
+            ) {
+                suppressNextTriggerAreaToolClick = true;
+                return;
+            }
             if (
                 wizard.currentSpell === "buildroad" &&
                 typeof SpellSystem.getVisibleFloorPolygonTargetAtScreenPoint === "function" &&
@@ -6258,10 +6270,9 @@ jQuery(() => {
                 suppressNextTriggerAreaToolClick = true;
                 return;
             }
-            const worldCoors = (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
-                ? {x: mousePos.worldX, y: mousePos.worldY}
-                : screenToWorld(dragScreenX, dragScreenY);
-            SpellSystem.beginDragSpell(wizard, wizard.currentSpell, worldCoors.x, worldCoors.y);
+            if (SpellSystem.beginDragSpell(wizard, wizard.currentSpell, worldCoors.x, worldCoors.y)) {
+                suppressNextTriggerAreaToolClick = true;
+            }
             return;
         }
     });

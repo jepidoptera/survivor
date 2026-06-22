@@ -140,7 +140,8 @@ function buildPrototypeRoadDirtyRectForNode(mapRef, node) {
 function markPrototypeLevel0RoadSurfaceDirty(mapRef, node, options = null) {
     const asset = resolvePrototypeSectionAssetForNode(mapRef, node);
     if (!asset) return false;
-    const dirtyRect = buildPrototypeRoadDirtyRectForNode(mapRef, node);
+    const optionRect = options && options.dirtyRect ? options.dirtyRect : null;
+    const dirtyRect = optionRect || buildPrototypeRoadDirtyRectForNode(mapRef, node);
     if (dirtyRect) {
         const existingDirtyRects = Array.isArray(asset._level0RoadSurfaceDirtyRects)
             ? asset._level0RoadSurfaceDirtyRects
@@ -6807,9 +6808,71 @@ class RoadPath extends StaticObject {
         if (this.map && Array.isArray(this.map.objects) && !this.map.objects.includes(this)) {
             this.map.objects.push(this);
         }
+        if (!options.suppressLevel0RoadSurfaceDirty) {
+            this.markLevel0RoadSurfaceDirty({ immediate: true });
+        }
     }
 
-    setPathPoints(points) {
+    getLevel0RoadSurfaceDirtyRect() {
+        const points = Array.isArray(this.outlinePolygon) ? this.outlinePolygon : [];
+        if (points.length < 3) return null;
+        const fadeWorld = (typeof Road !== "undefined" && Road && Number.isFinite(Road._edgeFadePx) && Number.isFinite(Road._pixelsPerWorldUnit) && Road._pixelsPerWorldUnit > 0)
+            ? Number(Road._edgeFadePx) / Number(Road._pixelsPerWorldUnit)
+            : 0.5;
+        const pad = Math.max(fadeWorld, Number(this.roadWidth) || RoadPath.DEFAULT_WIDTH, 0.5);
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (let i = 0; i < points.length; i++) {
+            const x = Number(points[i] && points[i].x);
+            const y = Number(points[i] && points[i].y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+        }
+        if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null;
+        return {
+            minX: minX - pad,
+            minY: minY - pad,
+            maxX: maxX + pad,
+            maxY: maxY + pad
+        };
+    }
+
+    markLevel0RoadSurfaceDirty(options = null) {
+        if (this.gone) return false;
+        const layer = Number.isFinite(this.traversalLayer)
+            ? Math.round(Number(this.traversalLayer))
+            : (Number.isFinite(this.level) ? Math.round(Number(this.level)) : 0);
+        if (layer !== 0) return false;
+        if (typeof globalThis.markPrototypeLevel0RoadSurfaceDirty !== "function") return false;
+        const nodes = Array.isArray(this._indexedNodes) && this._indexedNodes.length > 0
+            ? this._indexedNodes
+            : (this.node ? [this.node] : []);
+        const dirtyRect = this.getLevel0RoadSurfaceDirtyRect();
+        let marked = false;
+        const seenSections = new Set();
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            if (!node) continue;
+            const sectionKey = typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "";
+            if (seenSections.has(sectionKey)) continue;
+            seenSections.add(sectionKey);
+            marked = globalThis.markPrototypeLevel0RoadSurfaceDirty(this.map, node, {
+                dirtyRect,
+                immediate: !!(options && options.immediate)
+            }) || marked;
+        }
+        return marked;
+    }
+
+    setPathPoints(points, options = {}) {
+        const updateIndexedNodes = !(options && options.updateIndexedNodes === false);
+        const markSurfaceDirty = !(options && options.markSurfaceDirty === false);
+        if (markSurfaceDirty) this.markLevel0RoadSurfaceDirty({ immediate: true });
         const geometry = RoadPath.computeGeometry(points, this.roadWidth);
         this.pathPoints = geometry.points;
         this.width = geometry.width;
@@ -6821,17 +6884,25 @@ class RoadPath extends StaticObject {
         this.y = this.pathPoints[0].y;
         this.visualHitbox = new PolygonHitbox(this.outlinePolygon.map(point => ({ ...point })));
         this.groundPlaneHitbox = this.visualHitbox;
-        this.refreshIndexedNodesFromHitbox({
-            forceExpanded: true,
-            sampleSpacing: Math.max(0.5, Math.min(1.5, this.roadWidth * 0.5)),
-            extraPoints: this.outlinePolygon
-        });
+        if (updateIndexedNodes) {
+            this.refreshIndexedNodesFromHitbox({
+                forceExpanded: true,
+                sampleSpacing: Math.max(0.5, Math.min(1.5, this.roadWidth * 0.5)),
+                extraPoints: this.outlinePolygon
+            });
+        }
+        if (markSurfaceDirty) this.markLevel0RoadSurfaceDirty({ immediate: true });
         return true;
     }
 
     setWidth(width) {
         this.roadWidth = RoadPath.normalizeWidth(width);
         return this.setPathPoints(this.pathPoints);
+    }
+
+    removeFromGame() {
+        this.markLevel0RoadSurfaceDirty({ immediate: true });
+        super.removeFromGame();
     }
 
     saveJson() {
@@ -6866,7 +6937,8 @@ class RoadPath extends StaticObject {
             fillTexturePath: data.fillTexturePath,
             traversalLayer,
             level: traversalLayer,
-            suppressAutoScriptingName: !!options.suppressAutoScriptingName
+            suppressAutoScriptingName: !!options.suppressAutoScriptingName,
+            suppressLevel0RoadSurfaceDirty: true
         });
         if (typeof data.scriptingName === "string" && data.scriptingName.trim().length > 0) {
             roadPath.scriptingName = data.scriptingName.trim();

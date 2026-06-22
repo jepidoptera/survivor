@@ -2658,7 +2658,11 @@ const SpellSystem = (() => {
     function isDragSpellActive(wizardRef, spellName) {
         if (!wizardRef) return false;
         if (spellName === "wall") return !!wizardRef.wallLayoutMode && !!wizardRef.wallStartPoint;
-        if (spellName === "buildroad") return !!wizardRef.roadLayoutMode && getRoadPathDraftPoints(wizardRef).length > 0;
+        if (spellName === "buildroad") return !!(
+            wizardRef.roadPathEditDrag &&
+            wizardRef.roadPathEditDrag.roadPath &&
+            !wizardRef.roadPathEditDrag.roadPath.gone
+        ) || (!!wizardRef.roadLayoutMode && getRoadPathDraftPoints(wizardRef).length > 0);
         if (spellName === "firewall") return !!wizardRef.firewallLayoutMode && !!wizardRef.firewallStartPoint;
         if (isMoveObjectToolName(spellName)) return !!(wizardRef.moveObjectDragState && wizardRef.moveObjectDragState.target);
         if (isVanishToolName(spellName)) return !!wizardRef.vanishDragMode;
@@ -2682,6 +2686,7 @@ const SpellSystem = (() => {
             wizardRef.roadLayoutMode = false;
             wizardRef.roadStartPoint = null;
             wizardRef.roadPathDraft = null;
+            wizardRef.roadPathEditDrag = null;
             clearDragPreview(wizardRef, "buildroad");
             return;
         }
@@ -2973,9 +2978,321 @@ const SpellSystem = (() => {
         return wrapWorldPointForMap(mapRef, worldX, worldY);
     }
 
+    function getRoadPathEditPoint(wizardRef, worldX, worldY) {
+        if (!wizardRef || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        return wrapWorldPointForMap(wizardRef.map || null, worldX, worldY);
+    }
+
     function getRoadPathDraftPoints(wizardRef) {
         const draft = wizardRef && wizardRef.roadPathDraft;
         return draft && Array.isArray(draft.points) ? draft.points : [];
+    }
+
+    function clearSelectedRoadPath(wizardRef) {
+        if (!wizardRef) return;
+        wizardRef.selectedRoadPath = null;
+        wizardRef.roadPathEditDrag = null;
+    }
+
+    function getSelectedEditableRoadPath(wizardRef) {
+        const roadPath = wizardRef && wizardRef.selectedRoadPath;
+        if (!roadPath || roadPath.gone || roadPath.vanishing || roadPath.type !== "roadPath") return null;
+        return roadPath;
+    }
+
+    function pickRoadPathAt(wizardRef, worldX, worldY) {
+        if (!wizardRef || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        const canTargetRoadPath = (obj) => !!(
+            obj &&
+            !obj.gone &&
+            !obj.vanishing &&
+            obj.type === "roadPath"
+        );
+        const pickResult = pickObjectViaRenderingColorId((obj) => canTargetRoadPath(obj));
+        if (pickResult && pickResult.attempted) {
+            const picked = pickResult.picked;
+            return canTargetRoadPath(picked) ? picked : null;
+        }
+        return null;
+    }
+
+    function getRoadPathEditHandleHit(wizardRef, worldX, worldY) {
+        const roadPath = getSelectedEditableRoadPath(wizardRef);
+        if (!roadPath || !Array.isArray(roadPath.pathPoints)) return null;
+        const worldToScreenFn = (typeof worldToScreen === "function") ? worldToScreen : null;
+        const mouseScreen = (
+            typeof mousePos !== "undefined" &&
+            mousePos &&
+            Number.isFinite(mousePos.screenX) &&
+            Number.isFinite(mousePos.screenY)
+        ) ? { x: Number(mousePos.screenX), y: Number(mousePos.screenY) } : (
+            worldToScreenFn ? worldToScreenFn({ x: worldX, y: worldY }) : null
+        );
+        if (!mouseScreen || !Number.isFinite(mouseScreen.x) || !Number.isFinite(mouseScreen.y)) return null;
+        const handleRadiusPx = 11;
+        let best = null;
+        for (let i = 0; i < roadPath.pathPoints.length; i++) {
+            const point = roadPath.pathPoints[i];
+            if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+            const screen = worldToScreenFn ? worldToScreenFn({ x: Number(point.x), y: Number(point.y) }) : null;
+            if (!screen || !Number.isFinite(screen.x) || !Number.isFinite(screen.y)) continue;
+            const distPx = Math.hypot(mouseScreen.x - screen.x, mouseScreen.y - screen.y);
+            if (distPx > handleRadiusPx) continue;
+            if (!best || distPx < best.distancePx) {
+                best = { roadPath, pointIndex: i, distancePx: distPx };
+            }
+        }
+        return best;
+    }
+
+    function markEditedRoadPathDirty(roadPath, mapRef) {
+        if (!roadPath || roadPath._prototypeRuntimeRecord !== true) return;
+        roadPath._prototypeDirty = true;
+        const objectState = mapRef && mapRef._prototypeObjectState;
+        if (!objectState) {
+            throw new Error("Cannot persist edited road path without prototype object state.");
+        }
+        if (!(objectState.dirtyRuntimeObjects instanceof Set)) {
+            objectState.dirtyRuntimeObjects = new Set();
+        }
+        objectState.dirtyRuntimeObjects.add(roadPath);
+        objectState.captureScanNeeded = true;
+    }
+
+    function persistEditedRoadPath(roadPath, mapRef) {
+        if (!roadPath || roadPath._prototypeRuntimeRecord !== true) return;
+        if (!mapRef || typeof mapRef.capturePendingPrototypeObjects !== "function") {
+            throw new Error("Cannot persist edited road path without map.capturePendingPrototypeObjects.");
+        }
+        markEditedRoadPathDirty(roadPath, mapRef);
+        if (mapRef.capturePendingPrototypeObjects() !== true) {
+            throw new Error("Edited road path persistence did not update a prototype object record.");
+        }
+    }
+
+    function beginRoadPathEditDrag(wizardRef, worldX, worldY) {
+        const hit = getRoadPathEditHandleHit(wizardRef, worldX, worldY);
+        if (!hit || !hit.roadPath) return false;
+        if (typeof RoadPath !== "function") {
+            throw new Error("Cannot edit road path because RoadPath is unavailable.");
+        }
+        const mapRef = hit.roadPath.map || wizardRef.map || null;
+        if (!mapRef) return false;
+        const points = Array.isArray(hit.roadPath.pathPoints)
+            ? hit.roadPath.pathPoints.map((point, index) => RoadPath.normalizePoint(point, `road path edit point ${index}`))
+            : [];
+        if (points.length < 2) return false;
+        wizardRef.roadPathEditDrag = {
+            roadPath: hit.roadPath,
+            pointIndex: hit.pointIndex,
+            originalPoints: points,
+            lastValidPoints: points.map(point => ({ x: point.x, y: point.y })),
+            map: mapRef,
+            changed: false
+        };
+        return true;
+    }
+
+    function updateRoadPathEditDrag(wizardRef, worldX, worldY) {
+        const drag = wizardRef && wizardRef.roadPathEditDrag;
+        const roadPath = drag && drag.roadPath;
+        if (!drag || !roadPath || roadPath.gone || roadPath.vanishing) {
+            if (wizardRef) wizardRef.roadPathEditDrag = null;
+            return false;
+        }
+        const mapRef = roadPath.map || drag.map || wizardRef.map || null;
+        const pointIndex = Number(drag.pointIndex);
+        if (!mapRef || !Number.isInteger(pointIndex) || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return false;
+        if (typeof RoadPath !== "function") {
+            throw new Error("Cannot edit road path because RoadPath is unavailable.");
+        }
+        const points = Array.isArray(roadPath.pathPoints)
+            ? roadPath.pathPoints.map((point, index) => RoadPath.normalizePoint(point, `road path edit current point ${index}`))
+            : [];
+        if (points.length < 2 || pointIndex < 0 || pointIndex >= points.length) return false;
+        const nextPoint = getRoadPathEditPoint(wizardRef, worldX, worldY);
+        if (!nextPoint) return false;
+        const nextPoints = points.map(point => ({ x: point.x, y: point.y }));
+        nextPoints[pointIndex] = nextPoint;
+        try {
+            roadPath.setPathPoints(nextPoints, {
+                markSurfaceDirty: false,
+                updateIndexedNodes: false
+            });
+            drag.lastValidPoints = nextPoints.map(point => ({ x: point.x, y: point.y }));
+            drag.changed = true;
+        } catch (error) {
+            const errorMessage = error && error.message ? error.message : "Road point is not valid.";
+            message(errorMessage);
+            return true;
+        }
+        return true;
+    }
+
+    function finishRoadPathEditDrag(wizardRef) {
+        const drag = wizardRef && wizardRef.roadPathEditDrag;
+        if (!drag) return false;
+        wizardRef.roadPathEditDrag = null;
+        const roadPath = drag.roadPath;
+        if (!roadPath || roadPath.gone || roadPath.vanishing) return true;
+        if (drag.changed) {
+            const finalPoints = Array.isArray(drag.lastValidPoints)
+                ? drag.lastValidPoints
+                : roadPath.pathPoints;
+            roadPath.setPathPoints(finalPoints, { markSurfaceDirty: false });
+            persistEditedRoadPath(roadPath, roadPath.map || drag.map || wizardRef.map || null);
+        }
+        return true;
+    }
+
+    function getNearestRoadPathSegmentInsertion(roadPath, worldX, worldY) {
+        if (!roadPath || !Array.isArray(roadPath.pathPoints) || roadPath.pathPoints.length < 2) return null;
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        const mapRef = roadPath.map || map || null;
+        let best = null;
+        for (let i = 0; i < roadPath.pathPoints.length - 1; i++) {
+            const start = roadPath.pathPoints[i];
+            const end = roadPath.pathPoints[i + 1];
+            const sx = Number(start && start.x);
+            const sy = Number(start && start.y);
+            const ex = Number(end && end.x);
+            const ey = Number(end && end.y);
+            if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) {
+                throw new Error(`Cannot insert road path point because segment ${i} has non-finite endpoints.`);
+            }
+            const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(sx, ex)
+                : (ex - sx);
+            const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(sy, ey)
+                : (ey - sy);
+            const lenSq = dx * dx + dy * dy;
+            if (!(lenSq > 1e-10)) continue;
+            const clickDx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(sx, worldX)
+                : (worldX - sx);
+            const clickDy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(sy, worldY)
+                : (worldY - sy);
+            const t = Math.max(0, Math.min(1, (clickDx * dx + clickDy * dy) / lenSq));
+            const projected = wrapWorldPointForMap(mapRef, sx + dx * t, sy + dy * t);
+            const pxDx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(worldX, projected.x)
+                : (projected.x - worldX);
+            const pxDy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(worldY, projected.y)
+                : (projected.y - worldY);
+            const distanceSq = pxDx * pxDx + pxDy * pxDy;
+            if (!best || distanceSq < best.distanceSq) {
+                best = {
+                    segmentIndex: i,
+                    insertIndex: i + 1,
+                    point: projected,
+                    t,
+                    distanceSq
+                };
+            }
+        }
+        return best;
+    }
+
+    function insertRoadPathPointAt(wizardRef, worldX, worldY) {
+        if (!wizardRef || wizardRef.currentSpell !== "buildroad") return false;
+        if (typeof RoadPath !== "function") {
+            throw new Error("Cannot insert road path point because RoadPath is unavailable.");
+        }
+        const roadPath = pickRoadPathAt(wizardRef, worldX, worldY);
+        if (!roadPath) return false;
+        const insertion = getNearestRoadPathSegmentInsertion(roadPath, worldX, worldY);
+        if (!insertion || !insertion.point || !Number.isInteger(insertion.insertIndex)) return false;
+        const minT = 1e-4;
+        if (insertion.t <= minT || insertion.t >= 1 - minT) {
+            message("Click farther from an existing road point to insert a new point.");
+            wizardRef.selectedRoadPath = roadPath;
+            return true;
+        }
+        const points = roadPath.pathPoints.map((point, index) =>
+            RoadPath.normalizePoint(point, `road path insert source point ${index}`)
+        );
+        points.splice(insertion.insertIndex, 0, RoadPath.normalizePoint(insertion.point, "road path inserted point"));
+        try {
+            roadPath.setPathPoints(points, { markSurfaceDirty: false });
+        } catch (error) {
+            const errorMessage = error && error.message ? error.message : "Road point is not valid.";
+            message(errorMessage);
+            return true;
+        }
+        wizardRef.selectedRoadPath = roadPath;
+        wizardRef.roadPathEditDrag = null;
+        persistEditedRoadPath(roadPath, roadPath.map || wizardRef.map || null);
+        return true;
+    }
+
+    function placeRoadPathPieces(wizardRef, points, width, fillTexturePath) {
+        if (!wizardRef || !wizardRef.map) {
+            throw new Error("Cannot place path road without a map.");
+        }
+        if (typeof RoadPath !== "function") {
+            throw new Error("Cannot place path road because RoadPath is unavailable.");
+        }
+        const mapRef = wizardRef.map;
+        const baseRecord = {
+            type: "roadPath",
+            points: points.map((point, index) => RoadPath.normalizePoint(point, `road path placement point ${index}`)),
+            width: RoadPath.normalizeWidth(width),
+            fillTexturePath: RoadPath.normalizeFillTexturePath(fillTexturePath)
+        };
+        baseRecord.x = baseRecord.points[0].x;
+        baseRecord.y = baseRecord.points[0].y;
+
+        let pieces = [{ sectionKey: "", record: baseRecord }];
+        const shouldSplitForSectionWorld = !!(
+            mapRef._prototypeSectionState &&
+            typeof mapRef.getPrototypeSectionAsset === "function"
+        );
+        if (shouldSplitForSectionWorld) {
+            if (typeof globalThis === "undefined" || typeof globalThis.splitRoadPathSaveRecordBySection !== "function") {
+                throw new Error("Cannot place section road path because road path section splitting is unavailable.");
+            }
+            if (typeof mapRef.getPrototypeSectionKeyForWorldPoint !== "function") {
+                throw new Error("Cannot place section road path because section lookup is unavailable.");
+            }
+            if (typeof mapRef.ensurePrototypeObjectRuntimeRecord !== "function") {
+                throw new Error("Cannot place section road path because prototype object registration is unavailable.");
+            }
+            const ownerSectionKey = mapRef.getPrototypeSectionKeyForWorldPoint(baseRecord.x, baseRecord.y);
+            if (typeof ownerSectionKey !== "string" || ownerSectionKey.length === 0) {
+                throw new Error("Cannot place section road path because the starting section is unavailable.");
+            }
+            pieces = globalThis.splitRoadPathSaveRecordBySection(mapRef, baseRecord, ownerSectionKey);
+        }
+
+        const created = [];
+        for (let i = 0; i < pieces.length; i++) {
+            const piece = pieces[i];
+            const record = piece && piece.record;
+            if (!record || record.type !== "roadPath") {
+                throw new Error("Cannot place section road path from an invalid split record.");
+            }
+            const roadPath = RoadPath.loadJson(record, mapRef, { suppressAutoScriptingName: true });
+            if (!roadPath) {
+                throw new Error("Cannot place section road path because a split runtime object could not be created.");
+            }
+            if (typeof piece.sectionKey === "string" && piece.sectionKey.length > 0) {
+                roadPath._prototypeOwnerSectionKey = piece.sectionKey;
+                roadPath._prototypeOwnerType = "section";
+                roadPath._prototypeOwnerId = piece.sectionKey;
+                roadPath._prototypeOwnerSignature = `section:${piece.sectionKey}`;
+            }
+            if (typeof mapRef.ensurePrototypeObjectRuntimeRecord === "function") {
+                mapRef.ensurePrototypeObjectRuntimeRecord(roadPath);
+            }
+            if (typeof roadPath.markLevel0RoadSurfaceDirty === "function") {
+                roadPath.markLevel0RoadSurfaceDirty({ immediate: true });
+            }
+            created.push(roadPath);
+        }
+        return created;
     }
 
     function getSpellTargetHistorySet(wizardRef, spellName) {
@@ -3870,7 +4187,7 @@ const SpellSystem = (() => {
         const canTargetObject = (obj) => !!(
             obj &&
             !obj.gone &&
-            obj.type === objectType &&
+            (spellName === "buildroad" ? (obj.type === "road" || obj.type === "roadPath") : obj.type === objectType) &&
             (spellName !== "wall" || isWallTargetOnActivePlacementLayer(wizardRef, obj)) &&
             !hasSpellAlreadyTargetedObject(wizardRef, spellName, obj)
         );
@@ -3959,6 +4276,31 @@ const SpellSystem = (() => {
             return da <= db
                 ? { x: obj.startPoint.x, y: obj.startPoint.y }
                 : { x: obj.endPoint.x, y: obj.endPoint.y };
+        }
+        if (obj.type === "roadPath" && Array.isArray(obj.pathPoints) && obj.pathPoints.length > 0) {
+            if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) {
+                const firstPoint = obj.pathPoints[0];
+                return firstPoint && Number.isFinite(firstPoint.x) && Number.isFinite(firstPoint.y)
+                    ? { x: firstPoint.x, y: firstPoint.y }
+                    : null;
+            }
+            const mapRef = obj.map || map || null;
+            let nearest = null;
+            for (let i = 0; i < obj.pathPoints.length; i++) {
+                const point = obj.pathPoints[i];
+                if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+                const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                    ? mapRef.shortestDeltaX(worldX, point.x)
+                    : (point.x - worldX);
+                const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                    ? mapRef.shortestDeltaY(worldY, point.y)
+                    : (point.y - worldY);
+                const distSq = dx * dx + dy * dy;
+                if (!nearest || distSq < nearest.distSq) {
+                    nearest = { point, distSq };
+                }
+            }
+            return nearest ? { x: nearest.point.x, y: nearest.point.y } : null;
         }
         if (Number.isFinite(obj.x) && Number.isFinite(obj.y)) {
             return { x: obj.x, y: obj.y };
@@ -5330,7 +5672,11 @@ const SpellSystem = (() => {
         if (spell === "wall" || spell === "buildroad" || spell === "firewall") {
             const objectType = getDragSpellObjectType(spell);
             if (!objectType) return false;
-            if (candidate.type !== objectType) return false;
+            if (spell === "buildroad") {
+                if (candidate.type !== "road" && candidate.type !== "roadPath") return false;
+            } else if (candidate.type !== objectType) {
+                return false;
+            }
             return !hasSpellAlreadyTargetedObject(wizardRef, spell, candidate);
         }
         if (spell === "placeobject") {
@@ -5453,11 +5799,28 @@ const SpellSystem = (() => {
         }
 
         if (spellName === "buildroad") {
-            const mapRef = wizardRef.map || null;
+            if (beginRoadPathEditDrag(wizardRef, worldX, worldY)) {
+                wizardRef.roadLayoutMode = false;
+                wizardRef.roadStartPoint = null;
+                wizardRef.roadPathDraft = null;
+                clearDragPreview(wizardRef, "buildroad");
+                return true;
+            }
             if (isDragSpellActive(wizardRef, "buildroad")) {
                 ensureDragPreview(wizardRef, "buildroad");
                 return true;
             }
+            const existingRoadPath = pickRoadPathAt(wizardRef, worldX, worldY);
+            if (existingRoadPath) {
+                wizardRef.selectedRoadPath = existingRoadPath;
+                wizardRef.roadPathEditDrag = null;
+                wizardRef.roadLayoutMode = false;
+                wizardRef.roadStartPoint = null;
+                wizardRef.roadPathDraft = null;
+                clearDragPreview(wizardRef, "buildroad");
+                return true;
+            }
+            clearSelectedRoadPath(wizardRef);
             const startPoint = getRoadPathPlacementPoint(wizardRef, worldX, worldY, snapTarget);
             if (!startPoint) return false;
             wizardRef.roadLayoutMode = true;
@@ -5510,6 +5873,9 @@ const SpellSystem = (() => {
             const adjustedPoint = getAdjustedWallDragWorldPoint(wizardRef, worldX, worldY);
             if (!adjustedPoint) return false;
             return true;
+        }
+        if (wizardRef.currentSpell === "buildroad" && wizardRef.roadPathEditDrag) {
+            return updateRoadPathEditDrag(wizardRef, worldX, worldY);
         }
         if (wizardRef.currentSpell === "buildroad" && isDragSpellActive(wizardRef, "buildroad")) {
             return true;
@@ -5704,6 +6070,9 @@ const SpellSystem = (() => {
         }
 
         if (spellName === "buildroad") {
+            if (wizardRef.roadPathEditDrag) {
+                return finishRoadPathEditDrag(wizardRef);
+            }
             if (!isDragSpellActive(wizardRef, "buildroad")) return false;
             const mapRef = wizardRef.map || null;
             const snapTarget = getDragStartSnapTargetAt(wizardRef, "buildroad", worldX, worldY);
@@ -5725,13 +6094,7 @@ const SpellSystem = (() => {
             const selectedFlooring = draft.fillTexturePath || getSelectedFlooringTexture(wizardRef);
             if (pointsMatchWorld(mapRef, lastPoint, nextPoint, 1e-5)) {
                 if (points.length >= 2) {
-                    if (typeof RoadPath !== "function") {
-                        throw new Error("Cannot place path road because RoadPath is unavailable.");
-                    }
-                    new RoadPath(points, mapRef, {
-                        width,
-                        fillTexturePath: selectedFlooring
-                    });
+                    placeRoadPathPieces(wizardRef, points, width, selectedFlooring);
                     if (!editorMode) {
                         wizardRef.magic -= 5;
                     }
@@ -11913,6 +12276,7 @@ const SpellSystem = (() => {
         updateDragPreview,
         completeDragSpell,
         cancelDragSpell,
+        insertRoadPathPointAt,
         cancelTriggerAreaPlacement,
         cancelFloorShapePlacement,
         cancelFloorHolePlacement,
