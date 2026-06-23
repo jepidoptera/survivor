@@ -267,6 +267,40 @@ test("evicting a level 0 ground texture also evicts its bake-node cache", () => 
     assert.equal(renderer.level0GroundSurfaceBakeNodeCache.has("old"), false);
 });
 
+test("resetting level 0 ground caches clears stale chunks and bumps coverage version", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    let destroyed = 0;
+    renderer.level0GroundSurfaceCache.set("0,0", {
+        texture: { destroy() { destroyed += 1; } }
+    });
+    renderer.level0GroundSurfaceChunkCache.set("0,0:0,0", {
+        texture: { destroy() { destroyed += 1; } }
+    });
+    renderer.level0GroundSurfaceBakeNodeCache.set("0,0", {
+        signature: "stale",
+        nodes: []
+    });
+    renderer._level0ChunkReadyCache = new Map([["0,0:0,0", true]]);
+    renderer._level0SectionAssetCache = new Map([["0,0", { asset: {} }]]);
+    renderer.bakedLevel0SectionKeys = new Set(["0,0"]);
+    renderer.bakedLevel0SectionSignature = "stale";
+    const beforeVersion = renderer.level0GroundCoverageVersion;
+
+    const result = renderer.resetLevel0GroundSurfaceCaches("test");
+
+    assert.equal(result.ok, true);
+    assert.equal(renderer.level0GroundSurfaceCache.size, 0);
+    assert.equal(renderer.level0GroundSurfaceChunkCache.size, 0);
+    assert.equal(renderer.level0GroundSurfaceBakeNodeCache.size, 0);
+    assert.equal(renderer._level0ChunkReadyCache.size, 0);
+    assert.equal(renderer._level0SectionAssetCache.size, 0);
+    assert.equal(renderer.bakedLevel0SectionKeys.size, 0);
+    assert.equal(renderer.bakedLevel0SectionSignature, "");
+    assert.equal(renderer.level0GroundCoverageVersion, beforeVersion + 1);
+    assert.equal(destroyed, 2);
+});
+
 test("character render items use absolute world z instead of adding layer base", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();

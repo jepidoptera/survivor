@@ -50,6 +50,8 @@
             this.prevX = 0;
             this.prevY = 0;
             this.prevZ = 0;
+            this.width = 0;
+            this.height = 0;
             this.viewscale = 1;
             this.xyratio = 0.66;
             this.map = null;
@@ -58,6 +60,14 @@
         update({ camera, wizard, viewport, viewscale, xyratio, map, renderAlpha }) {
             this.viewscale = Number.isFinite(viewscale) ? viewscale : this.viewscale;
             this.xyratio = Number.isFinite(xyratio) ? xyratio : this.xyratio;
+            const widthSource = camera && Number.isFinite(Number(camera.width)) && Number(camera.width) > 0
+                ? Number(camera.width)
+                : (viewport && Number.isFinite(Number(viewport.width)) && Number(viewport.width) > 0 ? Number(viewport.width) : NaN);
+            const heightSource = camera && Number.isFinite(Number(camera.height)) && Number(camera.height) > 0
+                ? Number(camera.height)
+                : (viewport && Number.isFinite(Number(viewport.height)) && Number(viewport.height) > 0 ? Number(viewport.height) : NaN);
+            if (Number.isFinite(widthSource)) this.width = widthSource;
+            if (Number.isFinite(heightSource)) this.height = heightSource;
             this.map = map || null;
             const alpha = Number.isFinite(renderAlpha) ? Math.max(0, Math.min(1, renderAlpha)) : 1;
 

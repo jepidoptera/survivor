@@ -8,6 +8,7 @@ const lazyTreeStore = {
     recordsByKey: new Map(),
     loadedKeys: new Set()
 };
+const PROTOTYPE_SECTION_LOAD_BUBBLE_LIMIT = 4;
 
 function markMinimapStaticDirty() {
     if (typeof globalThis !== "undefined" && typeof globalThis.invalidateMinimap === "function") {
@@ -333,12 +334,25 @@ if (typeof globalThis !== "undefined") {
 function encodeGroundTiles(mapRef) {
     if (!mapRef || !mapRef.nodes) return null;
     let out = "";
+    const values = [];
+    let requiresNumberGrid = false;
     for (let y = 0; y < mapRef.height; y++) {
         for (let x = 0; x < mapRef.width; x++) {
             const node = mapRef.nodes[x] && mapRef.nodes[x][y] ? mapRef.nodes[x][y] : null;
             const textureId = node && Number.isFinite(node.groundTextureId) ? node.groundTextureId : 0;
-            out += Math.max(0, Math.min(35, textureId)).toString(36);
+            const normalized = Math.max(0, Math.floor(Number(textureId) || 0));
+            values.push(normalized);
+            if (normalized > 35) requiresNumberGrid = true;
+            out += Math.max(0, Math.min(35, normalized)).toString(36);
         }
+    }
+    if (requiresNumberGrid) {
+        return {
+            encoding: "number-grid-v2",
+            width: mapRef.width,
+            height: mapRef.height,
+            data: values
+        };
     }
     return {
         encoding: "base36-char-grid",
@@ -349,13 +363,16 @@ function encodeGroundTiles(mapRef) {
 }
 
 function decodeGroundTiles(mapRef, encoded) {
-    if (!mapRef || !encoded || encoded.encoding !== "base36-char-grid" || typeof encoded.data !== "string") {
+    if (!mapRef || !encoded || typeof encoded !== "object") {
         return false;
     }
     if (encoded.width !== mapRef.width || encoded.height !== mapRef.height) {
         return false;
     }
     const expectedLen = mapRef.width * mapRef.height;
+    const isNumberGrid = encoded.encoding === "number-grid-v2" && Array.isArray(encoded.data);
+    const isBase36Grid = encoded.encoding === "base36-char-grid" && typeof encoded.data === "string";
+    if (!isNumberGrid && !isBase36Grid) return false;
     if (encoded.data.length < expectedLen) return false;
 
     let i = 0;
@@ -366,8 +383,8 @@ function decodeGroundTiles(mapRef, encoded) {
                 i += 1;
                 continue;
             }
-            const v = parseInt(encoded.data[i], 36);
-            node.groundTextureId = Number.isFinite(v) ? v : 0;
+            const v = isNumberGrid ? Number(encoded.data[i]) : parseInt(encoded.data[i], 36);
+            node.groundTextureId = Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0;
             i += 1;
         }
     }
@@ -630,31 +647,60 @@ function getPrototypeBubbleSectionKeysFromWorld(worldData) {
         ? world.loadedSectionKeys
         : (Array.isArray(world.activeSectionKeys) ? world.activeSectionKeys : null);
     if (Array.isArray(explicitKeys) && explicitKeys.length > 0) {
-        return Array.from(new Set(explicitKeys.filter(key => typeof key === "string" && key.length > 0))).slice(0, 3);
+        const normalizedKeys = Array.from(new Set(explicitKeys.filter(key => typeof key === "string" && key.length > 0)));
+        if (normalizedKeys.length >= PROTOTYPE_SECTION_LOAD_BUBBLE_LIMIT) return normalizedKeys;
+        const activeCenterKey = (typeof world.activeCenterKey === "string" && world.activeCenterKey.length > 0)
+            ? world.activeCenterKey
+            : (normalizedKeys[0] || "");
+        const availableKeys = collectPrototypeAvailableSectionKeys(world);
+        appendNearestPrototypeSectionKeys(normalizedKeys, availableKeys, activeCenterKey, PROTOTYPE_SECTION_LOAD_BUBBLE_LIMIT);
+        return normalizedKeys;
     }
     const activeCenterKey = (typeof world.activeCenterKey === "string" && world.activeCenterKey.length > 0)
         ? world.activeCenterKey
         : "";
     if (!activeCenterKey.length) return [];
-    const sectionCoords = Array.isArray(world.sectionCoords)
+    const availableKeys = collectPrototypeAvailableSectionKeys(world);
+    if (availableKeys.size === 0) {
+        availableKeys.add(activeCenterKey);
+    }
+    const normalizedKeys = [];
+    appendNearestPrototypeSectionKeys(normalizedKeys, availableKeys, activeCenterKey, PROTOTYPE_SECTION_LOAD_BUBBLE_LIMIT);
+    return normalizedKeys;
+}
+
+function collectPrototypeAvailableSectionKeys(world) {
+    const sectionCoords = Array.isArray(world && world.sectionCoords)
         ? world.sectionCoords
-        : ((Array.isArray(world.sections) ? world.sections.map(section => section && section.coord) : []));
+        : ((Array.isArray(world && world.sections) ? world.sections.map(section => section && section.coord) : []));
     const availableKeys = new Set();
     for (let i = 0; i < sectionCoords.length; i++) {
         const coord = sectionCoords[i];
         if (!coord || typeof coord !== "object") continue;
         availableKeys.add(makePrototypeSectionKey(coord));
     }
-    if (availableKeys.size === 0) {
-        availableKeys.add(activeCenterKey);
-    }
+    return availableKeys;
+}
+
+function appendNearestPrototypeSectionKeys(keys, availableKeys, activeCenterKey, limit) {
+    if (!Array.isArray(keys) || !(availableKeys instanceof Set) || !activeCenterKey) return keys;
+    const seen = new Set(keys);
     const centerCoord = parsePrototypeSectionKey(activeCenterKey);
-    return Array.from(availableKeys).sort((a, b) => {
+    const sortedKeys = Array.from(availableKeys).sort((a, b) => {
         const distanceA = getPrototypeSectionCoordDistance(parsePrototypeSectionKey(a), centerCoord);
         const distanceB = getPrototypeSectionCoordDistance(parsePrototypeSectionKey(b), centerCoord);
         if (distanceA !== distanceB) return distanceA - distanceB;
         return String(a).localeCompare(String(b));
-    }).slice(0, 3);
+    });
+    const targetLimit = Math.max(0, Math.floor(Number(limit)) || 0);
+    for (let i = 0; i < sortedKeys.length; i++) {
+        if (targetLimit > 0 && keys.length >= targetLimit) break;
+        const key = sortedKeys[i];
+        if (seen.has(key)) continue;
+        seen.add(key);
+        keys.push(key);
+    }
+    return keys;
 }
 
 function makePrototypeSectionStoreRecordId(slotKey, sectionKey) {
@@ -1684,10 +1730,16 @@ function saveGameStateToIndexedDb(saveKey) {
         const runtimeActiveSectionKeys = (state.activeBubbleSectionKeys instanceof Set && state.activeBubbleSectionKeys.size > 0)
             ? Array.from(state.activeBubbleSectionKeys)
             : (state.activeSectionKeys instanceof Set ? Array.from(state.activeSectionKeys) : []);
+        const buildingScopeSaveContext = getPrototypeBuildingScopeSectionSaveContext(map, runtimeActiveSectionKeys);
+        if (buildingScopeSaveContext) {
+            explicitActiveCenterKey = buildingScopeSaveContext.activeCenterKey;
+        }
         explicitLoadedSectionKeys = getPrototypeBubbleSectionKeysFromWorld({
             activeCenterKey: explicitActiveCenterKey,
             sectionCoords: explicitSectionCoords,
-            activeSectionKeys: runtimeActiveSectionKeys
+            activeSectionKeys: buildingScopeSaveContext
+                ? buildingScopeSaveContext.loadedSectionKeys
+                : runtimeActiveSectionKeys
         });
         if (typeof map.exportPrototypeSectionAssets === "function") {
             const hydratedKeys = (typeof map.getPrototypeHydratedSectionKeys === "function")
@@ -1873,30 +1925,34 @@ function loadGameStateFromIndexedDbKey(saveKey) {
         if (!loaded) {
             return getLastLoadGameStateFailureResult();
         }
-        if (!await finalizeLoadedGameStateAsync()) {
-            return getLastLoadGameStateFailureResult();
-        }
         if (
             parsed.prototypeSectionStoreBacked &&
             map &&
             typeof map.setPrototypeSectionAssetLoader === "function"
         ) {
             map.setPrototypeSectionAssetLoader((sectionKeys) => getPrototypeSaveSectionRecords(parsed.key, sectionKeys));
-            if (typeof map.prefetchPrototypeSectionAssets === "function") {
-                const lookaheadKeys = (typeof map.getPrototypeBubbleSectionKeys === "function" && typeof map.getPrototypeActiveSectionKeys === "function")
-                    ? (() => {
-                        const activeKeys = Array.from(map.getPrototypeActiveSectionKeys());
-                        if (activeKeys.length === 0) return [];
-                        const centerKey = activeKeys[0];
-                        if (typeof map.getPrototypeLookaheadSectionKeys === "function") {
-                            return Array.from(map.getPrototypeLookaheadSectionKeys(centerKey));
-                        }
-                        return [];
-                    })()
-                    : [];
-                if (lookaheadKeys.length > 0) {
-                    map.prefetchPrototypeSectionAssets(lookaheadKeys, { materialize: false });
-                }
+        }
+        if (!await finalizeLoadedGameStateAsync()) {
+            return getLastLoadGameStateFailureResult();
+        }
+        if (
+            parsed.prototypeSectionStoreBacked &&
+            map &&
+            typeof map.prefetchPrototypeSectionAssets === "function"
+        ) {
+            const lookaheadKeys = (typeof map.getPrototypeBubbleSectionKeys === "function" && typeof map.getPrototypeActiveSectionKeys === "function")
+                ? (() => {
+                    const activeKeys = Array.from(map.getPrototypeActiveSectionKeys());
+                    if (activeKeys.length === 0) return [];
+                    const centerKey = activeKeys[0];
+                    if (typeof map.getPrototypeLookaheadSectionKeys === "function") {
+                        return Array.from(map.getPrototypeLookaheadSectionKeys(centerKey));
+                    }
+                    return [];
+                })()
+                : [];
+            if (lookaheadKeys.length > 0) {
+                map.prefetchPrototypeSectionAssets(lookaheadKeys, { materialize: false });
             }
         }
         setActivePrototypeSaveSlotKey(parsed.key);
@@ -1982,6 +2038,10 @@ function saveGameState(options = {}) {
         const activeKeys = (typeof map.getPrototypeActiveSectionKeys === "function")
             ? Array.from(map.getPrototypeActiveSectionKeys())
             : [];
+        const buildingScopeSaveContext = getPrototypeBuildingScopeSectionSaveContext(map, activeKeys);
+        const saveActiveCenterKey = buildingScopeSaveContext
+            ? buildingScopeSaveContext.activeCenterKey
+            : (typeof state.activeCenterKey === "string" ? state.activeCenterKey : "");
         const exportedSections = (typeof map.exportPrototypeSectionWorld === "function")
             ? map.exportPrototypeSectionWorld()
             : null;
@@ -1991,7 +2051,9 @@ function saveGameState(options = {}) {
                 ? Array.from(state.sectionAssetsByKey.keys())
                 : ((Array.isArray(exportedSections) ? exportedSections.map(section => section && section.key) : [])
                     .filter((key) => typeof key === "string" && key.length > 0)))
-            : activeKeys.filter((key) => typeof key === "string" && key.length > 0);
+            : (buildingScopeSaveContext
+                ? buildingScopeSaveContext.loadedSectionKeys.slice()
+                : activeKeys.filter((key) => typeof key === "string" && key.length > 0));
         const sections = [];
         let objectSaveMap = null;
 
@@ -2055,7 +2117,7 @@ function saveGameState(options = {}) {
             radius: Number.isFinite(state.radius) ? Number(state.radius) : 0,
             sectionGraphRadius: Number.isFinite(state.sectionGraphRadius) ? Number(state.sectionGraphRadius) : 0,
             anchorCenter: state.anchorCenter ? { q: Number(state.anchorCenter.q) || 0, r: Number(state.anchorCenter.r) || 0 } : { q: 0, r: 0 },
-            activeCenterKey: typeof state.activeCenterKey === "string" ? state.activeCenterKey : "",
+            activeCenterKey: saveActiveCenterKey,
             loadedSectionKeys,
             sections,
             triggers: (typeof map.exportPrototypeTriggerDefinitions === "function")
@@ -2218,6 +2280,86 @@ function logPrototypeLoadDetail(mapInstance, label = "post-sync") {
     });
 }
 
+function getPrototypeBuildingScopeSectionSaveContext(mapRef, activeSectionKeys) {
+    const state = mapRef && mapRef._prototypeSectionState;
+    if (!state || !Array.isArray(activeSectionKeys)) return null;
+    const hasUnhydratedActiveSection = activeSectionKeys.some((sectionKey) => {
+        const asset = typeof mapRef.getPrototypeSectionAsset === "function"
+            ? mapRef.getPrototypeSectionAsset(sectionKey)
+            : null;
+        return asset && asset._prototypeSectionHydrated === false;
+    });
+    if (!hasUnhydratedActiveSection) return null;
+
+    const scope = typeof mapRef.getPrototypeWorldScope === "function"
+        ? mapRef.getPrototypeWorldScope()
+        : null;
+    const buildingId = scope && scope.type === "building" && typeof scope.id === "string"
+        ? scope.id
+        : "";
+    if (!buildingId) return null;
+
+    const placements = typeof mapRef.getPrototypeBuildingPlacements === "function"
+        ? mapRef.getPrototypeBuildingPlacements()
+        : [];
+    const placement = Array.isArray(placements)
+        ? placements.find((entry) => entry && entry.id === buildingId)
+        : null;
+    if (!placement) {
+        throw new Error(`Cannot save building scope ${buildingId}; missing building placement.`);
+    }
+
+    const rawSectionKeys = Array.isArray(placement.touchedSectionKeys)
+        ? placement.touchedSectionKeys
+        : (Array.isArray(placement.overlappedSectionKeys) ? placement.overlappedSectionKeys : []);
+    const loadedSectionKeys = rawSectionKeys.filter((sectionKey, index, array) => {
+        if (typeof sectionKey !== "string" || sectionKey.length === 0 || array.indexOf(sectionKey) !== index) return false;
+        const asset = typeof mapRef.getPrototypeSectionAsset === "function"
+            ? mapRef.getPrototypeSectionAsset(sectionKey)
+            : null;
+        return !!(asset && asset._prototypeSectionHydrated !== false);
+    });
+    if (loadedSectionKeys.length === 0) {
+        throw new Error(`Cannot save building scope ${buildingId}; no hydrated touched sections are available.`);
+    }
+
+    let activeCenterKey = loadedSectionKeys[0];
+    if (wizard && Number.isFinite(wizard.x) && Number.isFinite(wizard.y)) {
+        let bestDistance = Infinity;
+        for (let i = 0; i < loadedSectionKeys.length; i++) {
+            const sectionKey = loadedSectionKeys[i];
+            const asset = typeof mapRef.getPrototypeSectionAsset === "function"
+                ? mapRef.getPrototypeSectionAsset(sectionKey)
+                : null;
+            const center = asset && asset.centerWorld && typeof asset.centerWorld === "object"
+                ? asset.centerWorld
+                : null;
+            if (!center) continue;
+            const distance = Math.hypot(
+                Number(wizard.x) - (Number(center.x) || 0),
+                Number(wizard.y) - (Number(center.y) || 0)
+            );
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                activeCenterKey = sectionKey;
+            }
+        }
+    }
+
+    if (typeof console !== "undefined" && typeof console.warn === "function") {
+        console.warn("[section-world save] using building touched sections while outdoor bubble is suspended", {
+            buildingId,
+            activeCenterKey,
+            loadedSectionKeys,
+            replacedActiveSectionKeys: activeSectionKeys
+        });
+    }
+    return {
+        activeCenterKey,
+        loadedSectionKeys
+    };
+}
+
 function isPrototypeLegacyStaticRecord(objData) {
     const type = (objData && typeof objData.type === "string") ? objData.type : "";
     return type === "road" || type === "roadPath" || type === "tree" || type === "roof" || type === "wallSection";
@@ -2356,24 +2498,320 @@ function collectSectionKeysForPendingWizardMovementSupport() {
     return keys;
 }
 
-async function finalizeLoadedGameStateAsync() {
-    if (!wizard || typeof wizard.hasPendingSavedMovementSupport !== "function" || !wizard.hasPendingSavedMovementSupport()) {
+function getLoadedWizardCameraFollowZ(wizardRef) {
+    if (!wizardRef) {
+        throw new Error("loaded wizard camera follow requires wizard");
+    }
+    const support = wizardRef.currentMovementSupport && typeof wizardRef.currentMovementSupport === "object"
+        ? wizardRef.currentMovementSupport
+        : null;
+    const supportLayer = support ? Number(support.layer) : NaN;
+    const layer = Number.isFinite(supportLayer)
+        ? Math.round(supportLayer)
+        : (Number.isFinite(Number(wizardRef.currentLayer))
+            ? Math.round(Number(wizardRef.currentLayer))
+            : (Number.isFinite(Number(wizardRef.traversalLayer)) ? Math.round(Number(wizardRef.traversalLayer)) : 0));
+    const baseZ = support && Number.isFinite(Number(support.baseZ))
+        ? Number(support.baseZ)
+        : (Number.isFinite(Number(wizardRef.currentLayerBaseZ)) ? Number(wizardRef.currentLayerBaseZ) : NaN);
+    if (!Number.isFinite(baseZ)) {
+        throw new Error(`loaded wizard camera follow for layer ${layer} requires support baseZ or currentLayerBaseZ`);
+    }
+    if (support && support.type === "stair") {
+        if (Number.isFinite(Number(support.continuousLocalZ))) return baseZ + Number(support.continuousLocalZ);
+        if (Number.isFinite(Number(support.continuousBaseZ))) return Number(support.continuousBaseZ);
+        if (Number.isFinite(Number(support.localZ))) return baseZ + Number(support.localZ);
+    }
+    if (wizardRef._floorFallState && wizardRef._floorFallState.active) {
+        return baseZ + (Number.isFinite(Number(wizardRef.z)) ? Number(wizardRef.z) : 0);
+    }
+    return baseZ;
+}
+
+function ensureLoadedViewportGeometryForRestore(reason = "loadGameState") {
+    if (typeof globalThis !== "undefined" && typeof globalThis.ensureViewportGeometryForRestore === "function") {
+        globalThis.ensureViewportGeometryForRestore(reason);
+    }
+    const viewportRef = (typeof viewport !== "undefined" && viewport && typeof viewport === "object")
+        ? viewport
+        : null;
+    if (!viewportRef) {
+        throw new Error(`loaded game restore requires viewport (${reason})`);
+    }
+    if (
+        !Number.isFinite(Number(viewportRef.width)) ||
+        Number(viewportRef.width) <= 0 ||
+        !Number.isFinite(Number(viewportRef.height)) ||
+        Number(viewportRef.height) <= 0
+    ) {
+        throw new Error(`loaded game restore requires finite viewport dimensions before wizard restore (${reason})`);
+    }
+    return viewportRef;
+}
+
+function syncLoadedViewportCameraZ(wizardRef) {
+    const viewportRef = ensureLoadedViewportGeometryForRestore("screen-space section bubble");
+    if (
+        !Number.isFinite(Number(viewportRef.x)) ||
+        !Number.isFinite(Number(viewportRef.y))
+    ) {
+        throw new Error("screen-space load section bubble requires finite viewport position");
+    }
+    const cameraZ = getLoadedWizardCameraFollowZ(wizardRef);
+    viewportRef.prevZ = cameraZ;
+    viewportRef.z = cameraZ;
+    viewportRef._cameraZInitializedFromFollow = true;
+    return { viewportRef, cameraZ };
+}
+
+function shouldUseLoadedScreenSpaceSectionBubble(cameraContext) {
+    const cameraZ = Number(cameraContext && cameraContext.cameraZ);
+    if (!Number.isFinite(cameraZ)) {
+        throw new Error("loaded screen-space section bubble requires finite cameraZ");
+    }
+    return Math.abs(cameraZ) > 1e-6;
+}
+
+async function flushLoadedPrototypeBubbleShiftSession(mapRef) {
+    if (!mapRef || !mapRef._prototypeBubbleShiftSession) return true;
+    if (typeof mapRef.flushPrototypeBubbleShiftSession !== "function") {
+        throw new Error("loaded prototype section bubble shift requires flushPrototypeBubbleShiftSession");
+    }
+    const maxPasses = 64;
+    for (let pass = 0; pass < maxPasses; pass++) {
+        const session = mapRef._prototypeBubbleShiftSession;
+        if (!session || session.completed === true) return true;
+        if (session.error) throw session.error;
+
+        mapRef.flushPrototypeBubbleShiftSession({
+            maxTasks: 200000,
+            forceComplete: true
+        });
+
+        const nextSession = mapRef._prototypeBubbleShiftSession;
+        if (!nextSession || nextSession.completed === true) return true;
+        if (nextSession.error) throw nextSession.error;
+        if (nextSession.pendingPromise) {
+            await nextSession.pendingPromise;
+            if (nextSession.error) throw nextSession.error;
+        }
+    }
+    throw new Error("loaded prototype section bubble shift did not settle");
+}
+
+function resetLoadedLevel0GroundRenderCaches(reason = "loadGameState") {
+    const renderingApi = (typeof globalThis !== "undefined" && globalThis.Rendering)
+        ? globalThis.Rendering
+        : null;
+    if (!renderingApi) return false;
+    if (typeof renderingApi.resetLevel0GroundSurfaceCaches !== "function") {
+        throw new Error("loaded game terrain cache reset requires Rendering.resetLevel0GroundSurfaceCaches");
+    }
+    renderingApi.resetLevel0GroundSurfaceCaches(reason);
+    return true;
+}
+
+function getLoadedPrototypeSectionAsset(mapRef, sectionKey) {
+    if (!mapRef || typeof sectionKey !== "string" || sectionKey.length === 0) return null;
+    if (typeof mapRef.getPrototypeSectionAsset === "function") {
+        return mapRef.getPrototypeSectionAsset(sectionKey);
+    }
+    const state = mapRef._prototypeSectionState;
+    return state && state.sectionAssetsByKey instanceof Map
+        ? (state.sectionAssetsByKey.get(sectionKey) || null)
+        : null;
+}
+
+function collectLoadedPrototypeActiveSectionKeys(mapRef) {
+    const state = mapRef && mapRef._prototypeSectionState;
+    if (!state) return [];
+    const activeKeys = typeof mapRef.getPrototypeActiveSectionKeys === "function"
+        ? mapRef.getPrototypeActiveSectionKeys()
+        : (state.activeSectionKeys instanceof Set ? state.activeSectionKeys : null);
+    if (!(activeKeys instanceof Set)) return [];
+    return Array.from(activeKeys).filter((key, index, array) => (
+        typeof key === "string" &&
+        key.length > 0 &&
+        array.indexOf(key) === index
+    ));
+}
+
+function rebuildLoadedPrototypeActiveNodeSet(mapRef, activeSectionKeys) {
+    const state = mapRef && mapRef._prototypeSectionState;
+    if (!state || state.useSparseNodes !== true) return false;
+    if (!(state.nodesBySectionKey instanceof Map)) {
+        throw new Error("loaded prototype active sections require nodesBySectionKey");
+    }
+    const loadedNodes = [];
+    const loadedNodeKeySet = new Set();
+    const loadedNodesByCoordKey = new Map();
+    for (let i = 0; i < activeSectionKeys.length; i++) {
+        const sectionKey = activeSectionKeys[i];
+        const nodes = state.nodesBySectionKey.get(sectionKey);
+        if (!Array.isArray(nodes) || nodes.length === 0) {
+            throw new Error(`loaded prototype active section ${sectionKey} has no materialized nodes`);
+        }
+        for (let n = 0; n < nodes.length; n++) {
+            const node = nodes[n];
+            if (!node) continue;
+            node._prototypeSectionActive = true;
+            node.blocked = false;
+            const coordKey = `${node.xindex},${node.yindex}`;
+            loadedNodesByCoordKey.set(coordKey, node);
+            if (loadedNodeKeySet.has(coordKey)) continue;
+            loadedNodeKeySet.add(coordKey);
+            loadedNodes.push(node);
+        }
+    }
+    if (loadedNodes.length === 0) {
+        throw new Error("loaded prototype active sections produced no loaded nodes");
+    }
+    loadedNodes.sort((a, b) => {
+        const dy = (Number(a && a.yindex) || 0) - (Number(b && b.yindex) || 0);
+        return dy !== 0 ? dy : ((Number(a && a.xindex) || 0) - (Number(b && b.xindex) || 0));
+    });
+    state.loadedNodes = loadedNodes;
+    state.loadedNodeKeySet = loadedNodeKeySet;
+    state.loadedNodesByCoordKey = loadedNodesByCoordKey;
+    state.actualActiveSectionKeys = new Set(activeSectionKeys);
+    state.activeSectionKeys = new Set(activeSectionKeys);
+    state.activeBubbleSectionKeys = new Set(activeSectionKeys);
+    return true;
+}
+
+async function ensureLoadedPrototypeActiveSectionsReady(mapRef) {
+    const state = mapRef && mapRef._prototypeSectionState;
+    if (!state || !(state.sectionsByKey instanceof Map)) return true;
+    const activeSectionKeys = collectLoadedPrototypeActiveSectionKeys(mapRef);
+    if (activeSectionKeys.length === 0) {
+        if (state.activeSectionKeys instanceof Set || state.activeBubbleSectionKeys instanceof Set) {
+            throw new Error("loaded prototype section world has no active sections after load finalization");
+        }
         return true;
     }
+    if (!(state.sectionAssetsByKey instanceof Map)) {
+        throw new Error("loaded prototype active sections require sectionAssetsByKey");
+    }
+
+    const activeSectionKeySet = new Set(activeSectionKeys);
+    const keysToHydrate = activeSectionKeys.filter((sectionKey) => {
+        const asset = getLoadedPrototypeSectionAsset(mapRef, sectionKey);
+        return !asset || asset._prototypeSectionHydrated !== true;
+    });
+    let changedRuntime = false;
+    if (keysToHydrate.length > 0) {
+        if (typeof mapRef.hydratePrototypeSectionAssets !== "function") {
+            throw new Error(`loaded prototype active sections require hydratePrototypeSectionAssets for ${keysToHydrate.join(",")}`);
+        }
+        await mapRef.hydratePrototypeSectionAssets(keysToHydrate, { materialize: true });
+        for (let i = 0; i < keysToHydrate.length; i++) {
+            const sectionKey = keysToHydrate[i];
+            const asset = getLoadedPrototypeSectionAsset(mapRef, sectionKey);
+            if (!asset || asset._prototypeSectionHydrated !== true) {
+                throw new Error(`loaded prototype active section ${sectionKey} could not be hydrated`);
+            }
+        }
+        changedRuntime = true;
+    }
+
+    if (state.useSparseNodes === true) {
+        if (!(state.nodesBySectionKey instanceof Map)) {
+            throw new Error("loaded prototype sparse sections require nodesBySectionKey");
+        }
+        const keysWithoutNodes = activeSectionKeys.filter((sectionKey) => {
+            const nodes = state.nodesBySectionKey.get(sectionKey);
+            return !Array.isArray(nodes) || nodes.length === 0;
+        });
+        if (keysWithoutNodes.length > 0) {
+            if (typeof mapRef.materializePrototypeSectionNodes !== "function") {
+                throw new Error(`loaded prototype active sections require materializePrototypeSectionNodes for ${keysWithoutNodes.join(",")}`);
+            }
+            mapRef.materializePrototypeSectionNodes(keysWithoutNodes);
+            if (typeof mapRef.rebuildPrototypeFloorRuntime !== "function") {
+                throw new Error("loaded prototype active section materialization requires rebuildPrototypeFloorRuntime");
+            }
+            mapRef.rebuildPrototypeFloorRuntime();
+            changedRuntime = true;
+        }
+        rebuildLoadedPrototypeActiveNodeSet(mapRef, activeSectionKeys);
+    }
+
+    if (changedRuntime) {
+        if (typeof mapRef.ensurePrototypeBlockedEdges === "function") {
+            mapRef.ensurePrototypeBlockedEdges(activeSectionKeySet);
+        }
+        if (typeof mapRef.syncPrototypeWalls === "function") {
+            mapRef.syncPrototypeWalls();
+        }
+        if (typeof mapRef.syncPrototypeObjects === "function") {
+            mapRef.syncPrototypeObjects();
+        }
+        if (typeof mapRef.syncPrototypeAnimals === "function") {
+            mapRef.syncPrototypeAnimals();
+        }
+        if (typeof mapRef.syncPrototypePowerups === "function") {
+            mapRef.syncPrototypePowerups();
+        }
+        if (typeof mapRef.ensurePrototypeBuildingPlacementsForSectionKeys === "function") {
+            await mapRef.ensurePrototypeBuildingPlacementsForSectionKeys(activeSectionKeySet);
+        }
+        if (typeof mapRef.syncPrototypeBuildingGeometryRuntime === "function") {
+            mapRef.syncPrototypeBuildingGeometryRuntime();
+        }
+        if (typeof mapRef.applyPrototypeSectionClearance === "function") {
+            mapRef.applyPrototypeSectionClearance(activeSectionKeySet);
+        }
+        resetLoadedLevel0GroundRenderCaches("loadGameState-active-prototype-sections");
+    }
+    return true;
+}
+
+async function prepareLoadedWizardMovementSupportRuntime() {
+    if (map && typeof map.syncPrototypeBuildingPlacementRefs === "function") {
+        map.syncPrototypeBuildingPlacementRefs();
+    }
+    const sectionKeys = collectSectionKeysForPendingWizardMovementSupport();
+    if (map && typeof map.ensurePrototypeBuildingPlacementsForSectionKeys === "function" && sectionKeys.size > 0) {
+        await map.ensurePrototypeBuildingPlacementsForSectionKeys(sectionKeys);
+    }
+    if (map && typeof map.syncPrototypeBuildingGeometryRuntime === "function") {
+        map.syncPrototypeBuildingGeometryRuntime();
+    }
+}
+
+async function finalizeLoadedGameStateAsync() {
+    const hasPendingSavedMovementSupport = !!(
+        wizard &&
+        typeof wizard.hasPendingSavedMovementSupport === "function" &&
+        wizard.hasPendingSavedMovementSupport()
+    );
     try {
-        if (map && typeof map.syncPrototypeBuildingPlacementRefs === "function") {
-            map.syncPrototypeBuildingPlacementRefs();
-        }
-        const sectionKeys = collectSectionKeysForPendingWizardMovementSupport();
-        if (map && typeof map.ensurePrototypeBuildingPlacementsForSectionKeys === "function" && sectionKeys.size > 0) {
-            await map.ensurePrototypeBuildingPlacementsForSectionKeys(sectionKeys);
-        }
-        if (map && typeof map.syncPrototypeBuildingGeometryRuntime === "function") {
-            map.syncPrototypeBuildingGeometryRuntime();
-        }
-        wizard.restoreSavedMovementSupport();
         if (map && typeof map.updatePrototypeSectionBubble === "function") {
-            map.updatePrototypeSectionBubble(wizard, { force: true });
+            const hasPrototypeSectionState = !!(
+                map._prototypeSectionState &&
+                map._prototypeSectionState.sectionsByKey instanceof Map
+            );
+            if (hasPrototypeSectionState) {
+                const cameraContext = syncLoadedViewportCameraZ(wizard);
+                if (shouldUseLoadedScreenSpaceSectionBubble(cameraContext)) {
+                    map.updatePrototypeSectionBubble(wizard, {
+                        force: true,
+                        useScreenSpaceSections: true,
+                        viewport: cameraContext.viewportRef,
+                        cameraZ: cameraContext.cameraZ
+                    });
+                } else {
+                    map.updatePrototypeSectionBubble(wizard, { force: true });
+                }
+            } else {
+                map.updatePrototypeSectionBubble(wizard, { force: true });
+            }
+            await flushLoadedPrototypeBubbleShiftSession(map);
+            await ensureLoadedPrototypeActiveSectionsReady(map);
+        }
+        if (hasPendingSavedMovementSupport) {
+            await prepareLoadedWizardMovementSupportRuntime();
+            wizard.restoreSavedMovementSupport();
         }
         return true;
     } catch (e) {
@@ -2518,6 +2956,7 @@ function loadGameState(saveData) {
         if (wizard) {
             const wizardData = JSON.parse(JSON.stringify(saveData.wizard));
             sanitizeWizardLoadMovementSupport(wizardData);
+            ensureLoadedViewportGeometryForRestore("wizard loadJson");
             wizard.loadJson(wizardData);
         }
 
@@ -2832,6 +3271,7 @@ function loadGameState(saveData) {
         if (saveData.groundTiles) {
             decodeGroundTiles(map, saveData.groundTiles);
         }
+        resetLoadedLevel0GroundRenderCaches("loadGameState");
         const _lt5 = performance.now();
         console.log(`[LOAD TIMING] restore static objects + ground: ${(_lt5 - _lt4).toFixed(1)}ms`);
 

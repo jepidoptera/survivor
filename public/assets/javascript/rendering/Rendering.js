@@ -1205,6 +1205,7 @@ void main(void) {
             this.level0GroundSurfaceBakeNodeCache = new Map();
             this.level0GroundSurfaceChunkCache = new Map();
             this.level0GroundSurfaceChunkTick = 0;
+            this.level0GroundCoverageVersion = 1;
             this.level0GroundSurfaceChunkBuildsThisFrame = 0;
             this.floorVisualChunkClipCache = new Map();
             this.floorVisualChunkClipTick = 0;
@@ -1225,6 +1226,11 @@ void main(void) {
             this.scriptScreenColorOverlay = null;
             this.scriptScreenColorOverlayGraphics = null;
             this.scriptScreenColorOverlayRefreshHandle = null;
+            this.wizardThoughtBubble = null;
+            this.wizardThoughtBubbleSprite = null;
+            this.wizardThoughtBubbleTexture = null;
+            this.wizardThoughtBubbleRefreshHandle = null;
+            this.wizardThoughtBubblePendingBaseTextures = new Set();
             this.pickRenderItems = [];
             this._buildingInteriorPickerFrame = null;
             this.losShadowGraphics = null;
@@ -12968,12 +12974,7 @@ void main(void) {
             const level0ChunkReadyCache = FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED ? (this._level0ChunkReadyCache.clear(), this._level0ChunkReadyCache) : null;
             if (!this._level0SectionAssetCache) this._level0SectionAssetCache = new Map();
             const level0SectionAssetCache = FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED ? (this._level0SectionAssetCache.clear(), this._level0SectionAssetCache) : null;
-            // Version key for per-node chunk coverage cache. Increments when a new chunk enters
-            // the cache (new area visible). Doesn't catch in-place signature changes, but those
-            // only happen during floor editing where the next tile render is still correct.
-            const _groundCovVer = (this.level0GroundSurfaceChunkCache instanceof Map)
-                ? this.level0GroundSurfaceChunkCache.size
-                : -1;
+            const _groundCovVer = Number(this.level0GroundCoverageVersion) || 0;
             if (!this._nonzeroFloorFragmentsByLevel) this._nonzeroFloorFragmentsByLevel = new Map();
             const nonzeroFloorFragmentsByLevel = this._nonzeroFloorFragmentsByLevel;
             nonzeroFloorFragmentsByLevel.clear();
@@ -13062,19 +13063,10 @@ void main(void) {
                 }
 
                 const textureStartMs = profiler ? performance.now() : 0;
-                const maxTextureIndex = Array.isArray(map.groundTextures) ? (map.groundTextures.length - 1) : 0;
-                const _baseId = Math.max(0, Math.min(12, Number.isFinite(node.groundTextureId) ? Math.floor(node.groundTextureId) : 0));
-                const _x = Number.isFinite(node.xindex) ? Math.floor(node.xindex) : 0;
-                const _y = Number.isFinite(node.yindex) ? Math.floor(node.yindex) : 0;
-                const _seed = ((_x * 73856093) ^ (_y * 19349663) ^ (_baseId * 83492791)) >>> 0;
-                const _variant = _seed % 4;
-                const _variantTextureIndex = _baseId + (_variant * 13);
-                const _tileCount = 52;
-                const _scrambledIndex = (_variantTextureIndex * 17) % _tileCount;
-                const textureIndex = Math.min(maxTextureIndex, (_tileCount <= (maxTextureIndex + 1)) ? _scrambledIndex : _variantTextureIndex);
-                const texture = (Array.isArray(map.groundTextures) && map.groundTextures[textureIndex])
-                    ? map.groundTextures[textureIndex]
-                    : PIXI.Texture.WHITE;
+                if (typeof map.getGroundTextureForNode !== "function") {
+                    throw new Error("ground tile rendering requires map.getGroundTextureForNode");
+                }
+                const texture = map.getGroundTextureForNode(node);
                 if (sprite.texture !== texture) {
                     sprite.texture = texture;
                 }
@@ -13318,10 +13310,12 @@ void main(void) {
             const buildsThisFrame = Math.max(0, Number(this.level0GroundSurfaceChunkBuildsThisFrame) || 0);
             if (buildsThisFrame >= buildLimit) {
                 if (cache && cache.texture && cache.bounds) {
+                    const wasReady = cache.ready === true;
                     cache.ready = false;
                     cache.pending = true;
                     cache.targetSignature = signature;
                     cache.lastUsedTick = ++this.level0GroundSurfaceChunkTick;
+                    if (wasReady) this.bumpLevel0GroundCoverageVersion();
                     return cache;
                 }
                 return null;
@@ -13353,10 +13347,12 @@ void main(void) {
             pendingTexture = pendingTexture || !!(roadBake && roadBake.pending);
             if (pendingTexture) {
                 if (cache && cache.texture) {
+                    const wasReady = cache.ready === true;
                     cache.ready = false;
                     cache.targetSignature = signature;
                     cache.pending = true;
                     cache.lastUsedTick = ++this.level0GroundSurfaceChunkTick;
+                    if (wasReady) this.bumpLevel0GroundCoverageVersion();
                     return cache;
                 }
                 return null;
@@ -13385,6 +13381,7 @@ void main(void) {
             };
             cache.lastUsedTick = ++this.level0GroundSurfaceChunkTick;
             this.level0GroundSurfaceChunkCache.set(cacheKey, cache);
+            this.bumpLevel0GroundCoverageVersion();
             if (this.currentFrameMetrics) {
                 this.currentFrameMetrics.floorLevel0ChunkBuilds = (this.currentFrameMetrics.floorLevel0ChunkBuilds || 0) + 1;
                 this.currentFrameMetrics.floorLevel0ChunkGroundTiles = (this.currentFrameMetrics.floorLevel0ChunkGroundTiles || 0) + bakedGroundTiles;
@@ -13413,7 +13410,49 @@ void main(void) {
                 this.level0GroundSurfaceChunkCache.delete(key);
                 removed += 1;
             }
+            if (removed > 0) this.bumpLevel0GroundCoverageVersion();
             return removed;
+        }
+
+        bumpLevel0GroundCoverageVersion() {
+            this.level0GroundCoverageVersion = (Number(this.level0GroundCoverageVersion) || 0) + 1;
+            return this.level0GroundCoverageVersion;
+        }
+
+        resetLevel0GroundSurfaceCaches(reason = "") {
+            const destroyTexture = (cache) => {
+                if (cache && cache.texture && typeof cache.texture.destroy === "function") {
+                    cache.texture.destroy(true);
+                }
+            };
+            if (this.level0GroundSurfaceCache instanceof Map) {
+                for (const cache of this.level0GroundSurfaceCache.values()) destroyTexture(cache);
+                this.level0GroundSurfaceCache.clear();
+            } else {
+                this.level0GroundSurfaceCache = new Map();
+            }
+            if (this.level0GroundSurfaceChunkCache instanceof Map) {
+                for (const cache of this.level0GroundSurfaceChunkCache.values()) destroyTexture(cache);
+                this.level0GroundSurfaceChunkCache.clear();
+            } else {
+                this.level0GroundSurfaceChunkCache = new Map();
+            }
+            if (this.level0GroundSurfaceBakeNodeCache instanceof Map) {
+                this.level0GroundSurfaceBakeNodeCache.clear();
+            } else {
+                this.level0GroundSurfaceBakeNodeCache = new Map();
+            }
+            if (this._level0ChunkReadyCache instanceof Map) this._level0ChunkReadyCache.clear();
+            if (this._level0SectionAssetCache instanceof Map) this._level0SectionAssetCache.clear();
+            this.bakedLevel0SectionKeys = new Set();
+            this.bakedLevel0SectionSignature = "";
+            this.level0GroundSurfaceChunkBuildsThisFrame = 0;
+            this.bumpLevel0GroundCoverageVersion();
+            return {
+                ok: true,
+                reason: typeof reason === "string" ? reason : "",
+                coverageVersion: this.level0GroundCoverageVersion
+            };
         }
 
         trimFloorVisualChunkClipCache(limit = FLOOR_LEVEL0_CHUNK_CACHE_LIMIT * 4) {
@@ -13830,17 +13869,20 @@ void main(void) {
             const state = map && map._prototypeSectionState;
             if (!state || !(state.sectionAssetsByKey instanceof Map)) return new Set();
             if (FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED) {
+                let removedChunkedSectionCaches = 0;
                 if (this.level0GroundSurfaceCache instanceof Map) {
                     for (const [sectionKey, cache] of this.level0GroundSurfaceCache.entries()) {
                         if (cache && cache.texture && typeof cache.texture.destroy === "function") {
                             cache.texture.destroy(true);
                         }
                         this.level0GroundSurfaceCache.delete(sectionKey);
+                        removedChunkedSectionCaches += 1;
                         if (this.level0GroundSurfaceBakeNodeCache instanceof Map) {
                             this.level0GroundSurfaceBakeNodeCache.delete(sectionKey);
                         }
                     }
                 }
+                if (removedChunkedSectionCaches > 0) this.bumpLevel0GroundCoverageVersion();
                 this.bakedLevel0SectionKeys = new Set();
                 this.bakedLevel0SectionSignature = `chunked:${state.sectionAssetsByKey.size}`;
                 return this.bakedLevel0SectionKeys;
@@ -13986,19 +14028,10 @@ void main(void) {
 
         drawLevel0GroundTileToCanvas(ctx2d, map, node, bounds, scale, sectionKey = "", asset = null) {
             if (!ctx2d || !map || !node || !bounds || !Number.isFinite(scale)) return false;
-            const maxTextureIndex = Array.isArray(map.groundTextures) ? (map.groundTextures.length - 1) : 0;
-            const _baseId = Math.max(0, Math.min(12, Number.isFinite(node.groundTextureId) ? Math.floor(node.groundTextureId) : 0));
-            const _x = Number.isFinite(node.xindex) ? Math.floor(node.xindex) : 0;
-            const _y = Number.isFinite(node.yindex) ? Math.floor(node.yindex) : 0;
-            const _seed = ((_x * 73856093) ^ (_y * 19349663) ^ (_baseId * 83492791)) >>> 0;
-            const _variant = _seed % 4;
-            const _variantTextureIndex = _baseId + (_variant * 13);
-            const _tileCount = 52;
-            const _scrambledIndex = (_variantTextureIndex * 17) % _tileCount;
-            const textureIndex = Math.min(maxTextureIndex, (_tileCount <= (maxTextureIndex + 1)) ? _scrambledIndex : _variantTextureIndex);
-            const texture = Array.isArray(map.groundTextures) && map.groundTextures[textureIndex]
-                ? map.groundTextures[textureIndex]
-                : PIXI.Texture.WHITE;
+            if (typeof map.getGroundTextureForNode !== "function") {
+                throw new Error("level 0 ground baking requires map.getGroundTextureForNode");
+            }
+            const texture = map.getGroundTextureForNode(node);
             if (!isRenderablePixiTexture(texture)) {
                 const baseTexture = texture && texture.baseTexture ? texture.baseTexture : null;
                 if (baseTexture && baseTexture.valid !== true) {
@@ -18915,6 +18948,362 @@ void main(void) {
             }
         }
 
+        startWizardThoughtBubble(wizardRef, text, duration) {
+            if (!wizardRef || typeof wizardRef !== "object") {
+                throw new Error("wizard.thoughtBubble requires a wizard object");
+            }
+            const bubbleText = String(text === undefined || text === null ? "" : text);
+            if (!bubbleText.trim().length) {
+                throw new Error("wizard.thoughtBubble text cannot be empty");
+            }
+            const durationSeconds = Number(duration);
+            if (!Number.isFinite(durationSeconds)) {
+                throw new Error("wizard.thoughtBubble duration must be a finite number of seconds");
+            }
+            const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now();
+            this.destroyWizardThoughtBubbleTexture();
+            this.wizardThoughtBubble = {
+                wizard: wizardRef,
+                text: bubbleText,
+                startedAtMs: null,
+                requestedAtMs: nowMs,
+                durationMs: Math.max(0, durationSeconds * 1000),
+                fadeMs: 500,
+                baseViewscale: null,
+                pivotX: 0,
+                pivotY: 0,
+                smallRadiusPx: 0,
+                smallDiameterPx: 0,
+                cloudTextureReady: false,
+                cloudTextureError: null
+            };
+            this.scheduleWizardThoughtBubbleRefresh();
+            if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                globalThis.presentGameFrame();
+            }
+            return true;
+        }
+
+        scheduleWizardThoughtBubbleRefresh() {
+            if (this.wizardThoughtBubbleRefreshHandle !== null) return;
+            if (typeof requestAnimationFrame !== "function") return;
+            this.wizardThoughtBubbleRefreshHandle = requestAnimationFrame(() => {
+                this.wizardThoughtBubbleRefreshHandle = null;
+                if (!this.wizardThoughtBubble) return;
+                if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                    globalThis.presentGameFrame();
+                }
+                if (this.wizardThoughtBubble) {
+                    this.scheduleWizardThoughtBubbleRefresh();
+                }
+            });
+        }
+
+        destroyWizardThoughtBubbleTexture() {
+            if (this.wizardThoughtBubbleTexture) {
+                this.wizardThoughtBubbleTexture.destroy(true);
+                this.wizardThoughtBubbleTexture = null;
+            }
+            if (this.wizardThoughtBubbleSprite) {
+                this.wizardThoughtBubbleSprite.texture = (typeof PIXI !== "undefined" && PIXI.Texture) ? PIXI.Texture.EMPTY : null;
+                this.wizardThoughtBubbleSprite.visible = false;
+            }
+        }
+
+        clearWizardThoughtBubble() {
+            this.wizardThoughtBubble = null;
+            if (this.wizardThoughtBubbleRefreshHandle !== null && typeof cancelAnimationFrame === "function") {
+                cancelAnimationFrame(this.wizardThoughtBubbleRefreshHandle);
+            }
+            this.wizardThoughtBubbleRefreshHandle = null;
+            this.destroyWizardThoughtBubbleTexture();
+            if (this.wizardThoughtBubbleSprite && this.wizardThoughtBubbleSprite.parent) {
+                this.wizardThoughtBubbleSprite.parent.removeChild(this.wizardThoughtBubbleSprite);
+            }
+        }
+
+        getWizardThoughtBubbleAlpha(nowMs) {
+            const bubble = this.wizardThoughtBubble;
+            if (!bubble) return 0;
+            if (!Number.isFinite(bubble.startedAtMs)) return 1;
+            const elapsedMs = Math.max(0, nowMs - bubble.startedAtMs);
+            if (elapsedMs <= bubble.durationMs) return 1;
+            if (bubble.fadeMs <= 0) return 0;
+            const fadeElapsedMs = elapsedMs - bubble.durationMs;
+            const fadeProgress = Math.max(0, Math.min(1, fadeElapsedMs / bubble.fadeMs));
+            return 1 - fadeProgress;
+        }
+
+        getWizardThoughtBubbleCloudTexture(bubble) {
+            if (typeof PIXI === "undefined" || !PIXI.Texture) {
+                throw new Error("wizard.thoughtBubble requires PIXI.Texture");
+            }
+            const texture = PIXI.Texture.from("/assets/images/cloud.png");
+            const baseTexture = texture && texture.baseTexture ? texture.baseTexture : null;
+            if (!baseTexture) {
+                throw new Error("wizard.thoughtBubble missing cloud base texture");
+            }
+            if (baseTexture.valid === true) {
+                bubble.cloudTextureReady = true;
+                return texture;
+            }
+            if (bubble.cloudTextureError) {
+                throw new Error(`wizard.thoughtBubble failed to load /assets/images/cloud.png: ${bubble.cloudTextureError}`);
+            }
+            if (!this.wizardThoughtBubblePendingBaseTextures.has(baseTexture)) {
+                if (typeof baseTexture.once !== "function") {
+                    throw new Error("wizard.thoughtBubble cloud texture cannot report load completion");
+                }
+                this.wizardThoughtBubblePendingBaseTextures.add(baseTexture);
+                baseTexture.once("loaded", () => {
+                    this.wizardThoughtBubblePendingBaseTextures.delete(baseTexture);
+                    if (this.wizardThoughtBubble) {
+                        this.wizardThoughtBubble.cloudTextureReady = true;
+                    }
+                    if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                        globalThis.presentGameFrame();
+                    }
+                });
+                baseTexture.once("error", (error) => {
+                    this.wizardThoughtBubblePendingBaseTextures.delete(baseTexture);
+                    if (this.wizardThoughtBubble) {
+                        this.wizardThoughtBubble.cloudTextureError = error && error.message ? error.message : "texture error";
+                    }
+                    if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                        globalThis.presentGameFrame();
+                    }
+                });
+            }
+            return null;
+        }
+
+        ensureWizardThoughtBubbleTexture(ctx, bubble) {
+            if (this.wizardThoughtBubbleTexture) return true;
+            if (typeof PIXI === "undefined" || !PIXI.Container || !PIXI.Graphics || !PIXI.Sprite || !PIXI.Text || !PIXI.Rectangle) {
+                throw new Error("wizard.thoughtBubble requires Pixi display classes");
+            }
+            const appRef = (ctx && ctx.app) || global.app || null;
+            const renderer = appRef && appRef.renderer ? appRef.renderer : null;
+            if (!renderer || typeof renderer.generateTexture !== "function") {
+                throw new Error("wizard.thoughtBubble requires a Pixi renderer");
+            }
+            const cloudTexture = this.getWizardThoughtBubbleCloudTexture(bubble);
+            if (!cloudTexture) {
+                return false;
+            }
+
+            const baseViewscale = Math.max(1, Number(this.camera && this.camera.viewscale) || 40);
+            bubble.baseViewscale = baseViewscale;
+            const smallDiameter = Math.max(18, Math.min(52, baseViewscale * 0.42));
+            const r1 = smallDiameter * 0.5;
+            const r2 = smallDiameter * 0.75;
+            const r3 = smallDiameter;
+            const outlineWidth = Math.max(2, Math.round(smallDiameter * 0.09));
+            const fontSize = Math.max(16, Math.min(30, Math.round(smallDiameter * 0.78)));
+            const textLength = bubble.text.replace(/\s+/g, " ").trim().length;
+            const cloudWidth = Math.max(230, Math.min(560, 210 + textLength * fontSize * 0.22));
+            const cloudHeight = cloudWidth * (772 / 1173);
+            const padding = Math.max(10, outlineWidth * 3);
+            const baseCloudX = padding;
+            const cloudX = baseCloudX + (cloudWidth * 0.3);
+            const cloudY = padding;
+            const circleShiftX = r1 * 0.5;
+            const c3x = baseCloudX + cloudWidth * 0.52 + circleShiftX;
+            const c3y = cloudY + cloudHeight + smallDiameter * 0.5 + r3;
+            const c2x = c3x - smallDiameter * 1.5;
+            const c2y = c3y + smallDiameter * 1.25;
+            const c1x = c2x - smallDiameter * 1.08;
+            const c1y = c2y + smallDiameter * 1.0;
+            const chainDx = c3x - c1x;
+            const chainDy = c3y - c1y;
+            const chainLength = Math.max(1e-6, Math.hypot(chainDx, chainDy));
+            const chainUnitX = chainDx / chainLength;
+            const chainUnitY = chainDy / chainLength;
+            const spreadC1x = c1x - (chainUnitX * smallDiameter);
+            const spreadC1y = c1y - (chainUnitY * smallDiameter);
+            const spreadC3x = c3x + (chainUnitX * r3 * 2 / 3);
+            const spreadC3y = c3y + (chainUnitY * r3 * 2 / 3);
+            const strokePad = Math.max(1, outlineWidth);
+            const relC2x = c2x - spreadC1x;
+            const relC2y = c2y - spreadC1y;
+            const relC3x = spreadC3x - spreadC1x;
+            const relC3y = spreadC3y - spreadC1y;
+            const relCloudX = Math.max(cloudX - spreadC1x - r1, -r1);
+            const relCloudY = cloudY - spreadC1y + r1;
+            const originX = r1 + strokePad;
+            const relMinY = Math.min(
+                -r1 - strokePad,
+                relC2y - r2 - strokePad,
+                relC3y - r3 - strokePad,
+                relCloudY
+            );
+            const relMaxY = Math.max(
+                r1 + strokePad,
+                relC2y + r2 + strokePad,
+                relC3y + r3 + strokePad,
+                relCloudY + cloudHeight
+            );
+            const originY = -relMinY;
+            const drawC1x = originX;
+            const drawC1y = originY;
+            const drawC2x = originX + relC2x;
+            const drawC2y = originY + relC2y;
+            const drawC3x = originX + relC3x;
+            const drawC3y = originY + relC3y;
+            const drawCloudX = originX + relCloudX;
+            const drawCloudY = originY + relCloudY;
+            const width = Math.ceil(Math.max(
+                drawC1x + r1 + strokePad,
+                drawC2x + r2 + strokePad,
+                drawC3x + r3 + strokePad,
+                drawCloudX + cloudWidth
+            ));
+            const height = Math.ceil(relMaxY - relMinY);
+
+            const textureContainer = new PIXI.Container();
+            const circles = new PIXI.Graphics();
+            circles.lineStyle(outlineWidth, 0x000000, 1);
+            circles.beginFill(0xffffff, 1);
+            circles.drawCircle(drawC1x, drawC1y, r1);
+            circles.drawCircle(drawC2x, drawC2y, r2);
+            circles.drawCircle(drawC3x, drawC3y, r3);
+            circles.endFill();
+            textureContainer.addChild(circles);
+
+            const cloud = new PIXI.Sprite(cloudTexture);
+            cloud.x = drawCloudX;
+            cloud.y = drawCloudY;
+            cloud.width = cloudWidth;
+            cloud.height = cloudHeight;
+            textureContainer.addChild(cloud);
+
+            const textObj = new PIXI.Text(bubble.text, {
+                fontFamily: "Arial, Helvetica, sans-serif",
+                fontSize,
+                fontWeight: "bold",
+                fill: 0x000000,
+                align: "center",
+                wordWrap: true,
+                wordWrapWidth: cloudWidth * 0.62,
+                lineJoin: "round"
+            });
+            textObj.anchor.set(0.5, 0.5);
+            textObj.x = drawCloudX + cloudWidth * 0.5;
+            textObj.y = drawCloudY + cloudHeight * 0.48;
+            textureContainer.addChild(textObj);
+
+            const texture = renderer.generateTexture(textureContainer, {
+                region: new PIXI.Rectangle(0, 0, width, height),
+                resolution: 1
+            });
+            textureContainer.destroy({ children: true });
+            if (!texture) {
+                throw new Error("wizard.thoughtBubble failed to generate render texture");
+            }
+            this.wizardThoughtBubbleTexture = texture;
+            bubble.pivotX = 0;
+            bubble.pivotY = height;
+            bubble.smallRadiusPx = r1;
+            bubble.smallDiameterPx = smallDiameter;
+            return true;
+        }
+
+        renderWizardThoughtBubble(ctx) {
+            const bubble = this.wizardThoughtBubble;
+            if (!bubble) {
+                this.clearWizardThoughtBubble();
+                return;
+            }
+            const nowMs = Number.isFinite(ctx && ctx.renderNowMs)
+                ? Number(ctx.renderNowMs)
+                : ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now());
+            const alpha = this.getWizardThoughtBubbleAlpha(nowMs);
+            if (!(alpha > 0)) {
+                this.clearWizardThoughtBubble();
+                return;
+            }
+            const wizard = bubble.wizard || (ctx && ctx.wizard) || global.wizard || null;
+            if (!wizard || wizard.gone || !Number.isFinite(wizard.x) || !Number.isFinite(wizard.y)) {
+                this.clearWizardThoughtBubble();
+                return;
+            }
+            if (!this.ensureWizardThoughtBubbleTexture(ctx, bubble)) {
+                this.scheduleWizardThoughtBubbleRefresh();
+                return;
+            }
+            if (!Number.isFinite(bubble.startedAtMs)) {
+                bubble.startedAtMs = nowMs;
+            }
+            const container = this.layers && this.layers.scriptMessages ? this.layers.scriptMessages : null;
+            if (!container) {
+                throw new Error("wizard.thoughtBubble requires the scriptMessages render layer");
+            }
+            let sprite = this.wizardThoughtBubbleSprite;
+            if (!sprite) {
+                sprite = new PIXI.Sprite(this.wizardThoughtBubbleTexture);
+                sprite.name = "wizardThoughtBubble";
+                sprite.interactive = false;
+                sprite.interactiveChildren = false;
+                this.wizardThoughtBubbleSprite = sprite;
+            } else if (sprite.texture !== this.wizardThoughtBubbleTexture) {
+                sprite.texture = this.wizardThoughtBubbleTexture;
+            }
+            if (sprite.parent !== container) {
+                container.addChild(sprite);
+            }
+
+            const renderAlphaValue = Number.isFinite(ctx && ctx.renderAlpha)
+                ? Math.max(0, Math.min(1, Number(ctx.renderAlpha)))
+                : 1;
+            const renderPos = (wizard && typeof wizard.getInterpolatedPosition === "function")
+                ? wizard.getInterpolatedPosition(renderAlphaValue)
+                : {
+                    x: Number(wizard.x),
+                    y: Number(wizard.y),
+                    z: Number.isFinite(wizard.z) ? Number(wizard.z) : 0
+                };
+            const support = wizard && wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                ? wizard.currentMovementSupport
+                : null;
+            const wizardLayer = this.getLayerIndexFromValue(
+                support && Number.isFinite(support.layer) ? support.layer : wizard.currentLayer,
+                0
+            );
+            const wizardLayerBaseZ = support && Number.isFinite(support.baseZ)
+                ? Number(support.baseZ)
+                : (Number.isFinite(wizard.currentLayerBaseZ)
+                    ? Number(wizard.currentLayerBaseZ)
+                    : this.getLayerBaseZForLevel(wizardLayer));
+            const pGround = this.camera.worldToScreen(renderPos.x, renderPos.y, wizardLayerBaseZ);
+            const viewScale = Math.max(1, Number(this.camera && this.camera.viewscale) || Number(bubble.baseViewscale) || 40);
+            const xyRatio = Math.max(0.0001, Number(this.camera && this.camera.xyratio) || 0.66);
+            const localZ = Number.isFinite(renderPos.z) ? Number(renderPos.z) : 0;
+            const jumpOffsetPx = localZ * viewScale * xyRatio;
+            const wizardCenterY = pGround.y - jumpOffsetPx - (viewScale * 0.25);
+            const scale = Number.isFinite(bubble.baseViewscale) && bubble.baseViewscale > 0
+                ? (viewScale / bubble.baseViewscale)
+                : 1;
+            const smallDiameter = Math.max(1, Number(bubble.smallDiameterPx) || (bubble.smallRadiusPx * 2) || 1) * scale;
+            const wizardHeadX = pGround.x;
+            const wizardHeadY = wizardCenterY - (viewScale * 0.45);
+            const bubbleCornerX = wizardHeadX + (smallDiameter * 0.15);
+            const bubbleCornerY = wizardHeadY - (smallDiameter * 0.1) - (smallDiameter * 0.5);
+
+            sprite.pivot.set(bubble.pivotX, bubble.pivotY);
+            sprite.position.set(bubbleCornerX, bubbleCornerY);
+            sprite.scale.set(scale, scale);
+            sprite.alpha = alpha;
+            sprite.visible = true;
+            if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                sprite.renderable = true;
+            }
+            this.scheduleWizardThoughtBubbleRefresh();
+        }
+
         parseScriptScreenColor(value) {
             if (Number.isFinite(value)) {
                 const numeric = Math.floor(Number(value));
@@ -22902,6 +23291,9 @@ void main(void) {
             this.profileDrawPassSection("renderScriptMessages", () => {
                 this.renderScriptMessages(ctx);
             });
+            this.profileDrawPassSection("renderWizardThoughtBubble", () => {
+                this.renderWizardThoughtBubble(ctx);
+            });
             if (this.scenePicker && typeof this.scenePicker.renderHoverHighlight === "function") {
                 this.profileDrawPassSection("scenePicker.renderHoverHighlight", () => {
                     const spellSystemRef = (typeof SpellSystem !== "undefined")
@@ -23466,6 +23858,23 @@ void main(void) {
             }
             if (!singleton) singleton = new RenderingImpl();
             return singleton.startScriptScreenColorOverlay(color, opacity, duration, fade);
+        },
+        thoughtBubble(wizardRef, text, duration) {
+            if (!global.RenderingCamera || !global.RenderingLayers || typeof PIXI === "undefined") {
+                throw new Error("wizard.thoughtBubble requires the Rendering runtime");
+            }
+            if (!singleton) singleton = new RenderingImpl();
+            return singleton.startWizardThoughtBubble(wizardRef, text, duration);
+        },
+        resetLevel0GroundSurfaceCaches(reason = "") {
+            if (!singleton) {
+                return {
+                    ok: true,
+                    skipped: true,
+                    reason: typeof reason === "string" ? reason : ""
+                };
+            }
+            return singleton.resetLevel0GroundSurfaceCaches(reason);
         },
         isBuildingInteriorPresentationActive(ctx = null) {
             if (!singleton || typeof singleton.isBuildingInteriorPresentationActive !== "function") return false;

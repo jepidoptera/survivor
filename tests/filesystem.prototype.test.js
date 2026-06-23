@@ -82,6 +82,57 @@ test.afterEach(() => {
     restoreGlobals();
 });
 
+test("saveGameState uses numeric ground tile encoding for terrain ids above base36", () => {
+    const prototypeSectionAsset = {
+        id: "section-0",
+        key: "0,0",
+        coord: { q: 0, r: 0 },
+        centerAxial: { q: 0, r: 0 },
+        centerOffset: { x: 0, y: 0 },
+        neighborKeys: [],
+        tileCoordKeys: ["0,0"],
+        groundTextureId: 0,
+        walls: [],
+        objects: [],
+        animals: [],
+        powerups: []
+    };
+    const map = createRectMap();
+    map.nodes[0][0].xindex = 0;
+    map.nodes[0][0].yindex = 0;
+    map.nodes[0][0].groundTextureId = 53;
+    map._prototypeSectionState = {
+        radius: 3,
+        sectionGraphRadius: 1,
+        anchorCenter: { q: 0, r: 0 },
+        activeCenterKey: "0,0",
+        activeSectionKeys: new Set(["0,0"]),
+        nodesBySectionKey: new Map([["0,0", [map.nodes[0][0]]]])
+    };
+    map.getPrototypeActiveSectionKeys = () => new Set(["0,0"]);
+    map.getPrototypeSectionAsset = () => prototypeSectionAsset;
+    map.syncPrototypeWalls = () => false;
+    map.syncPrototypeObjects = () => false;
+    map.syncPrototypeAnimals = () => false;
+    map.syncPrototypePowerups = () => false;
+
+    globalThis.map = map;
+    globalThis.wizard = {
+        saveJson() {
+            return { name: "Merlin" };
+        }
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.LOSVisualSettings = { mazeMode: false };
+
+    const saveData = filesystem.saveGameState();
+
+    assert.equal(saveData.groundTiles.encoding, "number-grid-v2");
+    assert.deepEqual(saveData.groundTiles.data, [53]);
+});
+
 test("saveGameState persists prototype animals in section data without duplicating runtime records", () => {
     const prototypeSectionAsset = {
         id: "section-0",
@@ -1103,6 +1154,266 @@ test("loaded wizard stair support waits for pending prototype building geometry"
     assert.equal(counters.geometry, 1);
     assert.equal(wizard.hasPendingSavedMovementSupport(), false);
     assert.equal(wizard._stairSupport.stairId, "building:house:stair:floor-0:0");
+});
+
+test("loaded upper-floor wizard support waits for screen-space building geometry", async () => {
+    const fragmentId = "building:placed-9:floor:floor-fragment-71";
+    const calls = {
+        updateBubble: 0,
+        ensureBuildings: 0,
+        restore: 0,
+        geometry: 0
+    };
+    const state = {
+        sectionsByKey: new Map([
+            ["0,0", { key: "0,0" }],
+            ["1,0", { key: "1,0" }]
+        ]),
+        sectionAssetsByKey: new Map([
+            ["0,0", { key: "0,0", _prototypeSectionHydrated: true }],
+            ["1,0", { key: "1,0", _prototypeSectionHydrated: true }]
+        ]),
+        activeSectionKeys: new Set(["0,0"]),
+        activeBubbleSectionKeys: new Set(["0,0"])
+    };
+    const map = {
+        _prototypeSectionState: state,
+        floorsById: new Map(),
+        syncPrototypeBuildingPlacementRefs() {},
+        getPrototypeActiveSectionKeys() {
+            return new Set(state.activeSectionKeys);
+        },
+        getPrototypeBubbleSectionKeys() {
+            return new Set(state.activeBubbleSectionKeys);
+        },
+        getPrototypeSectionKeyForWorldPoint() {
+            return "1,0";
+        },
+        getPrototypeSectionAsset(sectionKey) {
+            return state.sectionAssetsByKey.get(sectionKey) || null;
+        },
+        updatePrototypeSectionBubble(_wizard, options = {}) {
+            calls.updateBubble += 1;
+            assert.equal(options.useScreenSpaceSections, true);
+            state.activeSectionKeys = new Set(["1,0"]);
+            state.activeBubbleSectionKeys = new Set(["1,0"]);
+            return true;
+        },
+        async ensurePrototypeBuildingPlacementsForSectionKeys(sectionKeys) {
+            calls.ensureBuildings += 1;
+            assert.equal(sectionKeys.has("1,0"), true);
+            assert.equal(sectionKeys.has("0,0"), false);
+            map.floorsById.set(fragmentId, {
+                fragmentId,
+                level: 2,
+                nodeBaseZ: 20,
+                surfaceId: "building:placed-9:surface:floor-fragment-71"
+            });
+            return [{ id: "building:placed-9" }];
+        },
+        syncPrototypeBuildingGeometryRuntime() {
+            calls.geometry += 1;
+            return { placements: 1, floors: map.floorsById.size, stairs: 0, pending: 0 };
+        }
+    };
+    const wizard = {
+        x: 50,
+        y: 75,
+        z: 0,
+        currentLayer: 2,
+        traversalLayer: 2,
+        currentLayerBaseZ: 20,
+        _pendingSavedFloorMovementSupport: { fragmentId },
+        hasPendingSavedMovementSupport() {
+            return !!this._pendingSavedFloorMovementSupport;
+        },
+        restoreSavedMovementSupport() {
+            calls.restore += 1;
+            if (!map.floorsById.has(fragmentId)) {
+                throw new Error(`wizard save references missing floor fragment ${fragmentId}`);
+            }
+            this._pendingSavedFloorMovementSupport = null;
+            this.currentMovementSupport = {
+                type: "floor",
+                layer: 2,
+                baseZ: 20,
+                fragmentId
+            };
+            return this.currentMovementSupport;
+        }
+    };
+
+    globalThis.map = map;
+    globalThis.wizard = wizard;
+    globalThis.viewport = { x: 40, y: 65, width: 30, height: 20 };
+
+    const finalized = await filesystem.finalizeLoadedGameStateAsync();
+
+    assert.equal(finalized, true);
+    assert.equal(calls.updateBubble, 1);
+    assert.equal(calls.ensureBuildings, 1);
+    assert.equal(calls.geometry, 1);
+    assert.equal(calls.restore, 1);
+    assert.equal(wizard.hasPendingSavedMovementSupport(), false);
+    assert.equal(wizard.currentMovementSupport.fragmentId, fragmentId);
+});
+
+test("finalizeLoadedGameStateAsync flushes screen-space bubble shift before load completes", async () => {
+    const calls = {
+        updateBubble: 0,
+        flush: 0
+    };
+    const map = {
+        _prototypeSectionState: {
+            sectionsByKey: new Map([["0,0", { key: "0,0" }]])
+        },
+        updatePrototypeSectionBubble(_wizard, options = {}) {
+            calls.updateBubble += 1;
+            assert.equal(options.force, true);
+            assert.equal(options.useScreenSpaceSections, true);
+            assert.ok(options.viewport);
+            assert.equal(options.cameraZ, 10);
+            const session = {
+                completed: false,
+                pendingPromise: null
+            };
+            session.pendingPromise = Promise.resolve().then(() => {
+                session.pendingPromise = null;
+            });
+            this._prototypeBubbleShiftSession = session;
+            return true;
+        },
+        flushPrototypeBubbleShiftSession() {
+            calls.flush += 1;
+            const session = this._prototypeBubbleShiftSession;
+            if (!session || session.completed === true) return true;
+            if (session.pendingPromise) return false;
+            session.completed = true;
+            this._prototypeBubbleShiftSession = null;
+            return true;
+        }
+    };
+    const wizard = {
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 10,
+        currentMovementSupport: {
+            type: "floor",
+            layer: 1,
+            baseZ: 10
+        },
+        hasPendingSavedMovementSupport() {
+            return false;
+        }
+    };
+
+    globalThis.map = map;
+    globalThis.wizard = wizard;
+    globalThis.viewport = { x: 0, y: 0, width: 100, height: 100 };
+
+    const finalized = await filesystem.finalizeLoadedGameStateAsync();
+
+    assert.equal(finalized, true);
+    assert.equal(calls.updateBubble, 1);
+    assert.equal(calls.flush >= 2, true);
+    assert.equal(map._prototypeBubbleShiftSession, null);
+});
+
+test("finalizeLoadedGameStateAsync hydrates unchanged active prototype sections before load completes", async () => {
+    const calls = {
+        hydrate: 0,
+        updateBubble: 0,
+        syncObjects: 0
+    };
+    const activeNode = {
+        xindex: 7,
+        yindex: 9,
+        blocked: true,
+        _prototypeSectionActive: false
+    };
+    const sectionAsset = {
+        key: "0,0",
+        _prototypeSectionHydrated: false
+    };
+    const state = {
+        sectionsByKey: new Map([["0,0", { key: "0,0" }]]),
+        sectionAssetsByKey: new Map([["0,0", sectionAsset]]),
+        activeSectionKeys: new Set(["0,0"]),
+        activeBubbleSectionKeys: new Set(["0,0"]),
+        actualActiveSectionKeys: new Set(["0,0"]),
+        useSparseNodes: true,
+        nodesBySectionKey: new Map(),
+        loadedNodes: [],
+        loadedNodeKeySet: new Set(),
+        loadedNodesByCoordKey: new Map()
+    };
+    const map = {
+        _prototypeSectionState: state,
+        getPrototypeActiveSectionKeys() {
+            return new Set(state.activeSectionKeys);
+        },
+        getPrototypeSectionAsset(sectionKey) {
+            return state.sectionAssetsByKey.get(sectionKey) || null;
+        },
+        updatePrototypeSectionBubble(_wizard, options = {}) {
+            calls.updateBubble += 1;
+            assert.equal(options.force, true);
+            assert.equal(options.useScreenSpaceSections, undefined);
+            return false;
+        },
+        async hydratePrototypeSectionAssets(sectionKeys, options = {}) {
+            calls.hydrate += 1;
+            assert.deepEqual(sectionKeys, ["0,0"]);
+            assert.equal(options.materialize, true);
+            sectionAsset._prototypeSectionHydrated = true;
+            state.nodesBySectionKey.set("0,0", [activeNode]);
+            return ["0,0"];
+        },
+        materializePrototypeSectionNodes() {
+            throw new Error("hydrate should materialize the active section in this test");
+        },
+        ensurePrototypeBlockedEdges(sectionKeys) {
+            assert.equal(sectionKeys.has("0,0"), true);
+        },
+        syncPrototypeWalls() {},
+        syncPrototypeObjects() {
+            calls.syncObjects += 1;
+        },
+        syncPrototypeAnimals() {},
+        syncPrototypePowerups() {},
+        applyPrototypeSectionClearance(sectionKeys) {
+            assert.equal(sectionKeys.has("0,0"), true);
+        }
+    };
+    const wizard = {
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        currentMovementSupport: {
+            type: "ground",
+            layer: 0,
+            baseZ: 0
+        },
+        hasPendingSavedMovementSupport() {
+            return false;
+        }
+    };
+
+    globalThis.map = map;
+    globalThis.wizard = wizard;
+    globalThis.viewport = { x: 0, y: 0, width: 100, height: 100 };
+
+    const finalized = await filesystem.finalizeLoadedGameStateAsync();
+
+    assert.equal(finalized, true);
+    assert.equal(calls.updateBubble, 1);
+    assert.equal(calls.hydrate, 1);
+    assert.equal(calls.syncObjects, 1);
+    assert.deepEqual(state.loadedNodes, [activeNode]);
+    assert.equal(state.loadedNodeKeySet.has("7,9"), true);
+    assert.equal(state.loadedNodesByCoordKey.get("7,9"), activeNode);
+    assert.equal(activeNode._prototypeSectionActive, true);
+    assert.equal(activeNode.blocked, false);
 });
 
 test("savePrototypeSectionWorldToServerSlot syncs animals and powerups before export", async () => {

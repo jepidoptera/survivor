@@ -10,6 +10,9 @@
         } = deps;
 
         function getPrototypeGroundTextureCount(map) {
+            if (map && typeof map.getGroundTerrainIdCount === "function") {
+                return map.getGroundTerrainIdCount();
+            }
             if (map && Array.isArray(map.groundTextures) && map.groundTextures.length > 0) {
                 return map.groundTextures.length;
             }
@@ -20,7 +23,7 @@
         }
 
         function pickPrototypeGroundTextureId(x, y, textureCount) {
-            const count = Math.max(1, Math.floor(Number(textureCount)) || 1);
+            const count = Math.max(1, Math.min(13, Math.floor(Number(textureCount)) || 1));
             if (count <= 1) return 0;
 
             const patchHash = hashCoordinatePair(Math.floor((Number(x) || 0) / 5), Math.floor((Number(y) || 0) / 4), 11);
@@ -36,6 +39,16 @@
             }
 
             return chosenHash % count;
+        }
+
+        function normalizePrototypeGroundTextureId(rawValue, textureCount) {
+            const count = Math.max(1, Math.floor(Number(textureCount)) || 1);
+            const value = Math.floor(Number(rawValue));
+            if (!Number.isFinite(value)) return null;
+            if (count <= 15 && value >= count) {
+                return Math.max(0, Math.min(12, value));
+            }
+            return Math.max(0, Math.min(count - 1, value));
         }
 
         function comparePrototypeTileCoordKeys(a, b) {
@@ -287,9 +300,8 @@
                 const [xRaw, yRaw] = coordKey.split(",");
                 const fallbackTextureId = pickPrototypeGroundTextureId(Number(xRaw), Number(yRaw), count);
                 const rawValue = source ? source[coordKey] : undefined;
-                const nextTextureId = Number.isFinite(rawValue)
-                    ? Math.max(0, Math.min(count - 1, Math.floor(Number(rawValue))))
-                    : fallbackTextureId;
+                const normalizedRawValue = normalizePrototypeGroundTextureId(rawValue, count);
+                const nextTextureId = normalizedRawValue !== null ? normalizedRawValue : fallbackTextureId;
                 normalized[coordKey] = nextTextureId;
             }
 

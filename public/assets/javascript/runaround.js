@@ -31,6 +31,14 @@ const CAMERA_RESET_DOUBLE_TAP_SECONDS = 0.2;
 let lastCameraResetTapAtMs = 0;
 let cameraResetTapAwaitingRelease = false;
 const SCRIPT_CAMERA_DEFAULT_ZOOM_FACTOR = 1;
+
+if (typeof globalThis !== "undefined") {
+    globalThis.viewport = viewport;
+    globalThis.viewscale = viewscale;
+    globalThis.viewScale = viewScale;
+    globalThis.xyratio = xyratio;
+}
+
 let scriptedCameraPanState = {
     active: false,
     focusTarget: null,
@@ -42,6 +50,14 @@ let scriptedCameraPanState = {
     durationMs: 0,
     releaseOnSettle: false
 };
+
+function syncGlobalViewportRuntime() {
+    if (typeof globalThis === "undefined") return;
+    globalThis.viewport = viewport;
+    globalThis.viewscale = viewscale;
+    globalThis.viewScale = viewScale;
+    globalThis.xyratio = xyratio;
+}
 let scriptedCameraZoomState = {
     active: false,
     startFactor: 1,
@@ -1093,6 +1109,7 @@ function recordPrototypeBubbleAdjacentFrame(nowMs, stats) {
 }
 
 function presentGameFrame(renderAnimalsOverride = null) {
+    syncGlobalViewportRuntime();
     const presentStats = {
         pumpMs: 0,
         lazyRoadMs: 0,
@@ -1840,6 +1857,7 @@ jQuery(() => {
                 typeof bundle.manifest.wizard === "object"
             ) ? bundle.manifest.wizard : null;
             if (prototypeWizardState && typeof wizard.loadJson === "function") {
+                ensureViewportGeometryForRestore("prototype indexeddb background wizard load");
                 wizard.loadJson(cloneWizardLoadDataForRuntime(prototypeWizardState));
             }
             if (map && typeof map.updatePrototypeSectionBubble === "function") {
@@ -2710,6 +2728,7 @@ jQuery(() => {
             }
             markPrototypeStartupPerf("prototype-sync-complete");
             if (manifest && manifest.wizard && typeof manifest.wizard === "object" && typeof wizard.loadJson === "function") {
+                ensureViewportGeometryForRestore("prototype template wizard load");
                 wizard.loadJson(cloneWizardLoadDataForRuntime(manifest.wizard));
             }
             const savedMazeMode = (
@@ -2778,28 +2797,22 @@ jQuery(() => {
         if (typeof loadGameStateFromIndexedDbKey !== "function") {
             return { ok: false, reason: "indexeddb-load-unavailable" };
         }
-        beginPrototypeStartupPerf("load-section-world-save", { key: saveKey });
-        showPrototypeLoadingOverlay("Loading");
-        try {
-            markPrototypeStartupPerf("indexeddb-load-begin", { key: saveKey });
-            const result = await loadGameStateFromIndexedDbKey(saveKey);
-            markPrototypeStartupPerf("indexeddb-load-finished", {
-                key: saveKey,
-                ok: !!(result && result.ok),
-                reason: result && result.reason ? String(result.reason) : ""
-            });
-            if (result && result.ok) {
-                setLastSaveReloadDirective({ source: "section-indexeddb", key: saveKey });
-            } else {
-                finishPrototypeStartupPerf("startup-perf-failed", {
-                    key: saveKey,
-                    reason: result && result.reason ? String(result.reason) : "load-failed"
-                });
-            }
-            return result;
-        } finally {
-            hidePrototypeLoadingOverlay();
+        const key = typeof saveKey === "string" ? saveKey.trim() : "";
+        if (!key.length) {
+            return { ok: false, reason: "missing-save-key" };
         }
+        beginPrototypeStartupPerf("queue-section-world-save-reload", { key });
+        markPrototypeStartupPerf("startup-load-directive-queue-begin", { key });
+        if (!reloadWithStartupLoadDirective({ source: "section-indexeddb", key })) {
+            finishPrototypeStartupPerf("startup-perf-failed", {
+                key,
+                reason: "startup-load-directive-failed"
+            });
+            return { ok: false, reason: "startup-load-directive-failed" };
+        }
+        setLastSaveReloadDirective({ source: "section-indexeddb", key });
+        message(`Reloading and loading save '${key}'...`);
+        return { ok: true, key, reloading: true };
     }
 
     async function runOpeningGameDialogFlow() {
@@ -3245,6 +3258,32 @@ jQuery(() => {
         const safeWidth = Math.max(0.01, Number(width) || getBaseViewportWidth());
         const aspectRatio = Math.max(1e-6, (Number(app.screen.height) || window.innerHeight || 1) / Math.max(1, Number(app.screen.width) || window.innerWidth || 1));
         return safeWidth * aspectRatio / xyratio;
+    }
+
+    function ensureViewportGeometryForRestore(reason = "restore") {
+        if (!viewport || typeof viewport !== "object") {
+            throw new Error(`viewport geometry restore requires viewport object (${reason})`);
+        }
+        const zoom = Math.max(VIEWPORT_ZOOM_MIN, Math.min(VIEWPORT_ZOOM_MAX, Number(viewportZoomFactor) || 1));
+        const nextWidth = getBaseViewportWidth() / zoom;
+        const nextHeight = getViewportHeightForWidth(nextWidth);
+        if (!Number.isFinite(nextWidth) || nextWidth <= 0 || !Number.isFinite(nextHeight) || nextHeight <= 0) {
+            throw new Error(`viewport geometry restore could not resolve finite dimensions (${reason})`);
+        }
+        viewportZoomFactor = zoom;
+        viewport.width = nextWidth;
+        viewport.height = nextHeight;
+        viewscale = (Number(app.screen.width) || window.innerWidth || 1) / Math.max(0.01, viewport.width);
+        viewScale = viewscale;
+        if (!Number.isFinite(viewscale) || viewscale <= 0) {
+            throw new Error(`viewport geometry restore could not resolve finite viewscale (${reason})`);
+        }
+        syncGlobalViewportRuntime();
+        return viewport;
+    }
+
+    if (typeof globalThis !== "undefined") {
+        globalThis.ensureViewportGeometryForRestore = ensureViewportGeometryForRestore;
     }
 
     function getViewportScreenCenter() {
@@ -3871,8 +3910,9 @@ jQuery(() => {
         if (!target) return { activated: false, shouldCloseMenu: false };
         const targetLabel = (target.textContent || "").trim().toLowerCase();
         const isBackAction = targetLabel === "back";
+        const opensSubmenu = !!(target.dataset && target.dataset.opensSubmenu === "true");
         target.click();
-        return { activated: true, shouldCloseMenu: !isBackAction };
+        return { activated: true, shouldCloseMenu: !isBackAction && !opensSubmenu };
     }
 
     function activateSelectedSpellFromMenu() {
@@ -3913,6 +3953,11 @@ jQuery(() => {
         if (!spellName) return false;
         if (spellName === "buildroad" && typeof SpellSystem.showFlooringMenu === "function") {
             SpellSystem.showFlooringMenu(wizard);
+            initSpellMenuKeyboardFocus();
+            return true;
+        }
+        if (spellName === "terrainedit" && typeof SpellSystem.showTerrainMenu === "function") {
+            SpellSystem.showTerrainMenu(wizard);
             initSpellMenuKeyboardFocus();
             return true;
         }
@@ -4151,22 +4196,36 @@ jQuery(() => {
             }
         }
 
+        function isGeneratedOutdoorGroundFloorFragment(fragment) {
+            if (!fragment || typeof fragment !== "object") return false;
+            const level = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+            if (level !== 0) return false;
+            if (fragment._prototypeGroundFloor === true) return true;
+            const fragmentId = typeof fragment.fragmentId === "string"
+                ? fragment.fragmentId
+                : (typeof fragment.id === "string" ? fragment.id : "");
+            return fragment.ownerType === "section" &&
+                fragmentId.startsWith("section:") &&
+                fragmentId.endsWith(":ground");
+        }
+
         // Returns true if (x, y) is on solid floor at the given layer number.
         // Solid means: inside an outer polygon AND not inside any hole polygon of a
         // registered floor fragment at that layer. Ground (layer 0) is treated as
-        // unconditionally solid when no floor fragments are registered at that level.
+        // outdoor support outside authored floor holes; generated section-ground
+        // fragments are render/runtime scaffolding and must not carve voids.
         function isPositionSupportedAtLayer(x, y, layer, mapRef) {
             if (!(mapRef && mapRef.floorsById instanceof Map)) return true;
-            let hasFragmentsAtLayer = false;
+            const normalizedLayer = Number.isFinite(layer) ? Math.round(Number(layer)) : 0;
             const fragments = typeof mapRef.getFloorFragmentsForLayer === "function"
-                ? mapRef.getFloorFragmentsForLayer(layer)
+                ? mapRef.getFloorFragmentsForLayer(normalizedLayer)
                 : Array.from(mapRef.floorsById.values());
             for (const fragment of fragments) {
                 if (!fragment) continue;
                 const fragLevel = Number.isFinite(fragment.level) ? Math.round(fragment.level) : 0;
-                if (fragLevel !== layer) continue;
+                if (fragLevel !== normalizedLayer) continue;
+                if (normalizedLayer === 0 && isGeneratedOutdoorGroundFloorFragment(fragment)) continue;
                 if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
-                hasFragmentsAtLayer = true;
                 if (!pointInPolygon2D(x, y, fragment.outerPolygon)) continue;
                 // Point is inside the fragment's outer area. Check whether it's also
                 // inside one of the cut-out holes (which means it's NOT supported).
@@ -4178,10 +4237,11 @@ jQuery(() => {
                         break;
                     }
                 }
+                if (inHole && normalizedLayer === 0) return false;
                 if (!inHole) return true;
             }
-            // No registered fragments at this layer → ground (layer 0) is always solid.
-            if (!hasFragmentsAtLayer && layer === 0) return true;
+            // Ground (layer 0) remains solid outside authored holes.
+            if (normalizedLayer === 0) return true;
             return false;
         }
 
@@ -4532,6 +4592,7 @@ jQuery(() => {
                 Number.isFinite(wizardRef.currentLayer) ? wizardRef.currentLayer : 0
             );
             if (currentSupport && currentSupport.type === "stair") return;
+            if (wizardLayer === 0 && (!currentSupport || currentSupport.type === "ground")) return;
             if (wizardLayer !== 0 && (!currentSupport || currentSupport.type !== "floor")) {
                 throw new Error("wizard non-ground movement requires currentMovementSupport floor");
             }
@@ -5557,6 +5618,7 @@ jQuery(() => {
         globalThis.wizard = wizard;
     }
     if (prototypeWizardState && typeof wizard.loadJson === "function") {
+        ensureViewportGeometryForRestore("prototype startup wizard load");
         wizard.loadJson(cloneWizardLoadDataForRuntime(prototypeWizardState));
     }
     if (map && typeof map.updatePrototypeSectionBubble === "function") {
@@ -5585,6 +5647,7 @@ jQuery(() => {
     }, 100);
     SpellSystem.initWizardSpells(wizard);
     if (prototypeWizardState && typeof wizard.loadJson === "function") {
+        ensureViewportGeometryForRestore("prototype startup wizard reload");
         wizard.loadJson(cloneWizardLoadDataForRuntime(prototypeWizardState));
         if (map && typeof map.updatePrototypeSectionBubble === "function") {
             map.updatePrototypeSectionBubble(wizard, { force: true });
@@ -5593,8 +5656,8 @@ jQuery(() => {
         centerViewport(wizard, 0, 0);
         wizard.updateStatusBars();
     }
-    function tryAutoLoadLocalSaveOnStartup() {
-        if (typeof getSavedGameState !== "function" || typeof loadGameState !== "function") {
+    async function tryAutoLoadLocalSaveOnStartup() {
+        if (typeof getSavedGameState !== "function") {
             return false;
         }
         const parsedSave = getSavedGameState();
@@ -5604,14 +5667,20 @@ jQuery(() => {
             }
             return false;
         }
-        const loaded = loadGameState(parsedSave.data);
-        if (loaded) {
+        const loadLocalSave = (typeof loadGameStateFromLocalStorageKeyAsync === "function")
+            ? loadGameStateFromLocalStorageKeyAsync
+            : loadGameStateFromLocalStorageKey;
+        if (typeof loadLocalSave !== "function") {
+            return false;
+        }
+        const result = await loadLocalSave(parsedSave.key);
+        if (result && result.ok) {
             setLastSaveReloadDirective({ source: "local" });
             message("Loaded local save");
             console.log("Auto-loaded game from localStorage at startup");
             return true;
         }
-        console.warn("Startup auto-load found local save but load failed");
+        console.warn("Startup auto-load found local save but load failed", result);
         return false;
     }
 
@@ -5742,11 +5811,14 @@ jQuery(() => {
         const handledPrototypeAutoLoad = !handledDirective
             ? await tryAutoLoadPrototypeSaveOnStartup()
             : false;
-        if (!handledDirective && !handledPrototypeAutoLoad && startupConfig.skipStartupDialogs !== true) {
+        const handledLocalAutoLoad = !handledDirective && !handledPrototypeAutoLoad && startupConfig.skipStartupDialogs === true
+            ? await tryAutoLoadLocalSaveOnStartup()
+            : false;
+        if (!handledDirective && !handledPrototypeAutoLoad && !handledLocalAutoLoad && startupConfig.skipStartupDialogs !== true) {
             await ensurePrototypeStartupWorldBackground();
             await runOpeningGameDialogFlow();
         }
-        if (startupConfig.skipStartupDialogs === true && !handledDirective && !handledPrototypeAutoLoad) {
+        if (startupConfig.skipStartupDialogs === true && !handledDirective && !handledPrototypeAutoLoad && !handledLocalAutoLoad) {
             message("Loaded two-section prototype world");
         }
         ensureStartupClearanceReady();
@@ -6368,11 +6440,11 @@ jQuery(() => {
         wizard.destination = null;
         wizard.path = [];
         wizard.travelFrames = 0;
-        const isTriggerAreaCast = (wizard.currentSpell === "triggerarea");
-        const castWorldX = isTriggerAreaCast ? worldCoors.x : aim.worldX;
-        const castWorldY = isTriggerAreaCast ? worldCoors.y : aim.worldY;
+        const isExactClickCast = wizard.currentSpell === "triggerarea" || wizard.currentSpell === "terrainedit";
+        const castWorldX = isExactClickCast ? worldCoors.x : aim.worldX;
+        const castWorldY = isExactClickCast ? worldCoors.y : aim.worldY;
         // Turn and cast at exact click coordinates.
-        if (!isTriggerAreaCast) {
+        if (!isExactClickCast) {
             wizard.turnToward(aim.x, aim.y);
         }
         if (

@@ -668,6 +668,73 @@ test("prototype section bubble is a hysteretic four-section set independent of e
     assert.equal(map.getPrototypeBubbleSectionKeys().size, 4);
 });
 
+test("screen-space section bubble chooses sections visible at the current camera z", () => {
+    const map = createPrototypeMap();
+    map.prepareFloorSectionUnregister = () => 0;
+    map.commitFloorSectionUnregister = () => 0;
+    map.prepareFloorSectionFragments = () => [];
+    map.addFloorSectionNodeBatch = () => 0;
+    map.finalizeFloorSectionNodes = () => 0;
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.roof = null;
+
+    const radius = 10;
+    const basis = sectionGeometry.getSectionBasisVectors(radius);
+    const anchorCenter = { q: 0, r: 0 };
+    const makeSection = (coord) => {
+        const key = sectionGeometry.makeSectionKey(coord);
+        const centerAxial = sectionGeometry.computeSectionCenterAxial(coord, basis, anchorCenter);
+        const centerOffset = sectionGeometry.axialToEvenQOffset(centerAxial);
+        return {
+            id: `section-${key}`,
+            key,
+            coord: { q: coord.q, r: coord.r },
+            centerAxial,
+            centerOffset,
+            centerWorld: sectionGeometry.offsetToWorld(centerOffset),
+            neighborKeys: [],
+            tileCoordKeys: [key],
+            groundTextureId: 0,
+            groundTiles: { [key]: 0 },
+            walls: [],
+            objects: [],
+            animals: [],
+            powerups: []
+        };
+    };
+
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        radius,
+        anchorCenter,
+        sections: [
+            makeSection({ q: 0, r: 0 }),
+            makeSection({ q: 0, r: 1 })
+        ]
+    })), true);
+    map._prototypeSectionState.activeSectionLimit = 1;
+
+    const actor = {
+        x: 0,
+        y: 0.5,
+        currentMovementSupport: { type: "floor", layer: 1, baseZ: 10 },
+        currentLayerBaseZ: 10
+    };
+    assert.equal(map.updatePrototypeSectionBubble(actor, {
+        force: true,
+        useScreenSpaceSections: true,
+        viewport: { x: -5, y: 20, width: 30, height: 8, z: 10 },
+        cameraZ: 10,
+        sectionBaseZ: 0,
+        viewscale: 1,
+        xyratio: 1
+    }), true);
+    assert.deepEqual(Array.from(map.getPrototypeBubbleSectionKeys()), ["0,1"]);
+});
+
 test("prototype canOccupyWorldPosition checks blockers on the actor floor layer", () => {
     const map = createPrototypeMap();
     const baseNode = map.nodes[0][0];

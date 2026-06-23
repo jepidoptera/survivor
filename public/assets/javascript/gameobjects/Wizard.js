@@ -2324,8 +2324,18 @@ class Wizard extends Character {
         if (Number.isFinite(data.currentLayer)) this.currentLayer = Math.round(Number(data.currentLayer));
         if (Number.isFinite(data.traversalLayer)) this.traversalLayer = Math.round(Number(data.traversalLayer));
         if (Number.isFinite(data.currentLayerBaseZ)) this.currentLayerBaseZ = Number(data.currentLayerBaseZ);
-        if (typeof data.surfaceId === "string") this.surfaceId = data.surfaceId;
-        if (typeof data.fragmentId === "string") this.fragmentId = data.fragmentId;
+        const loadedLayer = Number.isFinite(this.currentLayer)
+            ? Math.round(Number(this.currentLayer))
+            : (Number.isFinite(this.traversalLayer) ? Math.round(Number(this.traversalLayer)) : 0);
+        const loadedSurfaceId = typeof data.surfaceId === "string" ? data.surfaceId : "";
+        const loadedFragmentId = typeof data.fragmentId === "string" ? data.fragmentId : "";
+        if (loadedLayer === 0 && this.isGeneratedOutdoorGroundFloorFragmentId(loadedFragmentId)) {
+            this.surfaceId = "";
+            this.fragmentId = "";
+        } else {
+            this.surfaceId = loadedSurfaceId;
+            this.fragmentId = loadedFragmentId;
+        }
         this._stairSupport = null;
         this._pendingSavedStairSupport = null;
         this._pendingSavedFloorMovementSupport = null;
@@ -2477,13 +2487,29 @@ class Wizard extends Character {
         this.node = this.map.worldToNode(this.x, this.y) || this.node;
         this.updateHitboxes();
 
+        if (
+            typeof viewport === "undefined" ||
+            !viewport ||
+            typeof viewport !== "object" ||
+            !Number.isFinite(Number(viewport.width)) ||
+            Number(viewport.width) <= 0 ||
+            !Number.isFinite(Number(viewport.height)) ||
+            Number(viewport.height) <= 0
+        ) {
+            throw new Error("wizard load requires finite viewport dimensions before camera restore");
+        }
+
         if (data.viewport && Number.isFinite(data.viewport.x) && Number.isFinite(data.viewport.y)) {
             viewport.x = data.viewport.x;
             viewport.y = data.viewport.y;
             viewport.prevX = viewport.x;
             viewport.prevY = viewport.y;
         } else {
-            centerViewport(this, 0, 0);
+            viewport.x = this.x - viewport.width * 0.5;
+            viewport.y = this.y - viewport.height * 0.5;
+            if (!Number.isFinite(viewport.x) || !Number.isFinite(viewport.y)) {
+                throw new Error("wizard load could not center missing saved viewport");
+            }
             viewport.prevX = viewport.x;
             viewport.prevY = viewport.y;
         }
@@ -2508,6 +2534,14 @@ class Wizard extends Character {
             const centerY = viewport.y + viewport.height * 0.5;
             const nearestCenterX = this.x + this.map.shortestDeltaX(this.x, centerX);
             const nearestCenterY = this.y + this.map.shortestDeltaY(this.y, centerY);
+            if (
+                !Number.isFinite(centerX) ||
+                !Number.isFinite(centerY) ||
+                !Number.isFinite(nearestCenterX) ||
+                !Number.isFinite(nearestCenterY)
+            ) {
+                throw new Error("wizard load camera restore produced non-finite wrapped viewport center");
+            }
             viewport.x += (nearestCenterX - centerX);
             viewport.y += (nearestCenterY - centerY);
         }

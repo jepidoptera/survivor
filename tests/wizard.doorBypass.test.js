@@ -116,7 +116,7 @@ function loadWizardClass() {
         vm.runInContext(source, context, { filename: filePath });
     }
 
-    vm.runInContext("globalThis.__testExports = { Wizard, PolygonHitbox };", context);
+    vm.runInContext("globalThis.__testExports = { Wizard, PolygonHitbox, context: globalThis };", context);
     return context.__testExports;
 }
 
@@ -155,7 +155,7 @@ function loadRenderingApi() {
     return context.Rendering;
 }
 
-const { Wizard, PolygonHitbox } = loadWizardClass();
+const { Wizard, PolygonHitbox, context: wizardVmContext } = loadWizardClass();
 const Rendering = loadRenderingApi();
 
 function createWizardMap(node) {
@@ -172,6 +172,51 @@ function createWizardMap(node) {
             return [];
         }
     };
+}
+
+function createMinimalLoadWizard(mapOverrides = {}) {
+    const node = { xindex: 0, yindex: 0, traversalLayer: 0, baseZ: 0, objects: [] };
+    const map = {
+        worldToNode() { return node; },
+        wrapWorldX(value) { return value; },
+        wrapWorldY(value) { return value; },
+        shortestDeltaX(from, to) { return to - from; },
+        shortestDeltaY(from, to) { return to - from; },
+        getFloorSupportAtWorldPosition() { return null; },
+        isPointSupportedByFloorFragment() { return false; },
+        setActorCurrentMovementSupport(actor, support) {
+            actor.currentMovementSupport = support;
+            actor.currentLayer = support.layer;
+            actor.traversalLayer = support.layer;
+            actor.currentLayerBaseZ = support.baseZ;
+            return support;
+        },
+        ...mapOverrides
+    };
+    const wizard = Object.create(Wizard.prototype);
+    Object.assign(wizard, {
+        map,
+        node: null,
+        x: 0,
+        y: 0,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        ensureMagicPointsInitialized() {},
+        getTemperatureBaseline() { return 0; },
+        setTemperature() {},
+        isFrozen() { return false; },
+        applyFrozenState() {},
+        setGameMode(value) { this.gameMode = value; },
+        setDifficulty(value) { this.difficulty = value; },
+        loadInventory() {},
+        updateHitboxes() {},
+        refreshSpellSelector() {},
+        refreshEditorSelector() {},
+        updateModeToggleUi() {}
+    });
+    return wizard;
 }
 
 function createDoorEntry(hitbox, canTraverse = true) {
@@ -203,6 +248,7 @@ test("wizard selected floor keeps traversal layer synchronized for enemy targeti
     assert.equal(wizard.traversalLayer, -2);
     assert.equal(wizard.currentLayerBaseZ, -6);
 
+    wizard.node = { ...floorNode, traversalLayer: 1, baseZ: 3 };
     wizard.selectedFloorEditLevel = 1;
 
     assert.equal(wizard.currentLayer, 1);
@@ -679,7 +725,7 @@ test("wizard save omits generated outdoor ground floor fragment support", () => 
     assert.equal(saved.fragmentId, undefined);
 });
 
-test("wizard load restores stale generated outdoor ground fragment as ground support", () => {
+test("wizard load normalizes stale generated outdoor ground fragment as ground support", () => {
     const groundFragment = {
         fragmentId: "section:0,0:ground",
         surfaceId: "section:0,0:ground",
@@ -759,8 +805,51 @@ test("wizard load restores stale generated outdoor ground fragment as ground sup
     assert.equal(loadedWizard.currentMovementSupport.type, "ground");
     assert.equal(loadedWizard.fragmentId, "");
     assert.equal(loadedWizard.surfaceId, "");
-    assert.equal(warnings.length, 1);
-    assert.match(warnings[0][0], /generated outdoor ground fragment/);
+    assert.equal(warnings.length, 0);
+});
+
+test("wizard load rejects missing viewport dimensions before camera restore", () => {
+    const previousViewport = wizardVmContext.viewport;
+    wizardVmContext.viewport = { x: 0, y: 0, width: NaN, height: 100 };
+    try {
+        const loadedWizard = createMinimalLoadWizard();
+        assert.throws(() => {
+            loadedWizard.loadJson({
+                x: 12,
+                y: 18,
+                z: 0,
+                currentLayer: 0,
+                traversalLayer: 0,
+                currentLayerBaseZ: 0,
+                viewport: { x: 0, y: 0 }
+            });
+        }, /finite viewport dimensions/);
+    } finally {
+        wizardVmContext.viewport = previousViewport;
+    }
+});
+
+test("wizard load centers old saves without inheriting a stale viewport position", () => {
+    const previousViewport = wizardVmContext.viewport;
+    wizardVmContext.viewport = { x: NaN, y: NaN, prevX: NaN, prevY: NaN, width: 20, height: 10 };
+    try {
+        const loadedWizard = createMinimalLoadWizard();
+        loadedWizard.loadJson({
+            x: 50,
+            y: 75,
+            z: 0,
+            currentLayer: 0,
+            traversalLayer: 0,
+            currentLayerBaseZ: 0
+        });
+
+        assert.equal(wizardVmContext.viewport.x, 40);
+        assert.equal(wizardVmContext.viewport.y, 70);
+        assert.equal(wizardVmContext.viewport.prevX, 40);
+        assert.equal(wizardVmContext.viewport.prevY, 70);
+    } finally {
+        wizardVmContext.viewport = previousViewport;
+    }
 });
 
 test("wizard renderer keeps dead wizard on standing frame", () => {

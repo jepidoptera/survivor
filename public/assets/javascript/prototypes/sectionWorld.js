@@ -139,6 +139,7 @@
         getSectionStride,
         getSectionBasisVectors,
         computeSectionCenterAxial,
+        getSectionHexagonCorners,
         resolvePrototypeSectionCoordForWorldPosition,
         makeSectionKey,
         parseSectionKey,
@@ -220,6 +221,108 @@
         }
         const orderedKeys = sectionKeys instanceof Set ? Array.from(sectionKeys).sort() : [];
         return orderedKeys.length > 0 ? orderedKeys[0] : "";
+    }
+
+    function isExistingPrototypeSectionKey(state, sectionKey) {
+        return !!(
+            typeof sectionKey === "string" &&
+            sectionKey.length > 0 &&
+            state &&
+            (
+                (state.sectionsByKey instanceof Map && state.sectionsByKey.has(sectionKey)) ||
+                (state.sectionAssetsByKey instanceof Map && state.sectionAssetsByKey.has(sectionKey))
+            )
+        );
+    }
+
+    function getPrototypeBuildingTouchedSectionKeys(map, buildingId) {
+        const buildingState = map && map._prototypeBuildingState;
+        const placement = (
+            buildingState &&
+            buildingState.placementsById instanceof Map &&
+            typeof buildingId === "string" &&
+            buildingId.length > 0
+        ) ? (buildingState.placementsById.get(buildingId) || null) : null;
+        if (!placement) return [];
+        const keys = Array.isArray(placement.touchedSectionKeys)
+            ? placement.touchedSectionKeys
+            : (Array.isArray(placement.overlappedSectionKeys) ? placement.overlappedSectionKeys : []);
+        return keys.filter((key, index, array) => (
+            typeof key === "string" &&
+            key.length > 0 &&
+            array.indexOf(key) === index
+        ));
+    }
+
+    function chooseNearestExistingPrototypeSectionKey(state, sectionKeys, worldX, worldY) {
+        const keys = Array.isArray(sectionKeys) ? sectionKeys : [];
+        let bestKey = "";
+        let bestDistance = Infinity;
+        for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
+            if (!isExistingPrototypeSectionKey(state, key)) continue;
+            const centerWorld = getSectionCenterWorldForCoord(state, parseSectionKey(key));
+            const distance = Math.hypot(
+                (Number(worldX) || 0) - Number(centerWorld.x || 0),
+                (Number(worldY) || 0) - Number(centerWorld.y || 0)
+            );
+            if (distance < bestDistance || (distance === bestDistance && String(key).localeCompare(bestKey) < 0)) {
+                bestKey = key;
+                bestDistance = distance;
+            }
+        }
+        return bestKey;
+    }
+
+    function resolvePrototypeBubbleSectionKeyForActor(map, state, actor, fallbackCoord) {
+        if (!state || !actor) return "";
+        const rawCandidates = [];
+        const addRawCandidate = (key) => {
+            if (typeof key !== "string" || key.length === 0 || rawCandidates.includes(key)) return;
+            rawCandidates.push(key);
+        };
+        const support = actor.currentMovementSupport && typeof actor.currentMovementSupport === "object"
+            ? actor.currentMovementSupport
+            : null;
+        const supportNode = support && support.node && typeof support.node === "object" ? support.node : null;
+        const actorNode = actor.node && typeof actor.node === "object" ? actor.node : null;
+
+        addRawCandidate(support && support.sectionKey);
+        addRawCandidate(supportNode && supportNode.ownerSectionKey);
+        addRawCandidate(supportNode && supportNode._prototypeSectionKey);
+        addRawCandidate(actorNode && actorNode.ownerSectionKey);
+        addRawCandidate(actorNode && actorNode._prototypeSectionKey);
+
+        if (support && support.ownerType === "building") {
+            addRawCandidate(support.ownerId);
+        }
+        const fragment = support && support.fragment && typeof support.fragment === "object"
+            ? support.fragment
+            : (actor._activeFloorFragment && typeof actor._activeFloorFragment === "object" ? actor._activeFloorFragment : null);
+        if (fragment) {
+            addRawCandidate(fragment.ownerSectionKey);
+            addRawCandidate(fragment.ownerId);
+            if (fragment.ownerType === "building") addRawCandidate(fragment.ownerId);
+        }
+
+        const sectionCandidates = [];
+        for (let i = 0; i < rawCandidates.length; i++) {
+            const key = rawCandidates[i];
+            if (isExistingPrototypeSectionKey(state, key)) {
+                sectionCandidates.push(key);
+                continue;
+            }
+            if (key.startsWith("building:")) {
+                const touchedKeys = getPrototypeBuildingTouchedSectionKeys(map, key);
+                for (let t = 0; t < touchedKeys.length; t++) {
+                    sectionCandidates.push(touchedKeys[t]);
+                }
+            }
+        }
+
+        const supportSectionKey = chooseNearestExistingPrototypeSectionKey(state, sectionCandidates, actor.x, actor.y);
+        if (supportSectionKey) return supportSectionKey;
+        return fallbackCoord ? makeSectionKey(fallbackCoord) : "";
     }
 
     function getPrototypeSectionSetFarthestDistance(state, sectionKeys, worldX, worldY) {
@@ -1424,6 +1527,174 @@
         }
     }
 
+    function resolvePrototypeScreenSpaceViewport(actor, options = {}) {
+        const viewportRef = (options && options.viewport && typeof options.viewport === "object")
+            ? options.viewport
+            : (typeof globalScope.viewport !== "undefined" ? globalScope.viewport : null);
+        const width = Number(viewportRef && viewportRef.width);
+        const height = Number(viewportRef && viewportRef.height);
+        if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+            throw new Error("screen-space section bubble requires finite viewport width and height");
+        }
+
+        const x = Number.isFinite(Number(viewportRef.x))
+            ? Number(viewportRef.x)
+            : ((actor && Number.isFinite(actor.x)) ? Number(actor.x) - width * 0.5 : NaN);
+        const y = Number.isFinite(Number(viewportRef.y))
+            ? Number(viewportRef.y)
+            : ((actor && Number.isFinite(actor.y)) ? Number(actor.y) - height * 0.5 : NaN);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error("screen-space section bubble requires finite viewport origin");
+        }
+
+        return { x, y, width, height, ref: viewportRef };
+    }
+
+    function resolvePrototypeScreenSpaceBaseZ(actor, viewportInfo, options = {}) {
+        if (Number.isFinite(Number(options && options.sectionBaseZ))) return Number(options.sectionBaseZ);
+        if (Number.isFinite(Number(options && options.worldZ))) return Number(options.worldZ);
+        const support = actor && actor.currentMovementSupport && typeof actor.currentMovementSupport === "object"
+            ? actor.currentMovementSupport
+            : null;
+        if (support && Number.isFinite(Number(support.baseZ))) return Number(support.baseZ);
+        if (Number.isFinite(Number(actor && actor.currentLayerBaseZ))) return Number(actor.currentLayerBaseZ);
+        if (Number.isFinite(Number(options && options.cameraZ))) return Number(options.cameraZ);
+        if (viewportInfo && Number.isFinite(Number(viewportInfo.ref && viewportInfo.ref.z))) {
+            return Number(viewportInfo.ref.z);
+        }
+        throw new Error("screen-space section bubble requires actor support baseZ or currentLayerBaseZ");
+    }
+
+    function resolvePrototypeScreenSpaceCameraZ(actor, viewportInfo, sectionBaseZ, options = {}) {
+        if (Number.isFinite(Number(options && options.cameraZ))) return Number(options.cameraZ);
+        if (viewportInfo && Number.isFinite(Number(viewportInfo.ref && viewportInfo.ref.z))) {
+            return Number(viewportInfo.ref.z);
+        }
+        return sectionBaseZ;
+    }
+
+    function projectPrototypeSectionWorldPointToScreen(map, viewportInfo, worldX, worldY, worldZ, cameraZ, viewscale, xyratio) {
+        const dx = (map && typeof map.shortestDeltaX === "function")
+            ? map.shortestDeltaX(viewportInfo.x, worldX)
+            : (Number(worldX) - viewportInfo.x);
+        const dyBase = (map && typeof map.shortestDeltaY === "function")
+            ? map.shortestDeltaY(viewportInfo.y, worldY)
+            : (Number(worldY) - viewportInfo.y);
+        const dy = dyBase - (Number(worldZ) - cameraZ);
+        return {
+            x: dx * viewscale,
+            y: dy * viewscale * xyratio
+        };
+    }
+
+    function getPrototypeScreenSpaceBubbleSelection(map, state, actor, options = {}) {
+        if (!state || !(state.sectionsByKey instanceof Map)) return null;
+        const viewportInfo = resolvePrototypeScreenSpaceViewport(actor, options);
+        const viewscale = Number.isFinite(Number(options && options.viewscale))
+            ? Number(options.viewscale)
+            : (Number.isFinite(Number(globalScope.viewscale)) ? Number(globalScope.viewscale) : 1);
+        const xyratio = Number.isFinite(Number(options && options.xyratio))
+            ? Number(options.xyratio)
+            : (Number.isFinite(Number(globalScope.xyratio)) ? Number(globalScope.xyratio) : 1);
+        if (!Number.isFinite(viewscale) || viewscale <= 0 || !Number.isFinite(xyratio) || xyratio <= 0) {
+            throw new Error("screen-space section bubble requires positive viewscale and xyratio");
+        }
+
+        const sectionBaseZ = resolvePrototypeScreenSpaceBaseZ(actor, viewportInfo, options);
+        const cameraZ = resolvePrototypeScreenSpaceCameraZ(actor, viewportInfo, sectionBaseZ, options);
+        const activeLimit = Math.max(1, Math.floor(Number(state.activeSectionLimit) || 3));
+        const viewportWidthPx = viewportInfo.width * viewscale;
+        const viewportHeightPx = viewportInfo.height * viewscale * xyratio;
+        const screenCenterX = viewportWidthPx * 0.5;
+        const screenCenterY = viewportHeightPx * 0.5;
+        const candidates = [];
+
+        state.sectionsByKey.forEach((section, key) => {
+            if (!section || typeof key !== "string" || key.length === 0) return;
+            const coord = (section.coord && typeof section.coord === "object")
+                ? section.coord
+                : parseSectionKey(key);
+            const centerAxial = (section.centerAxial && typeof section.centerAxial === "object")
+                ? section.centerAxial
+                : computeSectionCenterAxial(coord, state.basis, state.anchorCenter);
+            if (!centerAxial || !Number.isFinite(Number(centerAxial.q)) || !Number.isFinite(Number(centerAxial.r))) {
+                throw new Error(`screen-space section bubble requires centerAxial for section ${key}`);
+            }
+            const corners = getSectionHexagonCorners(centerAxial, state.basis);
+            if (!Array.isArray(corners) || corners.length !== 6) {
+                throw new Error(`screen-space section bubble could not compute hex bounds for section ${key}`);
+            }
+            const centerWorld = (section.centerWorld && typeof section.centerWorld === "object")
+                ? section.centerWorld
+                : getSectionCenterWorldForCoord(state, parseSectionKey(key));
+            const points = corners.concat([centerWorld]);
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            for (let i = 0; i < points.length; i++) {
+                const point = points[i];
+                const projected = projectPrototypeSectionWorldPointToScreen(
+                    map,
+                    viewportInfo,
+                    Number(point && point.x),
+                    Number(point && point.y),
+                    sectionBaseZ,
+                    cameraZ,
+                    viewscale,
+                    xyratio
+                );
+                minX = Math.min(minX, projected.x);
+                minY = Math.min(minY, projected.y);
+                maxX = Math.max(maxX, projected.x);
+                maxY = Math.max(maxY, projected.y);
+            }
+            if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+                throw new Error(`screen-space section bubble produced non-finite bounds for section ${key}`);
+            }
+            if (maxX < 0 || minX > viewportWidthPx || maxY < 0 || minY > viewportHeightPx) return;
+
+            const centerScreen = projectPrototypeSectionWorldPointToScreen(
+                map,
+                viewportInfo,
+                Number(centerWorld && centerWorld.x),
+                Number(centerWorld && centerWorld.y),
+                sectionBaseZ,
+                cameraZ,
+                viewscale,
+                xyratio
+            );
+            candidates.push({
+                key,
+                centerWorld,
+                distanceToScreenCenter: Math.hypot(centerScreen.x - screenCenterX, centerScreen.y - screenCenterY)
+            });
+        });
+
+        if (candidates.length === 0) {
+            throw new Error("screen-space section bubble found no sections intersecting the viewport");
+        }
+        candidates.sort((a, b) => {
+            if (a.distanceToScreenCenter !== b.distanceToScreenCenter) {
+                return a.distanceToScreenCenter - b.distanceToScreenCenter;
+            }
+            return String(a.key).localeCompare(String(b.key));
+        });
+        const candidateKeys = new Set();
+        for (let i = 0; i < candidates.length && candidateKeys.size < activeLimit; i++) {
+            candidateKeys.add(candidates[i].key);
+        }
+        const representative = candidates[0];
+        const focusWorldX = viewportInfo.x + viewportInfo.width * 0.5;
+        const focusWorldY = viewportInfo.y + viewportInfo.height * 0.5 + (sectionBaseZ - cameraZ);
+        return {
+            candidateKeys,
+            representativeKey: representative.key,
+            focusWorldX: Number.isFinite(focusWorldX) ? focusWorldX : Number(representative.centerWorld && representative.centerWorld.x),
+            focusWorldY: Number.isFinite(focusWorldY) ? focusWorldY : Number(representative.centerWorld && representative.centerWorld.y)
+        };
+    }
+
     function settlePendingPrototypeLayoutTransition(map) {
         return prototypeLayoutSettlePendingLayoutTransition(map, {
             updatePrototypeSeamSegmentsForSections
@@ -1729,25 +2000,44 @@
         const force = options.force === true;
         const actorSectionCoord = resolvePrototypeSectionCoordForWorldPosition(state, actor.x, actor.y);
         if (!actorSectionCoord) return false;
-        const actorSectionKey = makeSectionKey(actorSectionCoord);
+        const projectedActorSectionKey = makeSectionKey(actorSectionCoord);
+        const actorSectionKey = resolvePrototypeBubbleSectionKeyForActor(map, state, actor, actorSectionCoord);
+        if (!actorSectionKey) return false;
         const activeLimit = Math.max(1, Math.floor(Number(state.activeSectionLimit) || 3));
-        state.bubbleFocusWorldX = Number(actor.x) || 0;
-        state.bubbleFocusWorldY = Number(actor.y) || 0;
-        state.bubbleFocusSectionKey = actorSectionKey;
-        const candidateKeys = getNearestSectionKeysForWorldPosition(
-            state,
-            state.bubbleFocusWorldX,
-            state.bubbleFocusWorldY,
-            activeLimit,
-            [actorSectionKey]
-        );
+        const supportFocus = actorSectionKey !== projectedActorSectionKey
+            ? getSectionCenterWorldForCoord(state, parseSectionKey(actorSectionKey))
+            : null;
+        const screenSpaceSelection = options.useScreenSpaceSections === true
+            ? getPrototypeScreenSpaceBubbleSelection(map, state, actor, options)
+            : null;
+        const focusWorldX = screenSpaceSelection
+            ? Number(screenSpaceSelection.focusWorldX)
+            : (supportFocus ? Number(supportFocus.x) : Number(actor.x));
+        const focusWorldY = screenSpaceSelection
+            ? Number(screenSpaceSelection.focusWorldY)
+            : (supportFocus ? Number(supportFocus.y) : Number(actor.y));
+        const representativeKey = screenSpaceSelection
+            ? screenSpaceSelection.representativeKey
+            : actorSectionKey;
+        state.bubbleFocusWorldX = Number.isFinite(focusWorldX) ? focusWorldX : 0;
+        state.bubbleFocusWorldY = Number.isFinite(focusWorldY) ? focusWorldY : 0;
+        state.bubbleFocusSectionKey = representativeKey;
+        const candidateKeys = screenSpaceSelection
+            ? screenSpaceSelection.candidateKeys
+            : getNearestSectionKeysForWorldPosition(
+                state,
+                state.bubbleFocusWorldX,
+                state.bubbleFocusWorldY,
+                activeLimit,
+                [actorSectionKey]
+            );
         const currentKeys = state.activeSectionKeys instanceof Set
             ? new Set(state.activeSectionKeys)
             : new Set();
-        if (!shouldSwitchPrototypeBubbleTriplet(state, currentKeys, candidateKeys, actor.x, actor.y, { force })) {
+        if (!shouldSwitchPrototypeBubbleTriplet(state, currentKeys, candidateKeys, state.bubbleFocusWorldX, state.bubbleFocusWorldY, { force })) {
             return false;
         }
-        const changed = setActiveSectionBubble(map, candidateKeys, actorSectionKey);
+        const changed = setActiveSectionBubble(map, candidateKeys, representativeKey);
         if (changed || force || state.bubbleTripletInitializedByActor !== true) {
             state.bubbleTripletInitializedByActor = true;
         }

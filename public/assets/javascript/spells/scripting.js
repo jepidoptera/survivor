@@ -83,6 +83,25 @@
                 if (!Number.isFinite(quantity)) return false;
                 return wizardRef.getInventory().remove(itemName, quantity);
             }
+        }),
+        Object.freeze({
+            name: "thoughtBubble",
+            syntax: "wizard.thoughtBubble(\"I should go north\", 3)",
+            description: "show a thought bubble above the wizard for a duration in seconds",
+            handler(args, context, namedArgs = {}) {
+                const wizardRef = (context && context.wizard) || global.wizard || null;
+                const safeNamedArgs = (namedArgs && typeof namedArgs === "object") ? namedArgs : {};
+                const textValue = Object.prototype.hasOwnProperty.call(safeNamedArgs, "text")
+                    ? safeNamedArgs.text
+                    : args[0];
+                const durationValue = Object.prototype.hasOwnProperty.call(safeNamedArgs, "duration")
+                    ? safeNamedArgs.duration
+                    : args[1];
+                if (!global.Rendering || typeof global.Rendering.thoughtBubble !== "function") {
+                    throw new Error("wizard.thoughtBubble requires the Rendering API");
+                }
+                return !!global.Rendering.thoughtBubble(wizardRef, textValue, durationValue);
+            }
         })
     ]);
     const PLAYER_COMMAND_API_ENTRIES = Object.freeze(
