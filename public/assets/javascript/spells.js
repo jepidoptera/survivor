@@ -369,6 +369,13 @@ const SpellSystem = (() => {
     const EDITOR_MENU_ICON = "/assets/images/thumbnails/edit.png";
     const BUILDING_EDITOR_ICON = "/assets/images/thumbnails/layers.png";
     const ROOF_EDITOR_ICON = "/assets/images/thumbnails/roof.png";
+    const TERRAIN_EDITOR_ICON = "/assets/images/land tiles/desert0.png";
+    const DEFAULT_TERRAIN_TYPE = "grass";
+    const TERRAIN_TOOL_DEFS = [
+        { name: "grass", label: "Grass", icon: "/assets/images/land tiles/forest0.png" },
+        { name: "desert", label: "Desert", icon: "/assets/images/land tiles/desert0.png" },
+        { name: "water", label: "Water", icon: "/assets/images/land tiles/water1.png" }
+    ];
     const DEFAULT_ROOF_TEXTURE = "/assets/images/roofs/smallshingles.png";
     const DEFAULT_PLACEABLE_CATEGORY = "doors";
     const DEFAULT_PLACEABLE_BY_CATEGORY = {
@@ -399,6 +406,7 @@ const SpellSystem = (() => {
     const EDITOR_TOOL_DEFS = [
         { name: "wall", icon: "/assets/images/thumbnails/wall.png" },
         { name: "buildroad", icon: "/assets/images/thumbnails/road.png" },
+        { name: "terrainedit", icon: TERRAIN_EDITOR_ICON, title: "Terrain" },
         { name: "flooredit", icon: "/assets/images/thumbnails/layers.png" },
         { name: "moveobject", icon: "/assets/images/thumbnails/move.png" },
         { name: "editorvanish", icon: "/assets/images/thumbnails/vanish.png" },
@@ -1946,7 +1954,7 @@ const SpellSystem = (() => {
     }
 
     function isEditorToolName(spellName) {
-        return spellName === "wall" || spellName === "buildroad" || spellName === "flooredit" || isFloorEditorToolName(spellName) || spellName === "moveobject" || spellName === "editorvanish" || spellName === "placeobject" || spellName === "placebuilding" || spellName === "blackdiamond" || spellName === "nodeinspector";
+        return spellName === "wall" || spellName === "buildroad" || spellName === "terrainedit" || spellName === "flooredit" || isFloorEditorToolName(spellName) || spellName === "moveobject" || spellName === "editorvanish" || spellName === "placeobject" || spellName === "placebuilding" || spellName === "blackdiamond" || spellName === "nodeinspector";
     }
 
     function isFloorEditorToolName(spellName) {
@@ -2028,6 +2036,27 @@ const SpellSystem = (() => {
         return normalized;
     }
 
+    function getSelectedTerrainType(wizardRef) {
+        const raw = (wizardRef && typeof wizardRef.selectedTerrainType === "string")
+            ? wizardRef.selectedTerrainType.trim().toLowerCase()
+            : "";
+        return TERRAIN_TOOL_DEFS.some(def => def.name === raw) ? raw : DEFAULT_TERRAIN_TYPE;
+    }
+
+    function setSelectedTerrainType(wizardRef, terrainType) {
+        if (!wizardRef) return DEFAULT_TERRAIN_TYPE;
+        const raw = (typeof terrainType === "string") ? terrainType.trim().toLowerCase() : "";
+        const next = TERRAIN_TOOL_DEFS.some(def => def.name === raw) ? raw : DEFAULT_TERRAIN_TYPE;
+        wizardRef.selectedTerrainType = next;
+        return next;
+    }
+
+    function getSelectedTerrainIcon(wizardRef) {
+        const selected = getSelectedTerrainType(wizardRef);
+        const def = TERRAIN_TOOL_DEFS.find(entry => entry.name === selected);
+        return def ? def.icon : TERRAIN_EDITOR_ICON;
+    }
+
     function getSelectedEditorIcon(wizardRef) {
         // If current spell is an editor tool (wall/road/vanish), show that tool's icon
         if (wizardRef && wizardRef.currentSpell === "wall") {
@@ -2035,6 +2064,9 @@ const SpellSystem = (() => {
         }
         if (wizardRef && wizardRef.currentSpell === "buildroad") {
             return getRoadSpellIcon(wizardRef);
+        }
+        if (wizardRef && wizardRef.currentSpell === "terrainedit") {
+            return getSelectedTerrainIcon(wizardRef);
         }
         if (wizardRef && wizardRef.currentSpell === "flooredit") {
             return "/assets/images/thumbnails/layers.png";
@@ -7447,6 +7479,49 @@ const SpellSystem = (() => {
         return { screenX, screenY };
     }
 
+    function markGroundTerrainSectionDirty(mapRef, node) {
+        const sectionKey = node && typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0
+            ? node._prototypeSectionKey
+            : (node && typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
+        if (!sectionKey || !mapRef || typeof mapRef.getPrototypeSectionAsset !== "function") return;
+        const asset = mapRef.getPrototypeSectionAsset(sectionKey);
+        if (!asset) return;
+        const coordKey = `${node.xindex},${node.yindex}`;
+        if (!asset.groundTiles || typeof asset.groundTiles !== "object") {
+            asset.groundTiles = {};
+        }
+        asset.groundTiles[coordKey] = Number.isFinite(node.groundTextureId) ? Number(node.groundTextureId) : 0;
+        asset._level0GroundSurfaceVersion = (Number(asset._level0GroundSurfaceVersion) || 0) + 1;
+    }
+
+    function paintTerrainAtWorldPoint(wizardRef, worldX, worldY) {
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
+        if (!mapRef || typeof mapRef.worldToNode !== "function") {
+            throw new Error("terrain editor requires map.worldToNode");
+        }
+        if (typeof mapRef.setGroundTerrainType !== "function") {
+            throw new Error("terrain editor requires map.setGroundTerrainType");
+        }
+        const node = mapRef.worldToNode(worldX, worldY);
+        if (!node) {
+            message("No terrain tile here.");
+            return false;
+        }
+        const terrainType = getSelectedTerrainType(wizardRef);
+        const changed = mapRef.setGroundTerrainType(node.xindex, node.yindex, terrainType);
+        if (!changed) return false;
+        markGroundTerrainSectionDirty(mapRef, node);
+        if (typeof globalThis !== "undefined") {
+            if (typeof globalThis.invalidateMinimap === "function") {
+                globalThis.invalidateMinimap();
+            }
+            if (typeof globalThis.presentGameFrame === "function") {
+                globalThis.presentGameFrame();
+            }
+        }
+        return true;
+    }
+
     function isVisibleFloorInteriorViewActive(wizardRef, mapRef) {
         const renderingApi = (typeof globalThis !== "undefined") ? globalThis.Rendering : null;
         if (!renderingApi || typeof renderingApi.isBuildingInteriorPresentationActive !== "function") return false;
@@ -9702,6 +9777,11 @@ const SpellSystem = (() => {
             return;
         }
 
+        if (wizardRef.currentSpell === "terrainedit") {
+            paintTerrainAtWorldPoint(wizardRef, worldX, worldY);
+            return;
+        }
+
         if (wizardRef.currentSpell === "wall") {
             if (isDragSpellActive(wizardRef, "wall")) {
                 completeDragSpell(wizardRef, "wall", worldX, worldY);
@@ -10265,6 +10345,9 @@ const SpellSystem = (() => {
             if (tool.name === "buildroad") {
                 return {...tool, key, icon: getRoadSpellIcon(wizardRef)};
             }
+            if (tool.name === "terrainedit") {
+                return {...tool, key, icon: getSelectedTerrainIcon(wizardRef)};
+            }
             return {...tool, key};
         });
     }
@@ -10457,6 +10540,65 @@ const SpellSystem = (() => {
                 renderFlooringSelector(wizardRef);
             }
         });
+    }
+
+    function renderTerrainSelector(wizardRef) {
+        const $grid = $("#spellGrid");
+        $grid.empty();
+        $grid.css({
+            display: "",
+            "flex-direction": "",
+            gap: ""
+        });
+        const backButton = $("<div>")
+            .addClass("spellIcon")
+            .css({
+                "display": "flex",
+                "align-items": "center",
+                "justify-content": "center",
+                "font-size": "13px",
+                "font-weight": "bold",
+                "color": "#ffffff",
+                "background": "rgba(20,20,20,0.9)"
+            })
+            .text("Back")
+            .click(() => {
+                spellMenuMode = "main";
+                refreshSpellSelector(wizardRef);
+            });
+        $grid.append(backButton);
+
+        const selected = getSelectedTerrainType(wizardRef);
+        TERRAIN_TOOL_DEFS.forEach(terrain => {
+            const icon = $("<div>")
+                .addClass("spellIcon")
+                .css({
+                    "background-image": `url('${terrain.icon}')`,
+                    "background-size": "cover",
+                    "background-position": "center center"
+                })
+                .attr("title", terrain.label)
+                .click(() => {
+                    setSelectedTerrainType(wizardRef, terrain.name);
+                    setCurrentSpell(wizardRef, "terrainedit");
+                    refreshSpellSelector(wizardRef);
+                    $("#spellMenu").addClass("hidden");
+                });
+            if (terrain.name === selected) {
+                icon.addClass("selected");
+            }
+            $grid.append(icon);
+        });
+    }
+
+    function openTerrainSelector(wizardRef) {
+        if (wizardRef && wizardRef.currentSpell !== "terrainedit") {
+            setCurrentSpell(wizardRef, "terrainedit");
+        }
+        setSelectedTerrainType(wizardRef, getSelectedTerrainType(wizardRef));
+        spellMenuMode = "terrain";
+        $("#spellMenu").removeClass("hidden");
+        renderTerrainSelector(wizardRef);
     }
 
     function renderTreeSelector(wizardRef) {
@@ -10665,6 +10807,10 @@ const SpellSystem = (() => {
                 .attr("data-spell", tool.name)
                 .attr("title", tool.name)
                 .click(() => {
+                    if (tool.name === "terrainedit") {
+                        openTerrainSelector(wizardRef);
+                        return;
+                    }
                     if (tool.name === "flooredit") {
                         openFloorEditingSelector(wizardRef);
                         return;
@@ -10673,7 +10819,7 @@ const SpellSystem = (() => {
                     refreshEditorSelector(wizardRef);
                     $("#spellMenu").addClass("hidden");
                 });
-            if (tool.name === "flooredit") {
+            if (tool.name === "terrainedit" || tool.name === "flooredit") {
                 icon.attr("data-opens-submenu", "true");
             }
             if (tool.name === "buildroad") {
@@ -10681,6 +10827,12 @@ const SpellSystem = (() => {
                     event.preventDefault();
                     event.stopPropagation();
                     openFlooringSelector(wizardRef);
+                });
+            } else if (tool.name === "terrainedit") {
+                icon.on("contextmenu", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openTerrainSelector(wizardRef);
                 });
             } else if (tool.name === "wall") {
                 icon.on("contextmenu", event => {
@@ -11656,6 +11808,10 @@ const SpellSystem = (() => {
             renderFlooringSelector(wizardRef);
             return;
         }
+        if (spellMenuMode === "terrain") {
+            renderTerrainSelector(wizardRef);
+            return;
+        }
         if (spellMenuMode === "tree") {
             renderTreeSelector(wizardRef);
             return;
@@ -11788,6 +11944,10 @@ const SpellSystem = (() => {
                     .attr("data-spell", tool.name)
                     .attr("title", tool.name)
                     .click(() => {
+                        if (tool.name === "terrainedit") {
+                            openTerrainSelector(wizardRef);
+                            return;
+                        }
                         if (tool.name === "flooredit") {
                             openFloorEditingSelector(wizardRef);
                             return;
@@ -11796,7 +11956,7 @@ const SpellSystem = (() => {
                         refreshSpellSelector(wizardRef);
                         $("#spellMenu").addClass("hidden");
                     });
-                if (tool.name === "flooredit") {
+                if (tool.name === "terrainedit" || tool.name === "flooredit") {
                     toolIcon.attr("data-opens-submenu", "true");
                 }
                 if (tool.name === "buildroad") {
@@ -11804,6 +11964,12 @@ const SpellSystem = (() => {
                         event.preventDefault();
                         event.stopPropagation();
                         openFlooringSelector(wizardRef);
+                    });
+                } else if (tool.name === "terrainedit") {
+                    toolIcon.on("contextmenu", event => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        openTerrainSelector(wizardRef);
                     });
                 } else if (tool.name === "wall") {
                     toolIcon.on("contextmenu", event => {
@@ -12074,6 +12240,12 @@ const SpellSystem = (() => {
         openFlooringSelector(wizardRef);
     }
 
+    function showTerrainMenu(wizardRef) {
+        if (!wizardRef) return;
+        setCurrentSpell(wizardRef, "terrainedit");
+        openTerrainSelector(wizardRef);
+    }
+
     function showTreeMenu(wizardRef) {
         if (!wizardRef) return;
         setCurrentSpell(wizardRef, "treegrow");
@@ -12239,6 +12411,7 @@ const SpellSystem = (() => {
         isEditorToolName,
         showMainSpellMenu,
         showFlooringMenu,
+        showTerrainMenu,
         showTreeMenu,
         showWallMenu,
         showFloorEditingMenu,

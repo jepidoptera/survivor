@@ -309,6 +309,103 @@ function createRuntimeGroundTexture(texturePath, onReady) {
     return base;
 }
 
+const FOREST_GROUND_BASE_COUNT = 13;
+const FOREST_GROUND_TEXTURE_COUNT = 52;
+// IDs 0-51 are legacy grass/forest variants already present in saved section assets.
+const GROUND_TERRAIN_DEFS = [
+    {
+        name: "grass",
+        label: "Grass",
+        idStart: 0,
+        baseCount: FOREST_GROUND_BASE_COUNT,
+        textureNames: Array.from({ length: FOREST_GROUND_TEXTURE_COUNT }, (_unused, index) => `forest${index}`),
+        icon: "/assets/images/land tiles/forest0.png"
+    },
+    {
+        name: "desert",
+        label: "Desert",
+        idStart: FOREST_GROUND_TEXTURE_COUNT,
+        baseCount: 1,
+        textureNames: ["desert", "desert0", "desert1", "desert2"],
+        icon: "/assets/images/land tiles/desert0.png"
+    },
+    {
+        name: "water",
+        label: "Water",
+        idStart: FOREST_GROUND_TEXTURE_COUNT + 1,
+        baseCount: 1,
+        textureNames: ["water1", "water2", "water3"],
+        icon: "/assets/images/land tiles/water1.png"
+    }
+];
+
+function cloneGroundTerrainDefForUi(def) {
+    return {
+        name: def.name,
+        label: def.label,
+        idStart: def.idStart,
+        baseCount: def.baseCount,
+        icon: def.icon
+    };
+}
+
+function getGroundTerrainDefsWithOffsets() {
+    let textureOffset = 0;
+    return GROUND_TERRAIN_DEFS.map((def) => {
+        const next = { ...def, textureOffset };
+        textureOffset += def.textureNames.length;
+        return next;
+    });
+}
+
+const GROUND_TERRAIN_DEFS_WITH_OFFSETS = getGroundTerrainDefsWithOffsets();
+const GROUND_TERRAIN_ID_COUNT = GROUND_TERRAIN_DEFS_WITH_OFFSETS.reduce((maxId, def) => (
+    Math.max(maxId, def.idStart + def.baseCount)
+), 0);
+const GROUND_TERRAIN_TEXTURE_NAMES = GROUND_TERRAIN_DEFS_WITH_OFFSETS.flatMap(def => def.textureNames);
+
+function getGroundTerrainDefForTextureId(textureId) {
+    const id = Number.isFinite(textureId) ? Math.floor(Number(textureId)) : NaN;
+    if (!Number.isFinite(id)) {
+        throw new Error("ground terrain id must be finite");
+    }
+    if (id >= 0 && id < FOREST_GROUND_TEXTURE_COUNT) {
+        return GROUND_TERRAIN_DEFS_WITH_OFFSETS[0];
+    }
+    for (let i = 0; i < GROUND_TERRAIN_DEFS_WITH_OFFSETS.length; i++) {
+        const def = GROUND_TERRAIN_DEFS_WITH_OFFSETS[i];
+        if (id >= def.idStart && id < def.idStart + def.baseCount) {
+            return def;
+        }
+    }
+    throw new Error(`unknown ground terrain id ${id}`);
+}
+
+function resolveGroundTerrainTextureIndexForNode(node) {
+    if (!node) {
+        throw new Error("ground terrain texture resolution requires a node");
+    }
+    const rawId = Number(node.groundTextureId);
+    const textureId = Number.isFinite(rawId) ? Math.floor(rawId) : 0;
+    const x = Number.isFinite(node.xindex) ? Math.floor(node.xindex) : 0;
+    const y = Number.isFinite(node.yindex) ? Math.floor(node.yindex) : 0;
+
+    if (textureId >= 0 && textureId < FOREST_GROUND_TEXTURE_COUNT) {
+        const baseId = Math.max(0, Math.min(FOREST_GROUND_BASE_COUNT - 1, textureId));
+        const seed = ((x * 73856093) ^ (y * 19349663) ^ (baseId * 83492791)) >>> 0;
+        const variant = seed % 4;
+        const variantTextureIndex = baseId + (variant * FOREST_GROUND_BASE_COUNT);
+        return (variantTextureIndex * 17) % FOREST_GROUND_TEXTURE_COUNT;
+    }
+
+    const def = getGroundTerrainDefForTextureId(textureId);
+    const localBaseId = textureId - def.idStart;
+    const variantCount = Math.max(1, Math.floor(def.textureNames.length / Math.max(1, def.baseCount)));
+    const seed = ((x * 73856093) ^ (y * 19349663) ^ (textureId * 83492791)) >>> 0;
+    const variant = seed % variantCount;
+    return def.textureOffset + localBaseId + (variant * def.baseCount);
+}
+
 function isNonBlockingSunkObject(obj) {
     const sinkState = (obj && typeof obj === "object" && obj._scriptSinkState && typeof obj._scriptSinkState === "object")
         ? obj._scriptSinkState
@@ -780,17 +877,8 @@ class GameMap {
         this.hexWidth = 1 / 0.866;
         this.worldWidth = this.width * 0.866;
         this.worldHeight = this.height;
-        this.groundPalette = [
-            "forest0", "forest1", "forest2", "forest3",
-            "forest4", "forest5", "forest6", "forest7", "forest8", "forest9",
-            "forest10", "forest11", "forest12",
-            "forest13", "forest14", "forest15", "forest16", "forest17", "forest18",
-            "forest19", "forest20", "forest21", "forest22", "forest23", "forest24", "forest25",
-            "forest26", "forest27", "forest28", "forest29", "forest30", "forest31",
-            "forest32", "forest33", "forest34", "forest35", "forest36", "forest37", "forest38",
-            "forest39", "forest40", "forest41", "forest42", "forest43", "forest44",
-            "forest45", "forest46", "forest47", "forest48", "forest49", "forest50", "forest51"
-        ];
+        this.groundTerrainDefs = GROUND_TERRAIN_DEFS_WITH_OFFSETS.map(cloneGroundTerrainDefForUi);
+        this.groundPalette = GROUND_TERRAIN_TEXTURE_NAMES.slice();
         this.groundTextures = this.groundPalette.map(() => PIXI.Texture.WHITE);
         this.groundPalette.forEach((name, idx) => {
             const path = `/assets/images/land tiles/${name}.png`;
@@ -857,7 +945,7 @@ class GameMap {
                 this.nodes[x][y] = new MapNode(x, y, this.width, this.height);
                 this.nodes[x][y].index = index;
                 if (x >= 0 && y >= 0) {
-                    this.nodes[x][y].groundTextureId = Math.floor(Math.random() * this.groundTextures.length);
+                    this.nodes[x][y].groundTextureId = Math.floor(Math.random() * FOREST_GROUND_BASE_COUNT);
                 }
                 
                 // Randomly spawn scenery on this node
@@ -7770,24 +7858,76 @@ class GameMap {
         return current === nodeB;
     }
 
-    getGroundTextureId(x, y) {
+    getGroundTerrainNodeByCoord(x, y) {
         const tx = this.wrapX ? this.wrapIndexX(x) : x;
         const ty = this.wrapY ? this.wrapIndexY(y) : y;
-        const node = this.nodes[tx] && this.nodes[tx][ty] ? this.nodes[tx][ty] : null;
+        const state = this._prototypeSectionState || null;
+        const coordKey = `${Math.round(Number(tx))},${Math.round(Number(ty))}`;
+        const sparseNode = state && state.allNodesByCoordKey instanceof Map
+            ? (state.allNodesByCoordKey.get(coordKey) || null)
+            : null;
+        if (sparseNode) return sparseNode;
+        return this.nodes[tx] && this.nodes[tx][ty] ? this.nodes[tx][ty] : null;
+    }
+
+    getGroundTextureId(x, y) {
+        const node = this.getGroundTerrainNodeByCoord(x, y);
         if (!node) return 0;
         return Number.isFinite(node.groundTextureId) ? node.groundTextureId : 0;
     }
 
+    getGroundTerrainIdCount() {
+        return GROUND_TERRAIN_ID_COUNT;
+    }
+
+    getGroundTerrainDefs() {
+        return GROUND_TERRAIN_DEFS_WITH_OFFSETS.map(cloneGroundTerrainDefForUi);
+    }
+
+    getGroundTerrainDef(textureId) {
+        return cloneGroundTerrainDefForUi(getGroundTerrainDefForTextureId(textureId));
+    }
+
+    getGroundTerrainTextureIdForType(typeName, x = 0, y = 0) {
+        const name = (typeof typeName === "string" && typeName.length > 0) ? typeName : "grass";
+        const def = GROUND_TERRAIN_DEFS_WITH_OFFSETS.find(entry => entry.name === name);
+        if (!def) {
+            throw new Error(`unknown ground terrain type "${name}"`);
+        }
+        if (def.name === "grass") {
+            return Math.abs(((Math.floor(Number(x) || 0) * 73856093) ^ (Math.floor(Number(y) || 0) * 19349663))) % FOREST_GROUND_BASE_COUNT;
+        }
+        return def.idStart;
+    }
+
+    getGroundTextureForNode(node) {
+        const textureIndex = resolveGroundTerrainTextureIndexForNode(node);
+        const texture = Array.isArray(this.groundTextures) ? this.groundTextures[textureIndex] : null;
+        if (!texture) {
+            throw new Error(`missing ground terrain texture at palette index ${textureIndex}`);
+        }
+        return texture;
+    }
+
     setGroundTextureId(x, y, textureId) {
-        const tx = this.wrapX ? this.wrapIndexX(x) : x;
-        const ty = this.wrapY ? this.wrapIndexY(y) : y;
-        const node = this.nodes[tx] && this.nodes[tx][ty] ? this.nodes[tx][ty] : null;
+        const node = this.getGroundTerrainNodeByCoord(x, y);
         if (!node) return false;
-        const maxId = Math.max(0, (Array.isArray(this.groundTextures) ? this.groundTextures.length : 1) - 1);
-        const nextId = Math.max(0, Math.min(maxId, Math.floor(Number(textureId) || 0)));
+        const rawId = Number(textureId);
+        if (!Number.isFinite(rawId)) {
+            throw new Error("ground terrain id must be finite");
+        }
+        const nextId = Math.floor(rawId);
+        getGroundTerrainDefForTextureId(nextId);
         if (node.groundTextureId === nextId) return false;
         node.groundTextureId = nextId;
         return true;
+    }
+
+    setGroundTerrainType(x, y, typeName) {
+        const node = this.getGroundTerrainNodeByCoord(x, y);
+        if (!node) return false;
+        const nextId = this.getGroundTerrainTextureIdForType(typeName, node.xindex, node.yindex);
+        return this.setGroundTextureId(node.xindex, node.yindex, nextId);
     }
 
     normalizeIndex(value, size) {
