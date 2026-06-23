@@ -1,8 +1,8 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -42.30707125750995,
-    "y": 117.45983874440344,
+    "x": -42.886161760047536,
+    "y": 116.91154519494762,
     "z": 0,
     "currentLayer": 8,
     "traversalLayer": 8,
@@ -24,7 +24,7 @@
     "shieldHp": 0,
     "maxShieldHp": 0,
     "food": 0,
-    "currentSpell": "placeobject",
+    "currentSpell": "editscript",
     "activeAura": "speed",
     "activeAuras": [
       "speed"
@@ -65,7 +65,7 @@
       "/assets/images/furniture/armor.png": 0,
       "/assets/images/flowers/white%20rosebush.png": 0
     },
-    "selectedPlaceableScale": 2.757,
+    "selectedPlaceableScale": 1.5,
     "selectedPlaceableScaleByTexture": {
       "/assets/images/doors/door5.png": 1,
       "/assets/images/windows/window.png": 0.997,
@@ -85,7 +85,7 @@
       "/assets/images/furniture/table.png": 2.733,
       "/assets/images/furniture/bed.png": 6.196,
       "/assets/images/furniture/bed2.png": 3.657,
-      "/assets/images/furniture/armor.png": 2.757,
+      "/assets/images/furniture/armor.png": 1.5,
       "/assets/images/flowers/white%20rosebush.png": 2.773
     },
     "selectedPlaceableRotation": 0,
@@ -263,8 +263,8 @@
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -57.80962126998788,
-      "y": 103.9556999264571
+      "x": -58.382423950652274,
+      "y": 95.61802564506615
     }
   },
   "los": {
