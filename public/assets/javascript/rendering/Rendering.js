@@ -20,6 +20,8 @@
     const FLOOR_LEVEL0_SURFACE_TEXTURE_MAX_SIZE = 4096;
     const FLOOR_LEVEL0_BAKED_SURFACE_ENABLED = true;
     const FLOOR_LEVEL0_FORCE_BAKED_SURFACE = true;
+    const FLOOR_LEVEL0_POLYGON_MATERIAL_ENABLED = true;
+    const FLOOR_LEVEL0_GRASS_MATERIAL_PATH = "/assets/images/terrain/materials/grass.png";
     const FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED = true;
     const FLOOR_LEVEL0_BAKE_ROAD_PATHS = false;
     const FLOOR_LEVEL0_CHUNK_TEXTURE_SIZE = 1024;
@@ -2480,6 +2482,63 @@ void main(void) {
             for (let i = 0; i < triggers.length; i++) {
                 if (triggers[i] && triggers[i].activeInteriorRegion) return true;
             }
+            return false;
+        }
+
+        getActiveBuildingInteriorRenderScope(ctx = null, cutawayState = null) {
+            const state = cutawayState || (ctx && ctx._renderingLayerCutawayState) || this.getLayerCutawayState(ctx);
+            const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
+            if (triggers.length === 0) return null;
+            const scope = {
+                active: false,
+                buildingIds: new Set(),
+                activeFragmentIds: new Set(),
+                visibleFragmentIds: new Set(),
+                visibleSurfaceIds: new Set(),
+                ownerSectionKeys: new Set()
+            };
+            const addRegion = (region, active = false) => {
+                if (!region) return;
+                const fragmentId = this.getBuildingInteriorRegionFragmentId(region);
+                if (fragmentId) {
+                    scope.visibleFragmentIds.add(fragmentId);
+                    if (active) scope.activeFragmentIds.add(fragmentId);
+                }
+                const surfaceId = typeof region.surfaceId === "string" && region.surfaceId.length > 0
+                    ? region.surfaceId
+                    : (typeof (region.fragment && region.fragment.surfaceId) === "string" ? region.fragment.surfaceId : "");
+                if (surfaceId) scope.visibleSurfaceIds.add(surfaceId);
+                const sectionKey = typeof (region.fragment && region.fragment.ownerSectionKey) === "string"
+                    ? region.fragment.ownerSectionKey
+                    : "";
+                if (sectionKey) scope.ownerSectionKeys.add(sectionKey);
+            };
+            for (let i = 0; i < triggers.length; i++) {
+                const trigger = triggers[i];
+                const activeRegion = trigger && trigger.activeInteriorRegion;
+                if (!trigger || !activeRegion) continue;
+                scope.active = true;
+                const buildingId = typeof trigger.buildingId === "string" && trigger.buildingId.length > 0
+                    ? trigger.buildingId
+                    : (typeof (trigger.building && trigger.building.buildingId) === "string" && trigger.building.buildingId.length > 0
+                        ? trigger.building.buildingId
+                        : (typeof (trigger.building && trigger.building._prototypeBuildingPlacement && trigger.building._prototypeBuildingPlacement.id) === "string"
+                            ? trigger.building._prototypeBuildingPlacement.id
+                            : ""));
+                if (buildingId) scope.buildingIds.add(buildingId);
+                addRegion(activeRegion, true);
+                const regions = this.getBuildingInteriorOverlayRegionsForTrigger(trigger);
+                for (let r = 0; r < regions.length; r++) addRegion(regions[r], false);
+            }
+            return scope.active ? scope : null;
+        }
+
+        floorFragmentAllowedByBuildingInteriorScope(fragment, scope = null) {
+            if (!scope || !scope.active) return true;
+            const fragmentId = typeof (fragment && fragment.fragmentId) === "string" ? fragment.fragmentId : "";
+            if (fragmentId && scope.visibleFragmentIds.has(fragmentId)) return true;
+            const surfaceId = typeof (fragment && fragment.surfaceId) === "string" ? fragment.surfaceId : "";
+            if (surfaceId && scope.visibleSurfaceIds.has(surfaceId)) return true;
             return false;
         }
 
@@ -5405,10 +5464,7 @@ void main(void) {
                     let entry = this.buildingCutawayGroundMaskMeshes.get(key);
                     if (!entry || entry.signature !== signature) {
                         if (entry && entry.mesh) {
-                            if (entry.mesh.parent) entry.mesh.parent.removeChild(entry.mesh);
-                            if (typeof entry.mesh.destroy === "function") {
-                                entry.mesh.destroy({ children: false, texture: false, baseTexture: false });
-                            }
+                            this.destroyCachedPixiMesh(entry.mesh, "building cutaway ground mask mesh");
                         }
                         const triangulation = triangulateFloorVisualPolygon(outer, holes);
                         if (!triangulation) continue;
@@ -7892,10 +7948,7 @@ void main(void) {
                 entry.uploadedTextureRepeatSignature !== textureRepeatSignature
             ) {
                 if (entry && entry.mesh) {
-                    if (entry.mesh.parent) entry.mesh.parent.removeChild(entry.mesh);
-                    if (typeof entry.mesh.destroy === "function") {
-                        entry.mesh.destroy({ children: false, texture: false, baseTexture: false });
-                    }
+                    this.destroyCachedPixiMesh(entry.mesh, "building interior overlay floor mesh");
                 }
                 const triangulation = triangulateFloorVisualPolygon(source.outer, source.holes);
                 if (!triangulation) return 0;
@@ -8835,14 +8888,34 @@ void main(void) {
 
         resolveMountedWallSectionForItem(item) {
             if (!item) return null;
+            const activeDrawFrameId = Number(this._activeDrawFrameId) || 0;
+            let frameCache = null;
+            if (activeDrawFrameId > 0) {
+                if (this._mountedWallSectionResolveFrameId !== activeDrawFrameId) {
+                    this._mountedWallSectionResolveFrameId = activeDrawFrameId;
+                    this._mountedWallSectionResolveCache = new WeakMap();
+                }
+                frameCache = this._mountedWallSectionResolveCache instanceof WeakMap
+                    ? this._mountedWallSectionResolveCache
+                    : null;
+                if (frameCache && frameCache.has(item)) {
+                    return frameCache.get(item);
+                }
+            }
+            let resolved = null;
             if (item._prototypeMountedWallSection && item._prototypeMountedWallSection.type === "wallSection") {
-                return item._prototypeMountedWallSection;
+                resolved = item._prototypeMountedWallSection;
+                if (frameCache) frameCache.set(item, resolved);
+                return resolved;
             }
             const wallCtor = global.WallSectionUnit;
             const allSections = (wallCtor && wallCtor._allSections instanceof Map)
                 ? wallCtor._allSections
                 : null;
-            if (!allSections) return null;
+            if (!allSections) {
+                if (frameCache) frameCache.set(item, null);
+                return null;
+            }
             const candidateIds = [
                 item.mountedWallSectionUnitId,
                 item.mountedSectionId,
@@ -8852,9 +8925,47 @@ void main(void) {
                 const id = Number(candidateIds[i]);
                 if (!Number.isInteger(id)) continue;
                 const section = allSections.get(id) || null;
-                if (section && section.type === "wallSection") return section;
+                if (section && section.type === "wallSection") {
+                    resolved = section;
+                    break;
+                }
             }
-            return null;
+            if (frameCache) frameCache.set(item, resolved);
+            return resolved;
+        }
+
+        hideRenderItemWithMissingMountedSection(item) {
+            if (!item) return;
+            if (item.pixiSprite) {
+                item.pixiSprite.visible = false;
+                if (Object.prototype.hasOwnProperty.call(item.pixiSprite, "renderable")) {
+                    item.pixiSprite.renderable = false;
+                }
+            }
+            if (item.fireSprite) {
+                item.fireSprite.visible = false;
+                if (Object.prototype.hasOwnProperty.call(item.fireSprite, "renderable")) {
+                    item.fireSprite.renderable = false;
+                }
+            }
+            if (item._renderingDepthMesh) {
+                item._renderingDepthMesh.visible = false;
+                if (Object.prototype.hasOwnProperty.call(item._renderingDepthMesh, "renderable")) {
+                    item._renderingDepthMesh.renderable = false;
+                }
+            }
+            if (item._compositeUnderlayMesh) {
+                item._compositeUnderlayMesh.visible = false;
+                if (Object.prototype.hasOwnProperty.call(item._compositeUnderlayMesh, "renderable")) {
+                    item._compositeUnderlayMesh.renderable = false;
+                }
+            }
+            if (item._doorBottomFaceDebugGraphics) {
+                item._doorBottomFaceDebugGraphics.visible = false;
+                if (Object.prototype.hasOwnProperty.call(item._doorBottomFaceDebugGraphics, "renderable")) {
+                    item._doorBottomFaceDebugGraphics.renderable = false;
+                }
+            }
         }
 
         getLosVisibilitySamplePointForItem(item, mapRef, observer = null) {
@@ -10323,6 +10434,7 @@ void main(void) {
         collectVisibleObjects(visibleNodes, ctx) {
             const nodes = Array.isArray(visibleNodes) ? visibleNodes : [];
             const mapRef = ctx && ctx.map ? ctx.map : null;
+            const interiorScope = this.getActiveBuildingInteriorRenderScope(ctx);
             const _nowCVO = typeof performance !== "undefined" ? () => performance.now() : () => Date.now();
             const _diagCVO = !!this.currentFrameMetrics;
             const tFloorScan = _diagCVO ? _nowCVO() : 0;
@@ -10349,6 +10461,7 @@ void main(void) {
             let nodeVisibilityRefs = 0;
             let duplicateRefsSkipped = 0;
             let skippedBuildingCutaway = 0;
+            let skippedBuildingInteriorScope = 0;
             let skippedRoadRefsForPickerSurface = 0;
             const cutawayFrameId = Number(this._layerCutawayFrameId) || 0;
             const isHiddenByBuildingCutawayFrame = (item) => !!(
@@ -10392,6 +10505,10 @@ void main(void) {
                             // ScenePicker's per-section road color surface, so keep them out of
                             // the general visible-object/onscreen-object working set.
                             skippedRoadRefsForPickerSurface += 1;
+                            continue;
+                        }
+                        if (interiorScope && interiorScope.active) {
+                            skippedBuildingInteriorScope += 1;
                             continue;
                         }
                         if (isHiddenByBuildingCutawayFrame(obj)) {
@@ -10537,6 +10654,10 @@ void main(void) {
                     if (!wall || wall.gone || wall.vanishing || wall.type !== "wallSection") continue;
                     if (mapRef && wall.map && wall.map !== mapRef) continue;
                     globalWallsConsidered += 1;
+                    if (interiorScope && interiorScope.active) {
+                        skippedBuildingInteriorScope += 1;
+                        continue;
+                    }
                     if (!wallIntersectsViewport(wall)) {
                         globalWallsCulled += 1;
                         continue;
@@ -10584,6 +10705,10 @@ void main(void) {
                     const entry = wall.attachedObjects[j];
                     const obj = entry && entry.object;
                     if (!obj || obj.gone || obj.vanishing || seen.has(obj)) continue;
+                    if (interiorScope && interiorScope.active) {
+                        skippedBuildingInteriorScope += 1;
+                        continue;
+                    }
                     if (isHiddenByBuildingCutawayFrame(obj)) {
                         skippedBuildingCutaway += 1;
                         continue;
@@ -10608,6 +10733,10 @@ void main(void) {
                 const animal = animalsList[i];
                 if (!animal || animal.gone || animal.vanishing) continue;
                 animalsConsidered += 1;
+                if (interiorScope && interiorScope.active) {
+                    skippedBuildingInteriorScope += 1;
+                    continue;
+                }
                 if (!animalsPreFilteredVisible && !animal.onScreen) {
                     animalsSkippedOffscreen += 1;
                     continue;
@@ -10627,16 +10756,31 @@ void main(void) {
                 for (let i = 0; i < triggerObjects.length; i++) {
                     const triggerObj = triggerObjects[i];
                     if (!triggerObj || triggerObj.gone || triggerObj.vanishing) continue;
+                    if (interiorScope && interiorScope.active) {
+                        skippedBuildingInteriorScope += 1;
+                        continue;
+                    }
                     if (seen.has(triggerObj)) continue;
                     seen.add(triggerObj);
                     out.push(triggerObj);
                 }
+            }
+            const interiorPlan = interiorScope && interiorScope.active && this._buildingInteriorRenderPlan
+                ? this._buildingInteriorRenderPlan
+                : null;
+            if (interiorPlan && interiorPlan.items instanceof Set) {
+                interiorPlan.items.forEach(item => {
+                    if (!item || item.gone || item.vanishing || seen.has(item)) return;
+                    seen.add(item);
+                    out.push(item);
+                });
             }
             if (diagnosticsEnabled) this.setFrameMetric("cvoAnimalsMs", nowVO() - tAnimals);
             this.setFrameMetric("visibleObjectNodeRefs", nodeObjectsRefs);
             this.setFrameMetric("visibleObjectVisibilityRefs", nodeVisibilityRefs);
             this.setFrameMetric("visibleFloorObjectNodes", floorObjectNodes.length);
             this.setFrameMetric("visibleObjectsSkippedBuildingCutaway", skippedBuildingCutaway);
+            this.setFrameMetric("visibleObjectsSkippedBuildingInteriorScope", skippedBuildingInteriorScope);
             this.setFrameMetric("visibleObjectRoadRefsSkippedForPickerSurface", skippedRoadRefsForPickerSurface);
             this.setFrameMetric("visibleGlobalWallsConsidered", globalWallsConsidered);
             this.setFrameMetric("visibleGlobalWallsAdded", globalWallsAdded);
@@ -10947,6 +11091,21 @@ void main(void) {
         collectVisibleFloorObjectNodes(ctx, mapRef, visibleNodes = []) {
             const map = mapRef || (ctx && ctx.map) || null;
             if (!map || !(map.floorNodesById instanceof Map)) return [];
+            const interiorScope = this.getActiveBuildingInteriorRenderScope(ctx);
+            if (interiorScope && interiorScope.active) {
+                if (!this._collectFloorObjectNodesOut) this._collectFloorObjectNodesOut = [];
+                this._collectFloorObjectNodesOut.length = 0;
+                this.setFrameMetric("floorObjectNodeInteriorScopeActive", 1);
+                this.setFrameMetric("floorObjectNodeCandidates", 0);
+                this.setFrameMetric("floorObjectNodeSectionsScanned", 0);
+                this.setFrameMetric("floorObjectNodeYRowsScanned", 0);
+                this.setFrameMetric("floorObjectNodeCandidatesScanned", 0);
+                this.setFrameMetric("floorObjectNodesSkippedStale", 0);
+                this.setFrameMetric("floorObjectNodesSkippedOffscreen", 0);
+                this.setFrameMetric("floorObjectNodesSkippedDuplicate", 0);
+                return this._collectFloorObjectNodesOut;
+            }
+            this.setFrameMetric("floorObjectNodeInteriorScopeActive", 0);
             const cameraRef = (ctx && ctx.camera) || this.camera || {};
             const viewportRef = (ctx && ctx.viewport) || {};
             const xScale = 0.866;
@@ -11273,6 +11432,23 @@ void main(void) {
         collectVisibleNodes(ctx, xPadding = 0, yPadding = 0) {
             const map = ctx.map;
             if (!map || !Array.isArray(map.nodes)) return [];
+            const interiorScope = this.getActiveBuildingInteriorRenderScope(ctx);
+            if (interiorScope && interiorScope.active) {
+                if (!this._collectVisibleNodesOut) this._collectVisibleNodesOut = [];
+                const nodes = this._collectVisibleNodesOut;
+                nodes.length = 0;
+                if (!this._collectVisibleNodesSeenKeys) this._collectVisibleNodesSeenKeys = new Set();
+                this._collectVisibleNodesSeenKeys.clear();
+                this.setFrameMetric("visibleNodes", 0);
+                this.setFrameMetric("visibleNodesWrapped", 0);
+                this.setFrameMetric("visibleNodesFallback", 0);
+                this.setFrameMetric("visibleNodeFilterSkipped", 0);
+                this.setFrameMetric("visibleNodeFallbackUsed", 0);
+                this.setFrameMetric("visibleNodesSkippedBuildingInteriorScope", 1);
+                this.setFrameMetric("visibleFloorNodes", 0);
+                return nodes;
+            }
+            this.setFrameMetric("visibleNodesSkippedBuildingInteriorScope", 0);
             const prototypeState = map._prototypeSectionState || null;
             this.setFrameMetric(
                 "visibleLoadedNodes",
@@ -12303,33 +12479,7 @@ void main(void) {
                     // dimensions and renders at the wrong size, so keep it hidden until
                     // the mounted wall is present again.
                     if (!_mountedSection) {
-                        if (item.pixiSprite) {
-                            item.pixiSprite.visible = false;
-                            if (Object.prototype.hasOwnProperty.call(item.pixiSprite, "renderable")) {
-                                item.pixiSprite.renderable = false;
-                            }
-                        }
-                        if (item.fireSprite) {
-                            item.fireSprite.visible = false;
-                            if (Object.prototype.hasOwnProperty.call(item.fireSprite, "renderable")) {
-                                item.fireSprite.renderable = false;
-                            }
-                        }
-                        if (item._renderingDepthMesh) {
-                            item._renderingDepthMesh.visible = false;
-                        }
-                        if (item._compositeUnderlayMesh) {
-                            item._compositeUnderlayMesh.visible = false;
-                            if (Object.prototype.hasOwnProperty.call(item._compositeUnderlayMesh, "renderable")) {
-                                item._compositeUnderlayMesh.renderable = false;
-                            }
-                        }
-                        if (item._doorBottomFaceDebugGraphics) {
-                            item._doorBottomFaceDebugGraphics.visible = false;
-                            if (Object.prototype.hasOwnProperty.call(item._doorBottomFaceDebugGraphics, "renderable")) {
-                                item._doorBottomFaceDebugGraphics.renderable = false;
-                            }
-                        }
+                        this.hideRenderItemWithMissingMountedSection(item);
                         depthMissingMountedSection += 1;
                         depthRenderedItems.add(item);
                         continue;
@@ -12979,6 +13129,34 @@ void main(void) {
             );
             const wizardLayer = this.getWizardVisualLayerIndex(wizard, 0);
             const cutawayState = this.getLayerCutawayState(ctx);
+            const interiorScope = this.getActiveBuildingInteriorRenderScope(ctx, cutawayState);
+            if (interiorScope && interiorScope.active) {
+                const previouslyVisibleNodeKeys = this._groundVisibleNodeKeysSets[1 - this._groundVisibleNodeKeysIdx];
+                let cleanedSprites = 0;
+                for (const key of previouslyVisibleNodeKeys) {
+                    const sprite = this.groundSpriteByNodeKey.get(key);
+                    if (sprite) {
+                        sprite.visible = false;
+                        cleanedSprites += 1;
+                    }
+                }
+                this.groundVisibleNodeKeys = visibleNodeKeys;
+                if (profiler) {
+                    profiler.frameCount += 1;
+                    profiler.totals.totalMs += (performance.now() - frameStartMs);
+                    profiler.totals.cleanupMs += 0;
+                    profiler.counts.visibleNodes += 0;
+                    profiler.counts.cleanedSprites += cleanedSprites;
+                    this.maybePrintGroundTileProfile(
+                        ctx && Number.isFinite(ctx.renderNowMs) ? Number(ctx.renderNowMs) : performance.now()
+                    );
+                }
+                if (this.currentFrameMetrics) {
+                    this.currentFrameMetrics.groundTilesSkippedForBuildingInteriorScope = 1;
+                    this.currentFrameMetrics.groundTileSpritesVisible = 0;
+                }
+                return;
+            }
             const bakedLevel0SectionKeys = this.getBakedLevel0SectionKeys(ctx);
             const activeKeyBuildStartMs = profiler ? performance.now() : 0;
             const activePrototypeNodeKeys = (typeof map.getLoadedPrototypeNodeKeySet === "function")
@@ -13312,18 +13490,38 @@ void main(void) {
             return out;
         }
 
-        getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY, map = null) {
+        getLevel0GroundSurfaceAssetTileCoordSignature(asset) {
             const tileCoordKeys = Array.isArray(asset && asset.tileCoordKeys) ? asset.tileCoordKeys : [];
-            const state = map && map._prototypeSectionState ? map._prototypeSectionState : null;
-            const prototypeNodeCount = state && state.allNodesByCoordKey instanceof Map
-                ? state.allNodesByCoordKey.size
-                : 0;
-            const prototypeSectionNodeCount = state && state.nodesBySectionKey instanceof Map
-                ? state.nodesBySectionKey.size
-                : 0;
+            const version = Number(asset && asset._level0SurfaceVersion) || 0;
+            const cached = asset && asset._level0GroundSurfaceTileCoordSignatureCache;
+            if (
+                cached &&
+                cached.source === tileCoordKeys &&
+                cached.version === version &&
+                cached.length === tileCoordKeys.length &&
+                typeof cached.signature === "string"
+            ) {
+                return cached.signature;
+            }
+            const signature = `${tileCoordKeys.length}:${tileCoordKeys.join("|")}`;
+            if (asset) {
+                asset._level0GroundSurfaceTileCoordSignatureCache = {
+                    source: tileCoordKeys,
+                    version,
+                    length: tileCoordKeys.length,
+                    signature
+                };
+            }
+            return signature;
+        }
+
+        getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY) {
+            const normalizedChunkX = Math.floor(Number(chunkX) || 0);
+            const normalizedChunkY = Math.floor(Number(chunkY) || 0);
+            const tileCoordSignature = this.getLevel0GroundSurfaceAssetTileCoordSignature(asset);
             return [
-                Math.floor(Number(chunkX) || 0),
-                Math.floor(Number(chunkY) || 0),
+                normalizedChunkX,
+                normalizedChunkY,
                 Number(asset && asset._level0SurfaceVersion) || 0,
                 Number(asset && asset._level0RoadSurfaceModelVersion) || 0,
                 Number(asset && asset._level0RoadSurfaceVersion) || 0,
@@ -13331,9 +13529,7 @@ void main(void) {
                 Number(asset && asset._level0SurfaceTextureReadyVersion) || 0,
                 FLOOR_LEVEL0_BAKE_ROAD_PATHS ? 1 : 0,
                 FLOOR_LEVEL0_TERRAIN_BOUNDARY_MODEL_VERSION,
-                tileCoordKeys.length,
-                prototypeNodeCount,
-                prototypeSectionNodeCount
+                tileCoordSignature
             ].join(":");
         }
 
@@ -13344,10 +13540,11 @@ void main(void) {
                 this.level0GroundSurfaceChunkCache = new Map();
             }
             const cacheKey = this.getLevel0GroundSurfaceChunkKey(sectionKey, chunkX, chunkY);
-            const signature = this.getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY, map);
+            const signature = this.getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY);
             let cache = this.level0GroundSurfaceChunkCache.get(cacheKey);
             if (cache && cache.signature === signature && cache.ready === true && cache.texture && cache.bounds) {
                 cache.lastUsedTick = ++this.level0GroundSurfaceChunkTick;
+                this.touchRenderCacheEntry(this.level0GroundSurfaceChunkCache, cacheKey, cache);
                 return cache;
             }
             const buildLimit = Math.max(0, Math.floor(Number(FLOOR_LEVEL0_CHUNK_BUILDS_PER_FRAME) || 0));
@@ -13359,6 +13556,7 @@ void main(void) {
                     cache.pending = true;
                     cache.targetSignature = signature;
                     cache.lastUsedTick = ++this.level0GroundSurfaceChunkTick;
+                    this.touchRenderCacheEntry(this.level0GroundSurfaceChunkCache, cacheKey, cache);
                     if (wasReady) this.bumpLevel0GroundCoverageVersion();
                     return cache;
                 }
@@ -13388,6 +13586,7 @@ void main(void) {
                     cache.targetSignature = signature;
                     cache.pending = true;
                     cache.lastUsedTick = ++this.level0GroundSurfaceChunkTick;
+                    this.touchRenderCacheEntry(this.level0GroundSurfaceChunkCache, cacheKey, cache);
                     if (wasReady) this.bumpLevel0GroundCoverageVersion();
                     return cache;
                 }
@@ -13426,45 +13625,49 @@ void main(void) {
             return cache;
         }
 
+        touchRenderCacheEntry(cacheMap, key, value) {
+            if (!(cacheMap instanceof Map) || !cacheMap.has(key)) return;
+            cacheMap.delete(key);
+            cacheMap.set(key, value);
+        }
+
+        trimRenderCacheIncremental(cacheMap, limit, maxRemove = 48, onRemove = null) {
+            if (!(cacheMap instanceof Map)) return 0;
+            const safeLimit = Math.max(0, Math.floor(Number(limit) || 0));
+            if (cacheMap.size <= safeLimit) return 0;
+            const removeBudget = Math.max(1, Math.floor(Number(maxRemove) || 1));
+            let removed = 0;
+            const removeCount = Math.min(removeBudget, Math.max(0, cacheMap.size - safeLimit));
+            for (const [key, cache] of cacheMap) {
+                if (typeof onRemove === "function") {
+                    onRemove(cache, key);
+                }
+                cacheMap.delete(key);
+                removed += 1;
+                if (removed >= removeCount || cacheMap.size <= safeLimit) break;
+            }
+            return removed;
+        }
+
         trimLevel0GroundSurfaceChunkCache(limit = FLOOR_LEVEL0_CHUNK_CACHE_LIMIT) {
             if (!(this.level0GroundSurfaceChunkCache instanceof Map)) return 0;
-            const safeLimit = Math.max(0, Math.floor(Number(limit) || 0));
-            if (this.level0GroundSurfaceChunkCache.size <= safeLimit) return 0;
-            const entries = Array.from(this.level0GroundSurfaceChunkCache.entries())
-                .sort((a, b) => {
-                    const aTick = Number(a[1] && a[1].lastUsedTick) || 0;
-                    const bTick = Number(b[1] && b[1].lastUsedTick) || 0;
-                    return aTick - bTick;
-                });
-            let removed = 0;
-            const removeCount = Math.max(0, entries.length - safeLimit);
-            for (let i = 0; i < removeCount; i++) {
-                const [key, cache] = entries[i];
-                if (cache && cache.texture && typeof cache.texture.destroy === "function") {
-                    cache.texture.destroy(true);
+            const removed = this.trimRenderCacheIncremental(
+                this.level0GroundSurfaceChunkCache,
+                limit,
+                32,
+                (cache) => {
+                    if (cache && cache.texture && typeof cache.texture.destroy === "function") {
+                        cache.texture.destroy(true);
+                    }
                 }
-                this.level0GroundSurfaceChunkCache.delete(key);
-                removed += 1;
-            }
+            );
             if (removed > 0) this.bumpLevel0GroundCoverageVersion();
             return removed;
         }
 
         trimLevel0AnimatedWaterChunkEntryCache(limit = FLOOR_LEVEL0_CHUNK_CACHE_LIMIT * 4) {
             if (!(this.level0AnimatedWaterChunkEntryCache instanceof Map)) return 0;
-            const safeLimit = Math.max(0, Math.floor(Number(limit) || 0));
-            if (this.level0AnimatedWaterChunkEntryCache.size <= safeLimit) return 0;
-            const entries = Array.from(this.level0AnimatedWaterChunkEntryCache.entries())
-                .sort((a, b) => {
-                    const aTick = Number(a[1] && a[1].lastUsedTick) || 0;
-                    const bTick = Number(b[1] && b[1].lastUsedTick) || 0;
-                    return aTick - bTick;
-                });
-            const removeCount = Math.max(0, entries.length - safeLimit);
-            for (let i = 0; i < removeCount; i++) {
-                this.level0AnimatedWaterChunkEntryCache.delete(entries[i][0]);
-            }
-            return removeCount;
+            return this.trimRenderCacheIncremental(this.level0AnimatedWaterChunkEntryCache, limit, 64);
         }
 
         bumpLevel0GroundCoverageVersion() {
@@ -13516,26 +13719,11 @@ void main(void) {
 
         trimFloorVisualChunkClipCache(limit = FLOOR_LEVEL0_CHUNK_CACHE_LIMIT * 4) {
             if (!(this.floorVisualChunkClipCache instanceof Map)) return 0;
-            const safeLimit = Math.max(0, Math.floor(Number(limit) || 0));
-            if (this.floorVisualChunkClipCache.size <= safeLimit) return 0;
-            const entries = Array.from(this.floorVisualChunkClipCache.entries())
-                .sort((a, b) => {
-                    const aTick = Number(a[1] && a[1].lastUsedTick) || 0;
-                    const bTick = Number(b[1] && b[1].lastUsedTick) || 0;
-                    return aTick - bTick;
-                });
-            const removeCount = Math.max(0, entries.length - safeLimit);
-            for (let i = 0; i < removeCount; i++) {
-                this.floorVisualChunkClipCache.delete(entries[i][0]);
-            }
-            return removeCount;
+            return this.trimRenderCacheIncremental(this.floorVisualChunkClipCache, limit, 128);
         }
 
         getCachedFloorVisualClippedPolygonsForChunk(fragmentId, renderOuter, holes, chunkBounds, chunkX, chunkY, shapeSignature) {
             const normalizedHoles = Array.isArray(holes) ? holes : [];
-            if (normalizedHoles.length === 0) {
-                return collectFloorVisualClippedPolygonsForRect(renderOuter, normalizedHoles, chunkBounds);
-            }
             if (!(this.floorVisualChunkClipCache instanceof Map)) {
                 this.floorVisualChunkClipCache = new Map();
             }
@@ -13546,6 +13734,7 @@ void main(void) {
             const cached = this.floorVisualChunkClipCache.get(cacheKey);
             if (cached && Array.isArray(cached.polygons)) {
                 cached.lastUsedTick = ++this.floorVisualChunkClipTick;
+                this.touchRenderCacheEntry(this.floorVisualChunkClipCache, cacheKey, cached);
                 if (this.currentFrameMetrics) {
                     this.currentFrameMetrics.floorVisualChunkClipCacheHits = (this.currentFrameMetrics.floorVisualChunkClipCacheHits || 0) + 1;
                 }
@@ -13573,7 +13762,7 @@ void main(void) {
             const chunkY = Math.floor(Number(coord.chunkY) || 0);
             const chunkKey = `${Math.floor(Number(coord.chunkX) || 0)},${Math.floor(Number(coord.chunkY) || 0)}`;
             const cacheKey = `${sectionKey || ""}:${chunkX},${chunkY}`;
-            const signature = `${this.getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY, map)}:animatedWater:v${FLOOR_LEVEL0_TERRAIN_BOUNDARY_MODEL_VERSION}`;
+            const signature = `${this.getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY)}:animatedWater:v${FLOOR_LEVEL0_TERRAIN_BOUNDARY_MODEL_VERSION}`;
             let cached = this.level0AnimatedWaterChunkEntryCache.get(cacheKey);
             if (!cached || cached.signature !== signature || !Array.isArray(cached.templates)) {
                 const candidateNodes = this.getLevel0PatchCandidateNodes(map, sectionKey, chunkBounds, chunkBounds);
@@ -13622,6 +13811,7 @@ void main(void) {
                 this.currentFrameMetrics.floorAnimatedWaterChunkCacheHits = (this.currentFrameMetrics.floorAnimatedWaterChunkCacheHits || 0) + 1;
             }
             cached.lastUsedTick = ++this.level0AnimatedWaterChunkTick;
+            this.touchRenderCacheEntry(this.level0AnimatedWaterChunkEntryCache, cacheKey, cached);
             const nowMs = (ctx && Number.isFinite(ctx.renderNowMs)) ? Number(ctx.renderNowMs) : Date.now();
             const out = [];
             const templates = cached.templates;
@@ -13653,10 +13843,11 @@ void main(void) {
             const map = ctx && ctx.map;
             const sectionKey = typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : "";
             if (!map || !sectionKey || !asset) return [];
+            const metrics = this.currentFrameMetrics || null;
+            const timeEnabled = !!(metrics && typeof performance !== "undefined" && performance && typeof performance.now === "function");
+            const now = timeEnabled ? performance.now.bind(performance) : null;
             const renderOuter = expandFloorVisualPolygonFromCentroid(outer, FLOOR_LEVEL0_SEAM_BLEED_UNITS);
-            const shapeSignature = Array.isArray(holes) && holes.length > 0
-                ? buildFloorVisualSignature(renderOuter, holes)
-                : "";
+            const shapeSignature = buildFloorVisualSignature(renderOuter, holes);
             const polygonBounds = getFloorVisualPointBounds(renderOuter);
             if (!polygonBounds) return [];
             const chunkCoords = this.getLevel0GroundSurfaceChunkCoordsForBounds(polygonBounds);
@@ -13679,6 +13870,7 @@ void main(void) {
             for (let i = 0; i < chunkCoords.length; i++) {
                 const coord = chunkCoords[i];
                 const chunkBounds = this.getLevel0GroundSurfaceChunkBounds(coord.chunkX, coord.chunkY, map);
+                if (metrics) metrics.floorLevel0ChunksConsidered = (metrics.floorLevel0ChunksConsidered || 0) + 1;
                 if (
                     viewBounds &&
                     (
@@ -13690,6 +13882,8 @@ void main(void) {
                 ) {
                     continue;
                 }
+                if (metrics) metrics.floorLevel0ChunksInView = (metrics.floorLevel0ChunksInView || 0) + 1;
+                const clipStartMs = now ? now() : 0;
                 const clippedPolygons = this.getCachedFloorVisualClippedPolygonsForChunk(
                     fragmentId,
                     renderOuter,
@@ -13699,9 +13893,12 @@ void main(void) {
                     coord.chunkY,
                     shapeSignature
                 );
+                if (metrics && now) metrics.floorLevel0ChunkClipMs = (metrics.floorLevel0ChunkClipMs || 0) + (now() - clipStartMs);
                 if (clippedPolygons === null) return null;
                 if (!Array.isArray(clippedPolygons) || clippedPolygons.length === 0) continue;
+                const textureStartMs = now ? now() : 0;
                 const chunk = this.getLevel0GroundSurfaceChunkTexture(ctx, sectionKey, asset, coord.chunkX, coord.chunkY);
+                if (metrics && now) metrics.floorLevel0ChunkTextureMs = (metrics.floorLevel0ChunkTextureMs || 0) + (now() - textureStartMs);
                 if (!chunk || !chunk.texture || !chunk.bounds) continue;
                 for (let p = 0; p < clippedPolygons.length; p++) {
                     const clipped = clippedPolygons[p];
@@ -13727,6 +13924,7 @@ void main(void) {
                         isHoleOverlay: false
                     });
                 }
+                const waterStartMs = now ? now() : 0;
                 const waterEntries = this.collectLevel0AnimatedWaterFloorVisualEntries(
                     ctx,
                     fragmentId,
@@ -13737,8 +13935,10 @@ void main(void) {
                     baseZ,
                     alpha
                 );
+                if (metrics && now) metrics.floorLevel0ChunkWaterMs = (metrics.floorLevel0ChunkWaterMs || 0) + (now() - waterStartMs);
                 for (let w = 0; w < waterEntries.length; w++) out.push(waterEntries[w]);
             }
+            if (metrics) metrics.floorLevel0ChunkEntries = (metrics.floorLevel0ChunkEntries || 0) + out.length;
             return out;
         }
 
@@ -13770,7 +13970,7 @@ void main(void) {
                 const cache = this.level0GroundSurfaceChunkCache instanceof Map
                     ? this.level0GroundSurfaceChunkCache.get(key)
                     : null;
-                const signature = this.getLevel0GroundSurfaceChunkSignature(asset, coord.chunkX, coord.chunkY, map);
+                const signature = this.getLevel0GroundSurfaceChunkSignature(asset, coord.chunkX, coord.chunkY);
                 if (!cache || cache.ready !== true || cache.signature !== signature || !cache.texture || !cache.bounds) {
                     return false;
                 }
@@ -13955,7 +14155,7 @@ void main(void) {
                 const cache = this.level0GroundSurfaceChunkCache instanceof Map
                     ? this.level0GroundSurfaceChunkCache.get(cacheKey)
                     : null;
-                const signature = this.getLevel0GroundSurfaceChunkSignature(asset, coord.chunkX, coord.chunkY, map);
+                const signature = this.getLevel0GroundSurfaceChunkSignature(asset, coord.chunkX, coord.chunkY);
                 const ready = !!(
                     cache &&
                     cache.ready === true &&
@@ -13970,7 +14170,7 @@ void main(void) {
         }
 
         isGroundNodeCoveredByReadyLevel0Chunk(ctx, node, tileWorldW, tileWorldH, readyCache = null, assetCache = null) {
-            if (!FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED || !node) return false;
+            if (!node) return false;
             const nodeLayer = this.getLayerIndexForNode(node);
             if (nodeLayer !== 0) return false;
             const map = ctx && ctx.map;
@@ -13999,6 +14199,8 @@ void main(void) {
             const tileKey = `${node.xindex},${node.yindex}`;
             const tileCoordSet = this.getLevel0GroundSurfaceAssetTileCoordSet(asset);
             if (tileCoordSet instanceof Set && !tileCoordSet.has(tileKey)) return false;
+            if (FLOOR_LEVEL0_POLYGON_MATERIAL_ENABLED) return true;
+            if (!FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED) return false;
             const x = Number(node.x);
             const y = Number(node.y);
             if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
@@ -14121,6 +14323,7 @@ void main(void) {
         }
 
         isRoadBakedIntoLevel0Surface(ctx, road, bakedSectionKeys = null) {
+            if (FLOOR_LEVEL0_POLYGON_MATERIAL_ENABLED) return false;
             if (FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED) {
                 return this.isRoadCoveredByReadyLevel0Chunks(ctx, road);
             }
@@ -14133,6 +14336,7 @@ void main(void) {
         }
 
         isRoadPathBakedIntoLevel0Surface(ctx, roadPath, bakedSectionKeys = null) {
+            if (FLOOR_LEVEL0_POLYGON_MATERIAL_ENABLED) return false;
             if (!FLOOR_LEVEL0_BAKE_ROAD_PATHS) return false;
             if (!roadPath || roadPath.type !== "roadPath") return false;
             const fallbackNode = typeof roadPath.getNode === "function" ? roadPath.getNode() : roadPath.node;
@@ -16408,10 +16612,7 @@ void main(void) {
             let entry = this.stairMeshById.get(cacheKey);
             if (!entry || entry.signature !== geometry.signature) {
                 if (entry && entry.mesh) {
-                    if (entry.mesh.parent) entry.mesh.parent.removeChild(entry.mesh);
-                    if (typeof entry.mesh.destroy === "function") {
-                        entry.mesh.destroy({ children: false, texture: false, baseTexture: false });
-                    }
+                    this.destroyCachedPixiMesh(entry.mesh, "straight stair mesh");
                 }
                 entry = {
                     key: cacheKey,
@@ -16462,10 +16663,7 @@ void main(void) {
             let entry = this.stairMeshById.get(cacheKey);
             if (!entry || entry.signature !== geometry.signature) {
                 if (entry && entry.mesh) {
-                    if (entry.mesh.parent) entry.mesh.parent.removeChild(entry.mesh);
-                    if (typeof entry.mesh.destroy === "function") {
-                        entry.mesh.destroy({ children: false, texture: false, baseTexture: false });
-                    }
+                    this.destroyCachedPixiMesh(entry.mesh, "tread path stair mesh");
                 }
                 entry = {
                     key: cacheKey,
@@ -16567,6 +16765,93 @@ void main(void) {
             const state = this.getFloorVisualDepthState();
             if (state) mesh.state = state;
             return mesh;
+        }
+
+        sanitizePixiGeometryBeforeDestroy(geometry) {
+            if (!geometry || !Array.isArray(geometry.buffers)) return;
+            const vaoObjects = geometry.glVertexArrayObjects && typeof geometry.glVertexArrayObjects === "object"
+                ? geometry.glVertexArrayObjects
+                : null;
+            const vaoKeys = vaoObjects ? Object.keys(vaoObjects) : [];
+            for (let k = 0; k < vaoKeys.length; k++) {
+                const contextUid = vaoKeys[k];
+                let missingBuffer = false;
+                for (let i = 0; i < geometry.buffers.length; i++) {
+                    const buffer = geometry.buffers[i];
+                    const glBuffers = buffer && buffer._glBuffers && typeof buffer._glBuffers === "object"
+                        ? buffer._glBuffers
+                        : null;
+                    if (!glBuffers || !glBuffers[contextUid]) {
+                        missingBuffer = true;
+                        break;
+                    }
+                }
+                if (missingBuffer) {
+                    delete vaoObjects[contextUid];
+                }
+            }
+            for (let i = 0; i < geometry.buffers.length; i++) {
+                const buffer = geometry.buffers[i];
+                const glBuffers = buffer && buffer._glBuffers && typeof buffer._glBuffers === "object"
+                    ? buffer._glBuffers
+                    : null;
+                if (!glBuffers) continue;
+                const keys = Object.keys(glBuffers);
+                for (let k = 0; k < keys.length; k++) {
+                    if (!glBuffers[keys[k]]) delete glBuffers[keys[k]];
+                }
+            }
+        }
+
+        recordStalePixiMeshDestroy(label, err = null) {
+            const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now();
+            this._stalePixiMeshDestroyWarningCount = (Number(this._stalePixiMeshDestroyWarningCount) || 0) + 1;
+            if (
+                Number.isFinite(this._lastStalePixiMeshDestroyWarningAtMs) &&
+                (nowMs - this._lastStalePixiMeshDestroyWarningAtMs) < 5000
+            ) {
+                return;
+            }
+            this._lastStalePixiMeshDestroyWarningAtMs = nowMs;
+            const count = Number(this._stalePixiMeshDestroyWarningCount) || 0;
+            this._stalePixiMeshDestroyWarningCount = 0;
+            console.warn("[rendering] detached stale Pixi mesh during destroy", {
+                label,
+                suppressedCount: Math.max(0, count - 1),
+                error: err && err.message ? String(err.message) : null
+            });
+        }
+
+        destroyCachedPixiMesh(mesh, label = "cached Pixi mesh") {
+            if (!mesh) return false;
+            if (mesh.parent && typeof mesh.parent.removeChild === "function") {
+                mesh.parent.removeChild(mesh);
+            }
+            mesh.visible = false;
+            if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+                mesh.renderable = false;
+            }
+            if (typeof mesh.destroy !== "function") return false;
+            if (!mesh.geometry || !Number.isFinite(mesh.geometry.refCount)) {
+                mesh.geometry = null;
+                mesh.shader = null;
+                mesh.state = null;
+                this.recordStalePixiMeshDestroy(label);
+                return false;
+            }
+            this.sanitizePixiGeometryBeforeDestroy(mesh.geometry);
+            try {
+                mesh.destroy({ children: false, texture: false, baseTexture: false });
+                return true;
+            } catch (_err) {
+                mesh.geometry = null;
+                mesh.shader = null;
+                mesh.state = null;
+                this.recordStalePixiMeshDestroy(label, _err);
+                return false;
+            }
         }
 
         getFloorVisualTextureBoundsSignature(bounds) {
@@ -16671,26 +16956,57 @@ void main(void) {
                     const w1 = 0.5 + 0.5 * Math.sin(wave + Math.PI * 2 / 3);
                     const w2 = 0.5 + 0.5 * Math.sin(wave + Math.PI * 4 / 3);
                     const wSum = Math.max(0.0001, w0 + w1 + w2);
+                    const phaseWeights = [w0 / wSum, w1 / wSum, w2 / wSum];
                     if (uniforms.uPhaseWeights) {
-                        uniforms.uPhaseWeights[0] = w0 / wSum;
-                        uniforms.uPhaseWeights[1] = w1 / wSum;
-                        uniforms.uPhaseWeights[2] = w2 / wSum;
+                        uniforms.uPhaseWeights[0] = phaseWeights[0];
+                        uniforms.uPhaseWeights[1] = phaseWeights[1];
+                        uniforms.uPhaseWeights[2] = phaseWeights[2];
                     }
                     uniforms.uSpatialPhase = wave;
                     uniforms.uSpatialFrequency = 2.25;
                     uniforms.uSpatialStrength = 0.42;
                     const wrapUnit = (value) => ((value % 1) + 1) % 1;
+                    if (!this._animatedWaterDriftState) {
+                        this._animatedWaterDriftState = {
+                            timeSeconds: t,
+                            offsets: [
+                                [0, 0],
+                                [0, 0],
+                                [0, 0]
+                            ]
+                        };
+                    }
+                    const driftState = this._animatedWaterDriftState;
+                    const previousTime = Number.isFinite(driftState.timeSeconds) ? Number(driftState.timeSeconds) : t;
+                    const driftDt = Math.max(0, Math.min(0.25, t - previousTime));
+                    driftState.timeSeconds = t;
+                    const baseDriftX = 0.014;
+                    const baseDriftY = 0.010;
+                    const rotateUvDrift = (offset, cos, sin) => ([
+                        offset[0] * cos + offset[1] * sin,
+                        -offset[0] * sin + offset[1] * cos
+                    ]);
+                    for (let i = 0; i < 3; i++) {
+                        const opacity = Math.max(0, Math.min(1, Number(phaseWeights[i]) || 0));
+                        const speedMultiplier = 1 / Math.max(0.1, 0.1 + 0.9 * opacity);
+                        const offset = driftState.offsets[i];
+                        offset[0] = wrapUnit(offset[0] + baseDriftX * speedMultiplier * driftDt);
+                        offset[1] = wrapUnit(offset[1] + baseDriftY * speedMultiplier * driftDt);
+                    }
+                    const drift0 = driftState.offsets[0];
+                    const drift1 = rotateUvDrift(driftState.offsets[1], 0.7986355, 0.6018150);
+                    const drift2 = rotateUvDrift(driftState.offsets[2], 0.2756374, 0.9612617);
                     if (uniforms.uPhaseOffset0) {
-                        uniforms.uPhaseOffset0[0] = wrapUnit(t * 0.018);
-                        uniforms.uPhaseOffset0[1] = wrapUnit(t * 0.006);
+                        uniforms.uPhaseOffset0[0] = drift0[0];
+                        uniforms.uPhaseOffset0[1] = drift0[1];
                     }
                     if (uniforms.uPhaseOffset1) {
-                        uniforms.uPhaseOffset1[0] = wrapUnit(0.37 - t * 0.011);
-                        uniforms.uPhaseOffset1[1] = wrapUnit(0.19 + t * 0.015);
+                        uniforms.uPhaseOffset1[0] = wrapUnit(0.37 + drift1[0]);
+                        uniforms.uPhaseOffset1[1] = wrapUnit(0.19 + drift1[1]);
                     }
                     if (uniforms.uPhaseOffset2) {
-                        uniforms.uPhaseOffset2[0] = wrapUnit(0.71 + t * 0.007);
-                        uniforms.uPhaseOffset2[1] = wrapUnit(0.43 - t * 0.013);
+                        uniforms.uPhaseOffset2[0] = wrapUnit(0.71 + drift2[0]);
+                        uniforms.uPhaseOffset2[1] = wrapUnit(0.43 + drift2[1]);
                     }
                 }
             }
@@ -16718,10 +17034,12 @@ void main(void) {
             );
             const wizardLayer = this.getWizardVisualLayerIndex(wizard, 0);
             const cutawayState = this.getLayerCutawayState(ctx);
+            const interiorScope = this.getActiveBuildingInteriorRenderScope(ctx, cutawayState);
             const activeInteriorFloorFragmentIds = this.getBuildingInteriorActiveFloorFragmentIds(ctx, cutawayState);
             const entries = [];
             const metrics = this.currentFrameMetrics || null;
             let scannedFragments = 0;
+            let skippedInteriorScope = 0;
             let skippedLevelIsolation = 0;
             let skippedUneditedLevel0 = 0;
             let skippedNoSurface = 0;
@@ -16731,11 +17049,21 @@ void main(void) {
             let level0Sections = new Set();
             if (!map) return entries;
             if (map.floorsById instanceof Map) {
-                for (const [fragmentId, fragment] of map.floorsById.entries()) {
+                const fragmentEntries = (interiorScope && interiorScope.active && interiorScope.visibleFragmentIds.size > 0)
+                    ? Array.from(interiorScope.visibleFragmentIds, fragmentId => [fragmentId, map.floorsById.get(fragmentId) || null])
+                    : Array.from(map.floorsById.entries());
+                if (interiorScope && interiorScope.active) {
+                    skippedInteriorScope = Math.max(0, map.floorsById.size - fragmentEntries.length);
+                }
+                for (const [fragmentId, fragment] of fragmentEntries) {
                     scannedFragments += 1;
                     if (!fragment) continue;
                     if (fragment.renderedByBuildingCutaway === true) {
                         skippedLevelIsolation += 1;
+                        continue;
+                    }
+                    if (!this.floorFragmentAllowedByBuildingInteriorScope(fragment, interiorScope)) {
+                        skippedInteriorScope += 1;
                         continue;
                     }
                     const level = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
@@ -16789,6 +17117,32 @@ void main(void) {
                             ? Number(fragment.nodeBaseZ)
                             : this.getLayerBaseZForLevel(level);
                         const fadeMultiplier = this.getLiveLayerFadeMultiplier(level, nowMs) * floorCutawayAlpha;
+                        if (FLOOR_LEVEL0_POLYGON_MATERIAL_ENABLED) {
+                            const renderOuter = expandFloorVisualPolygonFromCentroid(outer, FLOOR_LEVEL0_SEAM_BLEED_UNITS);
+                            const texturePath = this.getLevel0TerrainMaterialPathForType(map, "grass") || FLOOR_LEVEL0_GRASS_MATERIAL_PATH;
+                            entries.push({
+                                key: `fragment:${fragmentId}:level0-material`,
+                                level,
+                                baseZ,
+                                outer: renderOuter,
+                                holes,
+                                texture: null,
+                                textureBounds: null,
+                                textureRepeat: this.getLevel0TerrainMaterialRepeat(map, "grass"),
+                                texturePath,
+                                tint: 0xffffff,
+                                alpha: fadeMultiplier,
+                                depthBias: FLOOR_VISUAL_DEPTH_BIAS_UNITS - 0.005 + activeInteriorDepthBump,
+                                isHoleOverlay: false
+                            });
+                            if (buildingCutawayCompositeFrame > 0) {
+                                entries[entries.length - 1].buildingCutawayCompositeFrame = buildingCutawayCompositeFrame;
+                                entries[entries.length - 1].buildingCutawayCompositeAlpha = buildingCutawayCompositeAlpha;
+                            }
+                            if (sectionKey) level0Sections.add(sectionKey);
+                            level0Entries += 1;
+                            continue;
+                        }
                         const chunkEntries = this.collectLevel0ChunkFloorVisualEntries(
                             ctx,
                             fragmentId,
@@ -16959,6 +17313,7 @@ void main(void) {
             }
             if (metrics) {
                 metrics.floorFragmentsScanned = scannedFragments;
+                metrics.floorFragmentsSkippedInteriorScope = skippedInteriorScope;
                 metrics.floorFragmentsSkippedLevelIsolation = skippedLevelIsolation;
                 metrics.floorFragmentsSkippedUneditedLevel0 = skippedUneditedLevel0;
                 metrics.floorFragmentsSkippedNoSurface = skippedNoSurface;
@@ -16994,6 +17349,7 @@ void main(void) {
             let visibleVertices = 0;
             let visibleTriangles = 0;
             const previousVisibleKeys = this.floorVisualVisibleKeys || new Set();
+            const entryLoopStartMs = _pnow ? _pnow() : 0;
             for (let i = 0; i < entries.length; i++) {
                 const source = entries[i];
                 // source.outer is already normalized by collectFloorVisualEntries
@@ -17010,10 +17366,7 @@ void main(void) {
                     entry.texturePath !== (source.texturePath || "")
                 ) {
                     if (entry && entry.mesh) {
-                        if (entry.mesh.parent) entry.mesh.parent.removeChild(entry.mesh);
-                        if (typeof entry.mesh.destroy === "function") {
-                            entry.mesh.destroy({ children: false, texture: false, baseTexture: false });
-                        }
+                        this.destroyCachedPixiMesh(entry.mesh, "floor visual mesh");
                     }
                     const triangulation = triangulateFloorVisualPolygon(outer, source.holes);
                     if (!triangulation) continue;
@@ -17100,14 +17453,18 @@ void main(void) {
                     }
                 }
             }
+            const entryLoopMs = _pnow ? (_pnow() - entryLoopStartMs) : 0;
             const cachedMeshes = this.floorVisualMeshByKey.size;
+            const hideStartMs = _pnow ? _pnow() : 0;
             for (const key of previousVisibleKeys) {
                 if (!visibleKeys.has(key)) {
                     const entry = this.floorVisualMeshByKey.get(key);
                     if (entry && entry.mesh) entry.mesh.visible = false;
                 }
             }
+            const hideMs = _pnow ? (_pnow() - hideStartMs) : 0;
             this.floorVisualVisibleKeys = visibleKeys;
+            const trimStartMs = _pnow ? _pnow() : 0;
             const trimmedLevel0Chunks = this.trimLevel0GroundSurfaceChunkCache(
                 Math.max(FLOOR_LEVEL0_CHUNK_CACHE_LIMIT, visibleKeys.size)
             );
@@ -17117,10 +17474,14 @@ void main(void) {
             const trimmedChunkClips = this.trimFloorVisualChunkClipCache(
                 Math.max(FLOOR_LEVEL0_CHUNK_CACHE_LIMIT * 4, visibleKeys.size * 2)
             );
+            const trimMs = _pnow ? (_pnow() - trimStartMs) : 0;
             this.setFrameMetric("floorVisualPolygons", rendered);
             this.setFrameMetric("floorVisualMeshesCreated", meshesCreated);
             this.setFrameMetric("floorVisualGeometryUploads", geometryUploads);
             this.setFrameMetric("floorVisualCollectMs", collectMs);
+            this.setFrameMetric("floorVisualMeshUpdateMs", entryLoopMs);
+            this.setFrameMetric("floorVisualHideMs", hideMs);
+            this.setFrameMetric("floorVisualTrimMs", trimMs);
             this.setFrameMetric("floorVisualVertices", visibleVertices);
             this.setFrameMetric("floorVisualTriangles", visibleTriangles);
             this.setFrameMetric("floorVisualMeshCacheSize", cachedMeshes);
@@ -17980,6 +18341,11 @@ void main(void) {
                 this.hexGridPickerBackdrop.visible = false;
             }
 
+            if (this.getActiveBuildingInteriorRenderScope(ctx)) {
+                if (this.hexGridContainer) this.hexGridContainer.visible = false;
+                return;
+            }
+
             const gridEnabled = !!(
                 (typeof showHexGrid !== "undefined" && showHexGrid)
             );
@@ -18423,6 +18789,7 @@ void main(void) {
             let itemMazeHiddenCount = 0;
             let wallMazeHiddenCount = 0;
             let itemCutawayHiddenCount = 0;
+            let missingMountedSectionFilteredCount = 0;
             const cutawayState = this.prepareLayerCutawayFrame(ctx, mapRef, wizard);
             const buildingInteriorRenderPlan = this.buildBuildingInteriorRenderPlan(ctx, cutawayState);
             this.prepareBuildingInteriorPickerFrame(ctx, cutawayState, buildingInteriorRenderPlan);
@@ -18449,6 +18816,16 @@ void main(void) {
                 }
                 if (item.type === "road" || item === wizard) {
                     this.logPlaceObjectRenderDebug("filter-drop-road-or-wizard", item);
+                    return false;
+                }
+                if (this.isWallMountedSpatialItem(item) && !this.resolveMountedWallSectionForItem(item)) {
+                    missingMountedSectionFilteredCount += 1;
+                    this.hideRenderItemWithMissingMountedSection(item);
+                    this.logPlaceObjectRenderDebug("filter-drop-missing-mounted-section", item, {
+                        mountedWallSectionUnitId: Number.isInteger(item.mountedWallSectionUnitId) ? Number(item.mountedWallSectionUnitId) : null,
+                        mountedSectionId: Number.isInteger(item.mountedSectionId) ? Number(item.mountedSectionId) : null,
+                        mountedWallLineGroupId: Number.isInteger(item.mountedWallLineGroupId) ? Number(item.mountedWallLineGroupId) : null
+                    });
                     return false;
                 }
                 const mountedWallLayer = this.getMountedWallLayerIndexForItem(item, wizardLayer);
@@ -18634,6 +19011,7 @@ void main(void) {
             this.setFrameMetric("objects3dCutawayHidden", itemCutawayHiddenCount);
             this.setFrameMetric("objects3dMazeHidden", itemMazeHiddenCount);
             this.setFrameMetric("objects3dMazeHiddenWalls", wallMazeHiddenCount);
+            this.setFrameMetric("objects3dMissingMountedSectionFiltered", missingMountedSectionFilteredCount);
             this.setFrameMetric("objects3dMapItems", mapItems.length);
             this.setFrameMetric("objects3dRoofItems", filteredRoofItems.length);
             this.setFrameMetric("objects3dRenderItems", renderItems.length);
@@ -20706,6 +21084,7 @@ void main(void) {
                     : global.renderingShowSectionWorldSeams !== false
             );
             if (!showSectionWorldSeams) { hide(); return; }
+            if (this.getActiveBuildingInteriorRenderScope(ctx)) { hide(); return; }
 
             const mapRef = (ctx && ctx.map) || global.map || null;
             const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
@@ -23782,9 +24161,11 @@ void main(void) {
             const interiorHeldIds = this._prototypeBuildingInteriorHeldPlacementIdsThisFrame instanceof Set
                 ? this._prototypeBuildingInteriorHeldPlacementIdsThisFrame
                 : null;
+            const interiorScope = this.getActiveBuildingInteriorRenderScope(ctx);
             for (let i = 0; i < placements.length; i++) {
                 const placement = placements[i];
                 if (!placement || !placement.id) continue;
+                if (interiorScope && interiorScope.active && !interiorScope.buildingIds.has(placement.id)) continue;
                 const waitingForPrototypeInterior = !!(
                     interiorPendingIds &&
                     interiorPendingIds.has(placement.id)
@@ -24140,6 +24521,34 @@ void main(void) {
             return result;
         }
 
+        summarizeCurrentDrawSections(frameElapsedMs = 0, limit = 12) {
+            const sections = this.currentFrameDrawSections || null;
+            if (!sections) {
+                return {
+                    totalMs: 0,
+                    unaccountedMs: Number.isFinite(frameElapsedMs) ? frameElapsedMs : 0,
+                    top: []
+                };
+            }
+            const entries = [];
+            let totalMs = 0;
+            const names = Object.keys(sections);
+            for (let i = 0; i < names.length; i++) {
+                const name = names[i];
+                const ms = Number(sections[name]);
+                if (!Number.isFinite(ms) || ms <= 0) continue;
+                totalMs += ms;
+                entries.push({ name, ms: Number(ms.toFixed(2)) });
+            }
+            entries.sort((a, b) => b.ms - a.ms);
+            const elapsed = Number.isFinite(frameElapsedMs) ? Number(frameElapsedMs) : 0;
+            return {
+                totalMs: Number(totalMs.toFixed(2)),
+                unaccountedMs: Number(Math.max(0, elapsed - totalMs).toFixed(2)),
+                top: entries.slice(0, Math.max(1, Math.floor(Number(limit) || 12)))
+            };
+        }
+
         maybePrintDrawPassProfileSummary(ctx) {
             const profiler = this.drawPassProfiler;
             if (!profiler || profiler.printed || !Number.isFinite(profiler.deadlineMs)) return;
@@ -24234,13 +24643,13 @@ void main(void) {
             if (this.scenePicker && this.scenePicker.publicApi) {
                 global.renderingScenePicker = this.scenePicker.publicApi;
             }
-            const visibleNodes = this.profileDrawPassSection("collectVisibleNodes", () =>
-                this.collectVisibleNodes(ctx, 4, 4)
-            );
             let preparedCutawayState = null;
             this.profileDrawPassSection("prepareLayerCutawayFrame", () => {
                 preparedCutawayState = this.prepareLayerCutawayFrame(ctx, ctx.map || global.map || null, ctx.wizard || global.wizard || null);
             });
+            const visibleNodes = this.profileDrawPassSection("collectVisibleNodes", () =>
+                this.collectVisibleNodes(ctx, 4, 4)
+            );
             this.profileDrawPassSection("prepareBuildingInteriorPickerFrame", () => {
                 const cutawayState = preparedCutawayState || this.prepareLayerCutawayFrame(ctx, ctx.map || global.map || null, ctx.wizard || global.wizard || null);
                 this.prepareBuildingInteriorPickerFrame(ctx, cutawayState);
@@ -24666,6 +25075,17 @@ void main(void) {
                     floorLevel0BakeRoads: getMetric("floorLevel0BakeRoads"),
                     floorLevel0BakePixels: getMetric("floorLevel0BakePixels"),
                     floorLevel0BakePatchRects: getMetric("floorLevel0BakePatchRects"),
+                    floorLevel0ChunkBuilds: getMetric("floorLevel0ChunkBuilds"),
+                    floorLevel0ChunkGroundTiles: getMetric("floorLevel0ChunkGroundTiles"),
+                    floorLevel0ChunkRoads: getMetric("floorLevel0ChunkRoads"),
+                    floorLevel0ChunksConsidered: getMetric("floorLevel0ChunksConsidered"),
+                    floorLevel0ChunksInView: getMetric("floorLevel0ChunksInView"),
+                    floorLevel0ChunkEntries: getMetric("floorLevel0ChunkEntries"),
+                    floorLevel0ChunkClipMs: getMetric("floorLevel0ChunkClipMs"),
+                    floorLevel0ChunkTextureMs: getMetric("floorLevel0ChunkTextureMs"),
+                    floorLevel0ChunkWaterMs: getMetric("floorLevel0ChunkWaterMs"),
+                    floorAnimatedWaterChunkCacheHits: getMetric("floorAnimatedWaterChunkCacheHits"),
+                    floorAnimatedWaterChunkCacheMisses: getMetric("floorAnimatedWaterChunkCacheMisses"),
                     floorVisualPolygons: getMetric("floorVisualPolygons"),
                     floorVisualMeshesCreated: getMetric("floorVisualMeshesCreated"),
                     floorVisualGeometryUploads: getMetric("floorVisualGeometryUploads"),
@@ -24700,6 +25120,7 @@ void main(void) {
                     objects3dGroundMs: getMetric("objects3dGroundMs"),
                     objects3dDisplayMs: getMetric("objects3dDisplayMs"),
                     objects3dAnimalLosHidden: getMetric("objects3dAnimalLosHidden"),
+                    objects3dMissingMountedSectionFiltered: getMetric("objects3dMissingMountedSectionFiltered"),
                     objects3dBuildingCompositeMs: getMetric("objects3dBuildingCompositeMs"),
                     objects3dBuildingCompositeActive: getMetric("objects3dBuildingCompositeActive"),
                     objects3dBuildingCompositeObjects: getMetric("objects3dBuildingCompositeObjects"),
@@ -24812,6 +25233,7 @@ void main(void) {
                             visibleObjectsMax: 0,
                             visibleNodesMax: 0,
                             maxFrameMs: 0,
+                            maxFrame: null,
                             maxCutawayMs: 0,
                             maxCutawayFrame: null
                         };
@@ -24833,12 +25255,9 @@ void main(void) {
                     renderStats.cutawayHeldFrames += getMetric("layerCutawayHeldDuringBubble") > 0 ? 1 : 0;
                     renderStats.visibleObjectsMax = Math.max(renderStats.visibleObjectsMax || 0, visibleObjectsCount);
                     renderStats.visibleNodesMax = Math.max(renderStats.visibleNodesMax || 0, getMetric("visibleNodes"));
-                    if (frameElapsedMs > (Number(renderStats.maxFrameMs) || 0)) {
-                        renderStats.maxFrameMs = frameElapsedMs;
-                    }
-                    if (cutawayMs > (Number(renderStats.maxCutawayMs) || 0)) {
-                        renderStats.maxCutawayMs = cutawayMs;
-                        renderStats.maxCutawayFrame = {
+                    const buildRenderFrameSample = () => {
+                        const sectionSummary = this.summarizeCurrentDrawSections(frameElapsedMs, 14);
+                        return {
                             composeMs: frameElapsedMs,
                             collectMs,
                             cutawayMs,
@@ -24849,8 +25268,95 @@ void main(void) {
                             interiorPlanMs: getMetric("buildingInteriorPlanMs"),
                             cutawayHeldDuringBubble: getMetric("layerCutawayHeldDuringBubble"),
                             visibleNodes: getMetric("visibleNodes"),
-                            visibleObjects: visibleObjectsCount
+                            visibleObjects: visibleObjectsCount,
+                            drawSectionsTotalMs: sectionSummary.totalMs,
+                            drawUnaccountedMs: sectionSummary.unaccountedMs,
+                            topDrawSections: sectionSummary.top,
+                            passWorldMs:
+                                getMs("renderGroundTiles") +
+                                getMs("renderHexGridOverlay") +
+                                getMs("renderPrototypeSectionSeams") +
+                                getMs("renderClearanceOverlay") +
+                                getMs("renderTileClearanceNumbers") +
+                                getMs("drawMapBorder") +
+                                getMs("renderRoadsAndFloors") +
+                                getMs("renderFloorVisualPolygons"),
+                            passWorldGroundMs: getMs("renderGroundTiles"),
+                            passWorldHexMs: getMs("renderHexGridOverlay"),
+                            passWorldSeamsMs: getMs("renderPrototypeSectionSeams"),
+                            passWorldClearanceMs: getMs("renderClearanceOverlay"),
+                            passWorldTileNumbersMs: getMs("renderTileClearanceNumbers"),
+                            passWorldBorderMs: getMs("drawMapBorder"),
+                            passWorldRoadsMs: getMs("renderRoadsAndFloors"),
+                            passWorldFloorPolygonsMs: getMs("renderFloorVisualPolygons"),
+                            passLosMs:
+                                getMs("applyMazeModeCompositor") +
+                                getMs("renderLosShadowOverlay"),
+                            passObjectsMs:
+                                getMs("renderObjects3D") +
+                                getMs("renderPrototypeBuildingExteriors") +
+                                getMs("renderPowerups") +
+                                getMs("renderWizard") +
+                                getMs("renderCreatureTracePaths") +
+                                getMs("renderProjectiles") +
+                                getMs("renderScriptMessages"),
+                            passPostMs:
+                                getMs("renderWallPlacementPreview") +
+                                getMs("renderRoadPlacementPreview") +
+                                getMs("renderFirewallPlacementPreview") +
+                                getMs("renderTriggerAreaPlacementPreview") +
+                                getMs("renderPlaceObjectPreview") +
+                                getMs("renderBuildingPlacementPreview") +
+                                getMs("renderPowerupPlacementPreview") +
+                                getMs("scenePicker.renderHoverHighlight") +
+                                getMs("drawNodeInspectorOverlay") +
+                                getMs("sanitizeDisplayTreeTextures"),
+                            groundTileSpritesVisible: getMetric("groundTileSpritesVisible"),
+                            groundCached: this.groundSpriteByNodeKey instanceof Map ? this.groundSpriteByNodeKey.size : 0,
+                            roadCached: this.roadSpriteByObject instanceof Map ? this.roadSpriteByObject.size : 0,
+                            floorVisualMeshesCreated: getMetric("floorVisualMeshesCreated"),
+                            floorVisualGeometryUploads: getMetric("floorVisualGeometryUploads"),
+                            floorVisualCollectMs: getMetric("floorVisualCollectMs"),
+                            floorVisualMeshUpdateMs: getMetric("floorVisualMeshUpdateMs"),
+                            floorVisualHideMs: getMetric("floorVisualHideMs"),
+                            floorVisualTrimMs: getMetric("floorVisualTrimMs"),
+                            floorVisualMeshCacheSize: getMetric("floorVisualMeshCacheSize"),
+                            floorVisualChunkClipCacheHits: getMetric("floorVisualChunkClipCacheHits"),
+                            floorVisualChunkClipCacheMisses: getMetric("floorVisualChunkClipCacheMisses"),
+                            floorLevel0ChunkBuilds: getMetric("floorLevel0ChunkBuilds"),
+                            floorLevel0ChunkGroundTiles: getMetric("floorLevel0ChunkGroundTiles"),
+                            floorLevel0ChunkRoads: getMetric("floorLevel0ChunkRoads"),
+                            floorLevel0ChunksConsidered: getMetric("floorLevel0ChunksConsidered"),
+                            floorLevel0ChunksInView: getMetric("floorLevel0ChunksInView"),
+                            floorLevel0ChunkEntries: getMetric("floorLevel0ChunkEntries"),
+                            floorLevel0ChunkClipMs: getMetric("floorLevel0ChunkClipMs"),
+                            floorLevel0ChunkTextureMs: getMetric("floorLevel0ChunkTextureMs"),
+                            floorLevel0ChunkWaterMs: getMetric("floorLevel0ChunkWaterMs"),
+                            floorAnimatedWaterChunkCacheHits: getMetric("floorAnimatedWaterChunkCacheHits"),
+                            floorAnimatedWaterChunkCacheMisses: getMetric("floorAnimatedWaterChunkCacheMisses"),
+                            floorLevel0ChunkCacheSize: getMetric("floorLevel0ChunkCacheSize"),
+                            floorLevel0ChunksTrimmed: getMetric("floorLevel0ChunksTrimmed"),
+                            floorAnimatedWaterChunkCacheSize: getMetric("floorAnimatedWaterChunkCacheSize"),
+                            floorAnimatedWaterChunksTrimmed: getMetric("floorAnimatedWaterChunksTrimmed"),
+                            floorVisualChunkClipCacheSize: getMetric("floorVisualChunkClipCacheSize"),
+                            floorVisualChunkClipsTrimmed: getMetric("floorVisualChunkClipsTrimmed"),
+                            depthMeshes: this.activeDepthBillboardMeshes instanceof Set ? this.activeDepthBillboardMeshes.size : 0,
+                            objectDisplays: this.activeObjectDisplayObjects instanceof Set ? this.activeObjectDisplayObjects.size : 0,
+                            objects3dRenderItems: getMetric("objects3dRenderItems"),
+                            objects3dDisplayObjects: getMetric("objects3dDisplayObjects"),
+                            objects3dBuildingCompositeMs: getMetric("objects3dBuildingCompositeMs"),
+                            objects3dBuildingCompositeCacheMisses: getMetric("objects3dBuildingCompositeCacheMisses"),
+                            visibleGlobalWallsConsidered: getMetric("visibleGlobalWallsConsidered"),
+                            visibleGlobalWallsAdded: getMetric("visibleGlobalWallsAdded")
                         };
+                    };
+                    if (frameElapsedMs > (Number(renderStats.maxFrameMs) || 0)) {
+                        renderStats.maxFrameMs = frameElapsedMs;
+                        renderStats.maxFrame = buildRenderFrameSample();
+                    }
+                    if (cutawayMs > (Number(renderStats.maxCutawayMs) || 0)) {
+                        renderStats.maxCutawayMs = cutawayMs;
+                        renderStats.maxCutawayFrame = buildRenderFrameSample();
                     }
                 }
             } else if (typeof globalThis !== "undefined") {

@@ -170,9 +170,12 @@
             const maxCutawayFrame = (stats.maxCutawayFrame && typeof stats.maxCutawayFrame === "object")
                 ? stats.maxCutawayFrame
                 : null;
+            const maxFrame = (stats.maxFrame && typeof stats.maxFrame === "object")
+                ? stats.maxFrame
+                : null;
             const summarizeFrame = (frame) => {
                 if (!frame) return null;
-                return {
+                const summary = {
                     composeMs: toBubbleMs(frame.composeMs),
                     collectMs: toBubbleMs(frame.collectMs),
                     cutawayMs: toBubbleMs(frame.cutawayMs),
@@ -185,6 +188,76 @@
                     visibleNodes: Number(frame.visibleNodes) || 0,
                     visibleObjects: Number(frame.visibleObjects) || 0
                 };
+                const optionalMsFields = [
+                    "drawSectionsTotalMs",
+                    "drawUnaccountedMs",
+                    "passWorldMs",
+                    "passWorldGroundMs",
+                    "passWorldHexMs",
+                    "passWorldSeamsMs",
+                    "passWorldClearanceMs",
+                    "passWorldTileNumbersMs",
+                    "passWorldBorderMs",
+                    "passWorldRoadsMs",
+                    "passWorldFloorPolygonsMs",
+                    "passLosMs",
+                    "passObjectsMs",
+                    "passPostMs",
+                    "floorLevel0ChunkClipMs",
+                    "floorLevel0ChunkTextureMs",
+                    "floorLevel0ChunkWaterMs",
+                    "floorVisualCollectMs",
+                    "floorVisualMeshUpdateMs",
+                    "floorVisualHideMs",
+                    "floorVisualTrimMs",
+                    "objects3dBuildingCompositeMs"
+                ];
+                for (let i = 0; i < optionalMsFields.length; i++) {
+                    const key = optionalMsFields[i];
+                    if (Number.isFinite(Number(frame[key]))) summary[key] = toBubbleMs(frame[key]);
+                }
+                const optionalCountFields = [
+                    "groundTileSpritesVisible",
+                    "groundCached",
+                    "roadCached",
+                    "floorVisualMeshesCreated",
+                    "floorVisualGeometryUploads",
+                    "floorVisualMeshCacheSize",
+                    "floorVisualChunkClipCacheHits",
+                    "floorVisualChunkClipCacheMisses",
+                    "floorLevel0ChunkBuilds",
+                    "floorLevel0ChunkGroundTiles",
+                    "floorLevel0ChunkRoads",
+                    "floorLevel0ChunksConsidered",
+                    "floorLevel0ChunksInView",
+                    "floorLevel0ChunkEntries",
+                    "floorAnimatedWaterChunkCacheHits",
+                    "floorAnimatedWaterChunkCacheMisses",
+                    "floorLevel0ChunkCacheSize",
+                    "floorLevel0ChunksTrimmed",
+                    "floorAnimatedWaterChunkCacheSize",
+                    "floorAnimatedWaterChunksTrimmed",
+                    "floorVisualChunkClipCacheSize",
+                    "floorVisualChunkClipsTrimmed",
+                    "depthMeshes",
+                    "objectDisplays",
+                    "objects3dRenderItems",
+                    "objects3dDisplayObjects",
+                    "objects3dBuildingCompositeCacheMisses",
+                    "visibleGlobalWallsConsidered",
+                    "visibleGlobalWallsAdded"
+                ];
+                for (let i = 0; i < optionalCountFields.length; i++) {
+                    const key = optionalCountFields[i];
+                    if (Number.isFinite(Number(frame[key]))) summary[key] = Number(frame[key]) || 0;
+                }
+                if (Array.isArray(frame.topDrawSections)) {
+                    summary.topDrawSections = frame.topDrawSections.slice(0, 14).map((entry) => ({
+                        name: entry && typeof entry.name === "string" ? entry.name : "",
+                        ms: toBubbleMs(entry && entry.ms)
+                    }));
+                }
+                return summary;
             };
             return {
                 frames,
@@ -211,7 +284,34 @@
                 cutawayHeldFrames: Number(stats.cutawayHeldFrames) || 0,
                 visibleNodesMax: Number(stats.visibleNodesMax) || 0,
                 visibleObjectsMax: Number(stats.visibleObjectsMax) || 0,
+                maxFrame: summarizeFrame(maxFrame),
                 maxCutawayFrame: summarizeFrame(maxCutawayFrame)
+            };
+        };
+
+        const summarizeBubbleOuterFrameSample = (sample) => {
+            if (!sample || typeof sample !== "object") return null;
+            return {
+                stage: typeof sample.stage === "string" ? sample.stage : "",
+                phase: typeof sample.phase === "string" ? sample.phase : "",
+                loopMs: toBubbleMs(sample.loopMs),
+                cpuMs: toBubbleMs(sample.cpuMs),
+                simMs: toBubbleMs(sample.simMs),
+                drawMs: toBubbleMs(sample.drawMs),
+                presentMs: toBubbleMs(sample.presentMs),
+                simSteps: Number(sample.simSteps) || 0,
+                accumulatorMs: toBubbleMs(sample.accumulatorMs),
+                present: sample.present && typeof sample.present === "object" ? {
+                    pumpMs: toBubbleMs(sample.present.pumpMs),
+                    lazyRoadMs: toBubbleMs(sample.present.lazyRoadMs),
+                    lazyTreeMs: toBubbleMs(sample.present.lazyTreeMs),
+                    renderMs: toBubbleMs(sample.present.renderMs),
+                    cursorMs: toBubbleMs(sample.present.cursorMs)
+                } : null,
+                draw: sample.draw && typeof sample.draw === "object" ? sample.draw : null,
+                renderMetrics: sample.renderMetrics && typeof sample.renderMetrics === "object"
+                    ? sample.renderMetrics
+                    : null
             };
         };
 
@@ -629,7 +729,11 @@
                             totalMs: toBubbleMs(totalMs),
                             settleFrames: Number(session.settleFrameCount) || 0,
                             cutawayRefreshFrames: Number(session.cutawayRefreshFrameCount) || 0,
-                            settleSkippedReason: session.settleSkippedReason || ""
+                            settleSkippedReason: session.settleSkippedReason || "",
+                            maxCpuFrame: summarizeBubbleOuterFrameSample(session.outerFrameStats && session.outerFrameStats.maxCpuFrame),
+                            maxDrawFrame: summarizeBubbleOuterFrameSample(session.outerFrameStats && session.outerFrameStats.maxDrawFrame),
+                            maxPresentFrame: summarizeBubbleOuterFrameSample(session.outerFrameStats && session.outerFrameStats.maxPresentFrame),
+                            maxLoopFrame: summarizeBubbleOuterFrameSample(session.outerFrameStats && session.outerFrameStats.maxLoopFrame)
                         },
                         tasks: buildBubbleTaskSummary(session),
                         layout: buildBubbleLayoutSummary(

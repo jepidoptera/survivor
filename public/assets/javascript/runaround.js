@@ -1095,6 +1095,44 @@ function recordPrototypeBubbleAdjacentFrame(nowMs, stats) {
         ? (session.phase === "settle" ? "settle" : (session.phase === "refresh" ? "refresh" : "work"))
         : "post";
     const sample = buildPrototypeBubbleFrameSample(nowMs, stats, session, stage);
+    if (session) {
+        if (!session.outerFrameStats || typeof session.outerFrameStats !== "object") {
+            session.outerFrameStats = {
+                frames: 0,
+                maxCpuFrame: null,
+                maxDrawFrame: null,
+                maxPresentFrame: null,
+                maxLoopFrame: null
+            };
+        }
+        const compactSessionFrameSample = {
+            tMs: sample.tMs,
+            stage: sample.stage,
+            phase: sample.phase,
+            loopMs: sample.loopMs,
+            cpuMs: sample.cpuMs,
+            simMs: sample.simMs,
+            drawMs: sample.drawMs,
+            presentMs: sample.presentMs,
+            simSteps: sample.simSteps,
+            accumulatorMs: sample.accumulatorMs,
+            present: sample.present,
+            draw: sample.draw,
+            renderMetrics: sample.renderMetrics
+        };
+        const updateOuterMax = (fieldName, valueKey) => {
+            const value = numberOrZero(compactSessionFrameSample[valueKey]);
+            const previous = session.outerFrameStats[fieldName];
+            if (!previous || value > numberOrZero(previous[valueKey])) {
+                session.outerFrameStats[fieldName] = { ...compactSessionFrameSample };
+            }
+        };
+        session.outerFrameStats.frames += 1;
+        updateOuterMax("maxCpuFrame", "cpuMs");
+        updateOuterMax("maxDrawFrame", "drawMs");
+        updateOuterMax("maxPresentFrame", "presentMs");
+        updateOuterMax("maxLoopFrame", "loopMs");
+    }
     capture.frames.push(sample);
     if (capture.frames.length > 180) capture.frames.shift();
     updatePrototypeBubbleCaptureMax(capture, "cpuMs", sample, sample.cpuMs);
@@ -5270,6 +5308,7 @@ jQuery(() => {
                     objects3dGroundMs: Number(drawBreakdownForAccum.objects3dGroundMs || 0),
                     objects3dDisplayMs: Number(drawBreakdownForAccum.objects3dDisplayMs || 0),
                     objects3dAnimalLosHidden: Number(drawBreakdownForAccum.objects3dAnimalLosHidden || 0),
+                    objects3dMissingMountedSectionFiltered: Number(drawBreakdownForAccum.objects3dMissingMountedSectionFiltered || 0),
                     objects3dMazeHidden: Number(drawBreakdownForAccum.objects3dMazeHidden || 0),
                     objects3dMazeHiddenWalls: Number(drawBreakdownForAccum.objects3dMazeHiddenWalls || 0),
                     objects3dMapItems: Number(drawBreakdownForAccum.objects3dMapItems || 0),
@@ -5446,6 +5485,7 @@ jQuery(() => {
                         `\nobjh an ${Number(drawBreakdown.objects3dAnimalLosHidden || 0)}` +
                         ` mz ${Number(drawBreakdown.objects3dMazeHidden || 0)}` +
                         ` mw ${Number(drawBreakdown.objects3dMazeHiddenWalls || 0)}` +
+                        ` mf ${Number(drawBreakdown.objects3dMissingMountedSectionFiltered || 0)}` +
                         ` mm ${Number(drawBreakdown.depthMissingMountedSection || 0)}` +
                         ` dh ${Number(drawBreakdown.depthHiddenByScript || 0)}`
                     )

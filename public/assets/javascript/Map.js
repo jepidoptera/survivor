@@ -321,7 +321,7 @@ const GROUND_TERRAIN_DEFS = [
         textureNames: Array.from({ length: FOREST_GROUND_TEXTURE_COUNT }, (_unused, index) => `forest${index}`),
         icon: "/assets/images/land tiles/forest0.png",
         polygonMaterial: "/assets/images/terrain/materials/grass.png",
-        polygonMaterialScale: 1
+        polygonMaterialScale: 10
     },
     {
         name: "desert",

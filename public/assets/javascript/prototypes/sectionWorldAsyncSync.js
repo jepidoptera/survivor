@@ -116,6 +116,63 @@
             return desiredRecords;
         };
 
+        const getSortedStringSetSignature = (values) => {
+            const list = values instanceof Set
+                ? Array.from(values)
+                : (Array.isArray(values) ? values.slice() : []);
+            return list
+                .map(value => String(value || "").trim())
+                .filter(Boolean)
+                .sort()
+                .join("|");
+        };
+
+        const getPrototypeBuildingPendingLoadSignature = (buildingState) => (
+            buildingState && buildingState.pendingLoadsById instanceof Map
+                ? getSortedStringSetSignature(Array.from(buildingState.pendingLoadsById.keys()))
+                : ""
+        );
+
+        const allPrototypeBuildingIdsLoadedOrPending = (buildingState, desiredBuildingIds) => {
+            if (!buildingState || !(desiredBuildingIds instanceof Set)) return false;
+            const loaded = buildingState.loadedBuildingsById instanceof Map
+                ? buildingState.loadedBuildingsById
+                : null;
+            const pending = buildingState.pendingLoadsById instanceof Map
+                ? buildingState.pendingLoadsById
+                : null;
+            for (const id of desiredBuildingIds) {
+                if (loaded && loaded.has(id)) continue;
+                if (pending && pending.has(id)) continue;
+                return false;
+            }
+            return true;
+        };
+
+        const getCachedPrototypeBuildingDesiredIds = (buildingState, cacheKey) => {
+            if (!buildingState || !cacheKey) return null;
+            const cache = buildingState.desiredBuildingIdsBySectionSignature instanceof Map
+                ? buildingState.desiredBuildingIdsBySectionSignature
+                : null;
+            const cached = cache ? cache.get(cacheKey) : null;
+            if (!cached || !Array.isArray(cached.ids)) return null;
+            return new Set(cached.ids);
+        };
+
+        const rememberCachedPrototypeBuildingDesiredIds = (buildingState, cacheKey, desiredBuildingIds) => {
+            if (!buildingState || !cacheKey || !(desiredBuildingIds instanceof Set)) return;
+            if (!(buildingState.desiredBuildingIdsBySectionSignature instanceof Map)) {
+                buildingState.desiredBuildingIdsBySectionSignature = new Map();
+            }
+            const cache = buildingState.desiredBuildingIdsBySectionSignature;
+            cache.set(cacheKey, { ids: Array.from(desiredBuildingIds).sort() });
+            const maxEntries = 64;
+            if (cache.size > maxEntries) {
+                const firstKey = cache.keys().next().value;
+                if (firstKey !== undefined) cache.delete(firstKey);
+            }
+        };
+
         const restorePrototypeBuildingFloorSupportForObject = (runtimeObj, entry) => {
             if (!map || !runtimeObj || !entry || entry.ownerType !== "building") return false;
             const buildingId = typeof entry.ownerId === "string" ? entry.ownerId : "";
@@ -1843,20 +1900,57 @@
             if (!buildingState) return;
             prependPrototypeTasks(session, [createPrototypeTask("buildings.plan", () => {
                 const start = prototypeNow();
-                const desiredBuildingIds = new Set();
                 const activeSectionKeys = typeof map.getPrototypeActiveSectionKeys === "function"
                     ? map.getPrototypeActiveSectionKeys()
                     : new Set();
-                if (typeof map.collectPrototypeBuildingIdsForSectionKeys === "function") {
-                    map.collectPrototypeBuildingIdsForSectionKeys(activeSectionKeys).forEach((id) => desiredBuildingIds.add(id));
-                } else {
-                    activeSectionKeys.forEach((sectionKey) => {
-                        const ids = buildingState.buildingIdsBySectionKey instanceof Map
-                            ? buildingState.buildingIdsBySectionKey.get(sectionKey)
-                            : null;
-                        if (!(ids instanceof Set)) return;
-                        ids.forEach((id) => desiredBuildingIds.add(id));
-                    });
+                const activeSectionSignature = getSortedStringSetSignature(activeSectionKeys);
+                const buildingContentVersion = Number(buildingState.contentVersion) || 0;
+                const desiredCacheKey = `${activeSectionSignature}::${buildingContentVersion}`;
+                let desiredBuildingIds = getCachedPrototypeBuildingDesiredIds(buildingState, desiredCacheKey);
+                let desiredCacheHit = !!desiredBuildingIds;
+                if (!desiredBuildingIds) {
+                    desiredBuildingIds = new Set();
+                    if (typeof map.collectPrototypeBuildingIdsForSectionKeys === "function") {
+                        map.collectPrototypeBuildingIdsForSectionKeys(activeSectionKeys).forEach((id) => desiredBuildingIds.add(id));
+                    } else {
+                        activeSectionKeys.forEach((sectionKey) => {
+                            const ids = buildingState.buildingIdsBySectionKey instanceof Map
+                                ? buildingState.buildingIdsBySectionKey.get(sectionKey)
+                                : null;
+                            if (!(ids instanceof Set)) return;
+                            ids.forEach((id) => desiredBuildingIds.add(id));
+                        });
+                    }
+                    rememberCachedPrototypeBuildingDesiredIds(buildingState, desiredCacheKey, desiredBuildingIds);
+                }
+                const desiredSignature = getSortedStringSetSignature(desiredBuildingIds);
+                const pendingSignature = getPrototypeBuildingPendingLoadSignature(buildingState);
+                const canReuseExistingPlan = !!(
+                    buildingState.hasActiveBuildingSelection === true &&
+                    buildingState.activeDesiredSignature === desiredSignature &&
+                    allPrototypeBuildingIdsLoadedOrPending(buildingState, desiredBuildingIds)
+                );
+                if (canReuseExistingPlan) {
+                    buildingState.desiredBuildingIds = desiredBuildingIds;
+                    buildingState.lastBuildingPlanSignature = [
+                        activeSectionSignature,
+                        desiredSignature,
+                        String(Number(buildingState.contentVersion) || 0),
+                        pendingSignature
+                    ].join("::");
+                    buildingState.lastSyncStats = {
+                        ms: Number((prototypeNow() - start).toFixed(2)),
+                        placements: Array.isArray(buildingState.orderedPlacements) ? buildingState.orderedPlacements.length : 0,
+                        desired: desiredBuildingIds.size,
+                        active: buildingState.loadedBuildingsById instanceof Map ? buildingState.loadedBuildingsById.size : 0,
+                        pending: buildingState.pendingLoadsById instanceof Map ? buildingState.pendingLoadsById.size : 0,
+                        changed: false,
+                        unloaded: 0,
+                        skipped: true,
+                        desiredCacheHit
+                    };
+                    session.buildingsChanged = false;
+                    return;
                 }
                 const result = typeof map.setPrototypeBuildingDesiredPlacementIds === "function"
                     ? map.setPrototypeBuildingDesiredPlacementIds(desiredBuildingIds)
@@ -1900,7 +1994,9 @@
                     active: buildingState.loadedBuildingsById instanceof Map ? buildingState.loadedBuildingsById.size : 0,
                     pending: buildingState.pendingLoadsById instanceof Map ? buildingState.pendingLoadsById.size : 0,
                     changed: !!(result && result.changed),
-                    unloaded: Number(result && result.unloaded) || 0
+                    unloaded: Number(result && result.unloaded) || 0,
+                    skipped: false,
+                    desiredCacheHit
                 };
                 session.buildingsChanged = !!(result && result.changed);
             })]);
