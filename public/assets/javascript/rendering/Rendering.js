@@ -27,6 +27,7 @@
     const FLOOR_LEVEL0_CHUNK_BUILDS_PER_FRAME = 1;
     const FLOOR_LEVEL0_CHUNK_CACHE_LIMIT = 96;
     const FLOOR_LEVEL0_SEAM_BLEED_UNITS = 0.16;
+    const FLOOR_LEVEL0_TERRAIN_BOUNDARY_MODEL_VERSION = 4;
     const FLOOR_VISUAL_DEPTH_NEAR_METRIC = -128;
     const FLOOR_VISUAL_DEPTH_FAR_METRIC = 256;
     const FLOOR_VISUAL_DEPTH_BIAS_UNITS = 0.001;
@@ -199,6 +200,9 @@ uniform vec2 uPhaseOffset0;
 uniform vec2 uPhaseOffset1;
 uniform vec2 uPhaseOffset2;
 uniform vec3 uPhaseWeights;
+uniform float uSpatialPhase;
+uniform float uSpatialFrequency;
+uniform float uSpatialStrength;
 uniform float uAlphaCutoff;
 uniform float uBuildingCutawayDataPass;
 uniform vec2 uBuildingCutawayDataZRange;
@@ -211,6 +215,8 @@ void main(void) {
         return;
     }
     vec3 w = max(uPhaseWeights, vec3(0.0));
+    float spatial = 0.5 + 0.5 * sin((vUvs.x + vUvs.y) * uSpatialFrequency + uSpatialPhase);
+    w = mix(w, vec3(w.y, w.z, w.x), spatial * clamp(uSpatialStrength, 0.0, 1.0));
     float weightSum = max(0.0001, w.x + w.y + w.z);
     w /= weightSum;
     vec2 uv0 = vUvs;
@@ -13324,6 +13330,7 @@ void main(void) {
                 Number(asset && asset._level0GroundSurfaceVersion) || 0,
                 Number(asset && asset._level0SurfaceTextureReadyVersion) || 0,
                 FLOOR_LEVEL0_BAKE_ROAD_PATHS ? 1 : 0,
+                FLOOR_LEVEL0_TERRAIN_BOUNDARY_MODEL_VERSION,
                 tileCoordKeys.length,
                 prototypeNodeCount,
                 prototypeSectionNodeCount
@@ -13566,7 +13573,7 @@ void main(void) {
             const chunkY = Math.floor(Number(coord.chunkY) || 0);
             const chunkKey = `${Math.floor(Number(coord.chunkX) || 0)},${Math.floor(Number(coord.chunkY) || 0)}`;
             const cacheKey = `${sectionKey || ""}:${chunkX},${chunkY}`;
-            const signature = `${this.getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY, map)}:animatedWater:v1`;
+            const signature = `${this.getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY, map)}:animatedWater:v${FLOOR_LEVEL0_TERRAIN_BOUNDARY_MODEL_VERSION}`;
             let cached = this.level0AnimatedWaterChunkEntryCache.get(cacheKey);
             if (!cached || cached.signature !== signature || !Array.isArray(cached.templates)) {
                 const candidateNodes = this.getLevel0PatchCandidateNodes(map, sectionKey, chunkBounds, chunkBounds);
@@ -14553,11 +14560,65 @@ void main(void) {
             for (let i = 0; i < rawLoops.length; i++) {
                 const raw = rawLoops[i];
                 const requiredNonGroupCount = raw.isHole ? 1 : 2;
-                const kept = [];
+                const pointRecords = [];
                 for (let p = 0; p < raw.points.length; p++) {
                     const point = raw.points[p];
-                    if (this.getLevel0TerrainNonGroupTouchCountFromSlots(point, nodeKeys, vertexSlotsByPointKey) === requiredNonGroupCount) {
-                        kept.push(point);
+                    const nonGroupCount = this.getLevel0TerrainNonGroupTouchCountFromSlots(point, nodeKeys, vertexSlotsByPointKey);
+                    pointRecords.push({
+                        point,
+                        nonGroupCount,
+                        baseKeep: nonGroupCount === requiredNonGroupCount
+                    });
+                }
+                const forcedPointsByRunStart = new Map();
+                const isForcedCandidate = (record) => !!(
+                    record &&
+                    record.baseKeep === false &&
+                    record.nonGroupCount === 1
+                );
+                const addForcedRunPoint = (runStart, runLength) => {
+                    if (runLength < 3) return;
+                    const count = pointRecords.length;
+                    let xSum = 0;
+                    let ySum = 0;
+                    for (let r = 0; r < runLength; r++) {
+                        const point = pointRecords[(runStart + r) % count].point;
+                        xSum += Number(point.x);
+                        ySum += Number(point.y);
+                    }
+                    forcedPointsByRunStart.set(runStart, {
+                        x: xSum / runLength,
+                        y: ySum / runLength
+                    });
+                };
+                if (pointRecords.length >= 3) {
+                    const count = pointRecords.length;
+                    const startIndex = pointRecords.findIndex(record => !isForcedCandidate(record));
+                    if (startIndex >= 0) {
+                        let runStart = -1;
+                        let runLength = 0;
+                        for (let step = 1; step <= count; step++) {
+                            const index = (startIndex + step) % count;
+                            if (isForcedCandidate(pointRecords[index])) {
+                                if (runStart < 0) runStart = index;
+                                runLength += 1;
+                            } else if (runStart >= 0) {
+                                if (runLength >= 3) {
+                                    addForcedRunPoint(runStart, runLength);
+                                }
+                                runStart = -1;
+                                runLength = 0;
+                            }
+                        }
+                    }
+                }
+                const kept = [];
+                for (let p = 0; p < pointRecords.length; p++) {
+                    if (forcedPointsByRunStart.has(p)) {
+                        kept.push(forcedPointsByRunStart.get(p));
+                    }
+                    if (pointRecords[p].baseKeep) {
+                        kept.push(pointRecords[p].point);
                     }
                 }
                 const simplified = this.simplifyLevel0TerrainLoop(kept);
@@ -16487,6 +16548,9 @@ void main(void) {
                 uPhaseOffset1: new Float32Array([0, 0]),
                 uPhaseOffset2: new Float32Array([0, 0]),
                 uPhaseWeights: new Float32Array([1, 0, 0]),
+                uSpatialPhase: 0,
+                uSpatialFrequency: 2.25,
+                uSpatialStrength: 0.42,
                 uAlphaCutoff: 0.001,
                 uBuildingCutawayDataPass: 0,
                 uBuildingCutawayDataZRange: new Float32Array([
@@ -16612,17 +16676,21 @@ void main(void) {
                         uniforms.uPhaseWeights[1] = w1 / wSum;
                         uniforms.uPhaseWeights[2] = w2 / wSum;
                     }
+                    uniforms.uSpatialPhase = wave;
+                    uniforms.uSpatialFrequency = 2.25;
+                    uniforms.uSpatialStrength = 0.42;
+                    const wrapUnit = (value) => ((value % 1) + 1) % 1;
                     if (uniforms.uPhaseOffset0) {
-                        uniforms.uPhaseOffset0[0] = 0.00;
-                        uniforms.uPhaseOffset0[1] = 0.00;
+                        uniforms.uPhaseOffset0[0] = wrapUnit(t * 0.018);
+                        uniforms.uPhaseOffset0[1] = wrapUnit(t * 0.006);
                     }
                     if (uniforms.uPhaseOffset1) {
-                        uniforms.uPhaseOffset1[0] = 0.37;
-                        uniforms.uPhaseOffset1[1] = 0.19;
+                        uniforms.uPhaseOffset1[0] = wrapUnit(0.37 - t * 0.011);
+                        uniforms.uPhaseOffset1[1] = wrapUnit(0.19 + t * 0.015);
                     }
                     if (uniforms.uPhaseOffset2) {
-                        uniforms.uPhaseOffset2[0] = 0.71;
-                        uniforms.uPhaseOffset2[1] = 0.43;
+                        uniforms.uPhaseOffset2[0] = wrapUnit(0.71 + t * 0.007);
+                        uniforms.uPhaseOffset2[1] = wrapUnit(0.43 - t * 0.013);
                     }
                 }
             }
