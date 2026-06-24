@@ -273,6 +273,7 @@ const PERF_ACCUM_EXTRA_FIELDS = [
     "objects3dGroundMs",
     "objects3dDisplayMs",
     "objects3dAnimalLosHidden",
+    "objects3dMissingMountedSectionFiltered",
     "objects3dMazeHidden",
     "objects3dMazeHiddenWalls",
     "objects3dMapItems",

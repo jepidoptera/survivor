@@ -140,6 +140,8 @@ X floor fragment edges slow but don't stop movement
 X rugs on an upper floor are visible in the building overlay
 X inside and outside doors have opposite handles
 X trees can't place within building footprint rectangle
+X wizard gets stuck at bottom of wall-adjacent stairs
+X flicker when interior render plan changes
   yetis don't stay aggro or knock down doors
   megabear sometimes gets stuck. (this may be because it's in hitbox mode!)
   level editing (and probably other stuff) shouldn't be in spells.js
