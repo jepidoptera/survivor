@@ -116,11 +116,47 @@ function loadWizardClass() {
         vm.runInContext(source, context, { filename: filePath });
     }
 
-    vm.runInContext("globalThis.__testExports = { Wizard, PolygonHitbox, wizardFrames };", context);
+    vm.runInContext("globalThis.__testExports = { Wizard, PolygonHitbox, context: globalThis };", context);
     return context.__testExports;
 }
 
-const { Wizard, PolygonHitbox, wizardFrames } = loadWizardClass();
+function loadRenderingApi() {
+    const context = {
+        console,
+        Math,
+        Date,
+        JSON,
+        Map,
+        Set,
+        WeakMap,
+        WeakSet,
+        Array,
+        Object,
+        Number,
+        String,
+        Boolean,
+        RegExp,
+        Error,
+        Infinity,
+        NaN,
+        parseInt,
+        parseFloat,
+        isFinite,
+        performance: { now: () => 1000 }
+    };
+    context.window = context;
+    context.globalThis = context;
+    vm.createContext(context);
+    const source = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/rendering/Rendering.js"),
+        "utf8"
+    );
+    vm.runInContext(source, context, { filename: "Rendering.js" });
+    return context.Rendering;
+}
+
+const { Wizard, PolygonHitbox, context: wizardVmContext } = loadWizardClass();
+const Rendering = loadRenderingApi();
 
 function createWizardMap(node) {
     return {
@@ -136,6 +172,51 @@ function createWizardMap(node) {
             return [];
         }
     };
+}
+
+function createMinimalLoadWizard(mapOverrides = {}) {
+    const node = { xindex: 0, yindex: 0, traversalLayer: 0, baseZ: 0, objects: [] };
+    const map = {
+        worldToNode() { return node; },
+        wrapWorldX(value) { return value; },
+        wrapWorldY(value) { return value; },
+        shortestDeltaX(from, to) { return to - from; },
+        shortestDeltaY(from, to) { return to - from; },
+        getFloorSupportAtWorldPosition() { return null; },
+        isPointSupportedByFloorFragment() { return false; },
+        setActorCurrentMovementSupport(actor, support) {
+            actor.currentMovementSupport = support;
+            actor.currentLayer = support.layer;
+            actor.traversalLayer = support.layer;
+            actor.currentLayerBaseZ = support.baseZ;
+            return support;
+        },
+        ...mapOverrides
+    };
+    const wizard = Object.create(Wizard.prototype);
+    Object.assign(wizard, {
+        map,
+        node: null,
+        x: 0,
+        y: 0,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        ensureMagicPointsInitialized() {},
+        getTemperatureBaseline() { return 0; },
+        setTemperature() {},
+        isFrozen() { return false; },
+        applyFrozenState() {},
+        setGameMode(value) { this.gameMode = value; },
+        setDifficulty(value) { this.difficulty = value; },
+        loadInventory() {},
+        updateHitboxes() {},
+        refreshSpellSelector() {},
+        refreshEditorSelector() {},
+        updateModeToggleUi() {}
+    });
+    return wizard;
 }
 
 function createDoorEntry(hitbox, canTraverse = true) {
@@ -167,11 +248,67 @@ test("wizard selected floor keeps traversal layer synchronized for enemy targeti
     assert.equal(wizard.traversalLayer, -2);
     assert.equal(wizard.currentLayerBaseZ, -6);
 
+    wizard.node = { ...floorNode, traversalLayer: 1, baseZ: 3 };
     wizard.selectedFloorEditLevel = 1;
 
     assert.equal(wizard.currentLayer, 1);
     assert.equal(wizard.traversalLayer, 1);
     assert.equal(wizard.currentLayerBaseZ, 3);
+});
+
+test("wizard takeDamage calls die when damage is lethal", () => {
+    const wizard = Object.create(Wizard.prototype);
+    wizard.hp = 5;
+    wizard.maxHp = 5;
+    wizard.difficulty = 3;
+    wizard.dead = false;
+    wizard.magic = 0;
+    wizard.shieldHp = 0;
+    wizard.maxShieldHp = 0;
+    wizard.isAdventureMode = () => false;
+    let dieCalls = 0;
+    wizard.die = () => {
+        dieCalls++;
+        wizard.dead = true;
+    };
+    wizard.updateStatusBars = () => {};
+
+    const applied = wizard.takeDamage(10);
+
+    assert.equal(applied, 5);
+    assert.equal(wizard.hp, 0);
+    assert.equal(wizard.dead, true);
+    assert.equal(dieCalls, 1);
+});
+
+test("wizard takeDamage routes lethal adventure damage through adventure death state", () => {
+    const wizard = Object.create(Wizard.prototype);
+    wizard.hp = 5;
+    wizard.maxHp = 5;
+    wizard.difficulty = 3;
+    wizard.dead = false;
+    wizard.magic = 0;
+    wizard.shieldHp = 0;
+    wizard.maxShieldHp = 0;
+    wizard.isAdventureMode = () => true;
+    wizard.die = () => {
+        throw new Error("adventure damage should use updateAdventureDeathState");
+    };
+    let adventureDeathCalls = 0;
+    wizard.updateAdventureDeathState = () => {
+        adventureDeathCalls++;
+        wizard.dead = true;
+        wizard.hp = 0;
+        return true;
+    };
+    wizard.updateStatusBars = () => {};
+
+    const applied = wizard.takeDamage(10);
+
+    assert.equal(applied, 5);
+    assert.equal(wizard.hp, 0);
+    assert.equal(wizard.dead, true);
+    assert.equal(adventureDeathCalls, 1);
 });
 
 test("wizard movement context includes direct prototype building blockers without upper floor nodes", () => {
@@ -535,32 +672,207 @@ test("wizard save/load preserves stair support until runtime stairs are rebuilt"
     assert.equal(loadedWizard._stairSupport.stairId, "building:stairs-a");
 });
 
-test("wizard draw keeps dead wizard on standing frame", () => {
-    const wizard = Object.create(Wizard.prototype);
-    wizard.pixiSprite = null;
-    wizard.shadowGraphics = {
-        parent: true,
-        clear() {},
-        beginFill() {},
-        drawEllipse() {},
-        endFill() {}
+test("wizard save omits generated outdoor ground floor fragment support", () => {
+    const groundFragment = {
+        fragmentId: "section:0,0:ground",
+        surfaceId: "section:0,0:ground",
+        level: 0,
+        ownerType: "section",
+        ownerId: "0,0",
+        _prototypeGroundFloor: true,
+        outerPolygon: [
+            { x: -10, y: -10 },
+            { x: 10, y: -10 },
+            { x: 10, y: 10 },
+            { x: -10, y: 10 }
+        ]
     };
-    wizard.getInterpolatedPosition = () => ({ x: 12, y: 8, z: 0 });
-    wizard.drawShield = () => {};
-    wizard.drawHat = () => {};
-    wizard.movementVector = { x: 2, y: 0 };
-    wizard.moving = true;
+    const wizard = Object.create(Wizard.prototype);
+    Object.assign(wizard, {
+        x: 1,
+        y: 2,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        surfaceId: groundFragment.surfaceId,
+        fragmentId: groundFragment.fragmentId,
+        currentMovementSupport: {
+            type: "floor",
+            layer: 0,
+            baseZ: 0,
+            fragment: groundFragment,
+            fragmentId: groundFragment.fragmentId,
+            surfaceId: groundFragment.surfaceId
+        },
+        hp: 100,
+        maxHp: 100,
+        map: {
+            floorsById: new Map([[groundFragment.fragmentId, groundFragment]]),
+            wrapWorldX(value) { return value; },
+            wrapWorldY(value) { return value; },
+            isPointSupportedByFloorFragment() { return true; }
+        },
+        getTemperature() { return 0; },
+        getTemperatureBaseline() { return 0; },
+        serializeInventory() { return []; }
+    });
+
+    const saved = wizard.saveJson();
+
+    assert.equal(saved.currentLayer, 0);
+    assert.equal(saved.surfaceId, undefined);
+    assert.equal(saved.fragmentId, undefined);
+});
+
+test("wizard load normalizes stale generated outdoor ground fragment as ground support", () => {
+    const groundFragment = {
+        fragmentId: "section:0,0:ground",
+        surfaceId: "section:0,0:ground",
+        level: 0,
+        ownerType: "section",
+        ownerId: "0,0",
+        _prototypeGroundFloor: true,
+        outerPolygon: [
+            { x: -10, y: -10 },
+            { x: 10, y: -10 },
+            { x: 10, y: 10 },
+            { x: -10, y: 10 }
+        ]
+    };
+    const node = { xindex: 2, yindex: 3, traversalLayer: 0, baseZ: 0, objects: [] };
+    const loadedWizard = Object.create(Wizard.prototype);
+    Object.assign(loadedWizard, {
+        map: {
+            floorsById: new Map([[groundFragment.fragmentId, groundFragment]]),
+            wrapWorldX(value) { return value; },
+            wrapWorldY(value) { return value; },
+            worldToNode() { return node; },
+            getFloorSupportAtWorldPosition() { return null; },
+            isPointSupportedByFloorFragment() { return false; },
+            setActorCurrentMovementSupport(actor, support) {
+                actor.currentMovementSupport = support;
+                actor.currentLayer = support.layer;
+                actor.traversalLayer = support.layer;
+                actor.currentLayerBaseZ = support.baseZ;
+                if (support.type === "ground") {
+                    actor.surfaceId = "";
+                    actor.fragmentId = "";
+                }
+                return support;
+            }
+        },
+        node: null,
+        x: 0,
+        y: 0,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        ensureMagicPointsInitialized() {},
+        getTemperatureBaseline() { return 0; },
+        setTemperature() {},
+        isFrozen() { return false; },
+        applyFrozenState() {},
+        setGameMode(value) { this.gameMode = value; },
+        setDifficulty(value) { this.difficulty = value; },
+        loadInventory() {},
+        updateHitboxes() {},
+        refreshSpellSelector() {},
+        refreshEditorSelector() {},
+        updateModeToggleUi() {}
+    });
+    const warnings = [];
+    const originalWarn = console.warn;
+    console.warn = (...args) => warnings.push(args);
+    try {
+        loadedWizard.loadJson({
+            x: 50,
+            y: 50,
+            z: 0,
+            currentLayer: 0,
+            traversalLayer: 0,
+            currentLayerBaseZ: 0,
+            surfaceId: groundFragment.surfaceId,
+            fragmentId: groundFragment.fragmentId,
+            viewport: { x: 0, y: 0 }
+        });
+    } finally {
+        console.warn = originalWarn;
+    }
+
+    assert.equal(loadedWizard.hasPendingSavedMovementSupport(), false);
+    assert.equal(loadedWizard.currentMovementSupport.type, "ground");
+    assert.equal(loadedWizard.fragmentId, "");
+    assert.equal(loadedWizard.surfaceId, "");
+    assert.equal(warnings.length, 0);
+});
+
+test("wizard load rejects missing viewport dimensions before camera restore", () => {
+    const previousViewport = wizardVmContext.viewport;
+    wizardVmContext.viewport = { x: 0, y: 0, width: NaN, height: 100 };
+    try {
+        const loadedWizard = createMinimalLoadWizard();
+        assert.throws(() => {
+            loadedWizard.loadJson({
+                x: 12,
+                y: 18,
+                z: 0,
+                currentLayer: 0,
+                traversalLayer: 0,
+                currentLayerBaseZ: 0,
+                viewport: { x: 0, y: 0 }
+            });
+        }, /finite viewport dimensions/);
+    } finally {
+        wizardVmContext.viewport = previousViewport;
+    }
+});
+
+test("wizard load centers old saves without inheriting a stale viewport position", () => {
+    const previousViewport = wizardVmContext.viewport;
+    wizardVmContext.viewport = { x: NaN, y: NaN, prevX: NaN, prevY: NaN, width: 20, height: 10 };
+    try {
+        const loadedWizard = createMinimalLoadWizard();
+        loadedWizard.loadJson({
+            x: 50,
+            y: 75,
+            z: 0,
+            currentLayer: 0,
+            traversalLayer: 0,
+            currentLayerBaseZ: 0
+        });
+
+        assert.equal(wizardVmContext.viewport.x, 40);
+        assert.equal(wizardVmContext.viewport.y, 70);
+        assert.equal(wizardVmContext.viewport.prevX, 40);
+        assert.equal(wizardVmContext.viewport.prevY, 70);
+    } finally {
+        wizardVmContext.viewport = previousViewport;
+    }
+});
+
+test("wizard renderer keeps dead wizard on standing frame", () => {
+    const wizard = {
+        movementVector: { x: 2, y: 0 },
+        moving: true,
+        dead: false,
+        hp: 100,
+        lastDirectionRow: 1,
+        isJumping: false,
+        isMovingBackward: false,
+        animationSpeedMultiplier: 1,
+        speed: 2.5
+    };
+
+    assert.equal(Rendering.getWizardBodyFrameIndex(wizard, { renderNowMs: 1000, frameRate: 60 }), 10);
+
     wizard.dead = true;
     wizard.hp = 0;
-    wizard.lastDirectionRow = 1;
-    wizard.isJumping = false;
-    wizard.isMovingBackward = false;
-    wizard.animationSpeedMultiplier = 1;
-    wizard.speed = 2.5;
+    wizard.movementVector = { x: 2, y: 0 };
+    wizard.moving = true;
 
-    wizard.draw();
-
-    assert.deepEqual(wizard.pixiSprite.texture, wizardFrames[9]);
+    assert.equal(Rendering.getWizardBodyFrameIndex(wizard, { renderNowMs: 1000, frameRate: 60 }), 9);
 });
 
 test("wizard can enter a thin mounted door opening before the center reaches the wall plane", () => {

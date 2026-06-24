@@ -150,6 +150,9 @@ uniform float uBuildingExteriorDepthMetricDataPass;
 uniform float uBuildingExteriorDepthMetricBias;
 uniform vec2 uBuildingExteriorDepthMetricRange;
 uniform float uBuildingExteriorDepthMetricOrigin;
+uniform sampler2D uScreenClipMask;
+uniform float uScreenClipEnabled;
+uniform vec2 uScreenClipSize;
 vec3 encodeExteriorDepthMetric(float value) {
     float clamped = clamp(value, 0.0, 1.0);
     float r = floor(clamped * 255.0);
@@ -165,6 +168,13 @@ void main(void) {
     outColor.rgb *= uTint.a;
     outColor.rgb *= vSurfaceLightFactor;
     if (outColor.a < uAlphaCutoff) discard;
+    if (uScreenClipEnabled > 0.5) {
+        vec2 clipUv = vec2(
+            gl_FragCoord.x / max(1.0, uScreenClipSize.x),
+            1.0 - (gl_FragCoord.y / max(1.0, uScreenClipSize.y))
+        );
+        if (texture2D(uScreenClipMask, clipUv).a < 0.5) discard;
+    }
     if (uBuildingExteriorDepthMetricDataPass > 0.5) {
         float minMetric = uBuildingExteriorDepthMetricRange.x;
         float invSpan = uBuildingExteriorDepthMetricRange.y;
@@ -2810,6 +2820,171 @@ function collectInteriorBitmapProjectionPoints(building, floor, renderedFloors =
     return points;
 }
 
+function buildingBitmapFloorLevel(floor) {
+    const level = Number(floor && floor.level);
+    if (Number.isFinite(level)) return Math.round(level);
+    const elevation = getFloorElevation(floor);
+    return Number.isFinite(elevation) ? Math.round(elevation) : 0;
+}
+
+function normalizeBuildingBitmapFloorIdSet(value, label) {
+    if (value === undefined || value === null) return null;
+    const source = value instanceof Set ? Array.from(value) : (Array.isArray(value) ? value : [value]);
+    const out = new Set();
+    source.forEach((entry) => {
+        const id = String(entry || "").trim();
+        if (id) out.add(id);
+    });
+    if (out.size === 0) {
+        throw new Error(`${label} floor id list must include at least one floor id`);
+    }
+    return out;
+}
+
+function normalizeBuildingBitmapObjectIdSet(value, label) {
+    if (value === undefined || value === null) return new Set();
+    const source = value instanceof Set ? Array.from(value) : (Array.isArray(value) ? value : [value]);
+    const out = new Set();
+    source.forEach((entry) => {
+        const id = String(entry || "").trim();
+        if (id) out.add(id);
+    });
+    return out;
+}
+
+function resolveBuildingBitmapFloorSelection(building, options = {}, label = "building") {
+    const floors = getBuildingFloors(building)
+        .slice()
+        .sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
+    if (floors.length === 0) {
+        throw new Error(`${label} bitmap export requires at least one floor`);
+    }
+    const floorIds = normalizeBuildingBitmapFloorIdSet(
+        options.floorIds !== undefined ? options.floorIds : options.floorId,
+        label
+    );
+    const requestedLevel = Number(options.level);
+    const minLevel = Number(options.minLevel);
+    const maxLevel = Number(
+        options.maxLevel !== undefined ? options.maxLevel :
+            (options.floorLevelMax !== undefined ? options.floorLevelMax : options.maxFloorLevel)
+    );
+    const selected = floors.filter((floor) => {
+        const floorId = getFloorId(floor);
+        if (floorIds && !floorIds.has(floorId)) return false;
+        const level = buildingBitmapFloorLevel(floor);
+        if (Number.isFinite(requestedLevel) && level !== Math.round(requestedLevel)) return false;
+        if (Number.isFinite(minLevel) && level < Math.round(minLevel)) return false;
+        if (Number.isFinite(maxLevel) && level > Math.round(maxLevel)) return false;
+        return true;
+    });
+    if (selected.length === 0) {
+        throw new Error(`${label} bitmap export resolved no floors`);
+    }
+    return selected;
+}
+
+function collectBuildingBitmapProjectionPoints(building, renderedFloors, options = {}) {
+    const points = [];
+    const floorIds = new Set((Array.isArray(renderedFloors) ? renderedFloors : []).map((floor) => getFloorId(floor)));
+    const includeWalls = options.includeWalls !== false;
+    const includeRoofs = options.includeRoofs === true;
+    const includeMountedObjects = options.includeMountedObjects !== false;
+    const excludedObjectIds = normalizeBuildingBitmapObjectIdSet(options.excludedObjectIds, "building bitmap");
+    const addPoint = (point, z = 0) => {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        const pz = Number(z);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(pz)) return;
+        points.push({ x, y, z: pz });
+    };
+    (Array.isArray(renderedFloors) ? renderedFloors : []).forEach((floor) => {
+        const floorZ = getFloorElevation(floor);
+        const floorHeight = Number(floor && floor.floorHeight);
+        const topZ = floorZ + (Number.isFinite(floorHeight) && floorHeight > 0
+            ? floorHeight
+            : Number(floor && floor.defaultWallHeight) || DEFAULTS.wallHeight);
+        const rings = [floor && floor.outerPolygon]
+            .concat(Array.isArray(floor && floor.holes) ? floor.holes : []);
+        rings.forEach((ring) => {
+            (Array.isArray(ring) ? ring : []).forEach((point) => {
+                addPoint(point, floorZ);
+                addPoint(point, topZ);
+            });
+        });
+        if (includeRoofs) {
+            getFloorRoofs(floor).forEach((roof) => {
+                const roofView = floorRoofView(floor, roof);
+                const roofZ = roofRenderElevation(roofView);
+                getRoofContactPolygon(roofView).forEach((point) => addPoint(point, roofZ));
+                addPoint(getRoofPeakPoint(roofView), roofZ + roofPeakHeight(roofView));
+                getRoofGables(roof).forEach((gable) => {
+                    const geometry = gableWorldGeometry(roofView, gable);
+                    (geometry.wallSegments || []).forEach((segment) => {
+                        addPoint(segment.bottomStart, segment.bottomStart && segment.bottomStart.z);
+                        addPoint(segment.bottomEnd, segment.bottomEnd && segment.bottomEnd.z);
+                        addPoint(segment.topStart, segment.topStart && segment.topStart.z);
+                        addPoint(segment.topEnd, segment.topEnd && segment.topEnd.z);
+                    });
+                });
+            });
+        }
+        getFloorColumns(floor).forEach((column) => {
+            const bottomZ = Number(column && column.bottomZ);
+            const height = Number(column && column.height);
+            columnVertices(column).forEach((point) => {
+                addPoint(point, bottomZ);
+                addPoint(point, bottomZ + height);
+            });
+        });
+        getFloorBeams(floor).forEach((beam) => {
+            if (beam && beam.start) addPoint(beam.start, beam.start.z);
+            if (beam && beam.end) addPoint(beam.end, beam.end.z);
+        });
+        getFloorStairs(floor).forEach((stair) => {
+            const bottomZ = Number(stair && stair.bottomZ) || floorZ;
+            const height = Number(stair && stair.height) || 0;
+            stairFootprintPoints(stair).forEach((point) => {
+                addPoint(point, bottomZ);
+                addPoint(point, bottomZ + height);
+            });
+        });
+    });
+    if (includeWalls) {
+        getBuildingWalls(building).forEach((wall) => {
+            const ownerFloor = findFloor(building, wall && (wall.fragmentId || wall.floorId));
+            if (!ownerFloor || !floorIds.has(getFloorId(ownerFloor))) return;
+            const floorZ = getFloorElevation(ownerFloor);
+            const wallPointsForBounds = wallCenterlinePoints(building, wall, ownerFloor);
+            const wallTopZ = floorZ + Math.max(0, Number(wall && wall.height) || Number(ownerFloor && ownerFloor.defaultWallHeight) || DEFAULTS.wallHeight);
+            wallPointsForBounds.forEach((point) => {
+                addPoint(point, floorZ);
+                addPoint(point, wallTopZ);
+            });
+        });
+    }
+    if (includeMountedObjects) {
+        getBuildingMountedObjects(building).forEach((object) => {
+            if (excludedObjectIds.has(String(object && object.id))) return;
+            const ownerFloor = findFloor(building, object && object.floorId);
+            if (!ownerFloor || !floorIds.has(getFloorId(ownerFloor))) return;
+            const x = Number(object && object.x);
+            const y = Number(object && object.y);
+            const z = Number(object && object.z);
+            if (Number.isFinite(x) && Number.isFinite(y)) {
+                const size = Math.max(0.25, Number(object && object.size) || 1);
+                const baseZ = Number.isFinite(z) ? z : getFloorElevation(ownerFloor);
+                addPoint({ x: x - size, y: y - size }, baseZ - size);
+                addPoint({ x: x + size, y: y + size }, baseZ + size);
+            }
+        });
+    }
+    if (points.length === 0) {
+        throw new Error("building bitmap export requires at least one finite projection point");
+    }
+    return points;
+}
+
 function screenBoundsForProjectionPoints(renderer, points) {
     const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
     points.forEach((point) => {
@@ -2986,6 +3161,22 @@ function fitBuildingBitmapExportResolution(setup, projectionPoints, label) {
     throw new Error(`${label} bitmap ${width}x${height} still exceeds max dimension ${maxDimension} after resolution scaling`);
 }
 
+function resolveBuildingBitmapRenderTexture(provided, width, height, label) {
+    if (!provided) {
+        return PIXI.RenderTexture.create({
+            width,
+            height,
+            resolution: 1
+        });
+    }
+    const textureWidth = Number(provided.width);
+    const textureHeight = Number(provided.height);
+    if (Math.round(textureWidth) !== Math.round(width) || Math.round(textureHeight) !== Math.round(height)) {
+        throw new Error(`${label} provided render texture ${textureWidth}x${textureHeight} does not match required ${width}x${height}`);
+    }
+    return provided;
+}
+
 function createBuildingBitmapExportSetup(buildingData, options = {}, config = {}) {
     const label = typeof config.label === "string" && config.label.length > 0
         ? config.label
@@ -3075,6 +3266,9 @@ function destroyBuildingBitmapExportSetup(setup) {
     if (!setup) return;
     const exportRenderer = setup.exportRenderer;
     const stage = setup.stage;
+    if (exportRenderer && typeof exportRenderer.destroyScreenClipMasks === "function") {
+        exportRenderer.destroyScreenClipMasks();
+    }
     sanitizePixiGeometryDestroyState(setup.rendererRef, exportRenderer && exportRenderer.root);
     if (exportRenderer && exportRenderer.root && exportRenderer.root.parent && typeof exportRenderer.root.parent.removeChild === "function") {
         exportRenderer.root.parent.removeChild(exportRenderer.root);
@@ -3201,6 +3395,7 @@ export class BuildingRenderer {
         this.roofTextureConfigCache = null;
         this.roofTextureConfigPromise = null;
         this.roofTextureConfigError = "";
+        this.screenClipMaskTextureBySignature = new Map();
         this.screenPickerDebug = false;
         this.screenPickerDebugPoint = null;
         this.root.addChild(
@@ -4078,6 +4273,9 @@ export class BuildingRenderer {
                 : 0,
             uBuildingExteriorDepthMetricRange: new Float32Array([-128, 1 / 384]),
             uBuildingExteriorDepthMetricOrigin: 0,
+            uScreenClipMask: PIXI.Texture.WHITE,
+            uScreenClipEnabled: 0,
+            uScreenClipSize: new Float32Array([1, 1]),
             uSampler: this.getSurfaceTexture(texturePath, options.textureFallback)
         });
         const mesh = new PIXI.Mesh(geometry, shader, this.getFloorDepthState() || undefined, PIXI.DRAW_MODES.TRIANGLES);
@@ -4149,6 +4347,13 @@ export class BuildingRenderer {
         u.uTint[1] = lightFactor;
         u.uTint[2] = lightFactor;
         u.uTint[3] = Math.max(0, Math.min(1, Number(alpha)));
+        const screenClipMask = options && options.screenClipMask ? options.screenClipMask : null;
+        u.uScreenClipEnabled = screenClipMask ? 1 : 0;
+        u.uScreenClipMask = screenClipMask || PIXI.Texture.WHITE;
+        if (u.uScreenClipSize && u.uScreenClipSize.length >= 2) {
+            u.uScreenClipSize[0] = Math.max(1, this.app.screen.width);
+            u.uScreenClipSize[1] = Math.max(1, this.app.screen.height);
+        }
         mesh.visible = true;
     }
 
@@ -4181,7 +4386,22 @@ export class BuildingRenderer {
         return 1;
     }
 
-    stairCutoutReliefStepLightFactors(stair, steps, baseLightFactor) {
+    downStairClipTargetFloor(ownerFloor, stair, renderedFloors) {
+        const override = this.playtestFloorRenderOverride;
+        if (!override || !(override.clipDownStairFloorIds instanceof Set)) return null;
+        const ownerFloorId = ownerFloor ? getFloorId(ownerFloor) : "";
+        const candidates = (Array.isArray(renderedFloors) ? renderedFloors : [])
+            .filter((floor) => override.clipDownStairFloorIds.has(getFloorId(floor)));
+        const throughFloor = candidates.find((floor) => (
+            getFloorId(floor) !== ownerFloorId &&
+            this.stairOpeningIntersectsFloor(stair, floor)
+        ));
+        if (throughFloor) return throughFloor;
+        if (String(stair && stair.direction || "up") !== "down") return null;
+        return candidates.find((floor) => getFloorId(floor) === ownerFloorId) || null;
+    }
+
+    stairCutoutReliefStepLightFactors(stair, steps, baseLightFactor, options = {}) {
         if (!stair || !Array.isArray(steps) || steps.length === 0) return new Map();
         const baseFactor = Number.isFinite(Number(baseLightFactor))
             ? Math.max(SCENE_LIGHT_MIN, Math.min(1, Number(baseLightFactor)))
@@ -4192,11 +4412,17 @@ export class BuildingRenderer {
         if (!Number.isFinite(bottomZ) || !Number.isFinite(height) || height <= 0) {
             throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} needs finite elevation data for cutaway relief`);
         }
-        const topZ = String(stair.direction || "up") === "down" ? bottomZ : bottomZ + height;
-        const thresholdZ = topZ - 2;
-        const selected = steps
-            .filter((step) => Number(step && step.z) >= thresholdZ - GEOMETRY_EPSILON && Number(step && step.z) <= topZ + GEOMETRY_EPSILON)
-            .sort((a, b) => Number(a.z) - Number(b.z));
+        const selected = options && options.fullRun === true
+            ? steps
+                .filter((step) => Number.isFinite(Number(step && step.z)))
+                .sort((a, b) => Number(a.z) - Number(b.z))
+            : (() => {
+                const topZ = String(stair.direction || "up") === "down" ? bottomZ : bottomZ + height;
+                const thresholdZ = topZ - 2;
+                return steps
+                    .filter((step) => Number(step && step.z) >= thresholdZ - GEOMETRY_EPSILON && Number(step && step.z) <= topZ + GEOMETRY_EPSILON)
+                    .sort((a, b) => Number(a.z) - Number(b.z));
+            })();
         const factors = new Map();
         if (!selected.length) return factors;
         selected.forEach((step, index) => {
@@ -4584,8 +4810,62 @@ export class BuildingRenderer {
         return steps;
     }
 
+    clipStairStepsToFloor(steps, floor, stair, options = {}) {
+        if (!floor) throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} clipping requires an owner floor`);
+        const clipper = polygonClipper(`stair ${stair && stair.id ? stair.id : "(new)"} floor clip`);
+        const clipGeometry = options && options.openingOnly === true
+            ? this.stairOpeningClipGeometryForFloor(stair, floor, `stair ${stair && stair.id ? stair.id : "(new)"} clip opening`)
+            : [this.floorClipPolygon(floor, `stair ${stair && stair.id ? stair.id : "(new)"} clip floor ${getFloorId(floor)}`)];
+        if (!Array.isArray(clipGeometry) || clipGeometry.length === 0) {
+            if (options && options.allowEmpty === true) return [];
+            throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} floor clip resolved no clip geometry`);
+        }
+        const clippedSteps = [];
+        (Array.isArray(steps) ? steps : []).forEach((step) => {
+            const sourceRing = positiveAreaRing(step && step.polygon);
+            if (sourceRing.length < 3 || Math.abs(polygonSignedArea(sourceRing)) <= GEOMETRY_EPSILON) return;
+            const clipped = clipper.intersection(
+                [[closedClipRing(sourceRing, `stair ${stair && stair.id ? stair.id : "(new)"} step ${step.globalStepIndex} clip source`)]],
+                clipGeometry
+            );
+            if (!Array.isArray(clipped) || clipGeometryArea(clipped) <= GEOMETRY_EPSILON) return;
+            clipped.forEach((polygon, polygonIndex) => {
+                if (!Array.isArray(polygon) || !Array.isArray(polygon[0])) {
+                    throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} step ${step.globalStepIndex} floor clip returned malformed polygon ${polygonIndex}`);
+                }
+                const outer = positiveAreaRing(clipRingToPoints(
+                    polygon[0],
+                    `stair ${stair && stair.id ? stair.id : "(new)"} step ${step.globalStepIndex} clipped polygon ${polygonIndex}`
+                ));
+                const holes = polygon.slice(1)
+                    .map((ring, holeIndex) => positiveAreaRing(clipRingToPoints(
+                        ring,
+                        `stair ${stair && stair.id ? stair.id : "(new)"} step ${step.globalStepIndex} clipped polygon ${polygonIndex} hole ${holeIndex}`
+                    )))
+                    .filter((ring) => ring.length >= 3 && Math.abs(polygonSignedArea(ring)) > GEOMETRY_EPSILON);
+                if (outer.length < 3 || Math.abs(polygonSignedArea(outer)) <= GEOMETRY_EPSILON) return;
+                clippedSteps.push({
+                    ...step,
+                    polygon: outer,
+                    holes,
+                    clippedToFloor: true
+                });
+            });
+        });
+        if (clippedSteps.length === 0) {
+            if (options && options.allowEmpty === true) return [];
+            throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} floor clip removed every rendered step`);
+        }
+        return clippedSteps;
+    }
+
     triangulateStairSteps(stair, options = {}) {
-        const steps = this.stairStepPolygons(stair);
+        let steps = this.stairStepPolygons(stair);
+        if (options.clipToFloor) {
+            steps = this.clipStairStepsToFloor(steps, options.clipToFloor, stair, {
+                openingOnly: options.clipToFloorOpening === true
+            });
+        }
         const totalSteps = Math.max(1, Math.round(Number(stair && stair.stepCount) || 1));
         const height = Number(stair && stair.height);
         if (!Number.isFinite(height) || height <= 0) {
@@ -4610,7 +4890,15 @@ export class BuildingRenderer {
         const baseSurfaceLightFactor = Number.isFinite(Number(options.surfaceLightFactor))
             ? Math.max(SCENE_LIGHT_MIN, Math.min(1, Number(options.surfaceLightFactor)))
             : 1;
-        const cutoutReliefLightFactors = this.stairCutoutReliefStepLightFactors(stair, steps, baseSurfaceLightFactor);
+        const reliefBaseLightFactor = Number.isFinite(Number(options.cutoutReliefLightFactor))
+            ? Math.max(SCENE_LIGHT_MIN, Math.min(1, Number(options.cutoutReliefLightFactor)))
+            : baseSurfaceLightFactor;
+        const cutoutReliefLightFactors = this.stairCutoutReliefStepLightFactors(
+            stair,
+            steps,
+            reliefBaseLightFactor,
+            { fullRun: options.cutoutReliefFullRun === true }
+        );
         const surfaceLightFactorForStep = (step) => {
             const index = Number(step && step.globalStepIndex);
             if (cutoutReliefLightFactors.has(index)) return cutoutReliefLightFactors.get(index);
@@ -4664,13 +4952,18 @@ export class BuildingRenderer {
             const aBottom = pushRiserPoint({ x: ax, y: ay, z: bottomZA, u: u0, v: -bottomZA * riserTextureRepeat.repeatsPerMapUnitY, normal }, surfaceLightFactor);
             riserIndices.push(aTop, bBottom, bTop, aTop, aBottom, bBottom);
         };
-        const addBottomFace = (ring, bottomZFor, surfaceLightFactor = baseSurfaceLightFactor) => {
+        const addBottomFace = (ring, holes, bottomZFor, surfaceLightFactor = baseSurfaceLightFactor) => {
             const bottomRing = positiveAreaRing(ring).map((point) => ({
                 x: Number(point.x),
                 y: Number(point.y),
                 z: bottomZFor(point)
             }));
-            const triangulation = triangulateSurface(bottomRing, []);
+            const bottomHoles = (Array.isArray(holes) ? holes : []).map((hole) => positiveAreaRing(hole).map((point) => ({
+                x: Number(point.x),
+                y: Number(point.y),
+                z: bottomZFor(point)
+            })));
+            const triangulation = triangulateSurface(bottomRing, bottomHoles);
             if (!triangulation) {
                 throw new Error(`stair ${stair.id || "(new)"} bottom face could not be triangulated`);
             }
@@ -4820,6 +5113,9 @@ export class BuildingRenderer {
             if (!Array.isArray(ring) || ring.length < 3 || Math.abs(polygonSignedArea(ring)) <= GEOMETRY_EPSILON) {
                 throw new Error(`stair ${stair.id || "(new)"} final upper riser phantom step is degenerate`);
             }
+            const holes = (Array.isArray(step && step.holes) ? step.holes : [])
+                .map((hole) => positiveAreaRing(hole.map(transformPoint)))
+                .filter((hole) => hole.length >= 3 && Math.abs(polygonSignedArea(hole)) > GEOMETRY_EPSILON);
             const transformEdge = (edge) => edge.map(transformPoint);
             const upperFloorZ = String(stair && stair.direction || "up") === "down"
                 ? baseZ
@@ -4833,24 +5129,32 @@ export class BuildingRenderer {
                 globalStepIndex: Number(step.globalStepIndex) + 1,
                 z,
                 polygon: ring,
+                holes,
                 lowerEdge: transformEdge(lowerEdge),
                 upperEdge: transformEdge(upperEdge),
                 surfaceLightFactor: surfaceLightFactorForStep(step)
             };
         };
+        const stepHoleRings = (step, z) => (Array.isArray(step && step.holes) ? step.holes : [])
+            .map((hole) => positiveAreaRing(hole).map((point) => ({ ...point, z })))
+            .filter((hole) => hole.length >= 3 && Math.abs(polygonSignedArea(hole)) > GEOMETRY_EPSILON);
         const addStepRiserGeometry = (step, stepSurfaceLightFactor) => {
             const ring = positiveAreaRing(step.polygon).map((point) => ({ ...point, z: step.z }));
+            const holes = stepHoleRings(step, step.z);
             const bottomZFor = (point) => stepBottomZFor(step, point);
-            for (let index = 0; index < ring.length; index++) {
-                const a = ring[index];
-                const b = ring[(index + 1) % ring.length];
-                addVerticalFace(a, b, Number(step.z), bottomZFor(a), bottomZFor(b), stepSurfaceLightFactor);
-            }
-            addBottomFace(ring, bottomZFor, stepSurfaceLightFactor);
+            [ring, ...holes].forEach((edgeRing) => {
+                for (let index = 0; index < edgeRing.length; index++) {
+                    const a = edgeRing[index];
+                    const b = edgeRing[(index + 1) % edgeRing.length];
+                    addVerticalFace(a, b, Number(step.z), bottomZFor(a), bottomZFor(b), stepSurfaceLightFactor);
+                }
+            });
+            addBottomFace(ring, holes, bottomZFor, stepSurfaceLightFactor);
         };
         const addPlatformCapGeometry = (step, stepSurfaceLightFactor) => {
             const ring = positiveAreaRing(step.polygon).map((point) => ({ ...point, z: step.z }));
-            const triangulation = triangulateSurface(ring, []);
+            const holes = stepHoleRings(step, step.z);
+            const triangulation = triangulateSurface(ring, holes);
             if (!triangulation) {
                 throw new Error(`stair ${stair.id || "(new)"} final platform cap could not be triangulated`);
             }
@@ -4870,8 +5174,9 @@ export class BuildingRenderer {
         steps.forEach((step) => {
             const stepSurfaceLightFactor = surfaceLightFactorForStep(step);
             const ring = positiveAreaRing(step.polygon).map((point) => ({ ...point, z: step.z }));
+            const holes = stepHoleRings(step, step.z);
             const uvFrame = treadUvFrame(step, ring);
-            const triangulation = triangulateSurface(ring, []);
+            const triangulation = triangulateSurface(ring, holes);
             if (!triangulation) {
                 throw new Error(`stair ${stair.id || "(new)"} step ${step.globalStepIndex} could not be triangulated`);
             }
@@ -4897,8 +5202,16 @@ export class BuildingRenderer {
             const isDownStair = String(stair && stair.direction || "up") === "down";
             const upperStep = isDownStair ? steps[0] : steps[steps.length - 1];
             const phantomStep = translatedUpperRiserStep(upperStep);
-            addStepRiserGeometry(phantomStep, phantomStep.surfaceLightFactor);
-            addPlatformCapGeometry(phantomStep, phantomStep.surfaceLightFactor);
+            const platformSteps = options.clipToFloor
+                ? this.clipStairStepsToFloor([phantomStep], options.clipToFloor, stair, {
+                    allowEmpty: true,
+                    openingOnly: options.clipToFloorOpening === true
+                })
+                : [phantomStep];
+            platformSteps.forEach((platformStep) => {
+                addStepRiserGeometry(platformStep, platformStep.surfaceLightFactor);
+                addPlatformCapGeometry(platformStep, platformStep.surfaceLightFactor);
+            });
         }
         if (!treadPoints.length || treadIndices.length < 3) {
             throw new Error(`stair ${stair.id || "(new)"} did not produce renderable step geometry`);
@@ -4998,17 +5311,27 @@ export class BuildingRenderer {
         return container;
     }
 
-    syncStairMesh(floor, stair, alpha) {
+    syncStairMesh(floor, stair, alpha, options = {}) {
         const key = stairMeshKey(floor, stair);
         const treadTextureRepeatConfig = this.floorTextureRepeatConfig(stairTreadTexturePath(stair));
         const riserTextureRepeatConfig = this.floorTextureRepeatConfig(stairRiserTexturePath(stair));
         const platformCapFloor = this.stairUpperFloorForCap(stair);
         const platformCapTextureRepeatConfig = this.floorTextureRepeatConfig(platformCapFloor.floorTexturePath);
         const baseSurfaceLightFactor = this.floorShadowLightFactor(floor);
+        const clipDownStairFloor = options && options.clipDownStairFloor ? options.clipDownStairFloor : null;
+        const clipDownStairOpening = !!(options && options.clipDownStairOpening);
+        const cutoutReliefLightFactor = clipDownStairFloor
+            ? INTERIOR_BITMAP_LOWER_TERRAIN_SHADOW_LIGHT_FACTOR
+            : baseSurfaceLightFactor;
         const signature = [
             stairMeshSignature(floor, stair, treadTextureRepeatConfig, riserTextureRepeatConfig),
             `platformCap:${getFloorId(platformCapFloor)}:${normalizeTexturePath(platformCapFloor.floorTexturePath, DEFAULTS.floorTexture)}:${textureRepeatSignature(platformCapTextureRepeatConfig, FLOOR_TEXTURE_REPEAT)}`,
-            `surfaceLight:${Number(baseSurfaceLightFactor).toFixed(4)}`
+            `surfaceLight:${Number(baseSurfaceLightFactor).toFixed(4)}`,
+            `cutoutRelief:${Number(cutoutReliefLightFactor).toFixed(4)}`,
+            clipDownStairFloor
+                ? `clipDownToFloor:${surfaceMeshSignatureFromRings(getFloorId(clipDownStairFloor), clipDownStairFloor.outerPolygon || [], Array.isArray(clipDownStairFloor.holes) ? clipDownStairFloor.holes : [], "", getFloorElevation(clipDownStairFloor))}`
+                : "clipDownToFloor:none",
+            clipDownStairOpening ? "clipDownToOpening" : "clipDownToFloorArea"
         ].join(";");
         let entry = this.stairMeshById.get(key);
         if (!entry || entry.signature !== signature) {
@@ -5021,7 +5344,9 @@ export class BuildingRenderer {
                 treadTextureRepeatY: treadTextureRepeatConfig.repeatsPerMapUnitY,
                 riserTextureRepeatX: riserTextureRepeatConfig.repeatsPerMapUnitX,
                 riserTextureRepeatY: riserTextureRepeatConfig.repeatsPerMapUnitY,
-                surfaceLightFactor: baseSurfaceLightFactor
+                surfaceLightFactor: baseSurfaceLightFactor,
+                cutoutReliefLightFactor,
+                cutoutReliefFullRun: !!clipDownStairFloor
             });
             const mesh = this.createStairMesh(floor, stair, triangulation, treadTextureRepeatConfig, riserTextureRepeatConfig, platformCapFloor, platformCapTextureRepeatConfig);
             if (!mesh) throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} mesh could not be created`);
@@ -5032,23 +5357,29 @@ export class BuildingRenderer {
             this.buildingUnit.addChild(entry.mesh);
         }
         entry.mesh.visible = true;
+        const screenClipMask = clipDownStairFloor
+            ? this.stairScreenClipMaskTexture(stair, clipDownStairFloor, clipDownStairOpening)
+            : null;
         this.updateSurfaceMeshUniforms(entry.mesh._stairTreadMesh, floor, alpha, {
             texturePath: stairTreadTexturePath(stair),
             textureFallback: DEFAULTS.floorTexture,
-            lightFactor: 1
+            lightFactor: 1,
+            screenClipMask
         });
         if (entry.mesh._stairRiserMesh) {
             this.updateSurfaceMeshUniforms(entry.mesh._stairRiserMesh, floor, alpha, {
                 texturePath: stairRiserTexturePath(stair),
                 textureFallback: DEFAULTS.floorTexture,
-                lightFactor: 1
+                lightFactor: 1,
+                screenClipMask
             });
         }
         if (entry.mesh._stairPlatformCapMesh) {
             this.updateSurfaceMeshUniforms(entry.mesh._stairPlatformCapMesh, platformCapFloor, alpha, {
                 texturePath: platformCapFloor.floorTexturePath,
                 textureFallback: DEFAULTS.floorTexture,
-                lightFactor: 1
+                lightFactor: 1,
+                screenClipMask
             });
         }
         return entry.mesh;
@@ -5210,6 +5541,120 @@ export class BuildingRenderer {
                 return closedClipRing(projected, "projected floor open area");
             });
         }).filter((polygon) => polygon.length > 0);
+    }
+
+    drawScreenClipRing(gfx, ring, label) {
+        if (!looksLikeClipRing(ring)) {
+            throw new Error(`${label} requires a closed screen-space ring`);
+        }
+        ring.forEach((point, index) => {
+            const x = Number(point && point[0]);
+            const y = Number(point && point[1]);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                throw new Error(`${label} contains non-finite point ${index}`);
+            }
+            if (index === 0) gfx.moveTo(x, y);
+            else gfx.lineTo(x, y);
+        });
+        gfx.closePath();
+    }
+
+    screenClipMaskSignature(screenGeometry, label) {
+        const width = Math.max(1, Math.round(Number(this.app && this.app.screen && this.app.screen.width) || 1));
+        const height = Math.max(1, Math.round(Number(this.app && this.app.screen && this.app.screen.height) || 1));
+        const rounded = (Array.isArray(screenGeometry) ? screenGeometry : []).map((polygon, polygonIndex) => {
+            if (!looksLikeClipPolygon(polygon)) {
+                throw new Error(`${label} contains malformed projected polygon ${polygonIndex}`);
+            }
+            return polygon.map((ring, ringIndex) => {
+                if (!looksLikeClipRing(ring)) {
+                    throw new Error(`${label} contains malformed projected ring ${polygonIndex}:${ringIndex}`);
+                }
+                return ring.map((point, pointIndex) => {
+                    const x = Number(point && point[0]);
+                    const y = Number(point && point[1]);
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                        throw new Error(`${label} contains non-finite projected point ${polygonIndex}:${ringIndex}:${pointIndex}`);
+                    }
+                    return [
+                        Math.round(x * 1000) / 1000,
+                        Math.round(y * 1000) / 1000
+                    ];
+                });
+            });
+        });
+        return `${width}x${height}:${JSON.stringify(rounded)}`;
+    }
+
+    screenClipMaskTexture(screenGeometry, label) {
+        if (!PIXI.RenderTexture || !PIXI.Graphics) {
+            throw new Error(`${label} screen-space clip mask requires Pixi RenderTexture and Graphics`);
+        }
+        if (!Array.isArray(screenGeometry) || screenGeometry.length === 0) {
+            throw new Error(`${label} screen-space clip mask resolved no projected geometry`);
+        }
+        const width = Math.max(1, Math.round(Number(this.app && this.app.screen && this.app.screen.width) || 1));
+        const height = Math.max(1, Math.round(Number(this.app && this.app.screen && this.app.screen.height) || 1));
+        const signature = this.screenClipMaskSignature(screenGeometry, label);
+        const cached = this.screenClipMaskTextureBySignature.get(signature);
+        if (cached && cached.texture) return cached.texture;
+        const texture = PIXI.RenderTexture.create({ width, height, resolution: 1 });
+        const gfx = new PIXI.Graphics();
+        try {
+            screenGeometry.forEach((polygon, polygonIndex) => {
+                if (!looksLikeClipPolygon(polygon)) {
+                    throw new Error(`${label} contains malformed projected polygon ${polygonIndex}`);
+                }
+                gfx.beginFill(0xffffff, 1);
+                this.drawScreenClipRing(gfx, polygon[0], `${label} polygon ${polygonIndex} outer`);
+                if (polygon.length > 1) {
+                    if (typeof gfx.beginHole !== "function" || typeof gfx.endHole !== "function") {
+                        throw new Error(`${label} screen-space clip mask requires Pixi hole drawing support`);
+                    }
+                    gfx.beginHole();
+                    for (let ringIndex = 1; ringIndex < polygon.length; ringIndex++) {
+                        this.drawScreenClipRing(gfx, polygon[ringIndex], `${label} polygon ${polygonIndex} hole ${ringIndex}`);
+                    }
+                    gfx.endHole();
+                }
+                gfx.endFill();
+            });
+            this.app.renderer.render(gfx, texture, true);
+        } finally {
+            if (typeof gfx.destroy === "function") {
+                gfx.destroy({ children: true, texture: false, baseTexture: false });
+            }
+        }
+        this.screenClipMaskTextureBySignature.set(signature, { texture });
+        return texture;
+    }
+
+    stairScreenClipMaskTexture(stair, floor, openingOnly) {
+        if (!floor) throw new Error(`stair ${stair && stair.id ? stair.id : "(new)"} screen clip requires a target floor`);
+        const floorId = getFloorId(floor);
+        const label = `stair ${stair && stair.id ? stair.id : "(new)"} floor ${floorId}`;
+        const clipGeometry = openingOnly === true
+            ? this.stairOpeningClipGeometryForFloor(stair, floor, `${label} screen opening clip`)
+            : [this.floorClipPolygon(floor, `${label} screen floor clip`)];
+        if (!Array.isArray(clipGeometry) || clipGeometry.length === 0 || clipGeometryArea(clipGeometry) <= GEOMETRY_EPSILON) {
+            throw new Error(`${label} screen clip resolved no floor opening geometry`);
+        }
+        const screenGeometry = this.projectClipGeometryToScreen(clipGeometry, getFloorElevation(floor));
+        if (!Array.isArray(screenGeometry) || screenGeometry.length === 0) {
+            throw new Error(`${label} screen clip resolved no projected geometry`);
+        }
+        return this.screenClipMaskTexture(screenGeometry, `${label} screen clip`);
+    }
+
+    destroyScreenClipMasks() {
+        if (!(this.screenClipMaskTextureBySignature instanceof Map)) return;
+        for (const entry of this.screenClipMaskTextureBySignature.values()) {
+            const texture = entry && entry.texture;
+            if (texture && typeof texture.destroy === "function") {
+                texture.destroy(true);
+            }
+        }
+        this.screenClipMaskTextureBySignature.clear();
     }
 
     wallEntryForWall(wall, wallEntries) {
@@ -6174,6 +6619,12 @@ export class BuildingRenderer {
                 entry.unit.destroy();
             }
             const baseZ = getFloorElevation(floor);
+            const runtimeLayer = Number.isFinite(Number(wall.traversalLayer))
+                ? Math.round(Number(wall.traversalLayer))
+                : (Number.isFinite(Number(floor && floor.level)) ? Math.round(Number(floor.level)) : null);
+            if (!Number.isFinite(runtimeLayer)) {
+                throw new Error(`wall ${wall && wall.id} cannot create runtime wall without a floor stack layer`);
+            }
             const unit = new WallSectionUnit(
                 this.makeWallRuntimeEndpoint(renderPoints[0]),
                 this.makeWallRuntimeEndpoint(renderPoints[1]),
@@ -6183,10 +6634,8 @@ export class BuildingRenderer {
                     thickness: Number(wall.thickness),
                     topProfile: wall.topProfile || null,
                     bottomZ: baseZ,
-                    traversalLayer: Number.isFinite(Number(wall.traversalLayer))
-                        ? Math.round(Number(wall.traversalLayer))
-                        : Math.round(baseZ / 3),
-                    level: Number.isFinite(Number(wall.level)) ? Math.round(Number(wall.level)) : Math.round(baseZ / 3),
+                    traversalLayer: runtimeLayer,
+                    level: runtimeLayer,
                     wallTexturePath: wallTexturePathForRender(wall, floor),
                     deferSetup: true,
                     suppressAutoScriptingName: true
@@ -6921,12 +7370,17 @@ export class BuildingRenderer {
             }
             const selection = this.state.selection || {};
             getFloorRoofs(floor).forEach((roof) => {
+                const forceRoofVisible = !!(
+                    this.playtestFloorRenderOverride &&
+                    this.playtestFloorRenderOverride.roofFloorIds instanceof Set &&
+                    this.playtestFloorRenderOverride.roofFloorIds.has(getFloorId(floor))
+                );
                 const selectedRoofVisible = selection.kind === "roof"
                     ? this.state.isRoofSelected(getFloorId(floor), roof.id)
                     : (selection.kind === "roofVertex" || selection.kind === "roofPeak" || selection.kind === "roofShedDirection" || selection.kind === "gable" || selection.kind === "gableHandle") &&
                         selection.floorId === getFloorId(floor) &&
                         (!selection.roofId || String(selection.roofId) === String(roof.id));
-                if (exterior || selectedRoofVisible) {
+                if (exterior || selectedRoofVisible || forceRoofVisible) {
                     const roofView = floorRoofView(floor, roof);
                     const roofMesh = this.syncRoofMesh(floor, floorAlpha, roof);
                     if (roofMesh) {
@@ -7582,6 +8036,9 @@ export class BuildingRenderer {
             uBuildingExteriorDepthMetricDataPass: 0,
             uBuildingExteriorDepthMetricRange: new Float32Array([-128, 1 / 384]),
             uBuildingExteriorDepthMetricOrigin: 0,
+            uScreenClipMask: PIXI.Texture.WHITE,
+            uScreenClipEnabled: 0,
+            uScreenClipSize: new Float32Array([1, 1]),
             uSampler: texture
         });
         const mesh = new PIXI.Mesh(geometry, shader, this.getFloorDepthState() || undefined, PIXI.DRAW_MODES.TRIANGLES);
@@ -7662,6 +8119,10 @@ export class BuildingRenderer {
 
     drawMountedObjects() {
         const liveIds = new Set();
+        const excludedObjectIds = this.playtestFloorRenderOverride &&
+            this.playtestFloorRenderOverride.excludedObjectIds instanceof Set
+            ? this.playtestFloorRenderOverride.excludedObjectIds
+            : null;
         const floors = this.renderedFloors();
         const floorIds = new Set(floors.map((floor) => getFloorId(floor)));
         const exterior = this.state.renderStyle() === "exterior";
@@ -7675,6 +8136,7 @@ export class BuildingRenderer {
         this.lastMountedObjectPickEntries = [];
         getBuildingMountedObjects(this.state.building).forEach((object) => {
             const id = String(object.id);
+            if (excludedObjectIds && excludedObjectIds.has(id)) return;
             if (replacingMountedObjectId === id) return;
             const placement = this.mountedObjectPlacement(object);
             if (!placement) return;
@@ -8860,7 +9322,15 @@ export class BuildingRenderer {
                     throw new Error(`visible stair ${stair.id} has no resolved floor alpha`);
                 }
                 const stairAlpha = Math.max(...stairAlphas);
-                const mesh = this.syncStairMesh(ownerFloor, stair, stairAlpha);
+                const clipDownStairFloor = this.downStairClipTargetFloor(ownerFloor, stair, floors);
+                const clipDownStairOpening = !!(
+                    clipDownStairFloor &&
+                    getFloorId(clipDownStairFloor) !== ownerFloorId
+                );
+                const mesh = this.syncStairMesh(ownerFloor, stair, stairAlpha, {
+                    clipDownStairFloor,
+                    clipDownStairOpening
+                });
                 if (mesh) this.lastStairPickEntries.push({ stair, floor: ownerFloor, mesh });
                 liveStairMeshIds.add(key);
             });
@@ -9074,6 +9544,227 @@ export class BuildingRenderer {
             gfx.drawCircle(screen.x, screen.y, selected ? 7 : 5);
             gfx.endFill();
         });
+    }
+}
+
+export async function renderBuildingBitmap(buildingData, options = {}) {
+    const label = typeof options.label === "string" && options.label.length > 0
+        ? options.label
+        : "building";
+    const includeRoofs = options.includeRoofs === true || (options.roofFloorIds !== undefined && options.roofFloorIds !== null);
+    const includeDepthMetric = options.includeDepthMetric !== false;
+    const includeAlphaMask = options.includeAlphaMask === true;
+    const setup = createBuildingBitmapExportSetup(buildingData, options, {
+        label,
+        stageName: typeof options.stageName === "string" && options.stageName.length > 0
+            ? options.stageName
+            : "buildingBitmapExportStage",
+        rotateModelAroundOrigin: options.rotateModelAroundOrigin === true,
+        configureState(state, setupOptions) {
+            const requestedFloors = resolveBuildingBitmapFloorSelection(state.building, setupOptions, label);
+            const requestedFloorIds = new Set(requestedFloors.map((floor) => getFloorId(floor)));
+            state.layerSelectionMode = setupOptions.renderStyle === "exterior" ? "all" : "floor";
+            state.selectedFloorIds = new Set(requestedFloorIds);
+            if (requestedFloors.length === 1) {
+                const floorId = getFloorId(requestedFloors[0]);
+                state.selection = {
+                    ...(state.selection || {}),
+                    kind: "floor",
+                    floorId,
+                    levelId: floorId
+                };
+            }
+            return { requestedFloors, requestedFloorIds };
+        }
+    });
+    const {
+        rendererRef,
+        pixelsPerWorldUnit: requestedPixelsPerWorldUnit,
+        padding,
+        maxDimension,
+        rotation,
+        pitch,
+        state,
+        appLike,
+        exportRenderer,
+        requestedFloors,
+        requestedFloorIds
+    } = setup;
+    const previousFloorRenderOverride = exportRenderer.playtestFloorRenderOverride;
+    try {
+        const renderedFloorIds = new Set(requestedFloorIds);
+        if (options.includeVisibleLowerFloors === true || options.includeFloorsVisibleThroughOpenings === true) {
+            requestedFloors.forEach((floor) => {
+                const visibleThroughFloorIds = exportRenderer.floorIdsVisibleThroughFloorOpenings(floor);
+                const visibleLowerFloorIds = exportRenderer.floorIdsVisibleBelowFloor(floor);
+                visibleThroughFloorIds.forEach((id) => renderedFloorIds.add(id));
+                visibleLowerFloorIds.forEach((id) => renderedFloorIds.add(id));
+            });
+        }
+        const renderedFloors = getBuildingFloors(state.building)
+            .filter((floor) => renderedFloorIds.has(getFloorId(floor)))
+            .sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
+        if (renderedFloors.length === 0) {
+            throw new Error(`${label} bitmap export resolved no rendered floors`);
+        }
+        const roofFloorIds = normalizeBuildingBitmapFloorIdSet(options.roofFloorIds, label) ||
+            (includeRoofs ? new Set(renderedFloors.map((floor) => getFloorId(floor))) : new Set());
+        const fullHeightWallFloorIds = normalizeBuildingBitmapFloorIdSet(options.fullHeightWallFloorIds, label) || new Set();
+        const fullOpacityMountedObjectFloorIds = normalizeBuildingBitmapFloorIdSet(options.fullOpacityMountedObjectFloorIds, label) || new Set();
+        const lowerTerrainShadowFloorIds = normalizeBuildingBitmapFloorIdSet(options.lowerTerrainShadowFloorIds, label) || new Set();
+        const clipDownStairFloorIds = normalizeBuildingBitmapFloorIdSet(
+            options.clipDownStairFloorIds !== undefined ? options.clipDownStairFloorIds : (
+                options.clipDownStairsToFloor === true ? Array.from(renderedFloorIds) : null
+            ),
+            label
+        ) || new Set();
+        const excludedObjectIds = normalizeBuildingBitmapObjectIdSet(options.excludedObjectIds, label);
+        exportRenderer.playtestFloorRenderOverride = {
+            floorIds: renderedFloorIds,
+            roofFloorIds,
+            fullHeightWallFloorIds,
+            fullOpacityMountedObjectFloorIds,
+            lowerTerrainShadowFloorIds,
+            clipDownStairFloorIds,
+            excludedObjectIds,
+            suppressFade: true
+        };
+        await Promise.all([
+            exportRenderer.ensureFloorTextureConfigLoaded(),
+            exportRenderer.ensureRoofTextureConfigLoaded()
+        ]);
+        const WallSectionUnit = globalThis.WallSectionUnit;
+        if (WallSectionUnit && typeof WallSectionUnit._ensureWallTextureConfigLoaded === "function") {
+            await WallSectionUnit._ensureWallTextureConfigLoaded();
+        }
+        const texturePaths = typeof options.texturePaths === "function"
+            ? options.texturePaths(state.building, { renderedFloors, requestedFloors })
+            : exteriorBitmapTexturePaths(state.building);
+        await Promise.all((Array.isArray(texturePaths) ? texturePaths : [])
+            .map((path) => loadPixiTexturePath(path, `${label} bitmap`)));
+        const projectionPoints = collectBuildingBitmapProjectionPoints(state.building, renderedFloors, {
+            includeRoofs,
+            includeWalls: options.includeWalls !== false,
+            includeMountedObjects: options.includeMountedObjects !== false,
+            excludedObjectIds
+        });
+        const fitted = fitBuildingBitmapExportResolution(setup, projectionPoints, label);
+        const pixelsPerWorldUnit = fitted.pixelsPerWorldUnit;
+        const width = fitted.width;
+        const height = fitted.height;
+        setExteriorBitmapScreen(appLike, width, height);
+        let bounds = screenBoundsForProjectionPoints(exportRenderer, projectionPoints);
+        const dx = (width * 0.5) - bounds.centerX;
+        const dy = (height * 0.5) - bounds.centerY;
+        const pitchFactors = cameraPitchProjectionFactors(state.camera);
+        state.camera.x -= dx / pixelsPerWorldUnit;
+        state.camera.y -= dy / (pixelsPerWorldUnit * GAME_XY_RATIO * pitchFactors.floor);
+        bounds = screenBoundsForProjectionPoints(exportRenderer, projectionPoints);
+        const metricBounds = includeDepthMetric ? exteriorDepthMetricBounds(projectionPoints, state.camera) : null;
+        const originScreen = exportRenderer.worldToScreen({ x: 0, y: 0 }, 0);
+        if (!originScreen || !Number.isFinite(originScreen.x) || !Number.isFinite(originScreen.y)) {
+            throw new Error(`${label} bitmap export could not project building origin`);
+        }
+
+        const texture = resolveBuildingBitmapRenderTexture(options.renderTexture || options.texture, width, height, `${label} bitmap`);
+        const depthMetricTexture = includeDepthMetric
+            ? resolveBuildingBitmapRenderTexture(options.depthMetricTexture, width, height, `${label} depth metric`)
+            : null;
+        if (depthMetricTexture) configureExteriorDepthMetricTexture(depthMetricTexture);
+        exportRenderer.ensureRenderTextureDepthAttachment(texture, `${label} bitmap texture`);
+        if (depthMetricTexture) {
+            exportRenderer.ensureRenderTextureDepthAttachment(depthMetricTexture, `${label} depth metric texture`);
+        }
+        exportRenderer.drawGameStyleBuilding();
+        exportRenderer.drawMountedObjects();
+        if (typeof options.validate === "function") {
+            options.validate(exportRenderer, { renderedFloors, requestedFloors });
+        }
+        const hidden = [
+            exportRenderer.gridLayer,
+            exportRenderer.gridAnchorLayer,
+            exportRenderer.floorLayer,
+            exportRenderer.wallLayer,
+            exportRenderer.mountedObjectLayer,
+            exportRenderer.selectionOutlineLayer,
+            exportRenderer.handleLayer,
+            exportRenderer.draftLayer,
+            exportRenderer.playtestLayer,
+            exportRenderer.pickerDepthDebugLayer,
+            exportRenderer.pickerDebugLayer,
+            exportRenderer.pickerDebugLabels
+        ];
+        exportRenderer.withDisplayObjectsHidden(hidden, () => {
+            exportRenderer.clearDepthTestedRenderTarget(
+                { renderer: rendererRef, texture },
+                `${label} bitmap target`
+            );
+            rendererRef.render(exportRenderer.root, texture, false);
+            if (depthMetricTexture) {
+                const restoreDepthMetricPass = exportRenderer.applyExteriorDepthMetricDataPassState(
+                    new Set([exportRenderer.buildingUnit]),
+                    metricBounds
+                );
+                try {
+                    exportRenderer.clearDepthTestedRenderTarget(
+                        { renderer: rendererRef, texture: depthMetricTexture },
+                        `${label} depth metric target`
+                    );
+                    rendererRef.render(exportRenderer.root, depthMetricTexture, false);
+                } finally {
+                    restoreDepthMetricPass();
+                }
+            }
+        });
+        const alphaMask = includeAlphaMask
+            ? extractRenderTextureAlphaMask(rendererRef, texture, `${label} bitmap alpha mask`)
+            : null;
+        return {
+            texture,
+            depthMetricTexture,
+            alphaMask,
+            width,
+            height,
+            anchorX: originScreen.x / width,
+            anchorY: originScreen.y / height,
+            pixelsPerWorldUnit,
+            requestedPixelsPerWorldUnit,
+            resolutionScale: fitted.resolutionScale,
+            xyratio: GAME_XY_RATIO,
+            floorSurfaceZLift: EXTERIOR_BITMAP_FLOOR_Z_LIFT,
+            rotation,
+            pitch,
+            requestedFloorIds: Array.from(requestedFloorIds),
+            renderedFloorIds: Array.from(renderedFloorIds),
+            roofFloorIds: Array.from(roofFloorIds),
+            depthMetric: metricBounds ? {
+                min: metricBounds.min,
+                max: metricBounds.max,
+                span: metricBounds.span,
+                origin: metricBounds.origin
+            } : null,
+            bounds: {
+                screen: bounds,
+                worldWidth: width / pixelsPerWorldUnit,
+                worldHeight: height / (pixelsPerWorldUnit * GAME_XY_RATIO),
+                requestedWidth: fitted.requestedWidth,
+                requestedHeight: fitted.requestedHeight,
+                maxDimension
+            },
+            camera: {
+                x: Number(state.camera.x),
+                y: Number(state.camera.y),
+                z: Number(state.camera.z) || 0,
+                zoom: pixelsPerWorldUnit,
+                rotation,
+                pitch
+            }
+        };
+    } catch (error) {
+        throw new Error(`${label} bitmap export failed: ${error && error.message ? error.message : error}`);
+    } finally {
+        exportRenderer.playtestFloorRenderOverride = previousFloorRenderOverride;
+        destroyBuildingBitmapExportSetup(setup);
     }
 }
 

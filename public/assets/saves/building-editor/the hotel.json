@@ -1,0 +1,3031 @@
+{
+  "schema": "survivor-building-v1",
+  "id": "building-87",
+  "name": "the hotel",
+  "origin": {
+    "x": 0,
+    "y": 0
+  },
+  "defaults": {
+    "floorTexture": "/assets/images/flooring/woodfloor.png",
+    "wallTexture": "/assets/images/walls/woodwall.png",
+    "roofTexture": "/assets/images/roofs/slate.png",
+    "roofMode": "peak",
+    "roofOverhang": 0,
+    "roofPeakHeight": 0,
+    "wallHeight": 3,
+    "wallThickness": 0.25
+  },
+  "floorFragments": [
+    {
+      "fragmentId": "floor-fragment-88",
+      "surfaceId": "floor-fragment-88",
+      "ownerSectionKey": "",
+      "name": "lobby",
+      "level": 0,
+      "nodeBaseZOffset": 0,
+      "nodeBaseZ": 0,
+      "outerPolygon": [
+        {
+          "id": "vertex-89",
+          "x": -5.443745561227534,
+          "y": -4.692753026158711
+        },
+        {
+          "id": "vertex-90",
+          "x": -5.507157390525151,
+          "y": 10.08956775167067
+        },
+        {
+          "id": "vertex-91",
+          "x": 9.275163387304229,
+          "y": 10.152979580968287
+        },
+        {
+          "id": "vertex-92",
+          "x": 9.338575216601848,
+          "y": -4.629341196861093
+        }
+      ],
+      "holes": [],
+      "floorTexturePath": "/assets/images/flooring/concrete.jpg",
+      "roof": null,
+      "floorHeight": 3,
+      "defaultWallHeight": 5,
+      "defaultWallTexturePath": "/assets/images/walls/woodwall.png",
+      "posts": [],
+      "beams": [],
+      "columns": [],
+      "stairs": [
+        {
+          "type": "stairs",
+          "id": 33,
+          "stairKind": "treadPath",
+          "floorId": "floor-fragment-88",
+          "startPoint": {
+            "x": 1.8319787673943912,
+            "y": -3.3115298774047783
+          },
+          "endPoint": {
+            "x": -3.5196659944160356,
+            "y": -3.334486866986984
+          },
+          "treads": [
+            {
+              "left": {
+                "x": 1.836697402005388,
+                "y": -4.411519756670678
+              },
+              "right": {
+                "x": 1.8272601327833946,
+                "y": -2.211539998138879
+              },
+              "center": {
+                "x": 1.8319787673943912,
+                "y": -3.3115298774047783
+              }
+            },
+            {
+              "left": {
+                "x": -3.524384629027032,
+                "y": -2.2344969877210845
+              },
+              "right": {
+                "x": -3.514947359805039,
+                "y": -4.434476746252884
+              },
+              "center": {
+                "x": -3.5196659944160356,
+                "y": -3.334486866986984
+              }
+            }
+          ],
+          "ladder": false,
+          "direction": "down",
+          "width": 2.2,
+          "bottomZ": 3,
+          "height": 3,
+          "stepCount": 12,
+          "riserDepth": 0.4807692307692308,
+          "texturePath": "/assets/images/flooring/cave.jpg",
+          "treadTexturePath": "/assets/images/flooring/cave.jpg",
+          "riserTexturePath": "/assets/images/flooring/black.png",
+          "footprint": [
+            {
+              "x": 1.836697402005388,
+              "y": -4.411519756670678
+            },
+            {
+              "x": -3.524384629027032,
+              "y": -2.2344969877210845
+            },
+            {
+              "x": -3.514947359805039,
+              "y": -4.434476746252884
+            },
+            {
+              "x": 1.8272601327833946,
+              "y": -2.211539998138879
+            }
+          ]
+        }
+      ],
+      "roofs": []
+    },
+    {
+      "fragmentId": "floor-fragment-94",
+      "surfaceId": "floor-fragment-94",
+      "ownerSectionKey": "",
+      "name": "floor 1",
+      "level": 1,
+      "nodeBaseZOffset": 0,
+      "nodeBaseZ": 3,
+      "outerPolygon": [
+        {
+          "id": "vertex-89",
+          "x": -5.443745561227534,
+          "y": -4.692753026158711
+        },
+        {
+          "id": "vertex-90",
+          "x": -5.507157390525151,
+          "y": 10.08956775167067
+        },
+        {
+          "id": "vertex-91",
+          "x": 9.275163387304229,
+          "y": 10.152979580968287
+        },
+        {
+          "id": "vertex-92",
+          "x": 9.338575216601848,
+          "y": -4.629341196861093
+        }
+      ],
+      "holes": [],
+      "floorTexturePath": "/assets/images/flooring/concrete.jpg",
+      "roof": null,
+      "floorHeight": 3,
+      "defaultWallHeight": 5,
+      "defaultWallTexturePath": "/assets/images/walls/woodwall.png",
+      "posts": [],
+      "beams": [],
+      "columns": [],
+      "stairs": [
+        {
+          "type": "stairs",
+          "id": 32,
+          "stairKind": "treadPath",
+          "floorId": "floor-fragment-94",
+          "startPoint": {
+            "x": 1.8871849445298718,
+            "y": -3.3112930590639165
+          },
+          "endPoint": {
+            "x": -3.4675922513516886,
+            "y": -3.3342634858714124
+          },
+          "treads": [
+            {
+              "left": {
+                "x": 1.8919035791408685,
+                "y": -4.4112829383298156
+              },
+              "right": {
+                "x": 1.8824663099188752,
+                "y": -2.211303179798017
+              },
+              "center": {
+                "x": 1.8871849445298718,
+                "y": -3.3112930590639165
+              }
+            },
+            {
+              "left": {
+                "x": -3.4723108859626852,
+                "y": -2.234273606605513
+              },
+              "right": {
+                "x": -3.462873616740692,
+                "y": -4.434253365137312
+              },
+              "center": {
+                "x": -3.4675922513516886,
+                "y": -3.3342634858714124
+              }
+            }
+          ],
+          "ladder": false,
+          "direction": "down",
+          "width": 2.2,
+          "bottomZ": 6,
+          "height": 3,
+          "stepCount": 12,
+          "riserDepth": 0.4807692307692308,
+          "texturePath": "/assets/images/flooring/cave.jpg",
+          "treadTexturePath": "/assets/images/flooring/cave.jpg",
+          "riserTexturePath": "/assets/images/flooring/black.png",
+          "footprint": [
+            {
+              "x": 1.8919035791408685,
+              "y": -4.4112829383298156
+            },
+            {
+              "x": -3.4723108859626852,
+              "y": -2.234273606605513
+            },
+            {
+              "x": -3.462873616740692,
+              "y": -4.434253365137312
+            },
+            {
+              "x": 1.8824663099188752,
+              "y": -2.211303179798017
+            }
+          ]
+        }
+      ],
+      "_createPerimeterWalls": false,
+      "roofs": []
+    },
+    {
+      "fragmentId": "floor-fragment-96",
+      "surfaceId": "floor-fragment-96",
+      "ownerSectionKey": "",
+      "name": "floor 2",
+      "level": 2,
+      "nodeBaseZOffset": 0,
+      "nodeBaseZ": 6,
+      "outerPolygon": [
+        {
+          "id": "vertex-89",
+          "x": -5.443745561227534,
+          "y": -4.692753026158711
+        },
+        {
+          "id": "vertex-90",
+          "x": -5.507157390525151,
+          "y": 10.08956775167067
+        },
+        {
+          "id": "vertex-91",
+          "x": 9.275163387304229,
+          "y": 10.152979580968287
+        },
+        {
+          "id": "vertex-92",
+          "x": 9.338575216601848,
+          "y": -4.629341196861093
+        }
+      ],
+      "holes": [],
+      "floorTexturePath": "/assets/images/flooring/concrete.jpg",
+      "roof": null,
+      "floorHeight": 3,
+      "defaultWallHeight": 5,
+      "defaultWallTexturePath": "/assets/images/walls/woodwall.png",
+      "posts": [],
+      "beams": [],
+      "columns": [],
+      "stairs": [
+        {
+          "type": "stairs",
+          "id": 31,
+          "stairKind": "treadPath",
+          "floorId": "floor-fragment-96",
+          "startPoint": {
+            "x": 1.9219586386790717,
+            "y": -3.311143890094404
+          },
+          "endPoint": {
+            "x": -3.53183385795303,
+            "y": -3.3345390635599794
+          },
+          "treads": [
+            {
+              "left": {
+                "x": 1.9266772732900683,
+                "y": -4.411133769360303
+              },
+              "right": {
+                "x": 1.917240004068075,
+                "y": -2.2111540108285044
+              },
+              "center": {
+                "x": 1.9219586386790717,
+                "y": -3.311143890094404
+              }
+            },
+            {
+              "left": {
+                "x": -3.536552492564027,
+                "y": -2.23454918429408
+              },
+              "right": {
+                "x": -3.5271152233420335,
+                "y": -4.434528942825879
+              },
+              "center": {
+                "x": -3.53183385795303,
+                "y": -3.3345390635599794
+              }
+            }
+          ],
+          "ladder": false,
+          "direction": "down",
+          "width": 2.2,
+          "bottomZ": 9,
+          "height": 3,
+          "stepCount": 12,
+          "riserDepth": 0.4807692307692308,
+          "texturePath": "/assets/images/flooring/cave.jpg",
+          "treadTexturePath": "/assets/images/flooring/cave.jpg",
+          "riserTexturePath": "/assets/images/flooring/black.png",
+          "footprint": [
+            {
+              "x": 1.9266772732900683,
+              "y": -4.411133769360303
+            },
+            {
+              "x": -3.536552492564027,
+              "y": -2.23454918429408
+            },
+            {
+              "x": -3.5271152233420335,
+              "y": -4.434528942825879
+            },
+            {
+              "x": 1.917240004068075,
+              "y": -2.2111540108285044
+            }
+          ]
+        }
+      ],
+      "_createPerimeterWalls": false,
+      "roofs": []
+    },
+    {
+      "fragmentId": "floor-fragment-98",
+      "surfaceId": "floor-fragment-98",
+      "ownerSectionKey": "",
+      "name": "floor 3",
+      "level": 3,
+      "nodeBaseZOffset": 0,
+      "nodeBaseZ": 9,
+      "outerPolygon": [
+        {
+          "id": "vertex-89",
+          "x": -5.443745561227534,
+          "y": -4.692753026158711
+        },
+        {
+          "id": "vertex-90",
+          "x": -5.507157390525151,
+          "y": 10.08956775167067
+        },
+        {
+          "id": "vertex-91",
+          "x": 9.275163387304229,
+          "y": 10.152979580968287
+        },
+        {
+          "id": "vertex-92",
+          "x": 9.338575216601848,
+          "y": -4.629341196861093
+        }
+      ],
+      "holes": [],
+      "floorTexturePath": "/assets/images/flooring/concrete.jpg",
+      "roof": null,
+      "floorHeight": 3,
+      "defaultWallHeight": 5,
+      "defaultWallTexturePath": "/assets/images/walls/woodwall.png",
+      "posts": [],
+      "beams": [],
+      "columns": [],
+      "stairs": [
+        {
+          "type": "stairs",
+          "id": 30,
+          "stairKind": "treadPath",
+          "floorId": "floor-fragment-98",
+          "startPoint": {
+            "x": 1.9442170886180092,
+            "y": -3.311048407859295
+          },
+          "endPoint": {
+            "x": -3.6056361453129937,
+            "y": -3.3348556537705525
+          },
+          "treads": [
+            {
+              "left": {
+                "x": 1.9489357232290059,
+                "y": -4.411038287125194
+              },
+              "right": {
+                "x": 1.9394984540070126,
+                "y": -2.2110585285933957
+              },
+              "center": {
+                "x": 1.9442170886180092,
+                "y": -3.311048407859295
+              }
+            },
+            {
+              "left": {
+                "x": -3.6103547799239895,
+                "y": -2.234865774504653
+              },
+              "right": {
+                "x": -3.600917510701998,
+                "y": -4.434845533036452
+              },
+              "center": {
+                "x": -3.6056361453129937,
+                "y": -3.3348556537705525
+              }
+            }
+          ],
+          "ladder": false,
+          "direction": "down",
+          "width": 2.2,
+          "bottomZ": 12,
+          "height": 3,
+          "stepCount": 12,
+          "riserDepth": 0.4807692307692308,
+          "texturePath": "/assets/images/flooring/cave.jpg",
+          "treadTexturePath": "/assets/images/flooring/cave.jpg",
+          "riserTexturePath": "/assets/images/flooring/black.png",
+          "footprint": [
+            {
+              "x": 1.9489357232290059,
+              "y": -4.411038287125194
+            },
+            {
+              "x": -3.6103547799239895,
+              "y": -2.234865774504653
+            },
+            {
+              "x": -3.600917510701998,
+              "y": -4.434845533036452
+            },
+            {
+              "x": 1.9394984540070126,
+              "y": -2.2110585285933957
+            }
+          ]
+        }
+      ],
+      "_createPerimeterWalls": false,
+      "roofs": []
+    },
+    {
+      "fragmentId": "floor-fragment-102",
+      "surfaceId": "floor-fragment-102",
+      "ownerSectionKey": "",
+      "name": "floor 3 copy",
+      "level": 4,
+      "nodeBaseZOffset": 0,
+      "nodeBaseZ": 12,
+      "outerPolygon": [
+        {
+          "id": "vertex-89",
+          "x": -5.443745561227534,
+          "y": -4.692753026158711
+        },
+        {
+          "id": "vertex-90",
+          "x": -5.507157390525151,
+          "y": 10.08956775167067
+        },
+        {
+          "id": "vertex-91",
+          "x": 9.275163387304229,
+          "y": 10.152979580968287
+        },
+        {
+          "id": "vertex-92",
+          "x": 9.338575216601848,
+          "y": -4.629341196861093
+        }
+      ],
+      "holes": [],
+      "floorTexturePath": "/assets/images/flooring/concrete.jpg",
+      "roof": null,
+      "floorHeight": 3,
+      "defaultWallHeight": 5,
+      "defaultWallTexturePath": "/assets/images/walls/woodwall.png",
+      "posts": [],
+      "beams": [],
+      "columns": [],
+      "stairs": [
+        {
+          "type": "stairs",
+          "id": 34,
+          "stairKind": "treadPath",
+          "floorId": "floor-fragment-102",
+          "startPoint": {
+            "x": 1.9442170886180092,
+            "y": -3.311048407859295
+          },
+          "endPoint": {
+            "x": -3.6056361453129937,
+            "y": -3.3348556537705525
+          },
+          "treads": [
+            {
+              "left": {
+                "x": 1.9489357232290059,
+                "y": -4.411038287125194
+              },
+              "right": {
+                "x": 1.9394984540070126,
+                "y": -2.2110585285933957
+              },
+              "center": {
+                "x": 1.9442170886180092,
+                "y": -3.311048407859295
+              }
+            },
+            {
+              "left": {
+                "x": -3.6103547799239895,
+                "y": -2.234865774504653
+              },
+              "right": {
+                "x": -3.600917510701998,
+                "y": -4.434845533036452
+              },
+              "center": {
+                "x": -3.6056361453129937,
+                "y": -3.3348556537705525
+              }
+            }
+          ],
+          "ladder": false,
+          "direction": "down",
+          "width": 2.2,
+          "bottomZ": 12,
+          "height": 3,
+          "stepCount": 12,
+          "riserDepth": 0.4807692307692308,
+          "texturePath": "/assets/images/flooring/cave.jpg",
+          "treadTexturePath": "/assets/images/flooring/cave.jpg",
+          "riserTexturePath": "/assets/images/flooring/black.png",
+          "footprint": [
+            {
+              "x": 1.9489357232290059,
+              "y": -4.411038287125194
+            },
+            {
+              "x": -3.6103547799239895,
+              "y": -2.234865774504653
+            },
+            {
+              "x": -3.600917510701998,
+              "y": -4.434845533036452
+            },
+            {
+              "x": 1.9394984540070126,
+              "y": -2.2110585285933957
+            }
+          ]
+        },
+        {
+          "type": "stairs",
+          "id": 36,
+          "stairKind": "treadPath",
+          "floorId": "floor-fragment-102",
+          "startPoint": {
+            "x": -3.5217591336254137,
+            "y": -3.33449584594152
+          },
+          "endPoint": {
+            "x": 1.9416174372910666,
+            "y": -3.311059559602561
+          },
+          "treads": [
+            {
+              "left": {
+                "x": -3.517040499014417,
+                "y": -4.43448572520742
+              },
+              "right": {
+                "x": -3.5264777682364103,
+                "y": -2.2345059666756204
+              },
+              "center": {
+                "x": -3.5217591336254137,
+                "y": -3.33449584594152
+              }
+            },
+            {
+              "left": {
+                "x": 1.936898802680071,
+                "y": -2.2110696803366614
+              },
+              "right": {
+                "x": 1.9463360719020621,
+                "y": -4.41104943886846
+              },
+              "center": {
+                "x": 1.9416174372910666,
+                "y": -3.311059559602561
+              }
+            }
+          ],
+          "ladder": false,
+          "direction": "up",
+          "width": 2.2,
+          "bottomZ": 12,
+          "height": 3,
+          "stepCount": 12,
+          "riserDepth": 0.4807692307692308,
+          "texturePath": "/assets/images/flooring/cave.jpg",
+          "treadTexturePath": "/assets/images/flooring/cave.jpg",
+          "riserTexturePath": "/assets/images/flooring/black.png",
+          "footprint": [
+            {
+              "x": -3.517040499014417,
+              "y": -4.43448572520742
+            },
+            {
+              "x": 1.936898802680071,
+              "y": -2.2110696803366614
+            },
+            {
+              "x": 1.9463360719020621,
+              "y": -4.41104943886846
+            },
+            {
+              "x": -3.5264777682364103,
+              "y": -2.2345059666756204
+            }
+          ]
+        }
+      ],
+      "_createPerimeterWalls": false,
+      "roofs": []
+    },
+    {
+      "fragmentId": "floor-fragment-100",
+      "surfaceId": "floor-fragment-100",
+      "ownerSectionKey": "",
+      "name": "floor 4",
+      "level": 5,
+      "nodeBaseZOffset": 0,
+      "nodeBaseZ": 15,
+      "outerPolygon": [
+        {
+          "id": "vertex-89",
+          "x": -5.443745561227534,
+          "y": -4.692753026158711
+        },
+        {
+          "id": "vertex-90",
+          "x": -5.507157390525151,
+          "y": 10.08956775167067
+        },
+        {
+          "id": "vertex-91",
+          "x": 9.275163387304229,
+          "y": 10.152979580968287
+        },
+        {
+          "id": "vertex-92",
+          "x": 9.338575216601848,
+          "y": -4.629341196861093
+        }
+      ],
+      "holes": [],
+      "floorTexturePath": "/assets/images/flooring/concrete.jpg",
+      "roof": {
+        "type": "roof",
+        "id": "roof-93",
+        "floorId": "floor-fragment-100",
+        "mode": "peak",
+        "texturePath": "/assets/images/roofs/slate.png",
+        "overhang": 0,
+        "peakHeight": 0,
+        "domeLevels": 4,
+        "peakPoint": {
+          "x": 1.9157089130383478,
+          "y": 2.7301132774047883
+        },
+        "elevationOffset": 0,
+        "shedDirection": {
+          "x": 0,
+          "y": -1
+        },
+        "contactPolygon": [
+          {
+            "id": "vertex-89",
+            "x": -5.443745561227534,
+            "y": -4.692753026158711
+          },
+          {
+            "id": "vertex-90",
+            "x": -5.507157390525151,
+            "y": 10.08956775167067
+          },
+          {
+            "id": "vertex-91",
+            "x": 9.275163387304229,
+            "y": 10.152979580968287
+          },
+          {
+            "id": "vertex-92",
+            "x": 9.338575216601848,
+            "y": -4.629341196861093
+          }
+        ],
+        "gables": []
+      },
+      "floorHeight": 3,
+      "defaultWallHeight": 5,
+      "defaultWallTexturePath": "/assets/images/walls/woodwall.png",
+      "posts": [],
+      "beams": [],
+      "columns": [],
+      "stairs": [],
+      "_createPerimeterWalls": false,
+      "roofs": []
+    }
+  ],
+  "wallSections": [
+    {
+      "type": "wallSection",
+      "id": 939,
+      "floorId": "floor-fragment-88",
+      "fragmentId": "floor-fragment-88",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-88",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-89",
+        "x": -5.319282919789476,
+        "y": -4.567217967763609,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-88",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-90",
+        "x": -5.38162233213005,
+        "y": 9.96510511023261,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 0,
+      "traversalLayer": 0,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-88",
+        "ring": "outer",
+        "startVertexId": "vertex-89",
+        "endVertexId": "vertex-90"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.443745561227534,
+            "y": -4.692753026158711
+          },
+          "aRight": {
+            "x": -5.194820278351419,
+            "y": -4.441682909368508
+          },
+          "bLeft": {
+            "x": -5.507157390525152,
+            "y": 10.089567751670668
+          },
+          "bRight": {
+            "x": -5.256087273734948,
+            "y": 9.840642468794552
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.443745561227534,
+              "y": -4.692753026158711,
+              "z": 3
+            },
+            "right": {
+              "x": -5.194820278351419,
+              "y": -4.441682909368508,
+              "z": 3
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.507157390525152,
+              "y": 10.089567751670668,
+              "z": 3
+            },
+            "right": {
+              "x": -5.256087273734948,
+              "y": 9.840642468794552,
+              "z": 3
+            }
+          }
+        ],
+        "signature": "939;floor-fragment-88;0.000000;3.000000;0.250000;-5.443746,-4.692753|-5.507157,10.089568|-5.256087,9.840642|-5.194820,-4.441683;0.000000,-5.443746,-4.692753,3.000000,-5.194820,-4.441683,3.000000|1.000000,-5.507157,10.089568,3.000000,-5.256087,9.840642,3.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 940,
+      "floorId": "floor-fragment-88",
+      "fragmentId": "floor-fragment-88",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-88",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-90",
+        "x": -5.38162233213005,
+        "y": 9.96510511023261,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-88",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-91",
+        "x": 9.150700745866171,
+        "y": 10.027444522573186,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 0,
+      "traversalLayer": 0,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-88",
+        "ring": "outer",
+        "startVertexId": "vertex-90",
+        "endVertexId": "vertex-91"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.507157390525152,
+            "y": 10.089567751670668
+          },
+          "aRight": {
+            "x": -5.256087273734948,
+            "y": 9.840642468794552
+          },
+          "bLeft": {
+            "x": 9.275163387304229,
+            "y": 10.152979580968287
+          },
+          "bRight": {
+            "x": 9.026238104428113,
+            "y": 9.901909464178084
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.507157390525152,
+              "y": 10.089567751670668,
+              "z": 3
+            },
+            "right": {
+              "x": -5.256087273734948,
+              "y": 9.840642468794552,
+              "z": 3
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 9.275163387304229,
+              "y": 10.152979580968287,
+              "z": 3
+            },
+            "right": {
+              "x": 9.026238104428113,
+              "y": 9.901909464178084,
+              "z": 3
+            }
+          }
+        ],
+        "signature": "940;floor-fragment-88;0.000000;3.000000;0.250000;-5.507157,10.089568|9.275163,10.152980|9.026238,9.901909|-5.256087,9.840642;0.000000,-5.507157,10.089568,3.000000,-5.256087,9.840642,3.000000|1.000000,9.275163,10.152980,3.000000,9.026238,9.901909,3.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 941,
+      "floorId": "floor-fragment-88",
+      "fragmentId": "floor-fragment-88",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-88",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-91",
+        "x": 9.150700745866171,
+        "y": 10.027444522573186,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-88",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-92",
+        "x": 9.213040158206747,
+        "y": -4.504878555423035,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 0,
+      "traversalLayer": 0,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-88",
+        "ring": "outer",
+        "startVertexId": "vertex-91",
+        "endVertexId": "vertex-92"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 9.275163387304229,
+            "y": 10.152979580968287
+          },
+          "aRight": {
+            "x": 9.026238104428113,
+            "y": 9.901909464178084
+          },
+          "bLeft": {
+            "x": 9.338575216601848,
+            "y": -4.629341196861093
+          },
+          "bRight": {
+            "x": 9.087505099811645,
+            "y": -4.3804159139849785
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 9.275163387304229,
+              "y": 10.152979580968287,
+              "z": 3
+            },
+            "right": {
+              "x": 9.026238104428113,
+              "y": 9.901909464178084,
+              "z": 3
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 9.338575216601848,
+              "y": -4.629341196861093,
+              "z": 3
+            },
+            "right": {
+              "x": 9.087505099811645,
+              "y": -4.380415913984978,
+              "z": 3
+            }
+          }
+        ],
+        "signature": "941;floor-fragment-88;0.000000;3.000000;0.250000;9.275163,10.152980|9.338575,-4.629341|9.087505,-4.380416|9.026238,9.901909;0.000000,9.275163,10.152980,3.000000,9.026238,9.901909,3.000000|1.000000,9.338575,-4.629341,3.000000,9.087505,-4.380416,3.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 942,
+      "floorId": "floor-fragment-88",
+      "fragmentId": "floor-fragment-88",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-88",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-92",
+        "x": 9.213040158206747,
+        "y": -4.504878555423035,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-88",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-89",
+        "x": -5.319282919789476,
+        "y": -4.567217967763609,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 0,
+      "traversalLayer": 0,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-88",
+        "ring": "outer",
+        "startVertexId": "vertex-92",
+        "endVertexId": "vertex-89"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 9.338575216601848,
+            "y": -4.629341196861093
+          },
+          "aRight": {
+            "x": 9.087505099811645,
+            "y": -4.3804159139849785
+          },
+          "bLeft": {
+            "x": -5.443745561227534,
+            "y": -4.692753026158711
+          },
+          "bRight": {
+            "x": -5.194820278351419,
+            "y": -4.441682909368508
+          }
+        },
+        "bottomZ": 0,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 9.338575216601848,
+              "y": -4.629341196861093,
+              "z": 3
+            },
+            "right": {
+              "x": 9.087505099811645,
+              "y": -4.3804159139849785,
+              "z": 3
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.443745561227534,
+              "y": -4.692753026158711,
+              "z": 3
+            },
+            "right": {
+              "x": -5.19482027835142,
+              "y": -4.441682909368508,
+              "z": 3
+            }
+          }
+        ],
+        "signature": "942;floor-fragment-88;0.000000;3.000000;0.250000;9.338575,-4.629341|-5.443746,-4.692753|-5.194820,-4.441683|9.087505,-4.380416;0.000000,9.338575,-4.629341,3.000000,9.087505,-4.380416,3.000000|1.000000,-5.443746,-4.692753,3.000000,-5.194820,-4.441683,3.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 943,
+      "floorId": "floor-fragment-94",
+      "fragmentId": "floor-fragment-94",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-94",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-89",
+        "x": -5.319282919789476,
+        "y": -4.567217967763609,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-94",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-90",
+        "x": -5.38162233213005,
+        "y": 9.96510511023261,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 3,
+      "traversalLayer": 1,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-94",
+        "ring": "outer",
+        "startVertexId": "vertex-89",
+        "endVertexId": "vertex-90"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.443745561227534,
+            "y": -4.692753026158711
+          },
+          "aRight": {
+            "x": -5.194820278351419,
+            "y": -4.441682909368508
+          },
+          "bLeft": {
+            "x": -5.507157390525152,
+            "y": 10.089567751670668
+          },
+          "bRight": {
+            "x": -5.256087273734948,
+            "y": 9.840642468794552
+          }
+        },
+        "bottomZ": 3,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.443745561227534,
+              "y": -4.692753026158711,
+              "z": 6
+            },
+            "right": {
+              "x": -5.194820278351419,
+              "y": -4.441682909368508,
+              "z": 6
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.507157390525152,
+              "y": 10.089567751670668,
+              "z": 6
+            },
+            "right": {
+              "x": -5.256087273734948,
+              "y": 9.840642468794552,
+              "z": 6
+            }
+          }
+        ],
+        "signature": "943;floor-fragment-94;3.000000;3.000000;0.250000;-5.443746,-4.692753|-5.507157,10.089568|-5.256087,9.840642|-5.194820,-4.441683;0.000000,-5.443746,-4.692753,6.000000,-5.194820,-4.441683,6.000000|1.000000,-5.507157,10.089568,6.000000,-5.256087,9.840642,6.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 944,
+      "floorId": "floor-fragment-94",
+      "fragmentId": "floor-fragment-94",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-94",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-90",
+        "x": -5.38162233213005,
+        "y": 9.96510511023261,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-94",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-91",
+        "x": 9.150700745866171,
+        "y": 10.027444522573186,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 3,
+      "traversalLayer": 1,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-94",
+        "ring": "outer",
+        "startVertexId": "vertex-90",
+        "endVertexId": "vertex-91"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.507157390525152,
+            "y": 10.089567751670668
+          },
+          "aRight": {
+            "x": -5.256087273734948,
+            "y": 9.840642468794552
+          },
+          "bLeft": {
+            "x": 9.275163387304229,
+            "y": 10.152979580968287
+          },
+          "bRight": {
+            "x": 9.026238104428113,
+            "y": 9.901909464178084
+          }
+        },
+        "bottomZ": 3,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.507157390525152,
+              "y": 10.089567751670668,
+              "z": 6
+            },
+            "right": {
+              "x": -5.256087273734948,
+              "y": 9.840642468794552,
+              "z": 6
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 9.275163387304229,
+              "y": 10.152979580968287,
+              "z": 6
+            },
+            "right": {
+              "x": 9.026238104428113,
+              "y": 9.901909464178084,
+              "z": 6
+            }
+          }
+        ],
+        "signature": "944;floor-fragment-94;3.000000;3.000000;0.250000;-5.507157,10.089568|9.275163,10.152980|9.026238,9.901909|-5.256087,9.840642;0.000000,-5.507157,10.089568,6.000000,-5.256087,9.840642,6.000000|1.000000,9.275163,10.152980,6.000000,9.026238,9.901909,6.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 945,
+      "floorId": "floor-fragment-94",
+      "fragmentId": "floor-fragment-94",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-94",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-91",
+        "x": 9.150700745866171,
+        "y": 10.027444522573186,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-94",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-92",
+        "x": 9.213040158206747,
+        "y": -4.504878555423035,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 3,
+      "traversalLayer": 1,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-94",
+        "ring": "outer",
+        "startVertexId": "vertex-91",
+        "endVertexId": "vertex-92"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 9.275163387304229,
+            "y": 10.152979580968287
+          },
+          "aRight": {
+            "x": 9.026238104428113,
+            "y": 9.901909464178084
+          },
+          "bLeft": {
+            "x": 9.338575216601848,
+            "y": -4.629341196861093
+          },
+          "bRight": {
+            "x": 9.087505099811645,
+            "y": -4.3804159139849785
+          }
+        },
+        "bottomZ": 3,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 9.275163387304229,
+              "y": 10.152979580968287,
+              "z": 6
+            },
+            "right": {
+              "x": 9.026238104428113,
+              "y": 9.901909464178084,
+              "z": 6
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 9.338575216601848,
+              "y": -4.629341196861093,
+              "z": 6
+            },
+            "right": {
+              "x": 9.087505099811645,
+              "y": -4.380415913984978,
+              "z": 6
+            }
+          }
+        ],
+        "signature": "945;floor-fragment-94;3.000000;3.000000;0.250000;9.275163,10.152980|9.338575,-4.629341|9.087505,-4.380416|9.026238,9.901909;0.000000,9.275163,10.152980,6.000000,9.026238,9.901909,6.000000|1.000000,9.338575,-4.629341,6.000000,9.087505,-4.380416,6.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 946,
+      "floorId": "floor-fragment-94",
+      "fragmentId": "floor-fragment-94",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-94",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-92",
+        "x": 9.213040158206747,
+        "y": -4.504878555423035,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-94",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-89",
+        "x": -5.319282919789476,
+        "y": -4.567217967763609,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 3,
+      "traversalLayer": 1,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-94",
+        "ring": "outer",
+        "startVertexId": "vertex-92",
+        "endVertexId": "vertex-89"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 9.338575216601848,
+            "y": -4.629341196861093
+          },
+          "aRight": {
+            "x": 9.087505099811645,
+            "y": -4.3804159139849785
+          },
+          "bLeft": {
+            "x": -5.443745561227534,
+            "y": -4.692753026158711
+          },
+          "bRight": {
+            "x": -5.194820278351419,
+            "y": -4.441682909368508
+          }
+        },
+        "bottomZ": 3,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 9.338575216601848,
+              "y": -4.629341196861093,
+              "z": 6
+            },
+            "right": {
+              "x": 9.087505099811645,
+              "y": -4.3804159139849785,
+              "z": 6
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.443745561227534,
+              "y": -4.692753026158711,
+              "z": 6
+            },
+            "right": {
+              "x": -5.19482027835142,
+              "y": -4.441682909368508,
+              "z": 6
+            }
+          }
+        ],
+        "signature": "946;floor-fragment-94;3.000000;3.000000;0.250000;9.338575,-4.629341|-5.443746,-4.692753|-5.194820,-4.441683|9.087505,-4.380416;0.000000,9.338575,-4.629341,6.000000,9.087505,-4.380416,6.000000|1.000000,-5.443746,-4.692753,6.000000,-5.194820,-4.441683,6.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 947,
+      "floorId": "floor-fragment-96",
+      "fragmentId": "floor-fragment-96",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-96",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-89",
+        "x": -5.319282919789476,
+        "y": -4.567217967763609,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-96",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-90",
+        "x": -5.38162233213005,
+        "y": 9.96510511023261,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 6,
+      "traversalLayer": 2,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-96",
+        "ring": "outer",
+        "startVertexId": "vertex-89",
+        "endVertexId": "vertex-90"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.443745561227534,
+            "y": -4.692753026158711
+          },
+          "aRight": {
+            "x": -5.194820278351419,
+            "y": -4.441682909368508
+          },
+          "bLeft": {
+            "x": -5.507157390525152,
+            "y": 10.089567751670668
+          },
+          "bRight": {
+            "x": -5.256087273734948,
+            "y": 9.840642468794552
+          }
+        },
+        "bottomZ": 6,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.443745561227534,
+              "y": -4.692753026158711,
+              "z": 9
+            },
+            "right": {
+              "x": -5.194820278351419,
+              "y": -4.441682909368508,
+              "z": 9
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.507157390525152,
+              "y": 10.089567751670668,
+              "z": 9
+            },
+            "right": {
+              "x": -5.256087273734948,
+              "y": 9.840642468794552,
+              "z": 9
+            }
+          }
+        ],
+        "signature": "947;floor-fragment-96;6.000000;3.000000;0.250000;-5.443746,-4.692753|-5.507157,10.089568|-5.256087,9.840642|-5.194820,-4.441683;0.000000,-5.443746,-4.692753,9.000000,-5.194820,-4.441683,9.000000|1.000000,-5.507157,10.089568,9.000000,-5.256087,9.840642,9.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 948,
+      "floorId": "floor-fragment-96",
+      "fragmentId": "floor-fragment-96",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-96",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-90",
+        "x": -5.38162233213005,
+        "y": 9.96510511023261,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-96",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-91",
+        "x": 9.150700745866171,
+        "y": 10.027444522573186,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 6,
+      "traversalLayer": 2,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-96",
+        "ring": "outer",
+        "startVertexId": "vertex-90",
+        "endVertexId": "vertex-91"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.507157390525152,
+            "y": 10.089567751670668
+          },
+          "aRight": {
+            "x": -5.256087273734948,
+            "y": 9.840642468794552
+          },
+          "bLeft": {
+            "x": 9.275163387304229,
+            "y": 10.152979580968287
+          },
+          "bRight": {
+            "x": 9.026238104428113,
+            "y": 9.901909464178084
+          }
+        },
+        "bottomZ": 6,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.507157390525152,
+              "y": 10.089567751670668,
+              "z": 9
+            },
+            "right": {
+              "x": -5.256087273734948,
+              "y": 9.840642468794552,
+              "z": 9
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 9.275163387304229,
+              "y": 10.152979580968287,
+              "z": 9
+            },
+            "right": {
+              "x": 9.026238104428113,
+              "y": 9.901909464178084,
+              "z": 9
+            }
+          }
+        ],
+        "signature": "948;floor-fragment-96;6.000000;3.000000;0.250000;-5.507157,10.089568|9.275163,10.152980|9.026238,9.901909|-5.256087,9.840642;0.000000,-5.507157,10.089568,9.000000,-5.256087,9.840642,9.000000|1.000000,9.275163,10.152980,9.000000,9.026238,9.901909,9.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 949,
+      "floorId": "floor-fragment-96",
+      "fragmentId": "floor-fragment-96",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-96",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-91",
+        "x": 9.150700745866171,
+        "y": 10.027444522573186,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-96",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-92",
+        "x": 9.213040158206747,
+        "y": -4.504878555423035,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 6,
+      "traversalLayer": 2,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-96",
+        "ring": "outer",
+        "startVertexId": "vertex-91",
+        "endVertexId": "vertex-92"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 9.275163387304229,
+            "y": 10.152979580968287
+          },
+          "aRight": {
+            "x": 9.026238104428113,
+            "y": 9.901909464178084
+          },
+          "bLeft": {
+            "x": 9.338575216601848,
+            "y": -4.629341196861093
+          },
+          "bRight": {
+            "x": 9.087505099811645,
+            "y": -4.3804159139849785
+          }
+        },
+        "bottomZ": 6,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 9.275163387304229,
+              "y": 10.152979580968287,
+              "z": 9
+            },
+            "right": {
+              "x": 9.026238104428113,
+              "y": 9.901909464178084,
+              "z": 9
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 9.338575216601848,
+              "y": -4.629341196861093,
+              "z": 9
+            },
+            "right": {
+              "x": 9.087505099811645,
+              "y": -4.380415913984978,
+              "z": 9
+            }
+          }
+        ],
+        "signature": "949;floor-fragment-96;6.000000;3.000000;0.250000;9.275163,10.152980|9.338575,-4.629341|9.087505,-4.380416|9.026238,9.901909;0.000000,9.275163,10.152980,9.000000,9.026238,9.901909,9.000000|1.000000,9.338575,-4.629341,9.000000,9.087505,-4.380416,9.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 950,
+      "floorId": "floor-fragment-96",
+      "fragmentId": "floor-fragment-96",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-96",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-92",
+        "x": 9.213040158206747,
+        "y": -4.504878555423035,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-96",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-89",
+        "x": -5.319282919789476,
+        "y": -4.567217967763609,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 6,
+      "traversalLayer": 2,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-96",
+        "ring": "outer",
+        "startVertexId": "vertex-92",
+        "endVertexId": "vertex-89"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 9.338575216601848,
+            "y": -4.629341196861093
+          },
+          "aRight": {
+            "x": 9.087505099811645,
+            "y": -4.3804159139849785
+          },
+          "bLeft": {
+            "x": -5.443745561227534,
+            "y": -4.692753026158711
+          },
+          "bRight": {
+            "x": -5.194820278351419,
+            "y": -4.441682909368508
+          }
+        },
+        "bottomZ": 6,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 9.338575216601848,
+              "y": -4.629341196861093,
+              "z": 9
+            },
+            "right": {
+              "x": 9.087505099811645,
+              "y": -4.3804159139849785,
+              "z": 9
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.443745561227534,
+              "y": -4.692753026158711,
+              "z": 9
+            },
+            "right": {
+              "x": -5.19482027835142,
+              "y": -4.441682909368508,
+              "z": 9
+            }
+          }
+        ],
+        "signature": "950;floor-fragment-96;6.000000;3.000000;0.250000;9.338575,-4.629341|-5.443746,-4.692753|-5.194820,-4.441683|9.087505,-4.380416;0.000000,9.338575,-4.629341,9.000000,9.087505,-4.380416,9.000000|1.000000,-5.443746,-4.692753,9.000000,-5.194820,-4.441683,9.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 951,
+      "floorId": "floor-fragment-98",
+      "fragmentId": "floor-fragment-98",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-98",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-89",
+        "x": -5.319282919789476,
+        "y": -4.567217967763609,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-98",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-90",
+        "x": -5.38162233213005,
+        "y": 9.96510511023261,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 9,
+      "traversalLayer": 3,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-98",
+        "ring": "outer",
+        "startVertexId": "vertex-89",
+        "endVertexId": "vertex-90"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.443745561227534,
+            "y": -4.692753026158711
+          },
+          "aRight": {
+            "x": -5.194820278351419,
+            "y": -4.441682909368508
+          },
+          "bLeft": {
+            "x": -5.507157390525152,
+            "y": 10.089567751670668
+          },
+          "bRight": {
+            "x": -5.256087273734948,
+            "y": 9.840642468794552
+          }
+        },
+        "bottomZ": 9,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.443745561227534,
+              "y": -4.692753026158711,
+              "z": 12
+            },
+            "right": {
+              "x": -5.194820278351419,
+              "y": -4.441682909368508,
+              "z": 12
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.507157390525152,
+              "y": 10.089567751670668,
+              "z": 12
+            },
+            "right": {
+              "x": -5.256087273734948,
+              "y": 9.840642468794552,
+              "z": 12
+            }
+          }
+        ],
+        "signature": "951;floor-fragment-98;9.000000;3.000000;0.250000;-5.443746,-4.692753|-5.507157,10.089568|-5.256087,9.840642|-5.194820,-4.441683;0.000000,-5.443746,-4.692753,12.000000,-5.194820,-4.441683,12.000000|1.000000,-5.507157,10.089568,12.000000,-5.256087,9.840642,12.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 952,
+      "floorId": "floor-fragment-98",
+      "fragmentId": "floor-fragment-98",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-98",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-90",
+        "x": -5.38162233213005,
+        "y": 9.96510511023261,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-98",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-91",
+        "x": 9.150700745866171,
+        "y": 10.027444522573186,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 9,
+      "traversalLayer": 3,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-98",
+        "ring": "outer",
+        "startVertexId": "vertex-90",
+        "endVertexId": "vertex-91"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.507157390525152,
+            "y": 10.089567751670668
+          },
+          "aRight": {
+            "x": -5.256087273734948,
+            "y": 9.840642468794552
+          },
+          "bLeft": {
+            "x": 9.275163387304229,
+            "y": 10.152979580968287
+          },
+          "bRight": {
+            "x": 9.026238104428113,
+            "y": 9.901909464178084
+          }
+        },
+        "bottomZ": 9,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.507157390525152,
+              "y": 10.089567751670668,
+              "z": 12
+            },
+            "right": {
+              "x": -5.256087273734948,
+              "y": 9.840642468794552,
+              "z": 12
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 9.275163387304229,
+              "y": 10.152979580968287,
+              "z": 12
+            },
+            "right": {
+              "x": 9.026238104428113,
+              "y": 9.901909464178084,
+              "z": 12
+            }
+          }
+        ],
+        "signature": "952;floor-fragment-98;9.000000;3.000000;0.250000;-5.507157,10.089568|9.275163,10.152980|9.026238,9.901909|-5.256087,9.840642;0.000000,-5.507157,10.089568,12.000000,-5.256087,9.840642,12.000000|1.000000,9.275163,10.152980,12.000000,9.026238,9.901909,12.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 953,
+      "floorId": "floor-fragment-98",
+      "fragmentId": "floor-fragment-98",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-98",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-91",
+        "x": 9.150700745866171,
+        "y": 10.027444522573186,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-98",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-92",
+        "x": 9.213040158206747,
+        "y": -4.504878555423035,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 9,
+      "traversalLayer": 3,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-98",
+        "ring": "outer",
+        "startVertexId": "vertex-91",
+        "endVertexId": "vertex-92"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 9.275163387304229,
+            "y": 10.152979580968287
+          },
+          "aRight": {
+            "x": 9.026238104428113,
+            "y": 9.901909464178084
+          },
+          "bLeft": {
+            "x": 9.338575216601848,
+            "y": -4.629341196861093
+          },
+          "bRight": {
+            "x": 9.087505099811645,
+            "y": -4.3804159139849785
+          }
+        },
+        "bottomZ": 9,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 9.275163387304229,
+              "y": 10.152979580968287,
+              "z": 12
+            },
+            "right": {
+              "x": 9.026238104428113,
+              "y": 9.901909464178084,
+              "z": 12
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 9.338575216601848,
+              "y": -4.629341196861093,
+              "z": 12
+            },
+            "right": {
+              "x": 9.087505099811645,
+              "y": -4.380415913984978,
+              "z": 12
+            }
+          }
+        ],
+        "signature": "953;floor-fragment-98;9.000000;3.000000;0.250000;9.275163,10.152980|9.338575,-4.629341|9.087505,-4.380416|9.026238,9.901909;0.000000,9.275163,10.152980,12.000000,9.026238,9.901909,12.000000|1.000000,9.338575,-4.629341,12.000000,9.087505,-4.380416,12.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 954,
+      "floorId": "floor-fragment-98",
+      "fragmentId": "floor-fragment-98",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-98",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-92",
+        "x": 9.213040158206747,
+        "y": -4.504878555423035,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-98",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-89",
+        "x": -5.319282919789476,
+        "y": -4.567217967763609,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 9,
+      "traversalLayer": 3,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-98",
+        "ring": "outer",
+        "startVertexId": "vertex-92",
+        "endVertexId": "vertex-89"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 9.338575216601848,
+            "y": -4.629341196861093
+          },
+          "aRight": {
+            "x": 9.087505099811645,
+            "y": -4.3804159139849785
+          },
+          "bLeft": {
+            "x": -5.443745561227534,
+            "y": -4.692753026158711
+          },
+          "bRight": {
+            "x": -5.194820278351419,
+            "y": -4.441682909368508
+          }
+        },
+        "bottomZ": 9,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 9.338575216601848,
+              "y": -4.629341196861093,
+              "z": 12
+            },
+            "right": {
+              "x": 9.087505099811645,
+              "y": -4.3804159139849785,
+              "z": 12
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.443745561227534,
+              "y": -4.692753026158711,
+              "z": 12
+            },
+            "right": {
+              "x": -5.19482027835142,
+              "y": -4.441682909368508,
+              "z": 12
+            }
+          }
+        ],
+        "signature": "954;floor-fragment-98;9.000000;3.000000;0.250000;9.338575,-4.629341|-5.443746,-4.692753|-5.194820,-4.441683|9.087505,-4.380416;0.000000,9.338575,-4.629341,12.000000,9.087505,-4.380416,12.000000|1.000000,-5.443746,-4.692753,12.000000,-5.194820,-4.441683,12.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 955,
+      "floorId": "floor-fragment-100",
+      "fragmentId": "floor-fragment-100",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-100",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-89",
+        "x": -5.319282919789476,
+        "y": -4.567217967763609,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-100",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-90",
+        "x": -5.38162233213005,
+        "y": 9.96510511023261,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 15,
+      "traversalLayer": 5,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-100",
+        "ring": "outer",
+        "startVertexId": "vertex-89",
+        "endVertexId": "vertex-90"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.443745561227534,
+            "y": -4.692753026158711
+          },
+          "aRight": {
+            "x": -5.194820278351419,
+            "y": -4.441682909368508
+          },
+          "bLeft": {
+            "x": -5.507157390525152,
+            "y": 10.089567751670668
+          },
+          "bRight": {
+            "x": -5.256087273734948,
+            "y": 9.840642468794552
+          }
+        },
+        "bottomZ": 15,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.443745561227534,
+              "y": -4.692753026158711,
+              "z": 18
+            },
+            "right": {
+              "x": -5.194820278351419,
+              "y": -4.441682909368508,
+              "z": 18
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.507157390525152,
+              "y": 10.089567751670668,
+              "z": 18
+            },
+            "right": {
+              "x": -5.256087273734948,
+              "y": 9.840642468794552,
+              "z": 18
+            }
+          }
+        ],
+        "signature": "955;floor-fragment-100;15.000000;3.000000;0.250000;-5.443746,-4.692753|-5.507157,10.089568|-5.256087,9.840642|-5.194820,-4.441683;0.000000,-5.443746,-4.692753,18.000000,-5.194820,-4.441683,18.000000|1.000000,-5.507157,10.089568,18.000000,-5.256087,9.840642,18.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 956,
+      "floorId": "floor-fragment-100",
+      "fragmentId": "floor-fragment-100",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-100",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-90",
+        "x": -5.38162233213005,
+        "y": 9.96510511023261,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-100",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-91",
+        "x": 9.150700745866171,
+        "y": 10.027444522573186,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 15,
+      "traversalLayer": 5,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-100",
+        "ring": "outer",
+        "startVertexId": "vertex-90",
+        "endVertexId": "vertex-91"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.507157390525152,
+            "y": 10.089567751670668
+          },
+          "aRight": {
+            "x": -5.256087273734948,
+            "y": 9.840642468794552
+          },
+          "bLeft": {
+            "x": 9.275163387304229,
+            "y": 10.152979580968287
+          },
+          "bRight": {
+            "x": 9.026238104428113,
+            "y": 9.901909464178084
+          }
+        },
+        "bottomZ": 15,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.507157390525152,
+              "y": 10.089567751670668,
+              "z": 18
+            },
+            "right": {
+              "x": -5.256087273734948,
+              "y": 9.840642468794552,
+              "z": 18
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 9.275163387304229,
+              "y": 10.152979580968287,
+              "z": 18
+            },
+            "right": {
+              "x": 9.026238104428113,
+              "y": 9.901909464178084,
+              "z": 18
+            }
+          }
+        ],
+        "signature": "956;floor-fragment-100;15.000000;3.000000;0.250000;-5.507157,10.089568|9.275163,10.152980|9.026238,9.901909|-5.256087,9.840642;0.000000,-5.507157,10.089568,18.000000,-5.256087,9.840642,18.000000|1.000000,9.275163,10.152980,18.000000,9.026238,9.901909,18.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 957,
+      "floorId": "floor-fragment-100",
+      "fragmentId": "floor-fragment-100",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-100",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-91",
+        "x": 9.150700745866171,
+        "y": 10.027444522573186,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-100",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-92",
+        "x": 9.213040158206747,
+        "y": -4.504878555423035,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 15,
+      "traversalLayer": 5,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-100",
+        "ring": "outer",
+        "startVertexId": "vertex-91",
+        "endVertexId": "vertex-92"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 9.275163387304229,
+            "y": 10.152979580968287
+          },
+          "aRight": {
+            "x": 9.026238104428113,
+            "y": 9.901909464178084
+          },
+          "bLeft": {
+            "x": 9.338575216601848,
+            "y": -4.629341196861093
+          },
+          "bRight": {
+            "x": 9.087505099811645,
+            "y": -4.3804159139849785
+          }
+        },
+        "bottomZ": 15,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 9.275163387304229,
+              "y": 10.152979580968287,
+              "z": 18
+            },
+            "right": {
+              "x": 9.026238104428113,
+              "y": 9.901909464178084,
+              "z": 18
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 9.338575216601848,
+              "y": -4.629341196861093,
+              "z": 18
+            },
+            "right": {
+              "x": 9.087505099811645,
+              "y": -4.380415913984978,
+              "z": 18
+            }
+          }
+        ],
+        "signature": "957;floor-fragment-100;15.000000;3.000000;0.250000;9.275163,10.152980|9.338575,-4.629341|9.087505,-4.380416|9.026238,9.901909;0.000000,9.275163,10.152980,18.000000,9.026238,9.901909,18.000000|1.000000,9.338575,-4.629341,18.000000,9.087505,-4.380416,18.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 958,
+      "floorId": "floor-fragment-100",
+      "fragmentId": "floor-fragment-100",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-100",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-92",
+        "x": 9.213040158206747,
+        "y": -4.504878555423035,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-100",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-89",
+        "x": -5.319282919789476,
+        "y": -4.567217967763609,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 15,
+      "traversalLayer": 5,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-100",
+        "ring": "outer",
+        "startVertexId": "vertex-92",
+        "endVertexId": "vertex-89"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 9.338575216601848,
+            "y": -4.629341196861093
+          },
+          "aRight": {
+            "x": 9.087505099811645,
+            "y": -4.3804159139849785
+          },
+          "bLeft": {
+            "x": -5.443745561227534,
+            "y": -4.692753026158711
+          },
+          "bRight": {
+            "x": -5.194820278351419,
+            "y": -4.441682909368508
+          }
+        },
+        "bottomZ": 15,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 9.338575216601848,
+              "y": -4.629341196861093,
+              "z": 18
+            },
+            "right": {
+              "x": 9.087505099811645,
+              "y": -4.3804159139849785,
+              "z": 18
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.443745561227534,
+              "y": -4.692753026158711,
+              "z": 18
+            },
+            "right": {
+              "x": -5.19482027835142,
+              "y": -4.441682909368508,
+              "z": 18
+            }
+          }
+        ],
+        "signature": "958;floor-fragment-100;15.000000;3.000000;0.250000;9.338575,-4.629341|-5.443746,-4.692753|-5.194820,-4.441683|9.087505,-4.380416;0.000000,9.338575,-4.629341,18.000000,9.087505,-4.380416,18.000000|1.000000,-5.443746,-4.692753,18.000000,-5.194820,-4.441683,18.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 959,
+      "floorId": "floor-fragment-102",
+      "fragmentId": "floor-fragment-102",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-102",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-89",
+        "x": -5.319282919789476,
+        "y": -4.567217967763609,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-102",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-90",
+        "x": -5.38162233213005,
+        "y": 9.96510511023261,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 12,
+      "traversalLayer": 4,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-102",
+        "ring": "outer",
+        "startVertexId": "vertex-89",
+        "endVertexId": "vertex-90"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.443745561227534,
+            "y": -4.692753026158711
+          },
+          "aRight": {
+            "x": -5.194820278351419,
+            "y": -4.441682909368508
+          },
+          "bLeft": {
+            "x": -5.507157390525152,
+            "y": 10.089567751670668
+          },
+          "bRight": {
+            "x": -5.256087273734948,
+            "y": 9.840642468794552
+          }
+        },
+        "bottomZ": 12,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.443745561227534,
+              "y": -4.692753026158711,
+              "z": 15
+            },
+            "right": {
+              "x": -5.194820278351419,
+              "y": -4.441682909368508,
+              "z": 15
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.507157390525152,
+              "y": 10.089567751670668,
+              "z": 15
+            },
+            "right": {
+              "x": -5.256087273734948,
+              "y": 9.840642468794552,
+              "z": 15
+            }
+          }
+        ],
+        "signature": "959;floor-fragment-102;12.000000;3.000000;0.250000;-5.443746,-4.692753|-5.507157,10.089568|-5.256087,9.840642|-5.194820,-4.441683;0.000000,-5.443746,-4.692753,15.000000,-5.194820,-4.441683,15.000000|1.000000,-5.507157,10.089568,15.000000,-5.256087,9.840642,15.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 960,
+      "floorId": "floor-fragment-102",
+      "fragmentId": "floor-fragment-102",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-102",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-90",
+        "x": -5.38162233213005,
+        "y": 9.96510511023261,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-102",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-91",
+        "x": 9.150700745866171,
+        "y": 10.027444522573186,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 12,
+      "traversalLayer": 4,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-102",
+        "ring": "outer",
+        "startVertexId": "vertex-90",
+        "endVertexId": "vertex-91"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": -5.507157390525152,
+            "y": 10.089567751670668
+          },
+          "aRight": {
+            "x": -5.256087273734948,
+            "y": 9.840642468794552
+          },
+          "bLeft": {
+            "x": 9.275163387304229,
+            "y": 10.152979580968287
+          },
+          "bRight": {
+            "x": 9.026238104428113,
+            "y": 9.901909464178084
+          }
+        },
+        "bottomZ": 12,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": -5.507157390525152,
+              "y": 10.089567751670668,
+              "z": 15
+            },
+            "right": {
+              "x": -5.256087273734948,
+              "y": 9.840642468794552,
+              "z": 15
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 9.275163387304229,
+              "y": 10.152979580968287,
+              "z": 15
+            },
+            "right": {
+              "x": 9.026238104428113,
+              "y": 9.901909464178084,
+              "z": 15
+            }
+          }
+        ],
+        "signature": "960;floor-fragment-102;12.000000;3.000000;0.250000;-5.507157,10.089568|9.275163,10.152980|9.026238,9.901909|-5.256087,9.840642;0.000000,-5.507157,10.089568,15.000000,-5.256087,9.840642,15.000000|1.000000,9.275163,10.152980,15.000000,9.026238,9.901909,15.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 961,
+      "floorId": "floor-fragment-102",
+      "fragmentId": "floor-fragment-102",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-102",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-91",
+        "x": 9.150700745866171,
+        "y": 10.027444522573186,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-102",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-92",
+        "x": 9.213040158206747,
+        "y": -4.504878555423035,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 12,
+      "traversalLayer": 4,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-102",
+        "ring": "outer",
+        "startVertexId": "vertex-91",
+        "endVertexId": "vertex-92"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 9.275163387304229,
+            "y": 10.152979580968287
+          },
+          "aRight": {
+            "x": 9.026238104428113,
+            "y": 9.901909464178084
+          },
+          "bLeft": {
+            "x": 9.338575216601848,
+            "y": -4.629341196861093
+          },
+          "bRight": {
+            "x": 9.087505099811645,
+            "y": -4.3804159139849785
+          }
+        },
+        "bottomZ": 12,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 9.275163387304229,
+              "y": 10.152979580968287,
+              "z": 15
+            },
+            "right": {
+              "x": 9.026238104428113,
+              "y": 9.901909464178084,
+              "z": 15
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": 9.338575216601848,
+              "y": -4.629341196861093,
+              "z": 15
+            },
+            "right": {
+              "x": 9.087505099811645,
+              "y": -4.380415913984978,
+              "z": 15
+            }
+          }
+        ],
+        "signature": "961;floor-fragment-102;12.000000;3.000000;0.250000;9.275163,10.152980|9.338575,-4.629341|9.087505,-4.380416|9.026238,9.901909;0.000000,9.275163,10.152980,15.000000,9.026238,9.901909,15.000000|1.000000,9.338575,-4.629341,15.000000,9.087505,-4.380416,15.000000"
+      }
+    },
+    {
+      "type": "wallSection",
+      "id": 962,
+      "floorId": "floor-fragment-102",
+      "fragmentId": "floor-fragment-102",
+      "startPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-102",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-92",
+        "x": 9.213040158206747,
+        "y": -4.504878555423035,
+        "inset": true
+      },
+      "endPoint": {
+        "kind": "vertex",
+        "fragmentId": "floor-fragment-102",
+        "ring": "outer",
+        "holeIndex": -1,
+        "vertexId": "vertex-89",
+        "x": -5.319282919789476,
+        "y": -4.567217967763609,
+        "inset": true
+      },
+      "height": 3,
+      "thickness": 0.25,
+      "topProfile": null,
+      "bottomZ": 12,
+      "traversalLayer": 4,
+      "wallTexturePath": "/assets/images/walls/vertical wood.jpg",
+      "role": "perimeter",
+      "attachment": {
+        "kind": "fragmentEdge",
+        "fragmentId": "floor-fragment-102",
+        "ring": "outer",
+        "startVertexId": "vertex-92",
+        "endVertexId": "vertex-89"
+      },
+      "openings": [],
+      "resolvedGeometry": {
+        "version": 1,
+        "profile": {
+          "aLeft": {
+            "x": 9.338575216601848,
+            "y": -4.629341196861093
+          },
+          "aRight": {
+            "x": 9.087505099811645,
+            "y": -4.3804159139849785
+          },
+          "bLeft": {
+            "x": -5.443745561227534,
+            "y": -4.692753026158711
+          },
+          "bRight": {
+            "x": -5.194820278351419,
+            "y": -4.441682909368508
+          }
+        },
+        "bottomZ": 12,
+        "topStations": [
+          {
+            "t": 0,
+            "left": {
+              "x": 9.338575216601848,
+              "y": -4.629341196861093,
+              "z": 15
+            },
+            "right": {
+              "x": 9.087505099811645,
+              "y": -4.3804159139849785,
+              "z": 15
+            }
+          },
+          {
+            "t": 1,
+            "left": {
+              "x": -5.443745561227534,
+              "y": -4.692753026158711,
+              "z": 15
+            },
+            "right": {
+              "x": -5.19482027835142,
+              "y": -4.441682909368508,
+              "z": 15
+            }
+          }
+        ],
+        "signature": "962;floor-fragment-102;12.000000;3.000000;0.250000;9.338575,-4.629341|-5.443746,-4.692753|-5.194820,-4.441683|9.087505,-4.380416;0.000000,9.338575,-4.629341,15.000000,9.087505,-4.380416,15.000000|1.000000,-5.443746,-4.692753,15.000000,-5.194820,-4.441683,15.000000"
+      }
+    }
+  ],
+  "mountedWallObjects": [
+    {
+      "type": "placedObject",
+      "id": 596,
+      "category": "doors",
+      "texturePath": "/assets/images/doors/door1.png",
+      "floorId": "floor-fragment-88",
+      "wallId": 940,
+      "mountedSectionId": 940,
+      "mountedWallLineGroupId": 940,
+      "mountedWallSectionUnitId": 940,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.5,
+      "width": 0.8502738173815738,
+      "height": 1.9,
+      "zOffset": 0,
+      "rotationAxis": "spatial",
+      "placementRotation": 0.2457806158500478,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 1,
+      "renderDepthOffset": 0,
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [
+            0,
+            0.5
+          ]
+        },
+        {
+          "name": "door",
+          "uRegion": [
+            0.5,
+            1
+          ]
+        }
+      ],
+      "x": 1.8840029983895383,
+      "y": 10.121273666319476,
+      "z": 0,
+      "isOpen": false,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": true,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 1.4588163803941803,
+          "y": 10.131949855191353
+        },
+        {
+          "x": 2.3090823746891918,
+          "y": 10.135597247430917
+        },
+        {
+          "x": 2.3102620333419406,
+          "y": 9.860599777614441
+        },
+        {
+          "x": 1.4599960390469295,
+          "y": 9.856952385374877
+        }
+      ]
+    }
+  ],
+  "roof": null
+}

@@ -10,6 +10,258 @@
         return _wallSplitting;
     }
 
+    function getPrototypeOwnedRecordSignature(entry) {
+        if (!entry || typeof entry !== "object") return "";
+        const recordId = Number(entry.record && entry.record.id);
+        const ownerType = typeof entry.ownerType === "string" && entry.ownerType.length > 0
+            ? entry.ownerType
+            : "section";
+        const ownerId = typeof entry.ownerId === "string" && entry.ownerId.length > 0
+            ? entry.ownerId
+            : (typeof entry.sectionKey === "string" ? entry.sectionKey : "");
+        return `${ownerType}:${ownerId}:${Number.isInteger(recordId) ? recordId : ""}`;
+    }
+
+    function shouldSkipRoadAndFloorTileObjectLoad() {
+        return typeof globalScope !== "undefined" &&
+            globalScope.SKIP_ROAD_AND_FLOOR_TILE_OBJECT_LOAD !== false;
+    }
+
+    function isRoadOrFloorTileObjectRecord(record) {
+        if (!shouldSkipRoadAndFloorTileObjectLoad() || !record || typeof record !== "object") return false;
+        const type = typeof record.type === "string" ? record.type.trim().toLowerCase() : "";
+        const category = typeof record.category === "string" ? record.category.trim().toLowerCase() : "";
+        const objectType = typeof record.objectType === "string" ? record.objectType.trim().toLowerCase() : "";
+        return (
+            type === "road" ||
+            type === "floor" ||
+            type === "floortile" ||
+            type === "flooring" ||
+            type === "tile" ||
+            objectType === "road" ||
+            objectType === "floor" ||
+            objectType === "floortile" ||
+            objectType === "flooring" ||
+            objectType === "tile" ||
+            category === "roads" ||
+            category === "floor" ||
+            category === "floors" ||
+            category === "flooring" ||
+            category === "tiles"
+        );
+    }
+
+    function collectPrototypeOwnedRecords(map, fieldName, activeSectionKeys) {
+        const desiredRecords = [];
+        const sectionKeys = activeSectionKeys instanceof Set
+            ? activeSectionKeys
+            : (typeof map.getPrototypeActiveSectionKeys === "function" ? map.getPrototypeActiveSectionKeys() : new Set());
+        sectionKeys.forEach((sectionKey) => {
+            const asset = map.getPrototypeSectionAsset(sectionKey);
+            const records = Array.isArray(asset && asset[fieldName]) ? asset[fieldName] : null;
+            if (!Array.isArray(records)) return;
+            for (let i = 0; i < records.length; i++) {
+                const record = records[i];
+                if (!record || typeof record !== "object") continue;
+                if (fieldName === "objects" && isRoadOrFloorTileObjectRecord(record)) continue;
+                desiredRecords.push({
+                    ownerType: "section",
+                    ownerId: sectionKey,
+                    sectionKey,
+                    record
+                });
+            }
+        });
+        if (typeof map.collectPrototypeBuildingIdsForSectionKeys === "function") {
+            const buildingState = map && map._prototypeBuildingState;
+            const buildingInstances = buildingState && buildingState.buildingInstancesById instanceof Map
+                ? buildingState.buildingInstancesById
+                : null;
+            if (buildingInstances) {
+                map.collectPrototypeBuildingIdsForSectionKeys(sectionKeys).forEach((buildingId) => {
+                    const instance = buildingInstances.get(buildingId);
+                    const records = Array.isArray(instance && instance[fieldName]) ? instance[fieldName] : null;
+                    if (!Array.isArray(records)) return;
+                    for (let i = 0; i < records.length; i++) {
+                        const record = records[i];
+                        if (!record || typeof record !== "object") continue;
+                        if (fieldName === "objects" && isRoadOrFloorTileObjectRecord(record)) continue;
+                        desiredRecords.push({
+                            ownerType: "building",
+                            ownerId: buildingId,
+                            sectionKey: buildingId,
+                            record
+                        });
+                    }
+                });
+            }
+        }
+        return desiredRecords;
+    }
+
+    function restorePrototypeBuildingFloorSupportForObject(map, runtimeObj, entry) {
+        if (!map || !runtimeObj || !entry || entry.ownerType !== "building") return false;
+        const buildingId = typeof entry.ownerId === "string" ? entry.ownerId : "";
+        if (!buildingId) return false;
+        const initialLayer = Number.isFinite(Number(runtimeObj.traversalLayer))
+            ? Math.round(Number(runtimeObj.traversalLayer))
+            : (Number.isFinite(Number(runtimeObj.level)) ? Math.round(Number(runtimeObj.level)) : 0);
+        if (initialLayer <= 0) return false;
+        const floorSupportApi = globalScope && globalScope.FloorSupport;
+        if (!floorSupportApi || typeof floorSupportApi.getEntityFloorMembership !== "function" || typeof floorSupportApi.resolvePrototypeBuildingFloorFragment !== "function") {
+            throw new Error("prototype building object restore requires FloorSupport floor membership helpers");
+        }
+        const membership = floorSupportApi.getEntityFloorMembership(runtimeObj, {
+            map,
+            record: entry.record,
+            ownerType: "building",
+            ownerId: buildingId
+        });
+        if (!membership || membership.ownerType !== "building" || membership.ownerId !== buildingId || typeof membership.floorId !== "string" || membership.floorId.length === 0) {
+            throw new Error(`prototype building object ${entry.record && entry.record.id || "(unknown)"} is missing canonical floor membership for building ${buildingId}`);
+        }
+        const fragment = floorSupportApi.resolvePrototypeBuildingFloorFragment(map, membership);
+        const layer = Number.isFinite(Number(fragment && fragment.level)) ? Math.round(Number(fragment.level)) : 0;
+        if (layer <= 0) return false;
+        const baseNode = runtimeObj.node && typeof runtimeObj.node === "object"
+            ? runtimeObj.node
+            : (typeof map.worldToNode === "function" ? map.worldToNode(runtimeObj.x, runtimeObj.y) : null);
+        let floorNode = typeof map.getFloorNodeAtLayer === "function"
+            ? map.getFloorNodeAtLayer(
+                baseNode && Number.isFinite(baseNode.xindex) ? baseNode.xindex : runtimeObj.x,
+                baseNode && Number.isFinite(baseNode.yindex) ? baseNode.yindex : runtimeObj.y,
+                layer,
+                {
+                    fragmentId: fragment.fragmentId,
+                    surfaceId: fragment.surfaceId,
+                    groundNode: baseNode,
+                    worldX: runtimeObj.x,
+                    worldY: runtimeObj.y,
+                    allowScan: true
+                }
+            )
+            : null;
+        if (!floorNode && baseNode && typeof map.createFloorNodeFromSource === "function") {
+            if (!Number.isFinite(Number(fragment.nodeBaseZ))) {
+                throw new Error(`building object sync fragment ${fragment.fragmentId || "(unknown)"} requires nodeBaseZ`);
+            }
+            floorNode = map.createFloorNodeFromSource(baseNode, fragment, {
+                baseZ: Number(fragment.nodeBaseZ),
+                traversalLayer: layer
+            });
+            if (floorNode && typeof map._connectFloorNodesIncremental === "function") {
+                map._connectFloorNodesIncremental([floorNode], new Set([floorNode.id]));
+            }
+        }
+        if (!floorNode) {
+            console.warn("[prototype object sync] building-owned upper-floor object could not create floor node", {
+                recordId: Number.isInteger(Number(entry.record && entry.record.id)) ? Number(entry.record.id) : null,
+                buildingId,
+                layer,
+                fragmentId: fragment.fragmentId || "",
+                hasBaseNode: !!baseNode,
+                baseNodeX: baseNode && Number(baseNode.xindex),
+                baseNodeY: baseNode && Number(baseNode.yindex),
+                hasCreateFloorNodeFromSource: typeof map.createFloorNodeFromSource === "function"
+            });
+            return false;
+        }
+        runtimeObj.fragmentId = typeof fragment.fragmentId === "string" ? fragment.fragmentId : "";
+        runtimeObj.surfaceId = typeof fragment.surfaceId === "string" ? fragment.surfaceId : "";
+        if (!Number.isFinite(Number(fragment.nodeBaseZ))) {
+            throw new Error(`building object sync fragment ${fragment.fragmentId || "(unknown)"} requires nodeBaseZ`);
+        }
+        const baseZ = Number(fragment.nodeBaseZ);
+        const support = {
+            type: "floor",
+            layer,
+            baseZ,
+            fragment,
+            fragmentId: runtimeObj.fragmentId,
+            surfaceId: runtimeObj.surfaceId,
+            ownerType: "building",
+            ownerId: buildingId,
+            floorMembership: membership,
+            node: floorNode,
+            nodeId: floorNode && typeof floorNode.id === "string" ? floorNode.id : ""
+        };
+        floorSupportApi.stampEntityFloorMembership(runtimeObj, membership);
+        if (typeof runtimeObj.setIndexedNodes === "function") {
+            runtimeObj.setIndexedNodes([floorNode], floorNode);
+        } else {
+            runtimeObj.node = floorNode;
+            runtimeObj._indexedNodes = [floorNode];
+        }
+        runtimeObj.currentMovementSupport = {
+            type: "floor",
+            layer,
+            baseZ,
+            fragmentId: runtimeObj.fragmentId,
+            surfaceId: runtimeObj.surfaceId,
+            ownerType: "building",
+            ownerId: buildingId,
+            floorMembership: membership,
+            nodeId: support.nodeId
+        };
+        runtimeObj.currentLayer = layer;
+        runtimeObj.traversalLayer = layer;
+        runtimeObj.currentLayerBaseZ = baseZ;
+        runtimeObj._activeFloorFragment = fragment;
+        if (typeof map.setActorCurrentMovementSupport === "function") {
+            map.setActorCurrentMovementSupport(runtimeObj, support);
+        }
+        if (typeof map.registerFloorObject === "function") {
+            map.registerFloorObject(runtimeObj);
+        }
+        if (
+            entry &&
+            entry.record &&
+            entry.record.type === "placedObject" &&
+            entry.record.zMode === "local"
+        ) {
+            const savedLocalZ = Number.isFinite(Number(entry.record.z)) ? Number(entry.record.z) : 0;
+            const correctedLocalZ = (
+                baseZ !== 0 &&
+                Math.abs(savedLocalZ - baseZ) <= 0.001
+            ) ? 0 : savedLocalZ;
+            if (correctedLocalZ !== savedLocalZ) {
+                console.warn("[prototype object sync] corrected placed object local z that matched floor base", {
+                    recordId: Number.isInteger(Number(entry.record.id)) ? Number(entry.record.id) : null,
+                    buildingId,
+                    baseZ,
+                    savedLocalZ,
+                    correctedLocalZ
+                });
+            }
+            runtimeObj.z = correctedLocalZ;
+            runtimeObj._renderLayerBaseZ = baseZ;
+            runtimeObj.currentLayerBaseZ = baseZ;
+        }
+        return true;
+    }
+
+    function invalidatePrototypeInteriorBitmapForRuntimeObject(map, runtimeObj) {
+        if (!runtimeObj || !map || typeof map.invalidatePrototypeBuildingInteriorBitmap !== "function") return false;
+        const membership = runtimeObj._floorMembership && typeof runtimeObj._floorMembership === "object"
+            ? runtimeObj._floorMembership
+            : (runtimeObj.floorMembership && typeof runtimeObj.floorMembership === "object" ? runtimeObj.floorMembership : null);
+        if (
+            !membership ||
+            membership.ownerType !== "building" ||
+            typeof membership.ownerId !== "string" ||
+            membership.ownerId.length === 0 ||
+            typeof membership.floorId !== "string" ||
+            membership.floorId.length === 0
+        ) {
+            return false;
+        }
+        map.invalidatePrototypeBuildingInteriorBitmap({
+            placementId: membership.ownerId,
+            floorId: membership.floorId
+        });
+        return true;
+    }
+
     /**
      * Check all wall records in a section asset for cross-section spanning
      * and split them at seam boundaries. Mutates `asset.walls` in-place,
@@ -680,28 +932,22 @@
                 const captureMs = prototypeNow() - captureStart;
                 const collectStart = prototypeNow();
                 const activeSectionKeys = this.getPrototypeActiveSectionKeys();
-                const desiredRecords = [];
-                activeSectionKeys.forEach((sectionKey) => {
-                    const asset = this.getPrototypeSectionAsset(sectionKey);
-                    const records = Array.isArray(asset && asset.objects) ? asset.objects : null;
-                    if (!Array.isArray(records)) return;
-                    for (let i = 0; i < records.length; i++) {
-                        desiredRecords.push({ sectionKey, record: records[i] });
-                    }
-                });
+                const desiredRecords = collectPrototypeOwnedRecords(this, "objects", activeSectionKeys);
                 if (typeof this.getPrototypeTriggerDefsForSectionKeys === "function") {
                     const triggerDefs = this.getPrototypeTriggerDefsForSectionKeys(activeSectionKeys);
                     for (let i = 0; i < triggerDefs.length; i++) {
                         const triggerDef = triggerDefs[i];
                         if (!triggerDef || typeof triggerDef !== "object") continue;
                         desiredRecords.push({
+                            ownerType: "trigger",
+                            ownerId: "",
                             sectionKey: "",
                             record: triggerDef
                         });
                     }
                 }
                 const desiredSignature = desiredRecords
-                    .map((entry) => Number.isInteger(entry.record && entry.record.id) ? entry.record.id : "")
+                    .map(getPrototypeOwnedRecordSignature)
                     .join("|");
                 const collectMs = prototypeNow() - collectStart;
 
@@ -845,6 +1091,7 @@
                         bumpProfile(runtimeProfileKey, "removed", 1, prototypeNow() - removeStart);
                         staticRemoved += 1;
                     }
+                    invalidatePrototypeInteriorBitmapForRuntimeObject(this, runtimeObj);
                     objectState.activeRuntimeObjectsByRecordId.delete(recordId);
                     removedAny = true;
                     removedCount += 1;
@@ -993,7 +1240,12 @@
                     runtimeObj._prototypeObjectManaged = true;
                     runtimeObj._prototypeRecordId = recordId;
                     runtimeObj._prototypePersistenceSignature = buildPrototypeObjectPersistenceSignature(entry.record);
-                    runtimeObj._prototypeOwnerSectionKey = entry.sectionKey;
+                    runtimeObj._prototypeOwnerType = entry.ownerType || "section";
+                    runtimeObj._prototypeOwnerId = entry.ownerId || entry.sectionKey || "";
+                    runtimeObj._prototypeOwnerSignature = `${runtimeObj._prototypeOwnerType}:${runtimeObj._prototypeOwnerId}`;
+                    runtimeObj._prototypeOwnerSectionKey = runtimeObj._prototypeOwnerType === "section" ? entry.sectionKey : "";
+                    restorePrototypeBuildingFloorSupportForObject(this, runtimeObj, entry);
+                    invalidatePrototypeInteriorBitmapForRuntimeObject(this, runtimeObj);
                     runtimeObj._prototypeDirty = false;
                     objectState.activeRuntimeObjectsByRecordId.set(recordId, runtimeObj);
                     loadedAny = true;

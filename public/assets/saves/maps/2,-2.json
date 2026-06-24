@@ -127914,7 +127914,7 @@
       "script": {
         "playerTouches": "for (spell in shuffle([\"fireball\", \"freeze\", \"vanish\", \"speed\", \"omnivision\", \"spikes\", \"maze\", \"teleport\", \"shield\"])) {\n      if (!player.hasMagic(spell)) {\n         unlockMagic(spell);\n         scrollMessage(\n            \"Your powers as a wizard increased! You have unlocked: {spell}!\",\n            image(magicIcon(spell))\n         );\n         break;\n      }\n   };"
       },
-      "id": 136
+      "id": 142
     },
     {
       "type": "powerup",
@@ -127938,7 +127938,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup49",
-      "id": 137
+      "id": 143
     },
     {
       "type": "powerup",
@@ -127962,7 +127962,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup50",
-      "id": 138
+      "id": 144
     },
     {
       "type": "powerup",
@@ -127986,7 +127986,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup51",
-      "id": 139
+      "id": 145
     },
     {
       "type": "powerup",
@@ -128010,7 +128010,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup52",
-      "id": 140
+      "id": 146
     },
     {
       "type": "powerup",
@@ -128034,7 +128034,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup53",
-      "id": 141
+      "id": 147
     },
     {
       "type": "powerup",
@@ -128058,7 +128058,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup55",
-      "id": 142
+      "id": 148
     },
     {
       "type": "powerup",
@@ -128082,7 +128082,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup82",
-      "id": 143
+      "id": 149
     },
     {
       "type": "powerup",
@@ -128106,7 +128106,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup84",
-      "id": 144
+      "id": 150
     },
     {
       "type": "powerup",
@@ -128130,7 +128130,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup85",
-      "id": 145
+      "id": 151
     },
     {
       "type": "powerup",
@@ -128154,7 +128154,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup86",
-      "id": 146
+      "id": 152
     },
     {
       "type": "powerup",
@@ -128178,7 +128178,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup46",
-      "id": 147
+      "id": 153
     }
   ],
   "buildingRefs": []

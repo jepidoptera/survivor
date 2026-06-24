@@ -934,6 +934,17 @@ class Animal extends Character {
                 normalizedPath.shift();
             }
         }
+        if (typeof this._recordMovementDiagnostic === "function") {
+            this._recordMovementDiagnostic("ai-apply-path", {
+                preserveStep: !!preserveStep,
+                requestedPathLength: Array.isArray(path) ? path.length : null,
+                appliedPathLength: normalizedPath.length,
+                destinationNode: typeof this._describeMovementNode === "function"
+                    ? this._describeMovementNode(destinationNode)
+                    : null,
+                hadNextNode: !!this.nextNode
+            });
+        }
         this.path = normalizedPath;
         this.destination = destinationNode || null;
         if (!preserveStep) {
@@ -1001,6 +1012,25 @@ class Animal extends Character {
     }
     clearPlayerInteractionAcrossTraversalLayer(target, now = Date.now()) {
         if (this.isTargetOnSameTraversalLayer(target)) return false;
+        if (typeof this._recordMovementDiagnostic === "function") {
+            this._recordMovementDiagnostic("ai-target-layer-separated", {
+                targetType: target && target.type || "",
+                selfLayer: this.getNodeTraversalLayer(),
+                targetLayer: this.getTargetTraversalLayer(target, this.getNodeTraversalLayer()),
+                interactionActive: !!(
+                    this.attackTarget === target ||
+                    (this._closeCombatState && this._closeCombatState.target === target) ||
+                    this.attacking ||
+                    this.attackState !== "idle" ||
+                    this._hasAggro(now) ||
+                    this._committedToAttack ||
+                    this._corneredAttackPending
+                )
+            }, {
+                dedupeKey: `ai-target-layer-separated:${this.getNodeTraversalLayer()}:${this.getTargetTraversalLayer(target, this.getNodeTraversalLayer())}`,
+                minIntervalMs: 1000
+            });
+        }
         if (
             this.attackTarget === target ||
             (this._closeCombatState && this._closeCombatState.target === target) ||
@@ -1329,17 +1359,46 @@ class Animal extends Character {
     }
     updatePursuitDestination(target) {
         if (!target) return;
-        if (!this.isKnockableObstacle(target) && !this.isTargetOnSameTraversalLayer(target)) return;
+        if (!this.isKnockableObstacle(target) && !this.isTargetOnSameTraversalLayer(target)) {
+            if (typeof this._recordMovementDiagnostic === "function") {
+                this._recordMovementDiagnostic("ai-pursuit-abort-layer", {
+                    targetType: target && target.type || "",
+                    selfLayer: this.getNodeTraversalLayer(),
+                    targetLayer: this.getTargetTraversalLayer(target, this.getNodeTraversalLayer())
+                });
+            }
+            return;
+        }
         const now = Date.now();
         const targetLayer = this.getTargetTraversalLayer(target, this.getNodeTraversalLayer());
         const targetNode = (typeof this.resolveNodeForTraversalLayer === "function")
             ? this.resolveNodeForTraversalLayer(target.x, target.y, { traversalLayer: targetLayer })
             : this.map.worldToNode(target.x, target.y);
-        if (!targetNode) return;
+        if (!targetNode) {
+            if (typeof this._recordMovementDiagnostic === "function") {
+                this._recordMovementDiagnostic("ai-pursuit-no-target-node", {
+                    targetType: target && target.type || "",
+                    targetX: Number.isFinite(target && target.x) ? Number(target.x) : null,
+                    targetY: Number.isFinite(target && target.y) ? Number(target.y) : null,
+                    targetLayer
+                });
+            }
+            return;
+        }
         const preserveStep = this._isMidTraversalStep();
 
         const startNode = this._getPathStartNode(preserveStep);
-        if (!startNode) return;
+        if (!startNode) {
+            if (typeof this._recordMovementDiagnostic === "function") {
+                this._recordMovementDiagnostic("ai-pursuit-no-start-node", {
+                    preserveStep,
+                    targetNode: typeof this._describeMovementNode === "function"
+                        ? this._describeMovementNode(targetNode)
+                        : null
+                });
+            }
+            return;
+        }
         const repathInterval = Number.isFinite(this.pursuitRepathMs) ? Math.max(0, this.pursuitRepathMs) : 0;
         const repathDue = (now - (this._lastPursuitPathMs || 0)) >= repathInterval;
         const destinationChanged = this.destination !== targetNode;
@@ -1355,13 +1414,35 @@ class Animal extends Character {
             allowBlockedDestination: true
         });
         const path = route ? route.path : null;
+        if (typeof this._recordMovementDiagnostic === "function") {
+            this._recordMovementDiagnostic("ai-pursuit-route", {
+                preserveStep,
+                source: route && route.source || "none",
+                pathLength: Array.isArray(path) ? path.length : null,
+                targetNode: typeof this._describeMovementNode === "function"
+                    ? this._describeMovementNode(targetNode)
+                    : null,
+                startNode: typeof this._describeMovementNode === "function"
+                    ? this._describeMovementNode(startNode)
+                    : null
+            });
+        }
         this._lastPursuitPathMs = now;
         this._applyPursuitPath(path, route && route.targetNode ? route.targetNode : targetNode, preserveStep);
     }
 
     getCombatRouteToTarget(target, options = {}) {
         if (!target || !this.map) return null;
-        if (!this.isKnockableObstacle(target) && !this.isTargetOnSameTraversalLayer(target)) return null;
+        if (!this.isKnockableObstacle(target) && !this.isTargetOnSameTraversalLayer(target)) {
+            if (typeof this._recordMovementDiagnostic === "function") {
+                this._recordMovementDiagnostic("ai-route-abort-layer", {
+                    targetType: target && target.type || "",
+                    selfLayer: this.getNodeTraversalLayer(),
+                    targetLayer: this.getTargetTraversalLayer(target, this.getNodeTraversalLayer())
+                });
+            }
+            return null;
+        }
 
         const startNode = options.startNode || this._getPathStartNode(options.preserveCurrentStep === true);
         const targetLayer = this.getTargetTraversalLayer(target, this.getNodeTraversalLayer());
@@ -1370,7 +1451,22 @@ class Animal extends Character {
                 ? this.resolveNodeForTraversalLayer(target.x, target.y, { traversalLayer: targetLayer })
                 : this.map.worldToNode(target.x, target.y))
             : null);
-        if (!startNode || !targetNode) return null;
+        if (!startNode || !targetNode) {
+            if (typeof this._recordMovementDiagnostic === "function") {
+                this._recordMovementDiagnostic("ai-route-missing-node", {
+                    hasStartNode: !!startNode,
+                    hasTargetNode: !!targetNode,
+                    targetLayer,
+                    startNode: typeof this._describeMovementNode === "function"
+                        ? this._describeMovementNode(startNode)
+                        : null,
+                    targetNode: typeof this._describeMovementNode === "function"
+                        ? this._describeMovementNode(targetNode)
+                        : null
+                });
+            }
+            return null;
+        }
 
         const maxPathLength = Object.prototype.hasOwnProperty.call(options, "maxPathLength")
             ? options.maxPathLength
@@ -1480,9 +1576,33 @@ class Animal extends Character {
 
         if (!playerHiddenByInvisibility && this.fleeRadius > 0 && this.isPointWithinRadius(wizard.x, wizard.y, this.fleeRadius)) {
             if (this._corneredAttackPending) {
+                if (typeof this._recordMovementDiagnostic === "function") {
+                    this._recordMovementDiagnostic("ai-decision-attack", {
+                        reason: "cornered-flee-radius",
+                        fleeRadius: Number.isFinite(this.fleeRadius) ? Number(this.fleeRadius) : null,
+                        distanceToWizard: this.distanceToPoint(wizard.x, wizard.y),
+                        wizardLayer: this.getTargetTraversalLayer(wizard, this.getNodeTraversalLayer()),
+                        selfLayer: this.getNodeTraversalLayer()
+                    }, {
+                        dedupeKey: "ai-decision-attack:cornered-flee-radius",
+                        minIntervalMs: 500
+                    });
+                }
                 this._playerVisibleLastAiTick = false;
                 this.attack(wizard);
                 return;
+            }
+            if (typeof this._recordMovementDiagnostic === "function") {
+                this._recordMovementDiagnostic("ai-decision-flee", {
+                    reason: "flee-radius",
+                    fleeRadius: Number.isFinite(this.fleeRadius) ? Number(this.fleeRadius) : null,
+                    distanceToWizard: this.distanceToPoint(wizard.x, wizard.y),
+                    wizardLayer: this.getTargetTraversalLayer(wizard, this.getNodeTraversalLayer()),
+                    selfLayer: this.getNodeTraversalLayer()
+                }, {
+                    dedupeKey: "ai-decision-flee:flee-radius",
+                    minIntervalMs: 500
+                });
             }
             this.resetAttackState();
             this._playerVisibleLastAiTick = false;
@@ -1509,6 +1629,20 @@ class Animal extends Character {
             }
 
             if (hasLOS) {
+                if (typeof this._recordMovementDiagnostic === "function") {
+                    this._recordMovementDiagnostic("ai-decision-attack", {
+                        reason: "line-of-sight",
+                        inChaseRadius,
+                        alreadyAggro,
+                        chaseRadius: Number.isFinite(this.chaseRadius) ? Number(this.chaseRadius) : null,
+                        distanceToWizard: this.distanceToPoint(wizard.x, wizard.y),
+                        wizardLayer: this.getTargetTraversalLayer(wizard, this.getNodeTraversalLayer()),
+                        selfLayer: this.getNodeTraversalLayer()
+                    }, {
+                        dedupeKey: "ai-decision-attack:line-of-sight",
+                        minIntervalMs: 500
+                    });
+                }
                 this._playerVisibleLastAiTick = playerVisibleThisTick;
                 this._refreshAggro(now);
                 this.attack(wizard);
@@ -1516,6 +1650,19 @@ class Animal extends Character {
             }
 
             if (alreadyAggro) {
+                if (typeof this._recordMovementDiagnostic === "function") {
+                    this._recordMovementDiagnostic("ai-decision-attack", {
+                        reason: "already-aggro",
+                        inChaseRadius,
+                        chaseRadius: Number.isFinite(this.chaseRadius) ? Number(this.chaseRadius) : null,
+                        distanceToWizard: this.distanceToPoint(wizard.x, wizard.y),
+                        wizardLayer: this.getTargetTraversalLayer(wizard, this.getNodeTraversalLayer()),
+                        selfLayer: this.getNodeTraversalLayer()
+                    }, {
+                        dedupeKey: "ai-decision-attack:already-aggro",
+                        minIntervalMs: 500
+                    });
+                }
                 this._playerVisibleLastAiTick = playerVisibleThisTick;
                 this._refreshAggro(now);
                 this.attack(wizard);
@@ -1569,7 +1716,13 @@ class Animal extends Character {
             const wanderX = this.x + (Math.random() - 0.5) * 10;
             const wanderY = this.y + (Math.random() - 0.5) * 10;
             const wanderNode = (typeof this.resolveNodeForTraversalLayer === "function")
-                ? this.resolveNodeForTraversalLayer(wanderX, wanderY)
+                ? this.resolveNodeForTraversalLayer(
+                    wanderX,
+                    wanderY,
+                    typeof this.getFloorNodeResolutionOptions === "function"
+                        ? this.getFloorNodeResolutionOptions()
+                        : {}
+                )
                 : this.map.worldToNode(wanderX, wanderY);
             if (wanderNode) this.goto(wanderNode);
             this.speed = this.walkSpeed;
@@ -1623,6 +1776,15 @@ class Animal extends Character {
     tickMovementOnly(simHz = null, movementScale = 1) {
         this._ensureDeathState();
         if (this.dead || this.gone) return;
+        if (typeof this._recordMovementDiagnostic === "function") {
+            this._recordMovementDiagnostic("scheduler-movement-tick", {
+                simHz: Number.isFinite(simHz) ? Number(simHz) : null,
+                movementScale: Number.isFinite(movementScale) ? Number(movementScale) : null
+            }, {
+                dedupeKey: "scheduler-movement-tick",
+                minIntervalMs: 1000
+            });
+        }
         if (Number.isFinite(simHz) && simHz > 0) {
             this.frameRate = simHz;
         }
@@ -1661,6 +1823,12 @@ class Animal extends Character {
     tickBehaviorOnly() {
         this._ensureDeathState();
         if (this.dead || this.gone) return;
+        if (typeof this._recordMovementDiagnostic === "function") {
+            this._recordMovementDiagnostic("scheduler-behavior-tick", {}, {
+                dedupeKey: "scheduler-behavior-tick",
+                minIntervalMs: 1000
+            });
+        }
         if (this.map && this.map._prototypeBlockingPending) {
             this.moving = false;
             return;
@@ -1742,12 +1910,30 @@ class Animal extends Character {
     flee() {
         // flee the player
         const now = Date.now();
+        if (typeof this._recordMovementDiagnostic === "function") {
+            this._recordMovementDiagnostic("ai-flee-request", {
+                wizardLayer: this.getTargetTraversalLayer(typeof wizard !== "undefined" ? wizard : null, this.getNodeTraversalLayer()),
+                selfLayer: this.getNodeTraversalLayer()
+            }, {
+                dedupeKey: "ai-flee-request",
+                minIntervalMs: 500
+            });
+        }
         const repathInterval = Number.isFinite(this.fleeRepathMs)
             ? Math.max(0, Number(this.fleeRepathMs))
             : 0;
         const repathDue = (now - (this._lastFleePathMs || 0)) >= repathInterval;
         const hasMovementPlanned = this.hasRetreatMovementPlanned();
         if (hasMovementPlanned && !repathDue) {
+            if (typeof this._recordMovementDiagnostic === "function") {
+                this._recordMovementDiagnostic("ai-flee-existing-plan", {
+                    repathInterval,
+                    lastFleePathMs: Number.isFinite(this._lastFleePathMs) ? Number(this._lastFleePathMs) : null
+                }, {
+                    dedupeKey: "ai-flee-existing-plan",
+                    minIntervalMs: 500
+                });
+            }
             this.speed = this.runSpeed;
             return;
         }
@@ -1777,12 +1963,31 @@ class Animal extends Character {
             }
         );
         if (fleeRoute) {
+            if (typeof this._recordMovementDiagnostic === "function") {
+                this._recordMovementDiagnostic("ai-flee-route", {
+                    source: fleeRoute.source || "",
+                    pathLength: Array.isArray(fleeRoute.path) ? fleeRoute.path.length : null,
+                    destinationNode: typeof this._describeMovementNode === "function"
+                        ? this._describeMovementNode(fleeRoute.destinationNode)
+                        : null,
+                    startNode: typeof this._describeMovementNode === "function"
+                        ? this._describeMovementNode(startNode)
+                        : null
+                });
+            }
             if (this.shouldAttackInsteadOfRetreat(wizard, fleeRoute, startNode)) {
                 this.commitCorneredAttack(wizard);
                 return;
             }
             this._applyPursuitPath(fleeRoute.path, fleeRoute.destinationNode, preserveStep);
             this._lastFleePathMs = now;
+        } else if (typeof this._recordMovementDiagnostic === "function") {
+            this._recordMovementDiagnostic("ai-flee-no-route", {
+                preserveStep,
+                startNode: typeof this._describeMovementNode === "function"
+                    ? this._describeMovementNode(startNode)
+                    : null
+            });
         }
         this.speed = this.runSpeed;
     }
@@ -2146,16 +2351,35 @@ class Animal extends Character {
 
     attack(target) {
         if (!target || target.gone || target.dead) {
+            if (typeof this._recordMovementDiagnostic === "function") {
+                this._recordMovementDiagnostic("ai-attack-invalid-target", {
+                    hasTarget: !!target,
+                    targetGone: !!(target && target.gone),
+                    targetDead: !!(target && target.dead)
+                });
+            }
             this.resetAttackState();
             return;
         }
         if (this.isTargetHiddenByInvisibilityAura(target)) {
+            if (typeof this._recordMovementDiagnostic === "function") {
+                this._recordMovementDiagnostic("ai-attack-target-hidden", {
+                    targetType: target && target.type || ""
+                });
+            }
             this._clearPursuit();
             this._aggroUntilMs = 0;
             this._playerVisibleLastAiTick = false;
             return;
         }
         if (!this.isKnockableObstacle(target) && !this.isTargetOnSameTraversalLayer(target)) {
+            if (typeof this._recordMovementDiagnostic === "function") {
+                this._recordMovementDiagnostic("ai-attack-abort-layer", {
+                    targetType: target && target.type || "",
+                    selfLayer: this.getNodeTraversalLayer(),
+                    targetLayer: this.getTargetTraversalLayer(target, this.getNodeTraversalLayer())
+                });
+            }
             this._clearPursuit();
             this._aggroUntilMs = 0;
             this._playerVisibleLastAiTick = false;
@@ -2213,6 +2437,20 @@ class Animal extends Character {
             preserveCurrentStep: preserveStep,
             allowBlockedDestination: true
         });
+        if (typeof this._recordMovementDiagnostic === "function") {
+            this._recordMovementDiagnostic("ai-attack-route", {
+                targetType: target && target.type || "",
+                preserveStep,
+                routeSource: route && route.source || "none",
+                routePathLength: route && Array.isArray(route.path) ? route.path.length : null,
+                routeTargetNode: typeof this._describeMovementNode === "function"
+                    ? this._describeMovementNode(route && route.targetNode)
+                    : null
+            }, {
+                dedupeKey: `ai-attack-route:${route && route.source || "none"}:${route && Array.isArray(route.path) ? route.path.length : "null"}`,
+                minIntervalMs: 500
+            });
+        }
         const routeBlocker = this.getPriorityBlockerFromRoute(route);
         if (routeBlocker) {
             this.resetCloseCombatState();
@@ -2464,6 +2702,13 @@ class Animal extends Character {
         if (typeof this.fragmentId === "string" && this.fragmentId.length > 0) {
             data.fragmentId = this.fragmentId;
         }
+        const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+        const floorMembership = floorSupportApi && typeof floorSupportApi.getEntityFloorMembership === "function"
+            ? floorSupportApi.getEntityFloorMembership(this)
+            : (this._floorMembership && typeof this._floorMembership === "object" ? this._floorMembership : null);
+        if (floorMembership && typeof floorMembership === "object") {
+            data.floorMembership = { ...floorMembership };
+        }
         if (Number.isFinite(this.brightness)) {
             data.brightness = Number(this.brightness);
         }
@@ -2524,22 +2769,75 @@ class Animal extends Character {
             ? performance.now()
             : Date.now();
         const baseNode = map.worldToNode(data.x, data.y);
+        const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+        const savedFloorMembership = data.floorMembership && typeof data.floorMembership === "object"
+            ? data.floorMembership
+            : null;
+        const resolveSavedFloorFragment = () => {
+            const directFragmentId = typeof data.fragmentId === "string" && data.fragmentId.length > 0
+                ? data.fragmentId
+                : "";
+            if (directFragmentId && map.floorsById instanceof Map) {
+                const direct = map.floorsById.get(directFragmentId) || null;
+                if (direct) return direct;
+            }
+            if (
+                savedFloorMembership &&
+                floorSupportApi &&
+                typeof floorSupportApi.resolvePrototypeBuildingFloorFragment === "function" &&
+                savedFloorMembership.ownerType === "building"
+            ) {
+                const resolved = floorSupportApi.resolvePrototypeBuildingFloorFragment(map, savedFloorMembership, { required: false });
+                if (resolved) return resolved;
+            }
+            if (
+                savedFloorMembership &&
+                map.floorsById instanceof Map &&
+                floorSupportApi &&
+                typeof floorSupportApi.createFloorMembership === "function" &&
+                typeof floorSupportApi.floorMembershipMatches === "function"
+            ) {
+                for (const fragment of map.floorsById.values()) {
+                    const membership = floorSupportApi.createFloorMembership({ fragment });
+                    if (floorSupportApi.floorMembershipMatches(membership, savedFloorMembership)) return fragment;
+                }
+            }
+            return null;
+        };
+        const savedFloorFragment = resolveSavedFloorFragment();
+        const savedFloorMembershipLevel = savedFloorMembership && Number.isFinite(Number(savedFloorMembership.level))
+            ? Math.round(Number(savedFloorMembership.level))
+            : NaN;
         const traversalLayer = Number.isFinite(data.traversalLayer)
             ? Math.round(Number(data.traversalLayer))
-            : (Number.isFinite(data.currentLayer) ? Math.round(Number(data.currentLayer)) : 0);
+            : (Number.isFinite(savedFloorMembershipLevel)
+                ? savedFloorMembershipLevel
+                : (Number.isFinite(data.currentLayer) ? Math.round(Number(data.currentLayer)) : 0));
         let node = baseNode;
         if (baseNode && traversalLayer !== 0 && typeof map.getFloorNodeAtLayer === "function") {
             const sectionKey = targetSectionKey || (
-                typeof baseNode._prototypeSectionKey === "string"
-                    ? baseNode._prototypeSectionKey
-                    : ((typeof map.getPrototypeSectionKeyForWorldPoint === "function")
-                        ? map.getPrototypeSectionKeyForWorldPoint(data.x, data.y)
-                        : "")
+                savedFloorFragment && typeof savedFloorFragment.ownerSectionKey === "string" && savedFloorFragment.ownerSectionKey.length > 0
+                    ? savedFloorFragment.ownerSectionKey
+                    : (savedFloorFragment && savedFloorFragment.ownerType === "building" && typeof savedFloorFragment.ownerId === "string"
+                        ? savedFloorFragment.ownerId
+                        : (typeof baseNode._prototypeSectionKey === "string"
+                            ? baseNode._prototypeSectionKey
+                            : ((typeof map.getPrototypeSectionKeyForWorldPoint === "function")
+                                ? map.getPrototypeSectionKeyForWorldPoint(data.x, data.y)
+                                : "")))
             );
             node = map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, traversalLayer, {
                 sectionKey,
-                surfaceId: typeof data.surfaceId === "string" ? data.surfaceId : "",
-                fragmentId: typeof data.fragmentId === "string" ? data.fragmentId : "",
+                surfaceId: typeof data.surfaceId === "string" && data.surfaceId.length > 0
+                    ? data.surfaceId
+                    : (savedFloorFragment && typeof savedFloorFragment.surfaceId === "string" ? savedFloorFragment.surfaceId : ""),
+                fragmentId: typeof data.fragmentId === "string" && data.fragmentId.length > 0
+                    ? data.fragmentId
+                    : (savedFloorFragment && typeof savedFloorFragment.fragmentId === "string" ? savedFloorFragment.fragmentId : ""),
+                ownerType: savedFloorMembership && typeof savedFloorMembership.ownerType === "string" ? savedFloorMembership.ownerType : "",
+                ownerId: savedFloorMembership && typeof savedFloorMembership.ownerId === "string" ? savedFloorMembership.ownerId : "",
+                worldX: data.x,
+                worldY: data.y,
                 allowScan: true
             });
         }
@@ -2617,11 +2915,21 @@ class Animal extends Character {
                 } else {
                     animalInstance.traversalLayer = traversalLayer;
                     animalInstance.currentLayer = traversalLayer;
-                    animalInstance.currentLayerBaseZ = Number.isFinite(node.baseZ) ? Number(node.baseZ) : traversalLayer * 3;
+                    if (!Number.isFinite(node.baseZ)) {
+                        throw new Error(`animal ${animalInstance.id || animalInstance.name || animalInstance.type || "(unknown)"} load requires node baseZ`);
+                    }
+                    animalInstance.currentLayerBaseZ = Number(node.baseZ);
                 }
                 animalInstance.z = typeof animalInstance.getNodeStandingZ === "function"
                     ? animalInstance.getNodeStandingZ(node)
                     : (Number.isFinite(node.baseZ) ? Number(node.baseZ) : 0);
+                if (
+                    savedFloorMembership &&
+                    floorSupportApi &&
+                    typeof floorSupportApi.stampEntityFloorMembership === "function"
+                ) {
+                    floorSupportApi.stampEntityFloorMembership(animalInstance, savedFloorMembership);
+                }
                 if (data.hp !== undefined) animalInstance.hp = data.hp;
                 if (data.maxHp !== undefined) animalInstance.maxHp = data.maxHp;
                 animalInstance.ensureMagicPointsInitialized(true);
@@ -3769,6 +4077,9 @@ class Blodia extends Animal {
 
         // Movement — inlined from Character.move() (frameRate adjustment from Animal.move() added)
         this.frameRate = this.onScreen ? 30 : this.speed;
+        if (typeof this._checkMovementLayerDiagnostics === "function") {
+            this._checkMovementLayerDiagnostics("blodia-move");
+        }
 
         if (!this.destination) {
             this.moving = false;
@@ -3796,12 +4107,31 @@ class Blodia extends Animal {
                 this.currentPathStep = null;
             }
             const nextPathItem = this.path.shift();
+            if (!nextPathItem && typeof this._recordMovementDiagnostic === "function") {
+                this._recordMovementDiagnostic("path-empty-before-step", {
+                    context: "blodia-move",
+                    destinationBeforeClear: typeof this._describeMovementNode === "function"
+                        ? this._describeMovementNode(this.destination)
+                        : null
+                });
+            }
             this.currentPathStep = this.resolvePathStep(nextPathItem, this.node);
             this.nextNode = this.getPathItemDestinationNode(this.currentPathStep);
             this.directionIndex = Number.isInteger(this.currentPathStep && this.currentPathStep.directionIndex)
                 ? Number(this.currentPathStep.directionIndex)
                 : this.node.neighbors.indexOf(this.nextNode);
             if (!this.nextNode) {
+                if (typeof this._recordMovementDiagnostic === "function") {
+                    this._recordMovementDiagnostic("path-step-missing-next-node", {
+                        context: "blodia-move",
+                        nextPathItem: typeof this._describeMovementPathItem === "function"
+                            ? this._describeMovementPathItem(nextPathItem)
+                            : null,
+                        destinationBeforeClear: typeof this._describeMovementNode === "function"
+                            ? this._describeMovementNode(this.destination)
+                            : null
+                    });
+                }
                 this.destination = null;
                 this.moving = false;
                 if (!Number.isFinite(this.maxHp) || this.maxHp < this.hp) this.maxHp = this.hp;
@@ -3834,6 +4164,19 @@ class Blodia extends Animal {
             this.travelY = ydist / this.travelFrames;
             this.travelZ = zdist / this.travelFrames;
             this.direction = {x: xdist, y: ydist};
+            if (typeof this._recordMovementDiagnostic === "function") {
+                this._recordMovementDiagnostic("movement-step-start", {
+                    context: "blodia-move",
+                    targetPosition,
+                    xdist,
+                    ydist,
+                    zdist,
+                    directionDistance: d,
+                    effectiveSpeed,
+                    frameRate: Number(this.frameRate) || null,
+                    stepFrames: this.travelFrames
+                });
+            }
         }
 
         this.travelFrames--;
@@ -3880,7 +4223,13 @@ class Blodia extends Animal {
                 const wanderX = this.x + (Math.random() - 0.5) * 10;
                 const wanderY = this.y + (Math.random() - 0.5) * 10;
                 const wNode = (typeof this.resolveNodeForTraversalLayer === "function")
-                    ? this.resolveNodeForTraversalLayer(wanderX, wanderY)
+                    ? this.resolveNodeForTraversalLayer(
+                        wanderX,
+                        wanderY,
+                        typeof this.getFloorNodeResolutionOptions === "function"
+                            ? this.getFloorNodeResolutionOptions()
+                            : {}
+                    )
                     : this.map.worldToNode(wanderX, wanderY);
                 if (wNode) this.goto(wNode);
                 this.speed = this.walkSpeed;

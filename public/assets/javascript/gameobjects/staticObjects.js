@@ -4,6 +4,10 @@ const LEVEL0_ROAD_SURFACE_REBAKE_THROTTLE_MS = 1000;
 
 function destroyPixiDisplayObjectPreservingTexture(displayObj, options) {
     if (!displayObj || displayObj.destroyed === true || typeof displayObj.destroy !== "function") return false;
+    if (typeof PIXI !== "undefined" && PIXI.Graphics && displayObj instanceof PIXI.Graphics) {
+        displayObj.destroy({ children: !!(options && options.children) });
+        return true;
+    }
     // Pixi Sprite.destroy() calls this._texture.off(...). Road render sprites can
     // have had that private slot nulled after texture-cache churn, so restore a
     // non-owning sentinel before destruction.
@@ -28,7 +32,7 @@ function resolvePrototypeSectionAssetForNode(mapRef, node) {
         : null;
 }
 
-function flushPrototypeLevel0RoadSurfaceDirtyAsset(asset) {
+function flushPrototypeLevel0RoadSurfaceDirtyAsset(asset, options = null) {
     if (!asset || asset._level0RoadSurfaceDirtyPending !== true) return false;
     const dirtyRects = Array.isArray(asset._level0RoadSurfaceDirtyRects)
         ? asset._level0RoadSurfaceDirtyRects
@@ -52,7 +56,10 @@ function flushPrototypeLevel0RoadSurfaceDirtyAsset(asset) {
                 ? performance.now()
                 : Date.now()
         };
-        if (typeof globalThis.presentGameFrame === "function") {
+        if (
+            !(options && options.suppressPresent === true) &&
+            typeof globalThis.presentGameFrame === "function"
+        ) {
             globalThis.presentGameFrame();
         }
     }
@@ -133,7 +140,8 @@ function buildPrototypeRoadDirtyRectForNode(mapRef, node) {
 function markPrototypeLevel0RoadSurfaceDirty(mapRef, node, options = null) {
     const asset = resolvePrototypeSectionAssetForNode(mapRef, node);
     if (!asset) return false;
-    const dirtyRect = buildPrototypeRoadDirtyRectForNode(mapRef, node);
+    const optionRect = options && options.dirtyRect ? options.dirtyRect : null;
+    const dirtyRect = optionRect || buildPrototypeRoadDirtyRectForNode(mapRef, node);
     if (dirtyRect) {
         const existingDirtyRects = Array.isArray(asset._level0RoadSurfaceDirtyRects)
             ? asset._level0RoadSurfaceDirtyRects
@@ -638,14 +646,21 @@ function resolveExpandedNodeIndexNodes(mapRef, hitbox, options = {}) {
         if (!point) continue;
         const node = mapRef.worldToNode(point.x, point.y);
         if (!node) continue;
-        const resolvedNode = (
-            traversalLayer !== 0 &&
-            typeof mapRef.getFloorNodeAtLayer === "function"
-        ) ? (mapRef.getFloorNodeAtLayer(node.xindex, node.yindex, traversalLayer, {
-            surfaceId: typeof options.surfaceId === "string" ? options.surfaceId : "",
-            fragmentId: typeof options.fragmentId === "string" ? options.fragmentId : "",
-            allowScan: true
-        }) || node) : node;
+        let resolvedNode = node;
+        if (traversalLayer !== 0 && typeof mapRef.getFloorNodeAtLayer === "function") {
+            resolvedNode = mapRef.getFloorNodeAtLayer(node.xindex, node.yindex, traversalLayer, {
+                surfaceId: typeof options.surfaceId === "string" ? options.surfaceId : "",
+                fragmentId: typeof options.fragmentId === "string" ? options.fragmentId : "",
+                groundNode: node,
+                worldX: point.x,
+                worldY: point.y,
+                allowScan: true
+            }) || null;
+            if (!resolvedNode) {
+                if (options.requireTraversalLayerNode === true) continue;
+                resolvedNode = node;
+            }
+        }
         const key = `${Number(resolvedNode.xindex)}:${Number(resolvedNode.yindex)}:${Number.isFinite(resolvedNode.traversalLayer) ? Number(resolvedNode.traversalLayer) : traversalLayer}:${String(resolvedNode.surfaceId || "")}:${String(resolvedNode.fragmentId || "")}`;
         if (nodeKeys.has(key)) continue;
         nodeKeys.add(key);
@@ -1214,6 +1229,18 @@ function attachLoadedPlacedObjectToFloorBuildingManifest(map, obj, data) {
     if (!fragmentId) {
         throw new Error("Cannot restore upper-floor placed object without a saved floor fragment id.");
     }
+    const fragment = map.floorsById instanceof Map ? map.floorsById.get(fragmentId) || null : null;
+    const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+    const isPrototypeBuildingFragment = floorSupportApi && typeof floorSupportApi.isPrototypeBuildingPlacementFloorFragment === "function"
+        ? floorSupportApi.isPrototypeBuildingPlacementFloorFragment(fragment)
+        : !!(
+            fragment &&
+            fragment.renderedByBuildingCutaway === true &&
+            fragment.ownerType === "building" &&
+            typeof fragment.ownerId === "string" &&
+            fragment.ownerId.length > 0
+        );
+    if (isPrototypeBuildingFragment) return false;
     if (typeof map.addObjectToFloorBuildingManifest !== "function") {
         throw new Error("Cannot restore upper-floor placed object because floor building manifests are unavailable.");
     }
@@ -2344,6 +2371,7 @@ void main(void) {
         const hasDoorHitShake = Math.abs(shakeDx) > 1e-3 || Math.abs(shakeDy) > 1e-3;
 
         let signature = "";
+        let extraDepthBias = 0;
         if (useDualWallPlanes) {
             const width = Math.max(0.01, Number.isFinite(this.width) ? Number(this.width) : 1);
             const height = Math.max(0.01, Number.isFinite(this.height) ? Number(this.height) : 1);
@@ -2441,16 +2469,27 @@ void main(void) {
             const anchorY = (sprite.anchor && Number.isFinite(sprite.anchor.y)) ? Number(sprite.anchor.y) : 1;
             const worldWidth = Math.max(0.01, Math.abs(Number(sprite.width) || 0) / viewScale);
             const worldHeightZ = Math.max(0.01, Math.abs(Number(sprite.height) || 0) / (viewScale * xyRatio));
-            // Upright floor-standing billboards are depth-projected from their
-            // bottom edge, independent of sprite anchor. Otherwise center-anchored
-            // sprites put half of their depth quad below the floor and get clipped
-            // by depth-writing ground polygons.
+            // Most upright floor-standing billboards are depth-projected from
+            // their bottom edge. Furniture metadata uses vertical anchors to
+            // align visuals to the ground footprint, so let furniture sit there
+            // and handle any ground clipping with an explicit depth lift.
+            const useFurnitureVerticalAnchorY = !!(
+                category === "furniture" &&
+                this.rotationAxis !== "ground"
+            );
             const useVerticalAnchorY = this.depthBillboardUseVerticalAnchorY === true ||
-                (options && options.useVerticalAnchorY === true);
+                (options && options.useVerticalAnchorY === true) ||
+                useFurnitureVerticalAnchorY;
             const bottomZ = useVerticalAnchorY
                 ? worldZ - ((1 - anchorY) * worldHeightZ)
                 : worldZ;
             const topZ = bottomZ + worldHeightZ;
+            if (useFurnitureVerticalAnchorY) {
+                const submergedDepth = Math.max(0, worldZ - bottomZ);
+                extraDepthBias = submergedDepth > 0
+                    ? (submergedDepth * 2) + 0.02
+                    : 0;
+            }
             const isSpatialDoorOrWindow = !!(
                 this.rotationAxis === "spatial" &&
                 (category === "windows" || category === "doors" || this.type === "window" || this.type === "door")
@@ -2583,7 +2622,7 @@ void main(void) {
             }
         }
         uniforms.uLayerBaseZ = effectiveLayerBaseZ;
-        uniforms.uDepthBias = Number.isFinite(this._renderDepthBias) ? Number(this._renderDepthBias) : 0;
+        uniforms.uDepthBias = (Number.isFinite(this._renderDepthBias) ? Number(this._renderDepthBias) : 0) + extraDepthBias;
         uniforms.uViewScale = Number(cam.viewscale) || 1;
         uniforms.uXyRatio = Number(cam.xyratio) || 1;
         uniforms.uDepthRange[0] = farMetric;
@@ -2687,16 +2726,6 @@ void main(void) {
 
     setIndexedNodes(nodes, primaryNode = null) {
         const previousNodes = Array.isArray(this._indexedNodes) ? this._indexedNodes : [];
-        for (let i = 0; i < previousNodes.length; i++) {
-            const node = previousNodes[i];
-            if (node && typeof node.removeObject === "function") {
-                node.removeObject(this);
-            }
-        }
-        if (typeof this.clearVisibilityRegistration === "function") {
-            this.clearVisibilityRegistration();
-        }
-
         const nextNodes = [];
         const nodeKeys = new Set();
         const nodeList = Array.isArray(nodes) ? nodes : [];
@@ -2708,9 +2737,38 @@ void main(void) {
             nodeKeys.add(key);
             nextNodes.push(node);
         }
+        const nextPrimaryNode = primaryNode || nextNodes[0] || null;
+        let nodesUnchanged = previousNodes.length === nextNodes.length;
+        if (nodesUnchanged) {
+            for (let i = 0; i < previousNodes.length; i++) {
+                if (previousNodes[i] !== nextNodes[i]) {
+                    nodesUnchanged = false;
+                    break;
+                }
+            }
+        }
+        if (nodesUnchanged && this.node === nextPrimaryNode) {
+            for (let i = 0; i < nextNodes.length; i++) {
+                const node = nextNodes[i];
+                if (node && typeof node.recountBlockingObjects === "function") {
+                    node.recountBlockingObjects();
+                }
+            }
+            return;
+        }
+
+        for (let i = 0; i < previousNodes.length; i++) {
+            const node = previousNodes[i];
+            if (node && typeof node.removeObject === "function") {
+                node.removeObject(this);
+            }
+        }
+        if (typeof this.clearVisibilityRegistration === "function") {
+            this.clearVisibilityRegistration();
+        }
 
         this._indexedNodes = nextNodes;
-        this.node = primaryNode || nextNodes[0] || null;
+        this.node = nextPrimaryNode;
         if (this.node) {
             this.surfaceId = typeof this.node.surfaceId === "string" ? this.node.surfaceId : "";
             this.fragmentId = typeof this.node.fragmentId === "string" ? this.node.fragmentId : "";
@@ -2738,16 +2796,31 @@ void main(void) {
             : (Number.isFinite(this.traversalLayer)
                 ? Math.round(Number(this.traversalLayer))
                 : (Number.isFinite(this.level) ? Math.round(Number(this.level)) : 0));
+        const fallbackNode = options.fallbackNode && typeof options.fallbackNode === "object"
+            ? options.fallbackNode
+            : null;
+        const fallbackLayer = fallbackNode && Number.isFinite(Number(fallbackNode.traversalLayer))
+            ? Math.round(Number(fallbackNode.traversalLayer))
+            : (fallbackNode && Number.isFinite(Number(fallbackNode.level)) ? Math.round(Number(fallbackNode.level)) : 0);
+        const layerFallbackNode = fallbackNode && (traversalLayer === 0 || fallbackLayer === traversalLayer)
+            ? fallbackNode
+            : null;
         const basePrimaryNode = mapRef.worldToNode(this.x, this.y);
-        const primaryNode = (
+        let primaryNode = basePrimaryNode || layerFallbackNode || null;
+        if (
             basePrimaryNode &&
             traversalLayer !== 0 &&
             typeof mapRef.getFloorNodeAtLayer === "function"
-        ) ? (mapRef.getFloorNodeAtLayer(basePrimaryNode.xindex, basePrimaryNode.yindex, traversalLayer, {
-            surfaceId: typeof this.surfaceId === "string" ? this.surfaceId : "",
-            fragmentId: typeof this.fragmentId === "string" ? this.fragmentId : "",
-            allowScan: true
-        }) || basePrimaryNode) : basePrimaryNode;
+        ) {
+            primaryNode = mapRef.getFloorNodeAtLayer(basePrimaryNode.xindex, basePrimaryNode.yindex, traversalLayer, {
+                surfaceId: typeof this.surfaceId === "string" ? this.surfaceId : "",
+                fragmentId: typeof this.fragmentId === "string" ? this.fragmentId : "",
+                groundNode: basePrimaryNode,
+                worldX: this.x,
+                worldY: this.y,
+                allowScan: true
+            }) || layerFallbackNode || (options.requireTraversalLayerNode === true ? null : basePrimaryNode);
+        }
         if (!hitbox || !shouldUseExpandedNodeIndexing(hitbox, options)) {
             this.setIndexedNodes(primaryNode ? [primaryNode] : [], primaryNode);
             return;
@@ -2761,7 +2834,8 @@ void main(void) {
             traversalLayer,
             surfaceId: typeof this.surfaceId === "string" ? this.surfaceId : "",
             fragmentId: typeof this.fragmentId === "string" ? this.fragmentId : "",
-            extraPoints: options.extraPoints
+            extraPoints: options.extraPoints,
+            requireTraversalLayerNode: options.requireTraversalLayerNode
         });
         if (nodes.length === 0) {
             this.setIndexedNodes(primaryNode ? [primaryNode] : [], primaryNode);
@@ -2782,6 +2856,9 @@ void main(void) {
         if (this.gone) return;
         if (this.map && typeof this.map.removeObjectFromFloorBuildingManifest === "function") {
             this.map.removeObjectFromFloorBuildingManifest(this);
+        }
+        if (this.map && typeof this.map.unregisterFloorObject === "function") {
+            this.map.unregisterFloorObject(this);
         }
         this.gone = true;
         this.vanishing = false;
@@ -2878,6 +2955,7 @@ void main(void) {
     static FIRE_FRAME_COUNT_X = 5;
     static FIRE_FRAME_COUNT_Y = 5;
     static FIRE_FPS = 12;
+    static FLOOR_FALL_GRAVITY = -9;
     static _fireFramesCache = null;
 
     static getFireFrames() {
@@ -2994,6 +3072,7 @@ void main(void) {
     }
 
     update() {
+        this.updateFloorFall();
         this.updateSpriteAnimation();
 
         // Initialize max HP on first fire ignition
@@ -3071,6 +3150,45 @@ void main(void) {
                     delete this.fireFadeDelayFrames;
                     delete this.fireFadeDurationFrames;
                 }
+            }
+        }
+    }
+
+    updateFloorFall() {
+        const state = this._floorFallState && typeof this._floorFallState === "object"
+            ? this._floorFallState
+            : null;
+        if (!state || state.active !== true) return;
+        const simFps = Math.max(1, Number(typeof frameRate !== "undefined" ? frameRate : 60) || 60);
+        const dt = 1 / simFps;
+        const gravity = Number.isFinite(state.gravity) ? Number(state.gravity) : StaticObject.FLOOR_FALL_GRAVITY;
+        this.prevZ = Number.isFinite(this.z) ? Number(this.z) : 0;
+        state.velocityZ = (Number.isFinite(state.velocityZ) ? Number(state.velocityZ) : 0) + gravity * dt;
+        this.z = (Number.isFinite(this.z) ? Number(this.z) : 0) + state.velocityZ * dt;
+        const landZ = Number.isFinite(state.landZ) ? Number(state.landZ) : 0;
+        if (this.z > landZ) return;
+
+        this.z = landZ;
+        this.prevZ = landZ;
+        this._floorFallState = null;
+        this.falling = false;
+        if (state.bakeExclusion && this.map && typeof this.map.restorePrototypeBuildingObjectToInteriorBitmap === "function") {
+            this.map.restorePrototypeBuildingObjectToInteriorBitmap(state.bakeExclusion);
+            this._prototypeInteriorBitmapExcluded = false;
+            this._prototypeInteriorBitmapExclusion = null;
+        } else if (state.bakeExclusion) {
+            throw new Error("placed object floor fall landing requires map.restorePrototypeBuildingObjectToInteriorBitmap");
+        }
+
+        if (this._prototypeRuntimeRecord === true) {
+            this._prototypeDirty = true;
+            const objectState = this.map && this.map._prototypeObjectState;
+            if (objectState) {
+                if (!(objectState.dirtyRuntimeObjects instanceof Set)) {
+                    objectState.dirtyRuntimeObjects = new Set();
+                }
+                objectState.dirtyRuntimeObjects.add(this);
+                objectState.captureScanNeeded = true;
             }
         }
     }
@@ -3715,7 +3833,6 @@ void main(void) {
             : (Number.isFinite(this.level) ? Math.round(Number(this.level)) : 0);
         if (savedTraversalLayer !== 0) {
             data.traversalLayer = savedTraversalLayer;
-            data.level = savedTraversalLayer;
         }
         const surfaceId = typeof this.surfaceId === "string" && this.surfaceId.length > 0
             ? this.surfaceId
@@ -3725,7 +3842,18 @@ void main(void) {
             : (typeof (this.node && this.node.fragmentId) === "string" ? this.node.fragmentId : "");
         if (surfaceId) data.surfaceId = surfaceId;
         if (fragmentId) data.fragmentId = fragmentId;
-        if (this.falling) data.falling = true;
+        const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+        const floorMembership = floorSupportApi && typeof floorSupportApi.getEntityFloorMembership === "function"
+            ? floorSupportApi.getEntityFloorMembership(this, { map: this.map || null })
+            : (this._floorMembership && typeof this._floorMembership === "object" ? this._floorMembership : null);
+        if (floorMembership && typeof floorMembership === "object") {
+            data.floorMembership = {
+                ownerType: floorMembership.ownerType,
+                ownerId: floorMembership.ownerId,
+                floorId: floorMembership.floorId
+            };
+        }
+        if (this.falling && !(this._floorFallState && this._floorFallState.active === true)) data.falling = true;
         if (typeof this.fallDirection === "string") data.fallDirection = this.fallDirection;
         if (typeof this.script !== "undefined") {
             try {
@@ -3773,10 +3901,11 @@ void main(void) {
                 }
                 return triggerObj;
             }
+            const node = data.type === 'roadPath'
+                ? null
+                : resolveStaticObjectLoadNode(map, data, options);
 
-            const node = resolveStaticObjectLoadNode(map, data, options);
-
-            if (!node) return null;
+            if (!node && data.type !== 'roadPath') return null;
 
             let obj;
             let textures = [];
@@ -3804,6 +3933,12 @@ void main(void) {
                             ? data.fillTexturePath
                             : undefined,
                         deferTextureRefresh: !!options.deferRoadTextureRefresh,
+                        suppressAutoScriptingName: !!options.suppressAutoScriptingName
+                    });
+                    break;
+                case 'roadPath':
+                    if (typeof RoadPath !== 'function') return null;
+                    obj = RoadPath.loadJson(data, map, {
                         suppressAutoScriptingName: !!options.suppressAutoScriptingName
                     });
                     break;
@@ -3902,16 +4037,60 @@ void main(void) {
             if (obj) {
                 obj.x = data.x;
                 obj.y = data.y;
+                const resolveLoadedLayerBaseZ = (fallbackLayer = 0) => {
+                    if (node && Number.isFinite(node.baseZ)) return Number(node.baseZ);
+                    const fragmentId = typeof data.fragmentId === "string" && data.fragmentId.length > 0
+                        ? data.fragmentId
+                        : (typeof obj.fragmentId === "string" && obj.fragmentId.length > 0 ? obj.fragmentId : "");
+                    const fragment = fragmentId && map && map.floorsById instanceof Map
+                        ? map.floorsById.get(fragmentId) || null
+                        : null;
+                    if (fragment && Number.isFinite(Number(fragment.nodeBaseZ))) {
+                        return Number(fragment.nodeBaseZ);
+                    }
+                    if (Number.isFinite(data.currentLayerBaseZ)) return Number(data.currentLayerBaseZ);
+                    throw new Error(`static object ${data.id || data.name || data.type || "(unknown)"} load requires currentLayerBaseZ or fragment nodeBaseZ`);
+                };
                 const loadedTraversalLayer = Number.isFinite(data.traversalLayer)
                     ? Math.round(Number(data.traversalLayer))
                     : (Number.isFinite(data.level) ? Math.round(Number(data.level)) : null);
                 if (Number.isFinite(loadedTraversalLayer)) {
                     obj.traversalLayer = loadedTraversalLayer;
                     obj.level = loadedTraversalLayer;
-                    obj._renderTraversalLayer = loadedTraversalLayer;
+                    obj.currentLayer = loadedTraversalLayer;
+                    obj.currentLayerBaseZ = resolveLoadedLayerBaseZ(loadedTraversalLayer);
+                    obj._floorBaseZ = obj.currentLayerBaseZ;
+                    obj._renderLayerBaseZ = obj.currentLayerBaseZ;
                 }
                 if (Number.isFinite(data.z)) {
                     obj.z = Number(data.z);
+                    const loadedLayer = Number.isFinite(data.traversalLayer)
+                        ? Math.round(Number(data.traversalLayer))
+                        : (Number.isFinite(data.level) ? Math.round(Number(data.level)) : 0);
+                    const loadedLayerBaseZ = resolveLoadedLayerBaseZ(loadedLayer);
+                    const isWallMountedPlacedObject = !!(
+                        data.type === "placedObject" &&
+                        (
+                            Number.isInteger(data.mountedWallLineGroupId) ||
+                            Number.isInteger(data.mountedSectionId) ||
+                            Number.isInteger(data.mountedWallSectionUnitId)
+                        )
+                    );
+                    const isWindowPlacedObject = !!(
+                        data.type === "placedObject" &&
+                        typeof data.category === "string" &&
+                        data.category.trim().toLowerCase() === "windows"
+                    );
+                    if (
+                        data.type === "placedObject" &&
+                        data.zMode !== "local" &&
+                        !isWallMountedPlacedObject &&
+                        !isWindowPlacedObject &&
+                        loadedLayerBaseZ !== 0 &&
+                        Number(data.z) >= loadedLayerBaseZ - 0.001
+                    ) {
+                        obj.z = Number(data.z) - loadedLayerBaseZ;
+                    }
                 } else if (
                     data.type === "placedObject" &&
                     typeof data.category === "string" &&
@@ -3927,6 +4106,17 @@ void main(void) {
                 }
                 if (typeof data.fragmentId === "string" && data.fragmentId.length > 0) {
                     obj.fragmentId = data.fragmentId;
+                }
+                if (data.floorMembership && typeof data.floorMembership === "object") {
+                    const floorSupportApi = (typeof globalThis !== "undefined") ? globalThis.FloorSupport : null;
+                    if (floorSupportApi && typeof floorSupportApi.stampEntityFloorMembership === "function") {
+                        floorSupportApi.stampEntityFloorMembership(obj, data.floorMembership);
+                    } else {
+                        obj._floorMembership = { ...data.floorMembership };
+                    }
+                    if (map && typeof map.registerFloorObject === "function") {
+                        map.registerFloorObject(obj);
+                    }
                 }
                 attachLoadedPlacedObjectToFloorBuildingManifest(map, obj, data);
                 if (data.hp !== undefined) obj.hp = data.hp;
@@ -4065,6 +4255,9 @@ void main(void) {
 
             return obj;
         } catch (e) {
+            if (data && data.type === "roadPath") {
+                throw e;
+            }
             console.error("Error loading static object:", e);
             return null;
         }
@@ -5130,7 +5323,7 @@ class PlacedObject extends StaticObject {
         if (this._scriptDoorLocked === true) data._scriptDoorLocked = true;
         if (typeof this.isPassable === "boolean") data.isPassable = this.isPassable;
         if (typeof this.blocksTile === "boolean") data.blocksTile = this.blocksTile;
-        if (this.falling) data.falling = true;
+        if (this.falling && !(this._floorFallState && this._floorFallState.active === true)) data.falling = true;
         if (Number.isFinite(this.doorFallAngle)) {
             data.doorFallAngle = Math.max(0, Math.min(90, Number(this.doorFallAngle)));
         }
@@ -5150,6 +5343,16 @@ class PlacedObject extends StaticObject {
         }
         if (typeof this.castsLosShadows === "boolean") {
             data.castsLosShadows = this.castsLosShadows;
+        }
+        const hasMountedWallTarget = !!(
+            Number.isInteger(this.mountedWallLineGroupId) ||
+            Number.isInteger(this.mountedSectionId) ||
+            Number.isInteger(this.mountedWallSectionUnitId)
+        );
+        if (!hasMountedWallTarget && !this.isWindowObject()) {
+            data.zMode = "local";
+            if (Number.isFinite(this.currentLayerBaseZ)) data.currentLayerBaseZ = Number(this.currentLayerBaseZ);
+            else if (Number.isFinite(this._renderLayerBaseZ)) data.currentLayerBaseZ = Number(this._renderLayerBaseZ);
         }
         if (Number.isInteger(this.mountedWallLineGroupId)) {
             data.mountedWallLineGroupId = this.mountedWallLineGroupId;
@@ -6386,6 +6589,370 @@ class TriggerArea extends StaticObject {
     }
 }
 
+class RoadPath extends StaticObject {
+    static DEFAULT_WIDTH = 3;
+    static MIN_SEGMENT_LENGTH = 1e-5;
+    static JOIN_PARALLEL_EPSILON = 1e-7;
+    static MAX_TURN_RADIANS = Math.PI / 2;
+
+    static normalizePoint(raw, label = "road path point") {
+        const x = Number(raw && raw.x);
+        const y = Number(raw && raw.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error(`${label} requires finite x/y coordinates`);
+        }
+        return { x, y };
+    }
+
+    static normalizePoints(rawPoints) {
+        if (!Array.isArray(rawPoints)) {
+            throw new Error("road path requires an array of points");
+        }
+        const points = rawPoints.map((point, index) => RoadPath.normalizePoint(point, `road path point ${index}`));
+        if (points.length < 2) {
+            throw new Error("road path requires at least two points");
+        }
+        for (let i = 1; i < points.length; i++) {
+            const dx = points[i].x - points[i - 1].x;
+            const dy = points[i].y - points[i - 1].y;
+            if (Math.hypot(dx, dy) <= RoadPath.MIN_SEGMENT_LENGTH) {
+                throw new Error(`road path segment ${i - 1} has zero length`);
+            }
+        }
+        return points;
+    }
+
+    static normalizeWidth(width) {
+        const resolved = Number.isFinite(Number(width)) ? Number(width) : RoadPath.DEFAULT_WIDTH;
+        if (!(resolved > 0)) {
+            throw new Error("road path width must be a positive number");
+        }
+        return resolved;
+    }
+
+    static normalizeFillTexturePath(texturePath) {
+        if (typeof Road !== "undefined" && Road && typeof Road._normalizeFillTexturePath === "function") {
+            return Road._normalizeFillTexturePath(texturePath);
+        }
+        if (typeof texturePath === "string" && texturePath.length > 0) return texturePath;
+        return "/assets/images/flooring/dirt.jpg";
+    }
+
+    static lineIntersection(a0, a1, b0, b1, label = "road path join") {
+        const rX = a1.x - a0.x;
+        const rY = a1.y - a0.y;
+        const sX = b1.x - b0.x;
+        const sY = b1.y - b0.y;
+        const denom = rX * sY - rY * sX;
+        if (Math.abs(denom) <= RoadPath.JOIN_PARALLEL_EPSILON) {
+            return null;
+        }
+        const qpx = b0.x - a0.x;
+        const qpy = b0.y - a0.y;
+        const t = (qpx * sY - qpy * sX) / denom;
+        const point = {
+            x: a0.x + rX * t,
+            y: a0.y + rY * t
+        };
+        if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+            throw new Error(`${label} produced a non-finite intersection`);
+        }
+        return point;
+    }
+
+    static computeSegmentFrames(points, width) {
+        const halfWidth = width * 0.5;
+        const frames = [];
+        for (let i = 0; i < points.length - 1; i++) {
+            const start = points[i];
+            const end = points[i + 1];
+            const dx = end.x - start.x;
+            const dy = end.y - start.y;
+            const length = Math.hypot(dx, dy);
+            if (!(length > RoadPath.MIN_SEGMENT_LENGTH)) {
+                throw new Error(`road path segment ${i} has zero length`);
+            }
+            const nx = -dy / length;
+            const ny = dx / length;
+            frames.push({
+                index: i,
+                start,
+                end,
+                length,
+                leftStart: { x: start.x + nx * halfWidth, y: start.y + ny * halfWidth },
+                leftEnd: { x: end.x + nx * halfWidth, y: end.y + ny * halfWidth },
+                rightStart: { x: start.x - nx * halfWidth, y: start.y - ny * halfWidth },
+                rightEnd: { x: end.x - nx * halfWidth, y: end.y - ny * halfWidth }
+            });
+        }
+        return frames;
+    }
+
+    static validateTurnAngles(frames) {
+        for (let i = 1; i < frames.length; i++) {
+            const prev = frames[i - 1];
+            const next = frames[i];
+            const prevDx = (prev.end.x - prev.start.x) / prev.length;
+            const prevDy = (prev.end.y - prev.start.y) / prev.length;
+            const nextDx = (next.end.x - next.start.x) / next.length;
+            const nextDy = (next.end.y - next.start.y) / next.length;
+            const dot = Math.max(-1, Math.min(1, prevDx * nextDx + prevDy * nextDy));
+            const turnRadians = Math.acos(dot);
+            if (turnRadians > RoadPath.MAX_TURN_RADIANS + 1e-7) {
+                throw new Error(`road path join ${i} exceeds the 90 degree turn limit`);
+            }
+        }
+    }
+
+    static computeGeometry(rawPoints, rawWidth) {
+        const points = RoadPath.normalizePoints(rawPoints);
+        const width = RoadPath.normalizeWidth(rawWidth);
+        const frames = RoadPath.computeSegmentFrames(points, width);
+        RoadPath.validateTurnAngles(frames);
+        const leftEdgePoints = new Array(points.length);
+        const rightEdgePoints = new Array(points.length);
+
+        leftEdgePoints[0] = { ...frames[0].leftStart };
+        rightEdgePoints[0] = { ...frames[0].rightStart };
+        const lastFrame = frames[frames.length - 1];
+        leftEdgePoints[points.length - 1] = { ...lastFrame.leftEnd };
+        rightEdgePoints[points.length - 1] = { ...lastFrame.rightEnd };
+
+        for (let i = 1; i < points.length - 1; i++) {
+            const prev = frames[i - 1];
+            const next = frames[i];
+            const leftJoin = RoadPath.lineIntersection(
+                prev.leftStart,
+                prev.leftEnd,
+                next.leftStart,
+                next.leftEnd,
+                `road path left join ${i}`
+            ) || { ...prev.leftEnd };
+            const rightJoin = RoadPath.lineIntersection(
+                prev.rightStart,
+                prev.rightEnd,
+                next.rightStart,
+                next.rightEnd,
+                `road path right join ${i}`
+            ) || { ...prev.rightEnd };
+            leftEdgePoints[i] = leftJoin;
+            rightEdgePoints[i] = rightJoin;
+        }
+
+        const segments = [];
+        const triangles = [];
+        const outline = [];
+        for (let i = 0; i < frames.length; i++) {
+            const quad = [
+                { ...leftEdgePoints[i] },
+                { ...leftEdgePoints[i + 1] },
+                { ...rightEdgePoints[i + 1] },
+                { ...rightEdgePoints[i] }
+            ];
+            segments.push({
+                index: i,
+                startPoint: { ...points[i] },
+                endPoint: { ...points[i + 1] },
+                polygon: quad
+            });
+            triangles.push([quad[0], quad[1], quad[2]]);
+            triangles.push([quad[0], quad[2], quad[3]]);
+        }
+        for (let i = 0; i < leftEdgePoints.length; i++) outline.push({ ...leftEdgePoints[i] });
+        for (let i = rightEdgePoints.length - 1; i >= 0; i--) outline.push({ ...rightEdgePoints[i] });
+        return {
+            points: points.map(point => ({ ...point })),
+            width,
+            segments,
+            triangles,
+            outline
+        };
+    }
+
+    constructor(points, map, options = {}) {
+        const geometry = RoadPath.computeGeometry(points, options.width);
+        const seed = geometry.points[0];
+        super("roadPath", seed, 1, 1, [PIXI.Texture.WHITE], map, {
+            ...options,
+            suppressAutoScriptingName: options.suppressAutoScriptingName !== false
+        });
+        this.objectType = "roadPath";
+        this.blocksTile = false;
+        this.isPassable = true;
+        this.castsLosShadows = false;
+        this.flammable = false;
+        this.rotationAxis = "ground";
+        this.renderZ = 0.001;
+        this.pathPoints = geometry.points;
+        this.roadWidth = geometry.width;
+        this.width = geometry.width;
+        this.height = geometry.width;
+        this.fillTexturePath = RoadPath.normalizeFillTexturePath(options.fillTexturePath);
+        this.generatedGeometry = geometry;
+        this.segmentPolygons = geometry.segments.map(segment => segment.polygon.map(point => ({ ...point })));
+        this.outlinePolygon = geometry.outline.map(point => ({ ...point }));
+        this.visualRadius = Math.max(0.5, geometry.width * 0.5);
+        this.groundRadius = this.visualRadius;
+        this.visualHitbox = new PolygonHitbox(this.outlinePolygon.map(point => ({ ...point })));
+        this.groundPlaneHitbox = this.visualHitbox;
+        if (this.pixiSprite) {
+            this.pixiSprite.visible = false;
+            this.pixiSprite.renderable = false;
+            this.pixiSprite.alpha = 0;
+        }
+        this.refreshIndexedNodesFromHitbox({
+            forceExpanded: true,
+            sampleSpacing: Math.max(0.5, Math.min(1.5, geometry.width * 0.5)),
+            extraPoints: this.outlinePolygon
+        });
+        if (this.map && Array.isArray(this.map.objects) && !this.map.objects.includes(this)) {
+            this.map.objects.push(this);
+        }
+        if (!options.suppressLevel0RoadSurfaceDirty) {
+            this.markLevel0RoadSurfaceDirty({ immediate: true });
+        }
+    }
+
+    getLevel0RoadSurfaceDirtyRect() {
+        const points = Array.isArray(this.outlinePolygon) ? this.outlinePolygon : [];
+        if (points.length < 3) return null;
+        const fadeWorld = (typeof Road !== "undefined" && Road && Number.isFinite(Road._edgeFadePx) && Number.isFinite(Road._pixelsPerWorldUnit) && Road._pixelsPerWorldUnit > 0)
+            ? Number(Road._edgeFadePx) / Number(Road._pixelsPerWorldUnit)
+            : 0.5;
+        const pad = Math.max(fadeWorld, Number(this.roadWidth) || RoadPath.DEFAULT_WIDTH, 0.5);
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (let i = 0; i < points.length; i++) {
+            const x = Number(points[i] && points[i].x);
+            const y = Number(points[i] && points[i].y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+        }
+        if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null;
+        return {
+            minX: minX - pad,
+            minY: minY - pad,
+            maxX: maxX + pad,
+            maxY: maxY + pad
+        };
+    }
+
+    markLevel0RoadSurfaceDirty(options = null) {
+        if (this.gone) return false;
+        const layer = Number.isFinite(this.traversalLayer)
+            ? Math.round(Number(this.traversalLayer))
+            : (Number.isFinite(this.level) ? Math.round(Number(this.level)) : 0);
+        if (layer !== 0) return false;
+        if (typeof globalThis.markPrototypeLevel0RoadSurfaceDirty !== "function") return false;
+        const nodes = Array.isArray(this._indexedNodes) && this._indexedNodes.length > 0
+            ? this._indexedNodes
+            : (this.node ? [this.node] : []);
+        const dirtyRect = this.getLevel0RoadSurfaceDirtyRect();
+        let marked = false;
+        const seenSections = new Set();
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            if (!node) continue;
+            const sectionKey = typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "";
+            if (seenSections.has(sectionKey)) continue;
+            seenSections.add(sectionKey);
+            marked = globalThis.markPrototypeLevel0RoadSurfaceDirty(this.map, node, {
+                dirtyRect,
+                immediate: !!(options && options.immediate)
+            }) || marked;
+        }
+        return marked;
+    }
+
+    setPathPoints(points, options = {}) {
+        const updateIndexedNodes = !(options && options.updateIndexedNodes === false);
+        const markSurfaceDirty = !(options && options.markSurfaceDirty === false);
+        if (markSurfaceDirty) this.markLevel0RoadSurfaceDirty({ immediate: true });
+        const geometry = RoadPath.computeGeometry(points, this.roadWidth);
+        this.pathPoints = geometry.points;
+        this.width = geometry.width;
+        this.height = geometry.width;
+        this.generatedGeometry = geometry;
+        this.segmentPolygons = geometry.segments.map(segment => segment.polygon.map(point => ({ ...point })));
+        this.outlinePolygon = geometry.outline.map(point => ({ ...point }));
+        this.x = this.pathPoints[0].x;
+        this.y = this.pathPoints[0].y;
+        this.visualHitbox = new PolygonHitbox(this.outlinePolygon.map(point => ({ ...point })));
+        this.groundPlaneHitbox = this.visualHitbox;
+        if (updateIndexedNodes) {
+            this.refreshIndexedNodesFromHitbox({
+                forceExpanded: true,
+                sampleSpacing: Math.max(0.5, Math.min(1.5, this.roadWidth * 0.5)),
+                extraPoints: this.outlinePolygon
+            });
+        }
+        if (markSurfaceDirty) this.markLevel0RoadSurfaceDirty({ immediate: true });
+        return true;
+    }
+
+    setWidth(width) {
+        this.roadWidth = RoadPath.normalizeWidth(width);
+        return this.setPathPoints(this.pathPoints);
+    }
+
+    removeFromGame() {
+        this.markLevel0RoadSurfaceDirty({ immediate: true });
+        super.removeFromGame();
+    }
+
+    saveJson() {
+        const data = super.saveJson();
+        const points = Array.isArray(this.pathPoints) ? this.pathPoints : [];
+        data.type = "roadPath";
+        data.points = points.map((point, index) => RoadPath.normalizePoint(point, `road path save point ${index}`));
+        data.width = RoadPath.normalizeWidth(this.roadWidth);
+        data.fillTexturePath = RoadPath.normalizeFillTexturePath(this.fillTexturePath);
+        data.isPassable = true;
+        data.blocksTile = false;
+        data.castsLosShadows = false;
+        return data;
+    }
+
+    static loadJson(data, map, options = {}) {
+        if (!data || typeof data !== "object" || !map) return null;
+        const rawPoints = Array.isArray(data.points)
+            ? data.points
+            : (Array.isArray(data.pathPoints) ? data.pathPoints : null);
+        if (!rawPoints) {
+            throw new Error("Cannot load road path without points.");
+        }
+        const width = Number.isFinite(data.width)
+            ? Number(data.width)
+            : (Number.isFinite(data.roadWidth) ? Number(data.roadWidth) : RoadPath.DEFAULT_WIDTH);
+        const traversalLayer = Number.isFinite(data.traversalLayer)
+            ? Math.round(Number(data.traversalLayer))
+            : (Number.isFinite(data.level) ? Math.round(Number(data.level)) : undefined);
+        const roadPath = new RoadPath(rawPoints, map, {
+            width,
+            fillTexturePath: data.fillTexturePath,
+            traversalLayer,
+            level: traversalLayer,
+            suppressAutoScriptingName: !!options.suppressAutoScriptingName,
+            suppressLevel0RoadSurfaceDirty: true
+        });
+        if (typeof data.scriptingName === "string" && data.scriptingName.trim().length > 0) {
+            roadPath.scriptingName = data.scriptingName.trim();
+        }
+        if (Number.isFinite(data.renderZ)) {
+            roadPath.renderZ = Number(data.renderZ);
+        }
+        if (Number.isFinite(data.alpha)) {
+            roadPath.alpha = Math.max(0, Math.min(1, Number(data.alpha)));
+        }
+        return roadPath;
+    }
+}
+
 class Road extends StaticObject {
     static _geometryCache = new Map();
     static _textureCache = new Map();
@@ -7475,6 +8042,7 @@ if (typeof globalThis !== "undefined") {
     globalThis.Tree = Tree;
     globalThis.Playground = Playground;
     globalThis.TriggerArea = TriggerArea;
+    globalThis.RoadPath = RoadPath;
     globalThis.Road = Road;
     globalThis.getMountedWallFaceCentersForObject = getMountedWallFaceCentersForObject;
 }

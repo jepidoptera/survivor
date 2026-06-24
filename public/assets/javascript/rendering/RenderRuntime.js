@@ -138,32 +138,24 @@
 
     function resolveViewportFollowZ(obj) {
         if (!obj) return null;
-        const layer = Number.isFinite(obj.currentLayer)
-            ? Math.round(Number(obj.currentLayer))
-            : (Number.isFinite(obj.traversalLayer) ? Math.round(Number(obj.traversalLayer)) : null);
-        const baseZ = Number.isFinite(obj.currentLayerBaseZ)
-            ? Number(obj.currentLayerBaseZ)
-            : (Number.isFinite(layer) ? layer * 3 : null);
+        const support = obj.currentMovementSupport && typeof obj.currentMovementSupport === "object"
+            ? obj.currentMovementSupport
+            : null;
+        const layer = Number.isFinite(support && support.layer)
+            ? Math.round(Number(support.layer))
+            : (Number.isFinite(obj.currentLayer)
+                ? Math.round(Number(obj.currentLayer))
+                : (Number.isFinite(obj.traversalLayer) ? Math.round(Number(obj.traversalLayer)) : null));
+        const baseZ = Number.isFinite(support && support.baseZ)
+            ? Number(support.baseZ)
+            : (Number.isFinite(obj.currentLayerBaseZ)
+                ? Number(obj.currentLayerBaseZ)
+                : null);
         if (!Number.isFinite(baseZ)) return null;
-        if (obj._floorFallState && obj._floorFallState.active && Number.isFinite(obj.z)) {
-            return baseZ + Number(obj.z);
-        }
-        if (
-            obj._stairSupport &&
-            typeof obj._stairSupport === "object"
-        ) {
-            if (Number.isFinite(obj._stairSupport.continuousLocalZ)) {
-                return baseZ + Number(obj._stairSupport.continuousLocalZ);
-            }
-            if (Number.isFinite(obj._stairSupport.continuousBaseZ)) {
-                return Number(obj._stairSupport.continuousBaseZ);
-            }
-            if (Number.isFinite(obj._stairSupport.localZ)) {
-                return baseZ + Number(obj._stairSupport.localZ);
-            }
-            if (Number.isFinite(obj._stairSupport.baseZ)) {
-                return Number(obj._stairSupport.baseZ);
-            }
+        if (support && support.type === "stair") {
+            if (Number.isFinite(support.continuousLocalZ)) return baseZ + Number(support.continuousLocalZ);
+            if (Number.isFinite(support.continuousBaseZ)) return Number(support.continuousBaseZ);
+            if (Number.isFinite(support.localZ)) return baseZ + Number(support.localZ);
         }
         return baseZ;
     }
@@ -505,10 +497,13 @@
         const xPadding = Math.max(0, Math.floor(Number(paddingTiles) || 0));
         const yPadding = Math.max(0, Math.floor(Number(paddingTiles) || 0));
         const xScale = 0.866;
+        const cameraZ = Number.isFinite(viewportRef.z) ? Number(viewportRef.z) : 0;
+        const groundMinY = (Number(viewportRef.y) || 0) - cameraZ;
+        const groundMaxY = groundMinY + (Number(viewportRef.height) || 0);
         const xStart = Math.floor((Number(viewportRef.x) || 0) / xScale) - xPadding;
         const xEnd = Math.ceil(((Number(viewportRef.x) || 0) + (Number(viewportRef.width) || 0)) / xScale) + xPadding;
-        const yStart = Math.floor(Number(viewportRef.y) || 0) - yPadding;
-        const yEnd = Math.ceil((Number(viewportRef.y) || 0) + (Number(viewportRef.height) || 0)) + yPadding;
+        const yStart = Math.floor(groundMinY) - yPadding;
+        const yEnd = Math.ceil(groundMaxY) + yPadding;
         const xRanges = getWrappedIndexRanges(xStart, xEnd, mapRef.width, mapRef.wrapX);
         const yRanges = getWrappedIndexRanges(yStart, yEnd, mapRef.height, mapRef.wrapY);
         for (let yr = 0; yr < yRanges.length; yr++) {

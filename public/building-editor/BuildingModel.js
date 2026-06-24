@@ -724,13 +724,45 @@ export function getFloorElevation(floor) {
     return Number.isFinite(Number(floor && floor.nodeBaseZ)) ? Number(floor.nodeBaseZ) : 0;
 }
 
+function setDerivedFloorStackLevel(floor, level) {
+    if (!floor || typeof floor !== "object") return;
+    const resolvedLevel = Math.round(Number(level));
+    if (!Number.isInteger(resolvedLevel)) {
+        throw new Error("floor stack level must be a finite integer");
+    }
+    const z = getFloorElevation(floor);
+    Object.defineProperty(floor, "level", {
+        value: resolvedLevel,
+        enumerable: false,
+        writable: true,
+        configurable: true
+    });
+    Object.defineProperty(floor, "nodeBaseZOffset", {
+        value: 0,
+        enumerable: false,
+        writable: true,
+        configurable: true
+    });
+}
+
+export function syncFloorStackLevels(building) {
+    const floors = getBuildingFloors(building)
+        .map((floor, index) => ({ floor, index, z: getFloorElevation(floor) }))
+        .sort((a, b) => {
+            if (a.z !== b.z) return a.z - b.z;
+            return a.index - b.index;
+        });
+    floors.forEach((entry, level) => setDerivedFloorStackLevel(entry.floor, level));
+    return building;
+}
+
 export function setFloorElevation(floor, elevation) {
     const z = Number(elevation);
     if (!Number.isFinite(z)) throw new Error("floor elevation must be a finite number");
-    const level = Math.floor(z / 3);
-    floor.level = level;
-    floor.nodeBaseZOffset = z - level * 3;
     floor.nodeBaseZ = z;
+    if (Number.isFinite(Number(floor.level))) {
+        setDerivedFloorStackLevel(floor, Math.round(Number(floor.level)));
+    }
 }
 
 export function createFloor({
@@ -759,8 +791,6 @@ export function createFloor({
         surfaceId: fragmentId,
         ownerSectionKey: "",
         name: "floor",
-        level: 0,
-        nodeBaseZOffset: 0,
         nodeBaseZ: 0,
         outerPolygon: clonePoints(footprint),
         holes: Array.isArray(holes) ? holes.map((ring) => clonePoints(ring, "hole-vertex")).filter((ring) => ring.length >= 3) : [],
@@ -1760,6 +1790,7 @@ export function addFloor(building, floor) {
     }
     building.floorFragments.push(floor);
     building.floorFragments.sort((a, b) => getFloorElevation(a) - getFloorElevation(b));
+    syncFloorStackLevels(building);
     if (floor._createPerimeterWalls === true) {
         delete floor._createPerimeterWalls;
         createPerimeterWallsForFloor(building, floor);
@@ -2234,7 +2265,10 @@ export function refreshWallResolvedGeometry(building, floor = null) {
             const groupKey = wallMiterEndpointKey(wall, entry.endpointKey, entry.sharedPoint, wallFloor);
             const layer = Number.isFinite(Number(wall.traversalLayer))
                 ? Math.round(Number(wall.traversalLayer))
-                : Math.round(getFloorElevation(wallFloor) / 3);
+                : (Number.isFinite(Number(wallFloor && wallFloor.level)) ? Math.round(Number(wallFloor.level)) : null);
+            if (!Number.isFinite(layer)) {
+                throw new Error(`wall ${wall && wall.id} cannot resolve miter layer without a floor stack level`);
+            }
             const indexKey = `${groupKey}|layer:${layer}`;
             if (!groups.has(indexKey)) groups.set(indexKey, []);
             groups.get(indexKey).push({
@@ -2296,8 +2330,27 @@ export function fallbackDeletedVertexEndpointsToPoint(building, fragmentId, vert
     });
 }
 
+function buildingSourceSavePayload(building) {
+    const payload = JSON.parse(JSON.stringify(building));
+    (payload.floorFragments || []).forEach((floor) => {
+        delete floor.level;
+        delete floor.nodeBaseZOffset;
+        (floor.columns || []).forEach((column) => {
+            delete column.traversalLayer;
+        });
+    });
+    (payload.wallSections || []).forEach((wall) => {
+        delete wall.traversalLayer;
+    });
+    (payload.mountedWallObjects || []).forEach((object) => {
+        delete object.traversalLayer;
+    });
+    return payload;
+}
+
 export function serializeBuilding(building) {
-    return JSON.stringify(building, null, 2);
+    syncFloorStackLevels(building);
+    return JSON.stringify(buildingSourceSavePayload(building), null, 2);
 }
 
 export function normalizeImportedBuilding(raw) {
@@ -2436,7 +2489,9 @@ export function normalizeImportedBuilding(raw) {
                 height: Number(raw.height) > 0 ? Number(raw.height) : floor.defaultWallHeight,
                 topHeights: normalizeColumnTopHeights(raw.topHeights, sc >= 3 && sc <= 12 ? sc : 4),
                 bottomZ: Number.isFinite(Number(raw.bottomZ)) ? Number(raw.bottomZ) : getFloorElevation(floor),
-                traversalLayer: Math.round(Number(raw.traversalLayer) || 0),
+                traversalLayer: Number.isFinite(Number(raw.traversalLayer))
+                    ? Math.round(Number(raw.traversalLayer))
+                    : Math.round(Number(floor.level) || 0),
                 texturePath: String(raw.texturePath || DEFAULTS.wallTexture)
             };
             return column;
@@ -2464,6 +2519,8 @@ export function normalizeImportedBuilding(raw) {
             return stair;
         });
     });
+    syncFloorStackLevels(building);
+
     building.wallSections.forEach((wall) => {
         wall.topProfile = normalizeWallTopProfile(wall.topProfile, wall.height);
         if (!Number.isFinite(Number(wall.thickness)) || Number(wall.thickness) <= 0) {

@@ -153,7 +153,7 @@ class SpikeProjectile {
 
     isGroundLayerTarget(target) {
         if (!target) return false;
-        if (target.type === "road") return true;
+        if (target.type === "road" || target.type === "roadPath") return true;
         if (target.type === "triggerArea" || target.isTriggerArea === true) return true;
         return target.rotationAxis === "ground";
     }

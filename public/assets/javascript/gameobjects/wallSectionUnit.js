@@ -5392,7 +5392,7 @@ void main(void) {
                     const existingColor = drawnMarkers.get(markerKey);
                     if (existingColor === 0x3399ff || existingColor === color) continue;
                     drawnMarkers.set(markerKey, {
-                        sourceNode,
+                        fromNode: sourceNode,
                         destinationNode,
                         incomingDir,
                         color
@@ -5400,9 +5400,9 @@ void main(void) {
                 }
 
                 for (const marker of drawnMarkers.values()) {
-                    if (!marker || !marker.sourceNode || !marker.destinationNode) continue;
-                    const sourceWorldX = Number(marker.sourceNode.x) || 0;
-                    const sourceWorldY = Number(marker.sourceNode.y) || 0;
+                    if (!marker || !marker.fromNode || !marker.destinationNode) continue;
+                    const sourceWorldX = Number(marker.fromNode.x) || 0;
+                    const sourceWorldY = Number(marker.fromNode.y) || 0;
                     const destinationWorldX = Number(marker.destinationNode.x) || 0;
                     const destinationWorldY = Number(marker.destinationNode.y) || 0;
                     const dxWorld = sourceWorldX - destinationWorldX;
@@ -5827,16 +5827,17 @@ void main(void) {
                 : (Number.isFinite(node.level) ? Math.round(Number(node.level)) : 0);
             if (nodeLayer === layer) return node;
 
-            const sourceNode = node.sourceNode && WallSectionUnit._isMapNode(node.sourceNode)
-                ? node.sourceNode
-                : node;
-            if (layer === 0) return sourceNode;
-
             const mapRef = this.map || null;
             if (!mapRef) return null;
+            if (typeof mapRef.resolveNodeAtLayer === "function") {
+                return mapRef.resolveNodeAtLayer(node, layer, { allowScan: false });
+            }
+            if (layer === 0 && typeof mapRef.getGroundNodeForNode === "function") {
+                return mapRef.getGroundNodeForNode(node);
+            }
             if (typeof mapRef.getFloorNodeAtLayer === "function") {
-                const resolved = mapRef.getFloorNodeAtLayer(sourceNode.xindex, sourceNode.yindex, layer, {
-                    sectionKey: typeof sourceNode._prototypeSectionKey === "string" ? sourceNode._prototypeSectionKey : "",
+                const resolved = mapRef.getFloorNodeAtLayer(node.xindex, node.yindex, layer, {
+                    sectionKey: typeof mapRef.getNodeSectionKey === "function" ? mapRef.getNodeSectionKey(node) : "",
                     allowScan: false
                 });
                 if (resolved) return resolved;
@@ -5844,13 +5845,13 @@ void main(void) {
             }
             if (!(mapRef.floorNodesById instanceof Map)) return null;
             let fallback = null;
-            const sectionKey = typeof sourceNode._prototypeSectionKey === "string" ? sourceNode._prototypeSectionKey : "";
+            const sectionKey = typeof mapRef.getNodeSectionKey === "function" ? mapRef.getNodeSectionKey(node) : "";
             for (const nodes of mapRef.floorNodesById.values()) {
                 if (!Array.isArray(nodes)) continue;
                 for (let i = 0; i < nodes.length; i++) {
                     const candidate = nodes[i];
                     if (!candidate) continue;
-                    if (Number(candidate.xindex) !== Number(sourceNode.xindex) || Number(candidate.yindex) !== Number(sourceNode.yindex)) continue;
+                    if (Number(candidate.xindex) !== Number(node.xindex) || Number(candidate.yindex) !== Number(node.yindex)) continue;
                     const candidateLayer = Number.isFinite(candidate.traversalLayer)
                         ? Math.round(Number(candidate.traversalLayer))
                         : (Number.isFinite(candidate.level) ? Math.round(Number(candidate.level)) : 0);
@@ -5858,7 +5859,7 @@ void main(void) {
                     if (sectionKey && (
                         candidate.ownerSectionKey === sectionKey ||
                         candidate._prototypeSectionKey === sectionKey ||
-                        (candidate.sourceNode && candidate.sourceNode._prototypeSectionKey === sectionKey)
+                        (typeof mapRef.getNodeSectionKey === "function" && mapRef.getNodeSectionKey(candidate) === sectionKey)
                     )) {
                         return candidate;
                     }

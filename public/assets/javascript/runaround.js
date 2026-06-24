@@ -31,6 +31,14 @@ const CAMERA_RESET_DOUBLE_TAP_SECONDS = 0.2;
 let lastCameraResetTapAtMs = 0;
 let cameraResetTapAwaitingRelease = false;
 const SCRIPT_CAMERA_DEFAULT_ZOOM_FACTOR = 1;
+
+if (typeof globalThis !== "undefined") {
+    globalThis.viewport = viewport;
+    globalThis.viewscale = viewscale;
+    globalThis.viewScale = viewScale;
+    globalThis.xyratio = xyratio;
+}
+
 let scriptedCameraPanState = {
     active: false,
     focusTarget: null,
@@ -42,6 +50,14 @@ let scriptedCameraPanState = {
     durationMs: 0,
     releaseOnSettle: false
 };
+
+function syncGlobalViewportRuntime() {
+    if (typeof globalThis === "undefined") return;
+    globalThis.viewport = viewport;
+    globalThis.viewscale = viewscale;
+    globalThis.viewScale = viewScale;
+    globalThis.xyratio = xyratio;
+}
 let scriptedCameraZoomState = {
     active: false,
     startFactor: 1,
@@ -781,13 +797,338 @@ function pumpPrototypeBubbleShiftForFrame() {
     map.advancePrototypeBubbleShiftSession({ frameBudgetMs: 1.25 });
 }
 
+function shouldLogPrototypeBubbleAdjacentFrame(nowMs, frameCpuMs = 0) {
+    if (typeof globalThis === "undefined") return false;
+    if (globalThis.prototypeBubbleHitchDiagnostics !== true) return false;
+    const session = map && map._prototypeBubbleShiftSession;
+    const bubbleActive = !!(session && session.completed !== true);
+    const lastFinishedAt = Number(globalThis.__prototypeBubbleShiftLastFinishedAtMs) || 0;
+    const bubbleRecentlyFinished = lastFinishedAt > 0 && (nowMs - lastFinishedAt) < 750;
+    if (!bubbleActive && !bubbleRecentlyFinished) return false;
+    if (Number(frameCpuMs) >= 24) return true;
+    const lastLogAt = Number(globalThis.__prototypeBubbleHitchLastLogAtMs) || 0;
+    return lastLogAt <= 0 || (nowMs - lastLogAt) > 120;
+}
+
+function logPrototypeBubbleAdjacentFrame(nowMs, stats) {
+    if (typeof globalThis === "undefined" || !stats || typeof console === "undefined" || typeof console.log !== "function") return;
+    globalThis.__prototypeBubbleHitchLastLogAtMs = nowMs;
+    const drawBreakdown = globalThis.drawPerfBreakdown || null;
+    const minimapStats = globalThis.prototypeMinimapPerfStats || null;
+    const session = map && map._prototypeBubbleShiftSession ? map._prototypeBubbleShiftSession : null;
+    const sectionState = map && map._prototypeSectionState ? map._prototypeSectionState : null;
+    const frameMetrics = globalThis.renderingFrameMetrics || null;
+    console.log("[prototype bubble adjacent frame]", {
+        frame: {
+            loopMs: Number(stats.loopMs || 0).toFixed(1),
+            cpuMs: Number(stats.cpuMs || 0).toFixed(1),
+            simMs: Number(stats.simMs || 0).toFixed(1),
+            drawMs: Number(stats.drawMs || 0).toFixed(1),
+            presentMs: Number(stats.presentMs || 0).toFixed(1),
+            simSteps: Number(stats.simSteps || 0),
+            accumulatorMs: Number(stats.accumulatorMs || 0).toFixed(1)
+        },
+        present: stats.presentBreakdown || null,
+        bubble: session ? {
+            queue: Array.isArray(session.queue) ? session.queue.length : 0,
+            pendingPromise: !!session.pendingPromise,
+            pendingPromiseLabel: typeof session.pendingPromiseLabel === "string" ? session.pendingPromiseLabel : "",
+            phase: typeof session.phase === "string" ? session.phase : "",
+            slices: Number(session.frameSliceCount) || 0,
+            workMs: Number(session.workMs || 0).toFixed(1),
+            promiseWaitMs: Number(session.promiseWaitMs || 0).toFixed(1),
+            maxSliceMs: Number(session.maxFrameSliceMs || 0).toFixed(1),
+            settleFrames: Number(session.settleFrameCount) || 0,
+            settleRemaining: Number(session.settleFramesRemaining) || 0,
+            cutawayRefreshFrames: Number(session.cutawayRefreshFrameCount) || 0
+        } : (globalThis.__prototypeBubbleShiftLastSummary || null),
+        sections: sectionState ? {
+            active: sectionState.activeSectionKeys instanceof Set ? Array.from(sectionState.activeSectionKeys) : [],
+            actual: sectionState.actualActiveSectionKeys instanceof Set ? Array.from(sectionState.actualActiveSectionKeys) : [],
+            loadedNodes: Array.isArray(sectionState.loadedNodes) ? sectionState.loadedNodes.length : 0,
+            pendingLayout: !!sectionState.pendingLayoutTransition
+        } : null,
+        draw: drawBreakdown ? {
+            composeMs: Number(drawBreakdown.composeMs || 0).toFixed(1),
+            collectMs: Number(drawBreakdown.collectMs || 0).toFixed(1),
+            collectVisibleNodesMs: Number(drawBreakdown.collectVisibleNodesMs || 0).toFixed(1),
+            collectCutawayMs: Number(drawBreakdown.collectCutawayMs || 0).toFixed(1),
+            collectLayerCutawayMs: Number(drawBreakdown.collectLayerCutawayMs || 0).toFixed(1),
+            collectInteriorPickerMs: Number(drawBreakdown.collectInteriorPickerMs || 0).toFixed(1),
+            collectVisibleObjectsMs: Number(drawBreakdown.collectVisibleObjectsMs || 0).toFixed(1),
+            collectOnscreenCacheMs: Number(drawBreakdown.collectOnscreenCacheMs || 0).toFixed(1),
+            losMs: Number(drawBreakdown.losMs || 0).toFixed(1),
+            worldMs: Number(drawBreakdown.passWorldMs || 0).toFixed(1),
+            objectsMs: Number(drawBreakdown.passObjectsMs || 0).toFixed(1),
+            postMs: Number(drawBreakdown.passPostMs || 0).toFixed(1),
+            floorVisualCollectMs: Number(drawBreakdown.floorVisualCollectMs || 0).toFixed(1),
+            floorVisualGeometryMs: Number(drawBreakdown.floorVisualGeometryMs || 0).toFixed(1),
+            floorLevel0BakeMisses: Number(drawBreakdown.floorLevel0BakeMisses || 0),
+            floorLevel0BakePixels: Number(drawBreakdown.floorLevel0BakePixels || 0),
+            floorObjectNodeIndexBuildMs: Number(drawBreakdown.floorObjectNodeIndexBuildMs || 0).toFixed(1),
+            objects3dFilterMs: Number(drawBreakdown.objects3dFilterMs || 0).toFixed(1),
+            objects3dDisplayMs: Number(drawBreakdown.objects3dDisplayMs || 0).toFixed(1),
+            buildingCompositeMs: Number(drawBreakdown.objects3dBuildingCompositeMs || 0).toFixed(1)
+        } : null,
+        renderMetrics: frameMetrics ? {
+            visibleNodes: Number(frameMetrics.visibleNodes || 0),
+            visibleLoadedNodes: Number(frameMetrics.visibleLoadedNodes || 0),
+            visibleNodeCoordIndexSize: Number(frameMetrics.visibleNodeCoordIndexSize || 0),
+            visibleNodeFallbackUsed: Number(frameMetrics.visibleNodeFallbackUsed || 0),
+            visibleObjects: Number(frameMetrics.visibleObjectNodeRefs || 0) + Number(frameMetrics.visibleObjectVisibilityRefs || 0),
+            visibleObjectNodeRefs: Number(frameMetrics.visibleObjectNodeRefs || 0),
+            visibleObjectVisibilityRefs: Number(frameMetrics.visibleObjectVisibilityRefs || 0),
+            cvoFloorScanMs: Number(frameMetrics.cvoFloorScanMs || 0).toFixed(1),
+            cvoNodeScanMs: Number(frameMetrics.cvoNodeScanMs || 0).toFixed(1),
+            cvoWallsMs: Number(frameMetrics.cvoWallsMs || 0).toFixed(1),
+            cvoMountedMs: Number(frameMetrics.cvoMountedMs || 0).toFixed(1),
+            cvoStairsMs: Number(frameMetrics.cvoStairsMs || 0).toFixed(1),
+            floorObjectNodeCandidates: Number(frameMetrics.floorObjectNodeCandidates || 0),
+            floorObjectNodeCandidatesScanned: Number(frameMetrics.floorObjectNodeCandidatesScanned || 0),
+            floorObjectNodeSectionsScanned: Number(frameMetrics.floorObjectNodeSectionsScanned || 0),
+            floorObjectNodeYRowsScanned: Number(frameMetrics.floorObjectNodeYRowsScanned || 0),
+            visibleGlobalWallsConsidered: Number(frameMetrics.visibleGlobalWallsConsidered || 0),
+            visibleGlobalWallsAdded: Number(frameMetrics.visibleGlobalWallsAdded || 0),
+            layerCutawayStateMs: Number(frameMetrics.layerCutawayStateMs || 0).toFixed(1),
+            objects3dBuildingFlagMs: Number(frameMetrics.objects3dBuildingFlagMs || 0).toFixed(1),
+            buildingInteriorPlanMs: Number(frameMetrics.buildingInteriorPlanMs || 0).toFixed(1),
+            buildingInteriorPlanItems: Number(frameMetrics.buildingInteriorPlanItems || 0),
+            layerCutawayHeldDuringBubble: Number(frameMetrics.layerCutawayHeldDuringBubble || 0),
+            layerCutawayBuildingsScanned: Number(frameMetrics.layerCutawayBuildingsScanned || 0),
+            layerCutawayBuildingBoundsTests: Number(frameMetrics.layerCutawayBuildingBoundsTests || 0),
+            layerCutawayBuildingPointTests: Number(frameMetrics.layerCutawayBuildingPointTests || 0),
+            layerCutawayBuildingTriggers: Number(frameMetrics.layerCutawayBuildingTriggers || 0),
+            layerCutawayFloorFallbackScanned: Number(frameMetrics.layerCutawayFloorFallbackScanned || 0),
+            roadsCreated: Number(frameMetrics.roadsCreated || 0),
+            floorVisualMeshesCreated: Number(frameMetrics.floorVisualMeshesCreated || 0),
+            floorVisualGeometryUploads: Number(frameMetrics.floorVisualGeometryUploads || 0),
+            groundTileSpritesVisible: Number(frameMetrics.groundTileSpritesVisible || 0),
+            depthCandidates: Number(frameMetrics.depthCandidates || 0)
+        } : null,
+        minimap: minimapStats ? {
+            paintMs: Number(minimapStats.paintMs || 0).toFixed(1),
+            prototypeDrawMs: Number(minimapStats.prototypeDrawMs || 0).toFixed(1),
+            rebuildMs: Number(minimapStats.rebuildMs || 0).toFixed(1),
+            loadedNodes: Number(minimapStats.loadedNodes || 0),
+            allNodes: Number(minimapStats.allNodes || 0),
+            visible: !!minimapStats.visible
+        } : null
+    });
+}
+
+function numberOrZero(value) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : 0;
+}
+
+function roundFrameMs(value) {
+    return Number(numberOrZero(value).toFixed(2));
+}
+
+function compactPrototypeBubbleDrawStats(drawBreakdown) {
+    if (!drawBreakdown || typeof drawBreakdown !== "object") return null;
+    return {
+        composeMs: roundFrameMs(drawBreakdown.composeMs),
+        collectMs: roundFrameMs(drawBreakdown.collectMs),
+        collectVisibleNodesMs: roundFrameMs(drawBreakdown.collectVisibleNodesMs),
+        collectCutawayMs: roundFrameMs(drawBreakdown.collectCutawayMs),
+        collectLayerCutawayMs: roundFrameMs(drawBreakdown.collectLayerCutawayMs),
+        collectInteriorPickerMs: roundFrameMs(drawBreakdown.collectInteriorPickerMs),
+        collectVisibleObjectsMs: roundFrameMs(drawBreakdown.collectVisibleObjectsMs),
+        collectOnscreenCacheMs: roundFrameMs(drawBreakdown.collectOnscreenCacheMs),
+        losMs: roundFrameMs(drawBreakdown.losMs),
+        passWorldMs: roundFrameMs(drawBreakdown.passWorldMs),
+        passObjectsMs: roundFrameMs(drawBreakdown.passObjectsMs),
+        passPostMs: roundFrameMs(drawBreakdown.passPostMs),
+        objects3dFilterMs: roundFrameMs(drawBreakdown.objects3dFilterMs),
+        objects3dDisplayMs: roundFrameMs(drawBreakdown.objects3dDisplayMs),
+        buildingCompositeMs: roundFrameMs(drawBreakdown.objects3dBuildingCompositeMs),
+        floorObjectNodeIndexBuildMs: roundFrameMs(drawBreakdown.floorObjectNodeIndexBuildMs),
+        roadsCreated: numberOrZero(drawBreakdown.roadsCreated),
+        floorVisualMeshesCreated: numberOrZero(drawBreakdown.floorVisualMeshesCreated),
+        floorVisualGeometryUploads: numberOrZero(drawBreakdown.floorVisualGeometryUploads)
+    };
+}
+
+function compactPrototypeBubblePresentStats(presentBreakdown) {
+    if (!presentBreakdown || typeof presentBreakdown !== "object") return null;
+    return {
+        pumpMs: roundFrameMs(presentBreakdown.pumpMs),
+        lazyRoadMs: roundFrameMs(presentBreakdown.lazyRoadMs),
+        lazyTreeMs: roundFrameMs(presentBreakdown.lazyTreeMs),
+        renderMs: roundFrameMs(presentBreakdown.renderMs),
+        cursorMs: roundFrameMs(presentBreakdown.cursorMs)
+    };
+}
+
+function compactPrototypeBubbleSession(session) {
+    if (!session || typeof session !== "object") return null;
+    return {
+        sessionId: typeof session.sessionId === "string" ? session.sessionId : "",
+        from: typeof session.from === "string" ? session.from : "",
+        to: typeof session.to === "string" ? session.to : "",
+        phase: typeof session.phase === "string" ? session.phase : "",
+        queue: Array.isArray(session.queue) ? session.queue.length : 0,
+        pendingPromise: !!session.pendingPromise,
+        pendingPromiseLabel: typeof session.pendingPromiseLabel === "string" ? session.pendingPromiseLabel : "",
+        slices: numberOrZero(session.frameSliceCount),
+        workMs: roundFrameMs(session.workMs),
+        promiseWaitMs: roundFrameMs(session.promiseWaitMs),
+        maxSliceMs: roundFrameMs(session.maxFrameSliceMs),
+        settleFrames: numberOrZero(session.settleFrameCount),
+        settleRemaining: numberOrZero(session.settleFramesRemaining),
+        cutawayRefreshFrames: numberOrZero(session.cutawayRefreshFrameCount)
+    };
+}
+
+function buildPrototypeBubbleFrameSample(nowMs, stats, session, stage) {
+    const present = compactPrototypeBubblePresentStats(stats && stats.presentBreakdown);
+    const draw = compactPrototypeBubbleDrawStats(
+        typeof globalThis !== "undefined" ? globalThis.drawPerfBreakdown : null
+    );
+    const frameMetrics = typeof globalThis !== "undefined" ? globalThis.renderingFrameMetrics : null;
+    return {
+        tMs: roundFrameMs(nowMs),
+        stage,
+        phase: session && typeof session.phase === "string" ? session.phase : "",
+        loopMs: roundFrameMs(stats && stats.loopMs),
+        cpuMs: roundFrameMs(stats && stats.cpuMs),
+        simMs: roundFrameMs(stats && stats.simMs),
+        drawMs: roundFrameMs(stats && stats.drawMs),
+        presentMs: roundFrameMs(stats && stats.presentMs),
+        simSteps: numberOrZero(stats && stats.simSteps),
+        accumulatorMs: roundFrameMs(stats && stats.accumulatorMs),
+        present,
+        draw,
+        renderMetrics: frameMetrics ? {
+            visibleNodes: numberOrZero(frameMetrics.visibleNodes),
+            visibleObjects: numberOrZero(frameMetrics.visibleObjectNodeRefs) + numberOrZero(frameMetrics.visibleObjectVisibilityRefs),
+            layerCutawayHeldDuringBubble: numberOrZero(frameMetrics.layerCutawayHeldDuringBubble),
+            layerCutawayBuildingsScanned: numberOrZero(frameMetrics.layerCutawayBuildingsScanned),
+            layerCutawayBuildingBoundsTests: numberOrZero(frameMetrics.layerCutawayBuildingBoundsTests),
+            layerCutawayBuildingPointTests: numberOrZero(frameMetrics.layerCutawayBuildingPointTests),
+            layerCutawayBuildingTriggers: numberOrZero(frameMetrics.layerCutawayBuildingTriggers),
+            layerCutawayFloorFallbackScanned: numberOrZero(frameMetrics.layerCutawayFloorFallbackScanned),
+            roadsCreated: numberOrZero(frameMetrics.roadsCreated),
+            floorVisualMeshesCreated: numberOrZero(frameMetrics.floorVisualMeshesCreated),
+            floorVisualGeometryUploads: numberOrZero(frameMetrics.floorVisualGeometryUploads)
+        } : null,
+        session: compactPrototypeBubbleSession(session)
+    };
+}
+
+function updatePrototypeBubbleCaptureMax(capture, key, sample, value) {
+    if (!capture || !sample) return;
+    const numericValue = numberOrZero(value);
+    if (!capture.maxFrames || typeof capture.maxFrames !== "object") capture.maxFrames = {};
+    const previous = capture.maxFrames[key];
+    if (!previous || numericValue > numberOrZero(previous[key])) {
+        capture.maxFrames[key] = {
+            [key]: roundFrameMs(numericValue),
+            sample
+        };
+    }
+}
+
+function finishPrototypeBubbleFrameCapture(nowMs, reason = "finished") {
+    if (typeof globalThis === "undefined") return null;
+    const capture = globalThis.__prototypeBubbleFrameCapture;
+    if (!capture || typeof capture !== "object") return null;
+    const frames = Array.isArray(capture.frames) ? capture.frames : [];
+    const summary = {
+        sessionId: capture.sessionId || "",
+        from: capture.from || "",
+        to: capture.to || "",
+        reason,
+        frameCount: frames.length,
+        durationMs: roundFrameMs(nowMs - numberOrZero(capture.startedAtMs)),
+        finishedAtMs: roundFrameMs(nowMs),
+        maxFrames: capture.maxFrames || {},
+        finalBubbleSummary: typeof globalThis.__prototypeBubbleShiftLastSummary === "object"
+            ? globalThis.__prototypeBubbleShiftLastSummary
+            : null
+    };
+    globalThis.__prototypeBubbleFrameLastSummary = summary;
+    globalThis.__prototypeBubbleFrameCapture = null;
+    if (
+        globalThis.prototypeBubbleHitchDiagnostics === true &&
+        typeof console !== "undefined" &&
+        typeof console.log === "function"
+    ) {
+        console.log("[prototype bubble frame summary]", summary);
+    }
+    return summary;
+}
+
+function recordPrototypeBubbleAdjacentFrame(nowMs, stats) {
+    if (typeof globalThis === "undefined" || !stats) return null;
+    const session = map && map._prototypeBubbleShiftSession && map._prototypeBubbleShiftSession.completed !== true
+        ? map._prototypeBubbleShiftSession
+        : null;
+    const lastFinishedAt = numberOrZero(globalThis.__prototypeBubbleShiftLastFinishedAtMs);
+    const recentlyFinished = !session && lastFinishedAt > 0 && (nowMs - lastFinishedAt) < 750;
+    let capture = globalThis.__prototypeBubbleFrameCapture || null;
+
+    if (session) {
+        const sessionId = typeof session.sessionId === "string" ? session.sessionId : "";
+        if (!capture || capture.sessionId !== sessionId) {
+            if (capture && capture.sessionId !== sessionId) {
+                finishPrototypeBubbleFrameCapture(nowMs, "superseded-by-new-session");
+            }
+            capture = {
+                sessionId,
+                from: typeof session.from === "string" ? session.from : "",
+                to: typeof session.to === "string" ? session.to : "",
+                startedAtMs: nowMs,
+                frames: [],
+                maxFrames: {}
+            };
+            globalThis.__prototypeBubbleFrameCapture = capture;
+        }
+    } else if (!capture) {
+        return null;
+    } else if (!recentlyFinished) {
+        return finishPrototypeBubbleFrameCapture(nowMs, "post-window-expired");
+    }
+
+    const stage = session
+        ? (session.phase === "settle" ? "settle" : (session.phase === "refresh" ? "refresh" : "work"))
+        : "post";
+    const sample = buildPrototypeBubbleFrameSample(nowMs, stats, session, stage);
+    capture.frames.push(sample);
+    if (capture.frames.length > 180) capture.frames.shift();
+    updatePrototypeBubbleCaptureMax(capture, "cpuMs", sample, sample.cpuMs);
+    updatePrototypeBubbleCaptureMax(capture, "loopMs", sample, sample.loopMs);
+    updatePrototypeBubbleCaptureMax(capture, "drawMs", sample, sample.drawMs);
+    updatePrototypeBubbleCaptureMax(capture, "presentMs", sample, sample.presentMs);
+    updatePrototypeBubbleCaptureMax(capture, "pumpMs", sample, sample.present && sample.present.pumpMs);
+    updatePrototypeBubbleCaptureMax(capture, "collectCutawayMs", sample, sample.draw && sample.draw.collectCutawayMs);
+    updatePrototypeBubbleCaptureMax(capture, "collectVisibleObjectsMs", sample, sample.draw && sample.draw.collectVisibleObjectsMs);
+    updatePrototypeBubbleCaptureMax(capture, "floorObjectNodeIndexBuildMs", sample, sample.draw && sample.draw.floorObjectNodeIndexBuildMs);
+    return capture;
+}
+
 function presentGameFrame(renderAnimalsOverride = null) {
+    syncGlobalViewportRuntime();
+    const presentStats = {
+        pumpMs: 0,
+        lazyRoadMs: 0,
+        lazyTreeMs: 0,
+        renderMs: 0,
+        cursorMs: 0
+    };
+    let sectionStartMs = performance.now();
     pumpPrototypeBubbleShiftForFrame();
+    presentStats.pumpMs = performance.now() - sectionStartMs;
     if (typeof hydrateVisibleLazyRoads === "function") {
+        sectionStartMs = performance.now();
         hydrateVisibleLazyRoads({ maxPerFrame: 64, paddingWorld: 12 });
+        presentStats.lazyRoadMs = performance.now() - sectionStartMs;
     }
     if (typeof hydrateVisibleLazyTrees === "function") {
+        sectionStartMs = performance.now();
         hydrateVisibleLazyTrees({ maxPerFrame: 64, paddingWorld: 12 });
+        presentStats.lazyTreeMs = performance.now() - sectionStartMs;
     }
     if (
         typeof globalThis !== "undefined" &&
@@ -806,6 +1147,7 @@ function presentGameFrame(renderAnimalsOverride = null) {
         const roofList = (typeof globalThis !== "undefined" && Array.isArray(globalThis.roofs))
             ? globalThis.roofs
             : [];
+        sectionStartMs = performance.now();
         const rendered = renderingApi.renderFrame({
             app,
             gameContainer,
@@ -825,9 +1167,15 @@ function presentGameFrame(renderAnimalsOverride = null) {
             frameRate,
             renderAlpha
         });
+        presentStats.renderMs = performance.now() - sectionStartMs;
         if (rendered) {
             if (typeof updateCursor === "function") {
+                sectionStartMs = performance.now();
                 updateCursor();
+                presentStats.cursorMs = performance.now() - sectionStartMs;
+            }
+            if (typeof globalThis !== "undefined") {
+                globalThis.__prototypePresentFrameStats = presentStats;
             }
             return true;
         }
@@ -837,6 +1185,131 @@ function presentGameFrame(renderAnimalsOverride = null) {
         renderingUnavailableWarningShown = true;
     }
     return false;
+}
+
+function getPrototypeInteriorInvalidationCaptureRequest() {
+    if (typeof globalThis === "undefined") return null;
+    const capture = globalThis.__prototypeInteriorInvalidationFrameCapture;
+    return capture && capture.status === "pending" ? capture : null;
+}
+
+function forceRenderForPrototypeInteriorInvalidationCapture() {
+    if (!app || !app.renderer) {
+        throw new Error("prototype interior invalidation capture requires the Pixi app renderer");
+    }
+    if (typeof app.render === "function") {
+        app.render();
+        return;
+    }
+    if (app.stage && typeof app.renderer.render === "function") {
+        app.renderer.render(app.stage);
+        return;
+    }
+    throw new Error("prototype interior invalidation capture could not force a Pixi render");
+}
+
+function getPrototypeInteriorInvalidationCaptureDataUrl() {
+    forceRenderForPrototypeInteriorInvalidationCapture();
+    const canvas = (app && app.renderer && app.renderer.view) || (app && app.view) || null;
+    if (!canvas || typeof canvas.toDataURL !== "function") {
+        throw new Error("prototype interior invalidation capture requires a readable renderer canvas");
+    }
+    return canvas.toDataURL("image/png");
+}
+
+function buildPrototypeInteriorInvalidationCapturePayload(capture, nowMs, perfSnapshot = null) {
+    return {
+        id: capture.id,
+        kind: "prototype-interior-invalidation-frame",
+        capturedAtMs: nowMs,
+        href: typeof window !== "undefined" ? String(window.location && window.location.href || "") : "",
+        userAgent: typeof navigator !== "undefined" ? String(navigator.userAgent || "") : "",
+        viewport: {
+            width: Number(window && window.innerWidth) || 0,
+            height: Number(window && window.innerHeight) || 0,
+            devicePixelRatio: Number(window && window.devicePixelRatio) || 1
+        },
+        camera: viewport ? {
+            x: Number(viewport.x),
+            y: Number(viewport.y),
+            viewscale: Number(viewscale),
+            xyratio: Number(xyratio)
+        } : null,
+        wizard: wizard ? {
+            x: Number(wizard.x),
+            y: Number(wizard.y),
+            z: Number(wizard.z),
+            currentLayer: Number(wizard.currentLayer),
+            currentLayerBaseZ: Number(wizard.currentLayerBaseZ),
+            floorMembership: wizard._floorMembership && typeof wizard._floorMembership === "object"
+                ? { ...wizard._floorMembership }
+                : null,
+            currentMovementSupport: wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                ? {
+                    ownerType: wizard.currentMovementSupport.ownerType || "",
+                    ownerId: wizard.currentMovementSupport.ownerId || "",
+                    layer: wizard.currentMovementSupport.layer,
+                    baseZ: wizard.currentMovementSupport.baseZ,
+                    floorMembership: wizard.currentMovementSupport.floorMembership && typeof wizard.currentMovementSupport.floorMembership === "object"
+                        ? { ...wizard.currentMovementSupport.floorMembership }
+                        : null
+                }
+                : null
+        } : null,
+        events: Array.isArray(capture.events) ? capture.events.slice() : [],
+        perf: perfSnapshot
+    };
+}
+
+function maybeCapturePrototypeInteriorInvalidationFrame(nowMs, perfSnapshot = null) {
+    const capture = getPrototypeInteriorInvalidationCaptureRequest();
+    if (!capture) return null;
+    capture.status = "capturing";
+    capture.captureStartedAtMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+        ? performance.now()
+        : Date.now();
+    let dataUrl = "";
+    let payload = null;
+    try {
+        dataUrl = getPrototypeInteriorInvalidationCaptureDataUrl();
+        payload = buildPrototypeInteriorInvalidationCapturePayload(capture, nowMs, perfSnapshot);
+    } catch (error) {
+        capture.status = "error";
+        capture.error = error && error.message ? error.message : String(error);
+        if (typeof globalThis !== "undefined") {
+            globalThis.__prototypeInteriorInvalidationFrameCaptureLast = capture;
+        }
+        console.error("[prototype interior invalidation capture] failed before upload", error);
+        return Promise.resolve(true);
+    }
+    return fetch("/api/debug/frame-capture", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, dataUrl })
+    }).then((response) => response.json()).then((result) => {
+        capture.status = result && result.ok ? "saved" : "error";
+        capture.response = result;
+        capture.savedAtMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        if (typeof globalThis !== "undefined") {
+            globalThis.__prototypeInteriorInvalidationFrameCaptureLast = capture;
+        }
+        if (result && result.ok) {
+            console.warn("[prototype interior invalidation capture] saved and frozen", result.url, capture);
+        } else {
+            console.error("[prototype interior invalidation capture] save failed", result, capture);
+        }
+        return true;
+    }).catch((error) => {
+        capture.status = "error";
+        capture.error = error && error.message ? error.message : String(error);
+        if (typeof globalThis !== "undefined") {
+            globalThis.__prototypeInteriorInvalidationFrameCaptureLast = capture;
+        }
+        console.error("[prototype interior invalidation capture] upload failed", error);
+        return true;
+    });
 }
 if (typeof globalThis !== "undefined") {
     globalThis.presentGameFrame = presentGameFrame;
@@ -1077,6 +1550,24 @@ function initRoadLayer() {
 
 // Character, Wizard, Animal and animal subclasses moved to gameobjects/ folder
 
+function cloneWizardLoadDataForRuntime(data) {
+    if (!data || typeof data !== "object") return data;
+    const cloned = JSON.parse(JSON.stringify(data));
+    if (typeof sanitizeWizardLoadMovementSupport === "function") {
+        sanitizeWizardLoadMovementSupport(cloned);
+        return cloned;
+    }
+    const fragmentId = typeof cloned.fragmentId === "string" ? cloned.fragmentId : "";
+    const layer = Number.isFinite(cloned.currentLayer)
+        ? Math.round(Number(cloned.currentLayer))
+        : (Number.isFinite(cloned.traversalLayer) ? Math.round(Number(cloned.traversalLayer)) : 0);
+    if (layer === 0 && fragmentId.startsWith("section:") && fragmentId.endsWith(":ground")) {
+        cloned.fragmentId = "";
+        cloned.surfaceId = "";
+    }
+    return cloned;
+}
+
 jQuery(() => {
     if (typeof sanitizeSavedGameState === 'function') {
         sanitizeSavedGameState();
@@ -1085,7 +1576,7 @@ jQuery(() => {
     const startupLoadDirectiveStorageKey = "survivor_startup_load_directive_v1";
     let lastSaveReloadDirective = null;
 
-    function isPrototypeIndexedDbRoute() {
+    function isSectionWorldIndexedDbRoute() {
         return !!(
             startupConfig &&
             startupConfig.prototypeBuilder &&
@@ -1093,19 +1584,24 @@ jQuery(() => {
         );
     }
 
+    function isPrototypeIndexedDbRoute() {
+        return isSectionWorldIndexedDbRoute();
+    }
+
     function shouldBootstrapPrototypeApisWithoutWorldLoad() {
-        return isPrototypeIndexedDbRoute();
+        return isSectionWorldIndexedDbRoute();
     }
 
     function normalizeSaveReloadDirective(directive) {
         if (!directive || typeof directive !== "object") return null;
-        const source = String(directive.source || "").trim().toLowerCase();
-        if (source !== "local" && source !== "server" && source !== "prototype-indexeddb") return null;
+        const rawSource = String(directive.source || "").trim().toLowerCase();
+        const source = rawSource === "prototype-indexeddb" ? "section-indexeddb" : rawSource;
+        if (source !== "server" && source !== "section-indexeddb") return null;
         const normalized = { source };
         if (source === "server" && typeof directive.fileName === "string" && directive.fileName.trim().length > 0) {
             normalized.fileName = directive.fileName.trim();
         }
-        if (source === "prototype-indexeddb" && typeof directive.key === "string" && directive.key.trim().length > 0) {
+        if (source === "section-indexeddb" && typeof directive.key === "string" && directive.key.trim().length > 0) {
             normalized.key = directive.key.trim();
         }
         return normalized;
@@ -1170,6 +1666,20 @@ jQuery(() => {
         } catch (_ignored) {
             return null;
         }
+    }
+
+    function restoreWizardSavedMovementSupportAfterBubble(wizardRef, options = {}) {
+        if (
+            !wizardRef ||
+            typeof wizardRef.hasPendingSavedMovementSupport !== "function" ||
+            !wizardRef.hasPendingSavedMovementSupport()
+        ) {
+            return null;
+        }
+        if (typeof wizardRef.restoreSavedMovementSupport !== "function") {
+            throw new Error("saved wizard movement support is pending without a restore method");
+        }
+        return wizardRef.restoreSavedMovementSupport(options);
     }
 
     function reloadWithStartupLoadDirective(directive) {
@@ -1347,11 +1857,13 @@ jQuery(() => {
                 typeof bundle.manifest.wizard === "object"
             ) ? bundle.manifest.wizard : null;
             if (prototypeWizardState && typeof wizard.loadJson === "function") {
-                wizard.loadJson(prototypeWizardState);
+                ensureViewportGeometryForRestore("prototype indexeddb background wizard load");
+                wizard.loadJson(cloneWizardLoadDataForRuntime(prototypeWizardState));
             }
             if (map && typeof map.updatePrototypeSectionBubble === "function") {
                 map.updatePrototypeSectionBubble(wizard, { force: true });
             }
+            restoreWizardSavedMovementSupportAfterBubble(wizard);
             if (typeof centerViewport === "function") {
                 centerViewport(wizard, 0, 0);
             }
@@ -2216,7 +2728,8 @@ jQuery(() => {
             }
             markPrototypeStartupPerf("prototype-sync-complete");
             if (manifest && manifest.wizard && typeof manifest.wizard === "object" && typeof wizard.loadJson === "function") {
-                wizard.loadJson(manifest.wizard);
+                ensureViewportGeometryForRestore("prototype template wizard load");
+                wizard.loadJson(cloneWizardLoadDataForRuntime(manifest.wizard));
             }
             const savedMazeMode = (
                 manifest &&
@@ -2230,6 +2743,7 @@ jQuery(() => {
             if (map && typeof map.updatePrototypeSectionBubble === "function") {
                 map.updatePrototypeSectionBubble(wizard, { force: true });
             }
+            restoreWizardSavedMovementSupportAfterBubble(wizard);
             if (typeof centerViewport === "function") {
                 centerViewport(wizard, 0, 0);
             }
@@ -2247,8 +2761,8 @@ jQuery(() => {
             if (typeof setActivePrototypeSaveSlotKey === "function") {
                 setActivePrototypeSaveSlotKey(nextName);
             }
-            setLastSaveReloadDirective({ source: "prototype-indexeddb", key: nextName });
-            message(`Started new prototype game '${nextName}'`);
+            setLastSaveReloadDirective({ source: "section-indexeddb", key: nextName });
+            message(`Started new game '${nextName}'`);
             markPrototypeStartupPerf("start-new-complete", { key: nextName });
             return { ok: true, key: nextName };
         } catch (error) {
@@ -2283,28 +2797,22 @@ jQuery(() => {
         if (typeof loadGameStateFromIndexedDbKey !== "function") {
             return { ok: false, reason: "indexeddb-load-unavailable" };
         }
-        beginPrototypeStartupPerf("load-prototype-save", { key: saveKey });
-        showPrototypeLoadingOverlay("Loading");
-        try {
-            markPrototypeStartupPerf("indexeddb-load-begin", { key: saveKey });
-            const result = await loadGameStateFromIndexedDbKey(saveKey);
-            markPrototypeStartupPerf("indexeddb-load-finished", {
-                key: saveKey,
-                ok: !!(result && result.ok),
-                reason: result && result.reason ? String(result.reason) : ""
-            });
-            if (result && result.ok) {
-                setLastSaveReloadDirective({ source: "prototype-indexeddb", key: saveKey });
-            } else {
-                finishPrototypeStartupPerf("startup-perf-failed", {
-                    key: saveKey,
-                    reason: result && result.reason ? String(result.reason) : "load-failed"
-                });
-            }
-            return result;
-        } finally {
-            hidePrototypeLoadingOverlay();
+        const key = typeof saveKey === "string" ? saveKey.trim() : "";
+        if (!key.length) {
+            return { ok: false, reason: "missing-save-key" };
         }
+        beginPrototypeStartupPerf("queue-section-world-save-reload", { key });
+        markPrototypeStartupPerf("startup-load-directive-queue-begin", { key });
+        if (!reloadWithStartupLoadDirective({ source: "section-indexeddb", key })) {
+            finishPrototypeStartupPerf("startup-perf-failed", {
+                key,
+                reason: "startup-load-directive-failed"
+            });
+            return { ok: false, reason: "startup-load-directive-failed" };
+        }
+        setLastSaveReloadDirective({ source: "section-indexeddb", key });
+        message(`Reloading and loading save '${key}'...`);
+        return { ok: true, key, reloading: true };
     }
 
     async function runOpeningGameDialogFlow() {
@@ -2325,9 +2833,7 @@ jQuery(() => {
                         name: newGameChoice.name,
                         difficulty: newGameChoice.difficulty
                     };
-                    const startResult = isPrototypeIndexedDbRoute()
-                        ? await startNewPrototypeGame(newGameChoice)
-                        : await startNewGameFromServerTemplate(newGameChoice);
+                    const startResult = await startNewPrototypeGame(newGameChoice);
                     if (startResult && startResult.ok) {
                         clearDialogs();
                         return true;
@@ -2345,9 +2851,7 @@ jQuery(() => {
                 if (!loadChoice || loadChoice.action === "back") {
                     continue;
                 }
-                const loadResult = isPrototypeIndexedDbRoute()
-                    ? await loadNamedPrototypeSave(loadChoice.key)
-                    : await loadNamedLocalSave(loadChoice.key);
+                const loadResult = await loadNamedPrototypeSave(loadChoice.key);
                 if (loadResult && loadResult.ok) {
                     clearDialogs();
                     return true;
@@ -2754,6 +3258,32 @@ jQuery(() => {
         const safeWidth = Math.max(0.01, Number(width) || getBaseViewportWidth());
         const aspectRatio = Math.max(1e-6, (Number(app.screen.height) || window.innerHeight || 1) / Math.max(1, Number(app.screen.width) || window.innerWidth || 1));
         return safeWidth * aspectRatio / xyratio;
+    }
+
+    function ensureViewportGeometryForRestore(reason = "restore") {
+        if (!viewport || typeof viewport !== "object") {
+            throw new Error(`viewport geometry restore requires viewport object (${reason})`);
+        }
+        const zoom = Math.max(VIEWPORT_ZOOM_MIN, Math.min(VIEWPORT_ZOOM_MAX, Number(viewportZoomFactor) || 1));
+        const nextWidth = getBaseViewportWidth() / zoom;
+        const nextHeight = getViewportHeightForWidth(nextWidth);
+        if (!Number.isFinite(nextWidth) || nextWidth <= 0 || !Number.isFinite(nextHeight) || nextHeight <= 0) {
+            throw new Error(`viewport geometry restore could not resolve finite dimensions (${reason})`);
+        }
+        viewportZoomFactor = zoom;
+        viewport.width = nextWidth;
+        viewport.height = nextHeight;
+        viewscale = (Number(app.screen.width) || window.innerWidth || 1) / Math.max(0.01, viewport.width);
+        viewScale = viewscale;
+        if (!Number.isFinite(viewscale) || viewscale <= 0) {
+            throw new Error(`viewport geometry restore could not resolve finite viewscale (${reason})`);
+        }
+        syncGlobalViewportRuntime();
+        return viewport;
+    }
+
+    if (typeof globalThis !== "undefined") {
+        globalThis.ensureViewportGeometryForRestore = ensureViewportGeometryForRestore;
     }
 
     function getViewportScreenCenter() {
@@ -3380,8 +3910,9 @@ jQuery(() => {
         if (!target) return { activated: false, shouldCloseMenu: false };
         const targetLabel = (target.textContent || "").trim().toLowerCase();
         const isBackAction = targetLabel === "back";
+        const opensSubmenu = !!(target.dataset && target.dataset.opensSubmenu === "true");
         target.click();
-        return { activated: true, shouldCloseMenu: !isBackAction };
+        return { activated: true, shouldCloseMenu: !isBackAction && !opensSubmenu };
     }
 
     function activateSelectedSpellFromMenu() {
@@ -3422,6 +3953,11 @@ jQuery(() => {
         if (!spellName) return false;
         if (spellName === "buildroad" && typeof SpellSystem.showFlooringMenu === "function") {
             SpellSystem.showFlooringMenu(wizard);
+            initSpellMenuKeyboardFocus();
+            return true;
+        }
+        if (spellName === "terrainedit" && typeof SpellSystem.showTerrainMenu === "function") {
+            SpellSystem.showTerrainMenu(wizard);
             initSpellMenuKeyboardFocus();
             return true;
         }
@@ -3660,19 +4196,36 @@ jQuery(() => {
             }
         }
 
+        function isGeneratedOutdoorGroundFloorFragment(fragment) {
+            if (!fragment || typeof fragment !== "object") return false;
+            const level = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+            if (level !== 0) return false;
+            if (fragment._prototypeGroundFloor === true) return true;
+            const fragmentId = typeof fragment.fragmentId === "string"
+                ? fragment.fragmentId
+                : (typeof fragment.id === "string" ? fragment.id : "");
+            return fragment.ownerType === "section" &&
+                fragmentId.startsWith("section:") &&
+                fragmentId.endsWith(":ground");
+        }
+
         // Returns true if (x, y) is on solid floor at the given layer number.
         // Solid means: inside an outer polygon AND not inside any hole polygon of a
         // registered floor fragment at that layer. Ground (layer 0) is treated as
-        // unconditionally solid when no floor fragments are registered at that level.
+        // outdoor support outside authored floor holes; generated section-ground
+        // fragments are render/runtime scaffolding and must not carve voids.
         function isPositionSupportedAtLayer(x, y, layer, mapRef) {
             if (!(mapRef && mapRef.floorsById instanceof Map)) return true;
-            let hasFragmentsAtLayer = false;
-            for (const fragment of mapRef.floorsById.values()) {
+            const normalizedLayer = Number.isFinite(layer) ? Math.round(Number(layer)) : 0;
+            const fragments = typeof mapRef.getFloorFragmentsForLayer === "function"
+                ? mapRef.getFloorFragmentsForLayer(normalizedLayer)
+                : Array.from(mapRef.floorsById.values());
+            for (const fragment of fragments) {
                 if (!fragment) continue;
                 const fragLevel = Number.isFinite(fragment.level) ? Math.round(fragment.level) : 0;
-                if (fragLevel !== layer) continue;
+                if (fragLevel !== normalizedLayer) continue;
+                if (normalizedLayer === 0 && isGeneratedOutdoorGroundFloorFragment(fragment)) continue;
                 if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
-                hasFragmentsAtLayer = true;
                 if (!pointInPolygon2D(x, y, fragment.outerPolygon)) continue;
                 // Point is inside the fragment's outer area. Check whether it's also
                 // inside one of the cut-out holes (which means it's NOT supported).
@@ -3684,10 +4237,11 @@ jQuery(() => {
                         break;
                     }
                 }
+                if (inHole && normalizedLayer === 0) return false;
                 if (!inHole) return true;
             }
-            // No registered fragments at this layer → ground (layer 0) is always solid.
-            if (!hasFragmentsAtLayer && layer === 0) return true;
+            // Ground (layer 0) remains solid outside authored holes.
+            if (normalizedLayer === 0) return true;
             return false;
         }
 
@@ -3702,34 +4256,98 @@ jQuery(() => {
             return minLayer;
         }
 
-        function getLayerBaseZ(layer) {
-            return Math.round(Number.isFinite(layer) ? Number(layer) : 0) * 3;
+        function getSupportedFallTargetLayerBelow(x, y, fromLayer, mapRef) {
+            const startLayer = Number.isFinite(fromLayer) ? Math.round(Number(fromLayer)) : 0;
+            const lowestLayer = Math.min(0, getLowestRegisteredFloorLayer(mapRef));
+            for (let checkLayer = startLayer - 1; checkLayer >= lowestLayer; checkLayer--) {
+                if (isPositionSupportedAtLayer(x, y, checkLayer, mapRef)) {
+                    return checkLayer;
+                }
+            }
+            return null;
+        }
+
+        function getMovementSupportLayer(support, fallback = 0) {
+            if (support && Number.isFinite(support.layer)) return Math.round(Number(support.layer));
+            return Math.round(Number.isFinite(fallback) ? Number(fallback) : 0);
+        }
+
+        function getMovementSupportBaseZ(support, fallbackLayer = 0) {
+            if (support && Number.isFinite(support.baseZ)) return Number(support.baseZ);
+            throw new Error(`movement support for layer ${getMovementSupportLayer(support, fallbackLayer)} requires baseZ`);
+        }
+
+        function resolveWizardFloorSupportFragment(wizardRef, mapRef) {
+            const support = wizardRef && wizardRef.currentMovementSupport;
+            if (!support || support.type !== "floor") return null;
+            if (support.fragment && typeof support.fragment === "object") return support.fragment;
+            const fragmentId = typeof support.fragmentId === "string" ? support.fragmentId : "";
+            if (!fragmentId || !(mapRef && mapRef.floorsById instanceof Map)) return null;
+            return mapRef.floorsById.get(fragmentId) || null;
+        }
+
+        function resolveFallLandingSupport(wizardRef, mapRef, targetLayer) {
+            if (!Number.isFinite(targetLayer)) return null;
+            const toLayer = Math.round(Number(targetLayer));
+            const landingSupport = (mapRef && typeof mapRef.getFloorSupportAtWorldPosition === "function")
+                ? mapRef.getFloorSupportAtWorldPosition(wizardRef.x, wizardRef.y, toLayer)
+                : null;
+            if (landingSupport) return landingSupport;
+            if (toLayer === 0) {
+                return {
+                    type: "ground",
+                    layer: 0,
+                    baseZ: 0,
+                    node: mapRef && typeof mapRef.worldToNode === "function"
+                        ? mapRef.worldToNode(wizardRef.x, wizardRef.y)
+                        : null
+                };
+            }
+            throw new Error(`wizard floor fall landing has no support at layer ${toLayer}`);
+        }
+
+        function applyWizardMovementSupportPreservingWorldZ(wizardRef, support, mapRef) {
+            if (!wizardRef || !support) return null;
+            const supportMap = mapRef || wizardRef.map || (typeof map !== "undefined" ? map : null);
+            if (!supportMap || typeof supportMap.setActorCurrentMovementSupport !== "function") {
+                throw new Error("wizard movement support rebase requires movement support APIs");
+            }
+            const currentSupport = wizardRef.currentMovementSupport || null;
+            const currentLayer = getMovementSupportLayer(
+                currentSupport,
+                Number.isFinite(wizardRef.currentLayer) ? wizardRef.currentLayer : 0
+            );
+            const currentBaseZ = getMovementSupportBaseZ(currentSupport, currentLayer);
+            const previousWorldZ = currentBaseZ + (Number.isFinite(wizardRef.z) ? Number(wizardRef.z) : 0);
+            const previousPrevWorldZ = currentBaseZ + (Number.isFinite(wizardRef.prevZ) ? Number(wizardRef.prevZ) : (Number.isFinite(wizardRef.z) ? Number(wizardRef.z) : 0));
+            const applied = supportMap.setActorCurrentMovementSupport(wizardRef, support, {
+                suppressLayerTransition: true
+            });
+            if (!applied) {
+                throw new Error("wizard movement support rebase failed");
+            }
+            const nextBaseZ = getMovementSupportBaseZ(applied, getMovementSupportLayer(applied, 0));
+            wizardRef.z = previousWorldZ - nextBaseZ;
+            wizardRef.prevZ = previousPrevWorldZ - nextBaseZ;
+            return applied;
         }
 
         function getWizardCameraFollowZ(wizardRef, fallbackBaseZ = 0) {
             if (!wizardRef) return fallbackBaseZ;
-            const layer = Number.isFinite(wizardRef.currentLayer)
+            const support = wizardRef.currentMovementSupport || null;
+            const fallbackLayer = Number.isFinite(wizardRef.currentLayer)
                 ? Math.round(Number(wizardRef.currentLayer))
                 : (Number.isFinite(wizardRef.traversalLayer) ? Math.round(Number(wizardRef.traversalLayer)) : 0);
-            const baseZ = Number.isFinite(wizardRef.currentLayerBaseZ)
-                ? Number(wizardRef.currentLayerBaseZ)
-                : (Number.isFinite(fallbackBaseZ) ? Number(fallbackBaseZ) : getLayerBaseZ(layer));
-            if (wizardRef._floorFallState && wizardRef._floorFallState.active && Number.isFinite(wizardRef.z)) {
-                return baseZ + Number(wizardRef.z);
+            const baseZ = support
+                ? getMovementSupportBaseZ(support, fallbackLayer)
+                : (Number.isFinite(fallbackBaseZ) ? Number(fallbackBaseZ) : getLayerBaseZ(fallbackLayer));
+            if (support && support.type === "stair") {
+                if (Number.isFinite(support.continuousLocalZ)) return baseZ + Number(support.continuousLocalZ);
+                if (Number.isFinite(support.continuousBaseZ)) return Number(support.continuousBaseZ);
+                if (Number.isFinite(support.localZ)) return baseZ + Number(support.localZ);
             }
-            if (wizardRef._stairSupport && typeof wizardRef._stairSupport === "object") {
-                if (Number.isFinite(wizardRef._stairSupport.continuousLocalZ)) {
-                    return baseZ + Number(wizardRef._stairSupport.continuousLocalZ);
-                }
-                if (Number.isFinite(wizardRef._stairSupport.continuousBaseZ)) {
-                    return Number(wizardRef._stairSupport.continuousBaseZ);
-                }
-                if (Number.isFinite(wizardRef._stairSupport.localZ)) {
-                    return baseZ + Number(wizardRef._stairSupport.localZ);
-                }
-                if (Number.isFinite(wizardRef._stairSupport.baseZ)) {
-                    return Number(wizardRef._stairSupport.baseZ);
-                }
+            if (wizardRef._floorFallState && wizardRef._floorFallState.active) {
+                return baseZ + (Number.isFinite(wizardRef.z) ? Number(wizardRef.z) : 0);
             }
             return baseZ;
         }
@@ -3739,31 +4357,62 @@ jQuery(() => {
         // Negative z threshold at which the fall "lands" (sprite has slid off screen).
         const FLOOR_FALL_LAND_Z = -2.0;
 
+        function getFallImpactDamage(fromBaseZ, toBaseZ) {
+            const startZ = Number(fromBaseZ);
+            const endZ = Number(toBaseZ);
+            if (!Number.isFinite(startZ) || !Number.isFinite(endZ)) return 0;
+            const fallHeight = Math.max(0, startZ - endZ);
+            return fallHeight * fallHeight;
+        }
+
+        function resetWizardJumpState(wizardRef) {
+            if (!wizardRef) return;
+            wizardRef.isJumping = false;
+            wizardRef.jumpElapsedSec = 0;
+            wizardRef.jumpHeight = 0;
+            wizardRef.jumpCount = 0;
+            wizardRef.jumpMode = "single";
+            wizardRef.jumpLockedMovingBackward = false;
+            wizardRef._jumpEndedThisFrame = false;
+        }
+
         // Begin a fall animation. Any finite targetLayer means land there;
         // null means there is no floor below and the fall is lethal.
-        function startWizardFall(wizardRef, targetLayer) {
+        function startWizardFall(wizardRef, targetLayer, mapRef = null) {
             if (!wizardRef || (wizardRef._floorFallState && wizardRef._floorFallState.active)) return;
-            const fromLayer = Number.isFinite(wizardRef.currentLayer) ? Math.round(wizardRef.currentLayer) : 0;
-            const fromBaseZ = Number.isFinite(wizardRef.currentLayerBaseZ)
-                ? Number(wizardRef.currentLayerBaseZ)
-                : getLayerBaseZ(fromLayer);
-            const targetBaseZ = Number.isFinite(targetLayer) ? getLayerBaseZ(targetLayer) : null;
+            const currentSupport = wizardRef.currentMovementSupport || null;
+            const fromLayer = getMovementSupportLayer(currentSupport, Number.isFinite(wizardRef.currentLayer) ? wizardRef.currentLayer : 0);
+            const fromBaseZ = getMovementSupportBaseZ(currentSupport, fromLayer);
+            const hasFiniteTargetLayer = Number.isFinite(targetLayer);
+            const landingMap = mapRef || wizardRef.map || (typeof map !== "undefined" ? map : null);
+            const landingSupport = hasFiniteTargetLayer
+                ? resolveFallLandingSupport(wizardRef, landingMap, targetLayer)
+                : null;
+            const landingBaseZ = landingSupport
+                ? getMovementSupportBaseZ(landingSupport, targetLayer)
+                : fromBaseZ;
+            let initialLocalZ = Number.isFinite(wizardRef.z) ? Number(wizardRef.z) : 0;
+            if (landingSupport) {
+                applyWizardMovementSupportPreservingWorldZ(wizardRef, landingSupport, landingMap);
+                initialLocalZ = Number.isFinite(wizardRef.z) ? Number(wizardRef.z) : 0;
+            }
             wizardRef._floorFallState = {
                 active: true,
                 velocityZ: 0,
                 targetLayer,
                 fromLayer,
                 fromBaseZ,
-                landZ: Number.isFinite(targetBaseZ)
-                    ? Math.min(FLOOR_FALL_LAND_Z, targetBaseZ - fromBaseZ)
+                landingSupport,
+                landingBaseZ,
+                landZ: hasFiniteTargetLayer
+                    ? 0
                     : FLOOR_FALL_LAND_Z
             };
             // Clear any movement path so the wizard doesn't teleport mid-fall.
             wizardRef.path = [];
             wizardRef.nextNode = null;
-            wizardRef.isJumping = false;
-            wizardRef.jumpHeight = 0;
-            wizardRef.z = 0;
+            resetWizardJumpState(wizardRef);
+            wizardRef.z = initialLocalZ;
         }
 
         // Advance fall physics. Must be called every sim frame while a fall is active.
@@ -3771,6 +4420,7 @@ jQuery(() => {
             if (!wizardRef || !wizardRef._floorFallState || !wizardRef._floorFallState.active) return;
             const state = wizardRef._floorFallState;
             const dt = Math.max(0, Number(dtSec) || 0);
+            wizardRef.prevZ = Number.isFinite(wizardRef.z) ? Number(wizardRef.z) : 0;
             state.velocityZ += FLOOR_FALL_GRAVITY * dt;
             wizardRef.z = (Number.isFinite(wizardRef.z) ? wizardRef.z : 0) + state.velocityZ * dt;
 
@@ -3780,10 +4430,21 @@ jQuery(() => {
             // ── Landing ──────────────────────────────────────────────────────────
             wizardRef._floorFallState = null;
             wizardRef.z = 0;
+            resetWizardJumpState(wizardRef);
 
             if (Number.isFinite(state.targetLayer)) {
                 const toLayer = Math.round(Number(state.targetLayer));
-                const toBaseZ = getLayerBaseZ(toLayer);
+                const support = state.landingSupport || wizardRef.currentMovementSupport || null;
+                const toBaseZ = getMovementSupportBaseZ(support, toLayer);
+                const landingMap = wizardRef.map || (typeof map !== "undefined" ? map : null);
+                if (support) {
+                    if (!landingMap || typeof landingMap.setActorCurrentMovementSupport !== "function") {
+                        throw new Error("wizard floor fall landing requires movement support APIs");
+                    }
+                    landingMap.setActorCurrentMovementSupport(wizardRef, support, {
+                        suppressLayerTransition: true
+                    });
+                }
                 const previousLayer = Number.isFinite(wizardRef.currentLayer) ? Number(wizardRef.currentLayer) : null;
                 const previousBaseZ = Number.isFinite(wizardRef.currentLayerBaseZ) ? Number(wizardRef.currentLayerBaseZ) : null;
                 wizardRef.selectedFloorEditLevel = toLayer;
@@ -3808,6 +4469,37 @@ jQuery(() => {
                     startedAtMs: Number.isFinite(renderNowMs) ? Number(renderNowMs) : Date.now(),
                     durationMs: 320
                 };
+                const fallHeight = Math.max(0, Number(state.fromBaseZ) - Number(toBaseZ));
+                const fallDamage = getFallImpactDamage(state.fromBaseZ, toBaseZ);
+                if (fallDamage > 0) {
+                    if (typeof wizardRef.takeDamage === "function") {
+                        wizardRef.takeDamage(fallDamage, {
+                            source: "fall",
+                            fallHeight,
+                            fromBaseZ: state.fromBaseZ,
+                            toBaseZ
+                        });
+                    } else if (Number.isFinite(wizardRef.hp)) {
+                        wizardRef.hp = Math.max(0, Number(wizardRef.hp) - fallDamage);
+                        if (typeof wizardRef.updateStatusBars === "function") wizardRef.updateStatusBars();
+                        if (
+                            Number.isFinite(wizardRef.hp) &&
+                            wizardRef.hp <= 0 &&
+                            !wizardRef.dead &&
+                            typeof wizardRef.isAdventureMode === "function" &&
+                            wizardRef.isAdventureMode() &&
+                            typeof wizardRef.updateAdventureDeathState === "function"
+                        ) {
+                            wizardRef.updateAdventureDeathState();
+                        } else if (Number.isFinite(wizardRef.hp) && wizardRef.hp <= 0 && !wizardRef.dead) {
+                            if (typeof wizardRef.die === "function") {
+                                wizardRef.die();
+                            } else {
+                                wizardRef.dead = true;
+                            }
+                        }
+                    }
+                }
                 if (typeof message === "function") {
                     message("You land on the floor below.");
                 }
@@ -3826,6 +4518,45 @@ jQuery(() => {
 
         // Called every frame after movement. Detects whether the wizard stepped into
         // a hole and starts the fall animation if not already falling.
+        function updateWizardAirborneMovementSupport(wizardRef, mapRef) {
+            if (!wizardRef || !wizardRef.isJumping || wizardRef.dead) return false;
+            if (!(mapRef && mapRef.floorsById instanceof Map && mapRef.floorsById.size > 0)) return false;
+            const currentSupport = wizardRef.currentMovementSupport || null;
+            const currentLayer = getMovementSupportLayer(
+                currentSupport,
+                Number.isFinite(wizardRef.currentLayer) ? wizardRef.currentLayer : 0
+            );
+            if (currentLayer <= 0 || !currentSupport || currentSupport.type !== "floor") return false;
+            const fragment = resolveWizardFloorSupportFragment(wizardRef, mapRef);
+            if (
+                !fragment ||
+                typeof mapRef.isPointSupportedByFloorFragment !== "function" ||
+                mapRef.isPointSupportedByFloorFragment(fragment, wizardRef.x, wizardRef.y)
+            ) {
+                return false;
+            }
+            const targetLayer = getSupportedFallTargetLayerBelow(wizardRef.x, wizardRef.y, currentLayer, mapRef);
+            const landingSupport = Number.isFinite(targetLayer)
+                ? resolveFallLandingSupport(wizardRef, mapRef, targetLayer)
+                : null;
+            if (!landingSupport) return false;
+            applyWizardMovementSupportPreservingWorldZ(wizardRef, landingSupport, mapRef);
+            wizardRef._floorFallState = {
+                active: true,
+                velocityZ: 0,
+                targetLayer,
+                fromLayer: currentLayer,
+                fromBaseZ: getMovementSupportBaseZ(currentSupport, currentLayer),
+                landingSupport,
+                landingBaseZ: getMovementSupportBaseZ(landingSupport, targetLayer),
+                landZ: 0
+            };
+            wizardRef.path = [];
+            wizardRef.nextNode = null;
+            resetWizardJumpState(wizardRef);
+            return true;
+        }
+
         function checkWizardFloorFall(wizardRef, mapRef) {
             if (!wizardRef || wizardRef.dead) return;
             // Already in a fall — nothing to do here; updateWizardFall handles it.
@@ -3855,15 +4586,33 @@ jQuery(() => {
             const prevX = Number.isFinite(wizardRef.prevX) ? Number(wizardRef.prevX) : wx;
             const prevY = Number.isFinite(wizardRef.prevY) ? Number(wizardRef.prevY) : wy;
 
-            // Use wizard.currentLayer to restrict the scan to fragments at the wizard's
-            // actual layer. Without this, a building floor polygon (level 1-3) that
-            // overlaps the underground cave's XY footprint would be found first in the
-            // Map iteration order, making checkWizardFloorFall think the wizard is
-            // "supported" and skip the boundary snap entirely.
-            const wizardLayer = Number.isFinite(wizardRef.currentLayer) ? Math.round(wizardRef.currentLayer) : 0;
+            const currentSupport = wizardRef.currentMovementSupport || null;
+            const wizardLayer = getMovementSupportLayer(
+                currentSupport,
+                Number.isFinite(wizardRef.currentLayer) ? wizardRef.currentLayer : 0
+            );
+            if (currentSupport && currentSupport.type === "stair") return;
+            if (wizardLayer === 0 && (!currentSupport || currentSupport.type === "ground")) return;
+            if (wizardLayer !== 0 && (!currentSupport || currentSupport.type !== "floor")) {
+                throw new Error("wizard non-ground movement requires currentMovementSupport floor");
+            }
 
-            let contextFragment = null;
-            for (const fragment of mapRef.floorsById.values()) {
+            let contextFragment = resolveWizardFloorSupportFragment(wizardRef, mapRef);
+            if (
+                contextFragment &&
+                (
+                    !Array.isArray(contextFragment.outerPolygon) ||
+                    contextFragment.outerPolygon.length < 3 ||
+                    (Number.isFinite(contextFragment.level) ? Math.round(Number(contextFragment.level)) : 0) !== wizardLayer
+                )
+            ) {
+                throw new Error("wizard currentMovementSupport references invalid floor fragment");
+            }
+            const layerFragments = typeof mapRef.getFloorFragmentsForLayer === "function"
+                ? mapRef.getFloorFragmentsForLayer(wizardLayer)
+                : Array.from(mapRef.floorsById.values());
+            for (let i = 0; !contextFragment && wizardLayer === 0 && i < layerFragments.length; i++) {
+                const fragment = layerFragments[i];
                 if (!fragment) continue;
                 const fragLevel = Number.isFinite(fragment.level) ? Math.round(fragment.level) : 0;
                 if (fragLevel === 0) continue;
@@ -3871,54 +4620,10 @@ jQuery(() => {
                 if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
                 if (pointInPolygon2D(wx, wy, fragment.outerPolygon)) { contextFragment = fragment; break; }
             }
-            if (contextFragment) {
-                wizardRef._activeFloorFragment = contextFragment;
-            } else {
-                // Not currently inside any non-zero polygon. Try last-known fragment before
-                // resorting to prevPos scan — once we know the wizard is underground we want
-                // to keep enforcing that fragment's boundary until they explicitly leave.
-                const cachedFrag = wizardRef._activeFloorFragment;
-                const cachedLevel = cachedFrag
-                    ? (Number.isFinite(cachedFrag.level) ? Math.round(cachedFrag.level) : 0)
-                    : 0;
-                contextFragment = (cachedFrag &&
-                    wizardLayer !== 0 &&
-                    cachedLevel === wizardLayer &&
-                    mapRef.floorsById.has(cachedFrag.fragmentId || cachedFrag.id || ""))
-                    ? cachedFrag
-                    : null;
-                // If the cached fragment is gone (section unloaded), fall back to prevPos scan.
-                if (!contextFragment && wizardLayer !== 0) {
-                    for (const fragment of mapRef.floorsById.values()) {
-                        if (!fragment) continue;
-                        const fragLevel = Number.isFinite(fragment.level) ? Math.round(fragment.level) : 0;
-                        if (fragLevel === 0) continue;
-                        if (fragLevel !== wizardLayer) continue;
-                        if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
-                        if (pointInPolygon2D(prevX, prevY, fragment.outerPolygon)) { contextFragment = fragment; break; }
-                    }
-                    if (contextFragment) wizardRef._activeFloorFragment = contextFragment;
-                }
-            }
 
             const contextLayer = contextFragment
                 ? (Number.isFinite(contextFragment.level) ? Math.round(contextFragment.level) : 0)
                 : 0;
-
-            // If the wizard is on a non-zero layer but we couldn't resolve a context
-            // fragment (cache miss, section gap), skip rather than falling through to the
-            // layer-0 paths — the ground polygon covers everything so isPositionSupported
-            // at layer 0 always returns true, which would let the wizard roam freely.
-            if (wizardLayer !== 0 && !contextFragment) return;
-
-            // Clear the cached fragment once the wizard is confirmed back at ground level.
-            // Use wizardLayer (not contextLayer) so an underground wizard whose scan came
-            // up empty doesn't accidentally clear the cache and lose boundary enforcement.
-            if (wizardLayer === 0 && wizardRef._activeFloorFragment) {
-                if (isPositionSupportedAtLayer(wx, wy, 0, mapRef)) {
-                    wizardRef._activeFloorFragment = null;
-                }
-            }
 
             // Supported = wizard's current position is inside their own fragment's polygon.
             if (contextLayer === 0) {
@@ -3938,6 +4643,12 @@ jQuery(() => {
             // or stepped into a hole inside it. Two-pass move-and-slide: find the
             // crossed edge, project movement onto its tangent in the same frame.
             if (contextLayer !== 0) {
+                if (wizardRef._jumpEndedThisFrame === true) {
+                    const targetLayer = getSupportedFallTargetLayerBelow(wx, wy, contextLayer, mapRef);
+                    startWizardFall(wizardRef, targetLayer, mapRef);
+                    return;
+                }
+
                 const outerPoly = contextFragment.outerPolygon;
                 const holes = Array.isArray(contextFragment.holes) ? contextFragment.holes : [];
                 const movDx = wx - prevX, movDy = wy - prevY;
@@ -4055,7 +4766,7 @@ jQuery(() => {
                 }
             }
 
-            startWizardFall(wizardRef, targetLayer);
+            startWizardFall(wizardRef, targetLayer, mapRef);
         }
 
         function advanceNonWizardSimulationStep() {
@@ -4142,6 +4853,15 @@ jQuery(() => {
                 }
             }
             facingMs = performance.now() - facingStartMs;
+
+            if (
+                typeof SpellSystem !== "undefined" &&
+                typeof SpellSystem.updateDragPreview === "function" &&
+                Number.isFinite(mousePos.worldX) &&
+                Number.isFinite(mousePos.worldY)
+            ) {
+                SpellSystem.updateDragPreview(wizard, mousePos.worldX, mousePos.worldY);
+            }
             
             // Calculate desired movement direction from input
             let moveVector = null;
@@ -4201,6 +4921,16 @@ jQuery(() => {
             }
 
             const movementStartMs = performance.now();
+            const movementPerfEnabled = typeof globalThis !== "undefined" &&
+                globalThis.movementPerfBreakdownState &&
+                globalThis.movementPerfBreakdownState.enabled === true &&
+                typeof globalThis.recordMovementPerfSection === "function";
+            const movementPerfNow = () => movementPerfEnabled ? performance.now() : 0;
+            const movementPerfRecord = (name, startMs) => {
+                if (!movementPerfEnabled) return;
+                globalThis.recordMovementPerfSection(name, performance.now() - startMs);
+            };
+            let movementSectionStartMs = movementPerfNow();
             const wizardStartX = wizard.x;
             const wizardStartY = wizard.y;
             const wizardLayer = Number.isFinite(wizard.currentLayer) ? Math.round(wizard.currentLayer) : 0;
@@ -4210,34 +4940,58 @@ jQuery(() => {
             wizard.prevJumpHeight = Number.isFinite(wizard.jumpHeight) ? wizard.jumpHeight : 0;
             const isFalling = !!(wizard._floorFallState && wizard._floorFallState.active);
             if (!isFalling) {
+                movementSectionStartMs = movementPerfNow();
                 wizard.moveDirection(moveVector, moveOptions);
+                movementPerfRecord("movement.step.moveDirection", movementSectionStartMs);
+                movementSectionStartMs = movementPerfNow();
                 wizard.updateJump(1 / frameRate);
+                movementPerfRecord("movement.step.updateJump", movementSectionStartMs);
+                movementSectionStartMs = movementPerfNow();
+                updateWizardAirborneMovementSupport(wizard, map);
+                movementPerfRecord("movement.step.updateWizardAirborneMovementSupport", movementSectionStartMs);
+                movementSectionStartMs = movementPerfNow();
                 checkWizardFloorFall(wizard, map);
+                movementPerfRecord("movement.step.checkWizardFloorFall", movementSectionStartMs);
             } else {
                 // Keep applying horizontal momentum during the fall — don't steer or brake,
                 // just carry whatever velocity the wizard had when they stepped off the edge.
+                movementSectionStartMs = movementPerfNow();
+                const fallZBeforeHorizontalMove = Number.isFinite(wizard.z) ? Number(wizard.z) : 0;
+                const fallPrevZBeforeHorizontalMove = Number.isFinite(wizard.prevZ) ? Number(wizard.prevZ) : fallZBeforeHorizontalMove;
                 wizard.moveDirection(wizard.movementVector, {
                     lockMovementVector: true,
                     allowUnsupportedPosition: true
                 });
+                wizard.z = fallZBeforeHorizontalMove;
+                wizard.prevZ = fallPrevZBeforeHorizontalMove;
+                movementPerfRecord("movement.step.moveDirection.falling", movementSectionStartMs);
             }
+            movementSectionStartMs = movementPerfNow();
             updateWizardFall(wizard, 1 / frameRate);
+            movementPerfRecord("movement.step.updateWizardFall", movementSectionStartMs);
             if (typeof wizard.regenerateHealth === "function") {
+                movementSectionStartMs = movementPerfNow();
                 wizard.regenerateHealth(1 / frameRate);
+                movementPerfRecord("movement.step.regenerateHealth", movementSectionStartMs);
             }
             // Re-read layer state after updateWizardFall so the landing frame
             // gets the correct cameraFollowZ (-3 for level -1) instead of the
             // pre-landing value that was captured before the fall settled.
+            movementSectionStartMs = movementPerfNow();
             const postFallLayerBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
                 ? Number(wizard.currentLayerBaseZ)
                 : wizardLayerBaseZ;
             const cameraFollowZ = getWizardCameraFollowZ(wizard, postFallLayerBaseZ);
             viewport.prevZ = Number.isFinite(viewport.z) ? Number(viewport.z) : 0;
             viewport.z = cameraFollowZ;
+            movementPerfRecord("movement.step.cameraFollowZ", movementSectionStartMs);
             if (map && typeof map.updatePrototypeSectionBubble === "function") {
+                movementSectionStartMs = movementPerfNow();
                 map.updatePrototypeSectionBubble(wizard);
+                movementPerfRecord("movement.step.updatePrototypeSectionBubble", movementSectionStartMs);
             }
             movementMs = performance.now() - movementStartMs;
+            if (movementPerfEnabled) globalThis.recordMovementPerfSection("movement.step.total", movementMs);
             const collisionStartMs = performance.now();
             if (typeof SpellSystem !== "undefined" && typeof SpellSystem.updateCharacterObjectCollisions === "function") {
                 SpellSystem.updateCharacterObjectCollisions(wizard);
@@ -4435,6 +5189,26 @@ jQuery(() => {
             perfStats.drawPresentMs = _tDrawEnd - _tPresent;
             perfStats.drawMs = _tDrawEnd - drawStart;
             perfStats.idleMs = Math.max(0, perfStats.loopMs - perfStats.simMs - perfStats.drawMs);
+            const bubbleAdjacentFrameNow = performance.now();
+            const simBreakdownForBubbleFrame = (typeof globalThis !== "undefined" && globalThis.simPerfBreakdown)
+                ? globalThis.simPerfBreakdown
+                : null;
+            const bubbleFrameStats = {
+                loopMs: perfStats.loopMs,
+                cpuMs: perfStats.simMs + perfStats.drawMs,
+                simMs: perfStats.simMs,
+                drawMs: perfStats.drawMs,
+                presentMs: perfStats.drawPresentMs,
+                simSteps: perfStats.simSteps,
+                accumulatorMs: simBreakdownForBubbleFrame ? Number(simBreakdownForBubbleFrame.accumulatorMs || 0) : 0,
+                presentBreakdown: (typeof globalThis !== "undefined" && globalThis.__prototypePresentFrameStats)
+                    ? { ...globalThis.__prototypePresentFrameStats }
+                    : null
+            };
+            recordPrototypeBubbleAdjacentFrame(bubbleAdjacentFrameNow, bubbleFrameStats);
+            if (shouldLogPrototypeBubbleAdjacentFrame(bubbleAdjacentFrameNow, perfStats.simMs + perfStats.drawMs)) {
+                logPrototypeBubbleAdjacentFrame(bubbleAdjacentFrameNow, bubbleFrameStats);
+            }
             const perfInstrumentationActive = typeof isPerfInstrumentationEnabled === "function"
                 ? isPerfInstrumentationEnabled()
                 : false;
@@ -4789,6 +5563,27 @@ jQuery(() => {
                 perfPanel.text(perfReadoutVisibleText);
                 perfStats.lastUiUpdateAt = panelNow;
             }
+            const capturePromise = maybeCapturePrototypeInteriorInvalidationFrame(nowMs, {
+                loopMs: perfStats.loopMs,
+                drawMs: perfStats.drawMs,
+                simMs: perfStats.simMs,
+                presentMs: perfStats.drawPresentMs,
+                simSteps: perfStats.simSteps
+            });
+            if (capturePromise) {
+                capturePromise.then(() => {
+                    if (typeof globalThis !== "undefined") {
+                        globalThis.__prototypeInteriorInvalidationFrameCaptureFrozen = true;
+                        globalThis.resumePrototypeInteriorInvalidationCaptureFreeze = function resumePrototypeInteriorInvalidationCaptureFreeze() {
+                            globalThis.__prototypeInteriorInvalidationFrameCaptureFrozen = false;
+                            globalThis.__prototypeInteriorInvalidationFrameCapture = null;
+                            requestAnimationFrame(renderFrame);
+                            return true;
+                        };
+                    }
+                });
+                return;
+            }
             requestAnimationFrame(renderFrame);
             observePrototypeStartupPerfFrame();
         }
@@ -4823,11 +5618,13 @@ jQuery(() => {
         globalThis.wizard = wizard;
     }
     if (prototypeWizardState && typeof wizard.loadJson === "function") {
-        wizard.loadJson(prototypeWizardState);
+        ensureViewportGeometryForRestore("prototype startup wizard load");
+        wizard.loadJson(cloneWizardLoadDataForRuntime(prototypeWizardState));
     }
     if (map && typeof map.updatePrototypeSectionBubble === "function") {
         map.updatePrototypeSectionBubble(wizard, { force: true });
     }
+    restoreWizardSavedMovementSupportAfterBubble(wizard);
     sizeView();
     centerViewport(wizard, 0, 0);
     
@@ -4850,15 +5647,17 @@ jQuery(() => {
     }, 100);
     SpellSystem.initWizardSpells(wizard);
     if (prototypeWizardState && typeof wizard.loadJson === "function") {
-        wizard.loadJson(prototypeWizardState);
+        ensureViewportGeometryForRestore("prototype startup wizard reload");
+        wizard.loadJson(cloneWizardLoadDataForRuntime(prototypeWizardState));
         if (map && typeof map.updatePrototypeSectionBubble === "function") {
             map.updatePrototypeSectionBubble(wizard, { force: true });
         }
+        restoreWizardSavedMovementSupportAfterBubble(wizard);
         centerViewport(wizard, 0, 0);
         wizard.updateStatusBars();
     }
-    function tryAutoLoadLocalSaveOnStartup() {
-        if (typeof getSavedGameState !== "function" || typeof loadGameState !== "function") {
+    async function tryAutoLoadLocalSaveOnStartup() {
+        if (typeof getSavedGameState !== "function") {
             return false;
         }
         const parsedSave = getSavedGameState();
@@ -4868,14 +5667,20 @@ jQuery(() => {
             }
             return false;
         }
-        const loaded = loadGameState(parsedSave.data);
-        if (loaded) {
+        const loadLocalSave = (typeof loadGameStateFromLocalStorageKeyAsync === "function")
+            ? loadGameStateFromLocalStorageKeyAsync
+            : loadGameStateFromLocalStorageKey;
+        if (typeof loadLocalSave !== "function") {
+            return false;
+        }
+        const result = await loadLocalSave(parsedSave.key);
+        if (result && result.ok) {
             setLastSaveReloadDirective({ source: "local" });
             message("Loaded local save");
             console.log("Auto-loaded game from localStorage at startup");
             return true;
         }
-        console.warn("Startup auto-load found local save but load failed");
+        console.warn("Startup auto-load found local save but load failed", result);
         return false;
     }
 
@@ -4943,31 +5748,26 @@ jQuery(() => {
         if (!directive || typeof directive.source !== "string") return false;
 
         const source = directive.source.trim().toLowerCase();
-        if (source === "local") {
-            tryAutoLoadLocalSaveOnStartup();
-            return true;
-        }
-
-        if (source === "prototype-indexeddb") {
+        if (source === "section-indexeddb") {
             const key = (typeof directive.key === "string") ? directive.key.trim() : "";
             if (!key.length || typeof loadGameStateFromIndexedDbKey !== "function") {
-                message("Prototype IndexedDB load is unavailable");
+                message("Section-world save load is unavailable");
                 return true;
             }
-            beginPrototypeStartupPerf("autoload-prototype-save", { key });
+            beginPrototypeStartupPerf("autoload-section-world-save", { key });
             const result = await loadGameStateFromIndexedDbKey(key);
             if (result && result.ok) {
-                setLastSaveReloadDirective({ source: "prototype-indexeddb", key });
-                message(`Loaded prototype save '${key}'`);
-                console.log(`Startup loaded prototype IndexedDB save '${key}'`);
+                setLastSaveReloadDirective({ source: "section-indexeddb", key });
+                message(`Loaded save '${key}'`);
+                console.log(`Startup loaded section-world IndexedDB save '${key}'`);
             } else {
                 finishPrototypeStartupPerf("startup-perf-failed", {
                     key,
                     reason: result && result.reason ? String(result.reason) : "load-failed"
                 });
                 const reason = (result && result.reason) ? String(result.reason) : "unknown";
-                message(`Failed to load prototype save '${key}' (${reason})`);
-                console.error(`Startup prototype IndexedDB load failed for '${key}':`, result);
+                message(`Failed to load save '${key}' (${reason})`);
+                console.error(`Startup section-world IndexedDB load failed for '${key}':`, result);
             }
             return true;
         }
@@ -5011,11 +5811,14 @@ jQuery(() => {
         const handledPrototypeAutoLoad = !handledDirective
             ? await tryAutoLoadPrototypeSaveOnStartup()
             : false;
-        if (!handledDirective && !handledPrototypeAutoLoad && startupConfig.skipStartupDialogs !== true) {
+        const handledLocalAutoLoad = !handledDirective && !handledPrototypeAutoLoad && startupConfig.skipStartupDialogs === true
+            ? await tryAutoLoadLocalSaveOnStartup()
+            : false;
+        if (!handledDirective && !handledPrototypeAutoLoad && !handledLocalAutoLoad && startupConfig.skipStartupDialogs !== true) {
             await ensurePrototypeStartupWorldBackground();
             await runOpeningGameDialogFlow();
         }
-        if (startupConfig.skipStartupDialogs === true && !handledDirective && !handledPrototypeAutoLoad) {
+        if (startupConfig.skipStartupDialogs === true && !handledDirective && !handledPrototypeAutoLoad && !handledLocalAutoLoad) {
             message("Loaded two-section prototype world");
         }
         ensureStartupClearanceReady();
@@ -5519,6 +6322,18 @@ jQuery(() => {
             const rect = app.view.getBoundingClientRect();
             const dragScreenX = Number.isFinite(mousePos.screenX) ? mousePos.screenX : (event.clientX - rect.left);
             const dragScreenY = Number.isFinite(mousePos.screenY) ? mousePos.screenY : (event.clientY - rect.top);
+            const worldCoors = (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
+                ? {x: mousePos.worldX, y: mousePos.worldY}
+                : screenToWorld(dragScreenX, dragScreenY);
+            if (
+                wizard.currentSpell === "buildroad" &&
+                event.shiftKey &&
+                typeof SpellSystem.insertRoadPathPointAt === "function" &&
+                SpellSystem.insertRoadPathPointAt(wizard, worldCoors.x, worldCoors.y)
+            ) {
+                suppressNextTriggerAreaToolClick = true;
+                return;
+            }
             if (
                 wizard.currentSpell === "buildroad" &&
                 typeof SpellSystem.getVisibleFloorPolygonTargetAtScreenPoint === "function" &&
@@ -5527,10 +6342,9 @@ jQuery(() => {
                 suppressNextTriggerAreaToolClick = true;
                 return;
             }
-            const worldCoors = (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
-                ? {x: mousePos.worldX, y: mousePos.worldY}
-                : screenToWorld(dragScreenX, dragScreenY);
-            SpellSystem.beginDragSpell(wizard, wizard.currentSpell, worldCoors.x, worldCoors.y);
+            if (SpellSystem.beginDragSpell(wizard, wizard.currentSpell, worldCoors.x, worldCoors.y)) {
+                suppressNextTriggerAreaToolClick = true;
+            }
             return;
         }
     });
@@ -5626,11 +6440,11 @@ jQuery(() => {
         wizard.destination = null;
         wizard.path = [];
         wizard.travelFrames = 0;
-        const isTriggerAreaCast = (wizard.currentSpell === "triggerarea");
-        const castWorldX = isTriggerAreaCast ? worldCoors.x : aim.worldX;
-        const castWorldY = isTriggerAreaCast ? worldCoors.y : aim.worldY;
+        const isExactClickCast = wizard.currentSpell === "triggerarea" || wizard.currentSpell === "terrainedit";
+        const castWorldX = isExactClickCast ? worldCoors.x : aim.worldX;
+        const castWorldY = isExactClickCast ? worldCoors.y : aim.worldY;
         // Turn and cast at exact click coordinates.
-        if (!isTriggerAreaCast) {
+        if (!isExactClickCast) {
             wizard.turnToward(aim.x, aim.y);
         }
         if (
@@ -5820,6 +6634,20 @@ jQuery(() => {
                 SpellSystem.closeTriggerAreaHelpPanel();
                 return;
             }
+        }
+
+        if (
+            event.key === "Escape" &&
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.cancelDragSpell === "function" &&
+            typeof SpellSystem.isDragSpellActive === "function" &&
+            wizard.currentSpell === "buildroad" &&
+            SpellSystem.isDragSpellActive(wizard, "buildroad")
+        ) {
+            event.preventDefault();
+            SpellSystem.cancelDragSpell(wizard, "buildroad");
+            return;
         }
 
         if (
@@ -6361,38 +7189,21 @@ jQuery(() => {
         // Save game to fixed server path with Ctrl+Shift+S
         if ((event.key === 's' || event.key === 'S') && event.ctrlKey && event.shiftKey) {
             event.preventDefault();
-            const isPrototypeSectionMode = !!(map && map._prototypeSectionState);
-            if (isPrototypeSectionMode) {
-                if (typeof savePrototypeSectionWorldToServerSlot === "function") {
-                    savePrototypeSectionWorldToServerSlot("maps").then(result => {
-                        if (result && result.ok) {
-                            message(`Saved ${result.count} section file(s) to maps/`);
-                            console.log('Prototype section-world save to maps complete:', result);
-                        } else {
-                            message('Prototype section save failed');
-                            console.error('Prototype section save to maps failed:', result);
-                        }
-                    }).catch(err => {
-                        message('Prototype section save failed');
-                        console.error('Prototype section save to maps failed:', err);
-                    });
-                } else {
-                    message('Prototype section save is unavailable');
-                }
-                return;
-            }
-            if (typeof saveGameStateToServerFile === 'function') {
-                saveGameStateToServerFile().then(result => {
+            if (typeof saveSectionWorldToServerSlot === "function") {
+                saveSectionWorldToServerSlot("maps").then(result => {
                     if (result && result.ok) {
-                        setLastSaveReloadDirective({ source: "server" });
-                        message('Saved to /assets/saves/savefile.json');
+                        message(`Saved ${result.count} section file(s) to maps/`);
+                        console.log('Section-world save to maps complete:', result);
                     } else {
-                        message('Failed to save file');
-                        console.error('Failed to save file:', result);
+                        message('Section-world save failed');
+                        console.error('Section-world save to maps failed:', result);
                     }
+                }).catch(err => {
+                    message('Section-world save failed');
+                    console.error('Section-world save to maps failed:', err);
                 });
             } else {
-                message('Server file save is unavailable');
+                message('Section-world save is unavailable');
             }
             return;
         }
@@ -6411,84 +7222,43 @@ jQuery(() => {
         // Save game with Ctrl+S
         if ((event.key === 's' || event.key === 'S') && event.ctrlKey) {
             event.preventDefault();
-            const isPrototypeSectionMode = !!(map && map._prototypeSectionState);
-            if (isPrototypeSectionMode && isPrototypeIndexedDbRoute()) {
-                const prototypeKey = (typeof getActivePrototypeSaveSlotKey === "function")
-                    ? getActivePrototypeSaveSlotKey()
-                    : "";
-                if (!prototypeKey || !prototypeKey.length) {
-                    message("Start a new game or load a save first");
-                    return;
-                }
-                if (typeof saveGameStateToIndexedDb === "function") {
-                    saveGameStateToIndexedDb(prototypeKey).then(result => {
-                        if (result && result.ok) {
-                            setLastSaveReloadDirective({ source: "prototype-indexeddb", key: prototypeKey });
-                            message(`Saved prototype game to ${prototypeKey}`);
-                            console.log('Prototype IndexedDB save complete:', result);
-                        } else {
-                            message('Prototype save failed');
-                            console.error('Prototype IndexedDB save failed:', result);
-                        }
-                    }).catch(err => {
-                        message('Prototype save failed');
-                        console.error('Prototype IndexedDB save failed:', err);
-                    });
-                } else {
-                    message('Prototype save is unavailable');
-                }
+            const saveKey = (typeof getActivePrototypeSaveSlotKey === "function")
+                ? getActivePrototypeSaveSlotKey()
+                : "";
+            if (!saveKey || !saveKey.length) {
+                message("Start a new game or load a save first");
                 return;
             }
-            if (isPrototypeSectionMode) {
-                if (typeof savePrototypeSectionWorldToServerSlot === "function") {
-                    savePrototypeSectionWorldToServerSlot("testing").then(result => {
-                        if (result && result.ok) {
-                            message(`Saved ${result.count} section file(s) to testing/`);
-                            console.log('Prototype section-world save complete:', result);
-                        } else {
-                            message('Prototype section save failed');
-                            console.error('Prototype section save failed:', result);
-                        }
-                    }).catch(err => {
-                        message('Prototype section save failed');
-                        console.error('Prototype section save failed:', err);
-                    });
-                } else {
-                    message('Prototype section save is unavailable');
-                }
+            if (typeof saveGameStateToIndexedDb !== "function") {
+                message('Section-world save is unavailable');
                 return;
             }
-            if (typeof saveGameStateToLocalStorage === "function") {
-                const result = saveGameStateToLocalStorage();
+            saveGameStateToIndexedDb(saveKey).then(result => {
                 if (result && result.ok) {
-                    setLastSaveReloadDirective({ source: 'local' });
-                    message(`Game saved to ${result.key}`);
-                    console.log(`Game saved to localStorage key '${result.key}'`);
+                    setLastSaveReloadDirective({ source: "section-indexeddb", key: saveKey });
+                    message(`Saved game to ${saveKey}`);
+                    console.log('Section-world IndexedDB save complete:', result);
                 } else {
                     message('Save failed');
-                    console.error('Game save failed:', result);
+                    console.error('Section-world IndexedDB save failed:', result);
                 }
-            }
+            }).catch(err => {
+                message('Save failed');
+                console.error('Section-world IndexedDB save failed:', err);
+            });
+            return;
         }
 
         // Load game with Ctrl+L
         if ((event.key === 'l' || event.key === 'L') && event.ctrlKey) {
             event.preventDefault();
-            if (isPrototypeIndexedDbRoute()) {
-                const prototypeKey = (typeof getActivePrototypeSaveSlotKey === "function")
-                    ? getActivePrototypeSaveSlotKey()
-                    : "";
-                if (prototypeKey && reloadWithStartupLoadDirective({ source: "prototype-indexeddb", key: prototypeKey })) {
-                    message(`Reloading and loading prototype save '${prototypeKey}'...`);
-                } else {
-                    message('No active prototype save selected');
-                }
-                return;
-            }
-            if (reloadWithStartupLoadDirective({ source: "local" })) {
-                message('Reloading and loading local save...');
+            const saveKey = (typeof getActivePrototypeSaveSlotKey === "function")
+                ? getActivePrototypeSaveSlotKey()
+                : "";
+            if (saveKey && reloadWithStartupLoadDirective({ source: "section-indexeddb", key: saveKey })) {
+                message(`Reloading and loading save '${saveKey}'...`);
             } else {
-                message('Failed to queue reload for local save load');
+                message('No active save selected');
             }
             return;
         }
@@ -6524,7 +7294,6 @@ jQuery(() => {
             }
             if (wizard && typeof SpellSystem !== "undefined" && typeof SpellSystem.cancelDragSpell === "function") {
                 SpellSystem.cancelDragSpell(wizard, "wall");
-                SpellSystem.cancelDragSpell(wizard, "buildroad");
                 SpellSystem.cancelDragSpell(wizard, "firewall");
                 SpellSystem.cancelDragSpell(wizard, "moveobject");
                 SpellSystem.cancelDragSpell(wizard, "vanish");

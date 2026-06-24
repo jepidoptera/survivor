@@ -50,6 +50,8 @@
             this.prevX = 0;
             this.prevY = 0;
             this.prevZ = 0;
+            this.width = 0;
+            this.height = 0;
             this.viewscale = 1;
             this.xyratio = 0.66;
             this.map = null;
@@ -58,6 +60,14 @@
         update({ camera, wizard, viewport, viewscale, xyratio, map, renderAlpha }) {
             this.viewscale = Number.isFinite(viewscale) ? viewscale : this.viewscale;
             this.xyratio = Number.isFinite(xyratio) ? xyratio : this.xyratio;
+            const widthSource = camera && Number.isFinite(Number(camera.width)) && Number(camera.width) > 0
+                ? Number(camera.width)
+                : (viewport && Number.isFinite(Number(viewport.width)) && Number(viewport.width) > 0 ? Number(viewport.width) : NaN);
+            const heightSource = camera && Number.isFinite(Number(camera.height)) && Number(camera.height) > 0
+                ? Number(camera.height)
+                : (viewport && Number.isFinite(Number(viewport.height)) && Number(viewport.height) > 0 ? Number(viewport.height) : NaN);
+            if (Number.isFinite(widthSource)) this.width = widthSource;
+            if (Number.isFinite(heightSource)) this.height = heightSource;
             this.map = map || null;
             const alpha = Number.isFinite(renderAlpha) ? Math.max(0, Math.min(1, renderAlpha)) : 1;
 
@@ -77,24 +87,30 @@
             if (wizard && Number.isFinite(wizard.x) && Number.isFinite(wizard.y)) {
                 const width = viewport && Number.isFinite(viewport.width) ? viewport.width : 40;
                 const height = viewport && Number.isFinite(viewport.height) ? viewport.height : 30;
-                const wizardLayer = Number.isFinite(wizard.currentLayer)
-                    ? Math.round(Number(wizard.currentLayer))
-                    : (Number.isFinite(wizard.traversalLayer) ? Math.round(Number(wizard.traversalLayer)) : 0);
-                const wizardBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
-                    ? Number(wizard.currentLayerBaseZ)
-                    : wizardLayer * 3;
+                const support = wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                    ? wizard.currentMovementSupport
+                    : null;
+                const wizardLayer = Number.isFinite(support && support.layer)
+                    ? Math.round(Number(support.layer))
+                    : (Number.isFinite(wizard.currentLayer)
+                        ? Math.round(Number(wizard.currentLayer))
+                        : (Number.isFinite(wizard.traversalLayer) ? Math.round(Number(wizard.traversalLayer)) : 0));
+                const wizardBaseZ = Number.isFinite(support && support.baseZ)
+                    ? Number(support.baseZ)
+                    : (Number.isFinite(wizard.currentLayerBaseZ)
+                        ? Number(wizard.currentLayerBaseZ)
+                        : null);
+                if (!Number.isFinite(wizardBaseZ)) {
+                    throw new Error(`camera follow for wizard layer ${wizardLayer} requires support baseZ or currentLayerBaseZ`);
+                }
                 let wizardCameraZ = wizardBaseZ;
-                if (wizard && wizard._floorFallState && wizard._floorFallState.active && Number.isFinite(wizard.z)) {
-                    wizardCameraZ = wizardBaseZ + Number(wizard.z);
-                } else if (wizard && wizard._stairSupport && typeof wizard._stairSupport === "object") {
-                    if (Number.isFinite(wizard._stairSupport.continuousLocalZ)) {
-                        wizardCameraZ = wizardBaseZ + Number(wizard._stairSupport.continuousLocalZ);
-                    } else if (Number.isFinite(wizard._stairSupport.continuousBaseZ)) {
-                        wizardCameraZ = Number(wizard._stairSupport.continuousBaseZ);
-                    } else if (Number.isFinite(wizard._stairSupport.localZ)) {
-                        wizardCameraZ = wizardBaseZ + Number(wizard._stairSupport.localZ);
-                    } else if (Number.isFinite(wizard._stairSupport.baseZ)) {
-                        wizardCameraZ = Number(wizard._stairSupport.baseZ);
+                if (support && support.type === "stair") {
+                    if (Number.isFinite(support.continuousLocalZ)) {
+                        wizardCameraZ = wizardBaseZ + Number(support.continuousLocalZ);
+                    } else if (Number.isFinite(support.continuousBaseZ)) {
+                        wizardCameraZ = Number(support.continuousBaseZ);
+                    } else if (Number.isFinite(support.localZ)) {
+                        wizardCameraZ = wizardBaseZ + Number(support.localZ);
                     }
                 }
                 this.x = wizard.x - width * 0.5;

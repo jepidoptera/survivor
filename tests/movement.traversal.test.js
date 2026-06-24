@@ -139,6 +139,7 @@ function loadTraversalClasses() {
 
     const files = [
         path.join(__dirname, "../public/assets/javascript/gameobjects/hitbox.js"),
+        path.join(__dirname, "../public/assets/javascript/shared/FloorSupport.js"),
         path.join(__dirname, "../public/assets/javascript/shared/StairTraversal.js"),
         path.join(__dirname, "../public/assets/javascript/Map.js"),
         path.join(__dirname, "../public/assets/javascript/gameobjects/Character.js"),
@@ -159,6 +160,623 @@ const { GameMap, Character, Animal, Blodia, StairTraversal } = loadTraversalClas
 function assertApproxEqual(actual, expected, epsilon = 0.000001) {
     assert.ok(Math.abs(Number(actual) - Number(expected)) <= epsilon, `${actual} should be within ${epsilon} of ${expected}`);
 }
+
+function rectCircleIntersects(rect, circle) {
+    const closestX = Math.max(rect.minX, Math.min(rect.maxX, circle.x));
+    const closestY = Math.max(rect.minY, Math.min(rect.maxY, circle.y));
+    const dx = circle.x - closestX;
+    const dy = circle.y - closestY;
+    return dx * dx + dy * dy <= circle.radius * circle.radius;
+}
+
+test("GameMap object registry includes upper-floor node-only placed objects", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 1;
+    map.height = 1;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.objects = [];
+    map.gameObjects = [];
+    map.nodes = [[{ objects: [], visibilityObjects: [] }]];
+    map.floorNodesById = new Map();
+    map.markBuildingRenderCacheDirty = () => {};
+
+    const placedObject = {
+        map,
+        type: "placedObject",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        texturePath: "/assets/images/furniture/crystal%20ball.png",
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:placed-4",
+            floorId: "floor-fragment-34",
+            level: 1
+        }
+    };
+    const floorNode = {
+        xindex: -153,
+        yindex: 206,
+        traversalLayer: 1,
+        ownerSectionKey: "building:placed-4",
+        _prototypeSectionKey: "-4,0",
+        surfaceId: "building:placed-4:surface:floor-fragment-34",
+        fragmentId: "building:placed-4:floor:floor-fragment-34",
+        objects: [placedObject],
+        visibilityObjects: []
+    };
+    map.floorNodesById.set(floorNode.fragmentId, [floorNode]);
+
+    assert.equal(map.getGameObjects({ refresh: true }).includes(placedObject), true);
+
+    map.objects.push(placedObject);
+    const refreshed = map.getGameObjects({ refresh: true });
+    assert.equal(refreshed.filter((obj) => obj === placedObject).length, 1);
+
+    const spatialIndex = map.ensureFloorObjectNodeSpatialIndex();
+    assert.equal(spatialIndex.bySectionY.has("building:placed-4"), true);
+    assert.equal(spatialIndex.bySectionY.has("-4,0"), false);
+});
+
+test("GameMap tracks canonical floor objects by floor membership", () => {
+    const map = Object.create(GameMap.prototype);
+    map.resetFloorRuntimeState();
+    map.markBuildingRenderCacheDirty = () => {};
+    const item = {
+        type: "placedObject",
+        objectType: "placedObject",
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:placed-4",
+            floorId: "floor-fragment-34",
+            level: 1
+        }
+    };
+
+    assert.deepEqual(map.registerFloorObject(item), item._floorMembership);
+    const registeredObjects = map.getObjectsForFloorMembership(item._floorMembership);
+    assert.equal(registeredObjects.length, 1);
+    assert.equal(registeredObjects[0], item);
+    assert.equal(map.unregisterFloorObject(item), true);
+    assert.equal(map.getObjectsForFloorMembership(item._floorMembership).length, 0);
+    assert.throws(
+        () => map.registerFloorObject({ type: "placedObject" }),
+        /requires canonical floor membership/
+    );
+});
+
+test("GameMap updates registered floor object membership when movement support changes", () => {
+    const map = Object.create(GameMap.prototype);
+    map.resetFloorRuntimeState();
+    map.markBuildingRenderCacheDirty = () => {};
+    map.actorUsesLocalMovementZ = () => true;
+    map.floorsById.set("floor-a-runtime", {
+        fragmentId: "floor-a-runtime",
+        surfaceId: "surface-a-runtime",
+        ownerType: "building",
+        ownerId: "building:placed-4",
+        _prototypeBuildingSourceFragmentId: "floor-a",
+        level: 1,
+        nodeBaseZ: 3,
+        renderedByBuildingCutaway: true
+    });
+    map.floorsById.set("floor-b-runtime", {
+        fragmentId: "floor-b-runtime",
+        surfaceId: "surface-b-runtime",
+        ownerType: "building",
+        ownerId: "building:placed-4",
+        _prototypeBuildingSourceFragmentId: "floor-b",
+        level: 2,
+        nodeBaseZ: 6,
+        renderedByBuildingCutaway: true
+    });
+    const item = {
+        type: "placedObject",
+        objectType: "placedObject",
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:placed-4",
+            floorId: "floor-a",
+            level: 1
+        }
+    };
+    map.registerFloorObject(item);
+
+    map.setActorCurrentMovementSupport(item, {
+        type: "floor",
+        layer: 2,
+        baseZ: 6,
+        fragmentId: "floor-b-runtime",
+        surfaceId: "surface-b-runtime",
+        ownerType: "building",
+        ownerId: "building:placed-4",
+        node: { id: "floor-b-node" }
+    });
+
+    assert.equal(map.getObjectsForFloorMembership({
+        ownerType: "building",
+        ownerId: "building:placed-4",
+        floorId: "floor-a",
+        level: 1
+    }).length, 0);
+    const movedObjects = map.getObjectsForFloorMembership({
+        ownerType: "building",
+        ownerId: "building:placed-4",
+        floorId: "floor-b",
+        level: 2
+    });
+    assert.equal(movedObjects.length, 1);
+    assert.equal(movedObjects[0], item);
+});
+
+test("GameMap stair fast-path movement is blocked by swept building wall blockers", () => {
+    const map = Object.create(GameMap.prototype);
+    map.wrapX = false;
+    map.wrapY = false;
+    const wallRect = { minX: -10, minY: -0.25, maxX: 4, maxY: 0 };
+    const queriedLayers = [];
+    map.collectPrototypeBuildingMovementBlockersInBounds = (bounds, layer) => {
+        queriedLayers.push(layer);
+        assert.ok(bounds.minX <= -3.95 && bounds.maxX >= -3.95);
+        return [{
+            gone: false,
+            groundPlaneHitbox: {
+                intersects(hitbox) {
+                    return rectCircleIntersects(wallRect, hitbox);
+                }
+            }
+        }];
+    };
+    const actor = {
+        x: -3.95,
+        y: 0.5,
+        currentLayer: 0,
+        groundRadius: 0.3
+    };
+    const support = {
+        type: "stair",
+        stair: { lowerLevel: 0, higherLevel: 1 },
+        upDown: 0.05,
+        point: { x: -3.95, y: 0.8 }
+    };
+
+    assert.equal(map.actorStairFastPathClearsBuildingBlockers(-3.95, 0.5, -3.95, 0.8, support, actor), true);
+    assert.equal(map.actorStairFastPathClearsBuildingBlockers(-3.95, 0.5, -3.95, -0.1, support, actor), false);
+    assert.deepEqual(queriedLayers, [0, 0]);
+});
+
+test("GameMap stair fast-path reports only into-wall blocker contact", () => {
+    const map = Object.create(GameMap.prototype);
+    map.wrapX = false;
+    map.wrapY = false;
+    map.collectPrototypeBuildingMovementBlockersInBounds = () => [{
+        gone: false,
+        groundPlaneHitbox: {
+            intersects(hitbox) {
+                const radius = Number(hitbox && hitbox.radius) || 0;
+                const y = Number(hitbox && hitbox.y);
+                if (!Number.isFinite(y)) return null;
+                const wallTopY = 0;
+                const overlap = wallTopY - (y - radius);
+                if (overlap <= 0) return null;
+                return { pushX: 0, pushY: overlap };
+            }
+        }
+    }];
+    const actor = {
+        x: 0,
+        y: 0.2,
+        currentLayer: 0,
+        groundRadius: 0.3
+    };
+    const support = {
+        type: "stair",
+        stair: { lowerLevel: 0, higherLevel: 1 },
+        upDown: 0.5,
+        point: { x: 1, y: 0.2 }
+    };
+
+    assert.equal(map.getActorStairFastPathBuildingBlockerCollision(0, 0.2, 1, 0.2, support, actor), null);
+    const deeperCollision = map.getActorStairFastPathBuildingBlockerCollision(0, 0.2, 1, 0.1, {
+        ...support,
+        point: { x: 1, y: 0.1 }
+    }, actor);
+    assert.ok(deeperCollision);
+    assert.equal(deeperCollision.hasNormal, true);
+    assert.ok(deeperCollision.normalY > 0);
+    assert.equal(map.actorStairFastPathClearsBuildingBlockers(0, 0.2, 1, 0.2, support, actor), true);
+    assert.equal(map.actorStairFastPathClearsBuildingBlockers(0, 0.2, 1, 0.1, {
+        ...support,
+        point: { x: 1, y: 0.1 }
+    }, actor), false);
+});
+
+test("GameMap applies smaller overlapping floor support after walking from ground into a building", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 1;
+    map.height = 1;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.shortestDeltaX = (fromX, toX) => toX - fromX;
+    map.shortestDeltaY = (fromY, toY) => toY - fromY;
+    map.nodes = [[createNode(0, 0, { x: 0, y: 0 })]];
+    map.worldToNode = () => map.nodes[0][0];
+    map.resetFloorRuntimeState();
+
+    const ground = map.registerFloorFragment({
+        fragmentId: "section:-4,0:ground",
+        surfaceId: "overworld_ground_surface",
+        ownerSectionKey: "-4,0",
+        level: 0,
+        nodeBaseZ: 0,
+        outerPolygon: [
+            { x: -50, y: -50 },
+            { x: 50, y: -50 },
+            { x: 50, y: 50 },
+            { x: -50, y: 50 }
+        ],
+        holes: []
+    });
+    const building = map.registerFloorFragment({
+        fragmentId: "building:placed-5:floor:floor-fragment-16",
+        surfaceId: "building:placed-5:surface:floor-fragment-16",
+        ownerSectionKey: "building:placed-5",
+        level: 0,
+        nodeBaseZ: 0,
+        outerPolygon: [
+            { x: -2, y: -2 },
+            { x: 2, y: -2 },
+            { x: 2, y: 2 },
+            { x: -2, y: 2 }
+        ],
+        holes: [],
+        renderedByBuildingCutaway: true
+    });
+    const actor = {
+        type: "wizard",
+        x: 0,
+        y: 0,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        fragmentId: ground.fragmentId,
+        surfaceId: ground.surfaceId,
+        currentMovementSupport: {
+            type: "floor",
+            layer: 0,
+            baseZ: 0,
+            fragmentId: ground.fragmentId,
+            surfaceId: ground.surfaceId
+        },
+        updateHitboxes() {}
+    };
+    const options = {
+        _movementSupportCache: {
+            actor,
+            lastCheckedOccupancy: {
+                x: 0,
+                y: 0,
+                result: {
+                    handled: false,
+                    allowed: false,
+                    currentSupport: {
+                        type: "floor",
+                        layer: 0,
+                        baseZ: 0,
+                        fragment: ground,
+                        fragmentId: ground.fragmentId,
+                        surfaceId: ground.surfaceId,
+                        node: map.nodes[0][0]
+                    }
+                }
+            }
+        }
+    };
+
+    const directSupport = map.getFloorSupportAtWorldPosition(0, 0, 0);
+    assert.equal(directSupport.fragmentId, building.fragmentId);
+
+    const applied = map.applyActorResolvedMovementSupport(actor, 0, 0, options);
+    assert.equal(applied.fragmentId, building.fragmentId);
+    assert.equal(actor.fragmentId, building.fragmentId);
+    assert.equal(actor.currentMovementSupport.fragmentId, building.fragmentId);
+});
+
+test("GameMap floor support exposes owner world unit and notifies scope hook", () => {
+    const map = Object.create(GameMap.prototype);
+    map.width = 1;
+    map.height = 1;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.shortestDeltaX = (fromX, toX) => toX - fromX;
+    map.shortestDeltaY = (fromY, toY) => toY - fromY;
+    map.nodes = [[createNode(0, 0, { x: 0, y: 0 })]];
+    map.worldToNode = () => map.nodes[0][0];
+    map.resetFloorRuntimeState();
+
+    const building = map.registerFloorFragment({
+        fragmentId: "building:placed-5:floor:floor-fragment-16",
+        surfaceId: "building:placed-5:surface:floor-fragment-16",
+        ownerSectionKey: "building:placed-5",
+        level: 0,
+        nodeBaseZ: 0,
+        outerPolygon: [
+            { x: -2, y: -2 },
+            { x: 2, y: -2 },
+            { x: 2, y: 2 },
+            { x: -2, y: 2 }
+        ],
+        holes: []
+    });
+    const actor = {
+        x: 0,
+        y: 0,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0
+    };
+    let scopeUpdate = null;
+    map.updatePrototypeWorldScopeForMovementSupport = (updatedActor, support, options) => {
+        scopeUpdate = { actor: updatedActor, support, options };
+        return { type: "building", id: support.ownerId };
+    };
+
+    const support = map.getFloorSupportAtWorldPosition(0, 0, 0);
+    const applied = map.setActorCurrentMovementSupport(actor, support);
+
+    assert.equal(building.ownerType, "building");
+    assert.equal(building.ownerId, "building:placed-5");
+    assert.equal(support.ownerType, "building");
+    assert.equal(support.ownerId, "building:placed-5");
+    assert.equal(applied.ownerType, "building");
+    assert.equal(applied.ownerId, "building:placed-5");
+    assert.equal(actor.currentMovementSupport.ownerType, "building");
+    assert.equal(actor.currentMovementSupport.ownerId, "building:placed-5");
+    assert.equal(scopeUpdate.actor, actor);
+    assert.equal(scopeUpdate.support.ownerId, "building:placed-5");
+});
+
+function createSupportValidationMap() {
+    const map = Object.create(GameMap.prototype);
+    map.width = 1;
+    map.height = 1;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.shortestDeltaX = (fromX, toX) => toX - fromX;
+    map.shortestDeltaY = (fromY, toY) => toY - fromY;
+    const node = createNode(0, 0, { x: 0, y: 0 });
+    node._prototypeSectionKey = "0,0";
+    map.nodes = [[node]];
+    map.worldToNode = () => map.nodes[0][0];
+    map.resetFloorRuntimeState();
+    return map;
+}
+
+test("GameMap support validation keeps a still-supported floor fragment", () => {
+    const map = createSupportValidationMap();
+    const floor = map.registerFloorFragment({
+        fragmentId: "building:placed-5:floor:upper",
+        surfaceId: "building:placed-5:surface:upper",
+        ownerSectionKey: "building:placed-5",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: -1, y: -1 },
+            { x: 1, y: -1 },
+            { x: 1, y: 1 },
+            { x: -1, y: 1 }
+        ],
+        holes: []
+    });
+    const actor = {
+        x: 0,
+        y: 0,
+        z: 3,
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        currentMovementSupport: {
+            type: "floor",
+            layer: 1,
+            baseZ: 3,
+            fragmentId: floor.fragmentId,
+            surfaceId: floor.surfaceId,
+            ownerType: floor.ownerType,
+            ownerId: floor.ownerId,
+            sectionKey: floor.ownerSectionKey
+        }
+    };
+
+    const result = map.validateActorMovementSupport(actor);
+
+    assert.equal(result.changed, false);
+    assert.equal(result.ownerChanged, false);
+    assert.equal(result.lost, false);
+    assert.equal(actor.currentMovementSupport.fragmentId, floor.fragmentId);
+});
+
+test("GameMap support validation falls to highest lower support and reports owner change", () => {
+    const map = createSupportValidationMap();
+    const lower = map.registerFloorFragment({
+        fragmentId: "section:0,0:ground",
+        surfaceId: "section:0,0:ground",
+        ownerSectionKey: "0,0",
+        level: 0,
+        nodeBaseZ: 0,
+        outerPolygon: [
+            { x: -3, y: -3 },
+            { x: 3, y: -3 },
+            { x: 3, y: 3 },
+            { x: -3, y: 3 }
+        ],
+        holes: []
+    });
+    const upper = map.registerFloorFragment({
+        fragmentId: "building:placed-5:floor:upper",
+        surfaceId: "building:placed-5:surface:upper",
+        ownerSectionKey: "building:placed-5",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: -1, y: -1 },
+            { x: 1, y: -1 },
+            { x: 1, y: 1 },
+            { x: -1, y: 1 }
+        ],
+        holes: []
+    });
+    const actor = {
+        x: 2,
+        y: 0,
+        z: 3,
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        currentMovementSupport: {
+            type: "floor",
+            layer: 1,
+            baseZ: 3,
+            fragmentId: upper.fragmentId,
+            surfaceId: upper.surfaceId,
+            ownerType: upper.ownerType,
+            ownerId: upper.ownerId,
+            sectionKey: upper.ownerSectionKey
+        }
+    };
+    let scopeSupport = null;
+    map.updatePrototypeWorldScopeForMovementSupport = (_actor, support) => {
+        scopeSupport = support;
+        return { type: "sectionWorld" };
+    };
+
+    const result = map.validateActorMovementSupport(actor);
+
+    assert.equal(result.changed, true);
+    assert.equal(result.ownerChanged, true);
+    assert.equal(result.lost, false);
+    assert.equal(result.nextSupport.fragmentId, lower.fragmentId);
+    assert.equal(result.nextSupport.ownerType, "section");
+    assert.equal(result.nextSupport.ownerId, "0,0");
+    assert.equal(actor.currentMovementSupport.fragmentId, lower.fragmentId);
+    assert.equal(actor.currentLayer, 0);
+    assert.equal(actor.z, 0);
+    assert.equal(scopeSupport.ownerType, "section");
+});
+
+test("GameMap support validation keeps placed object z local when it falls", () => {
+    const map = createSupportValidationMap();
+    const lower = map.registerFloorFragment({
+        fragmentId: "section:0,0:ground",
+        surfaceId: "section:0,0:ground",
+        ownerSectionKey: "0,0",
+        level: 0,
+        nodeBaseZ: 0,
+        outerPolygon: [
+            { x: -3, y: -3 },
+            { x: 3, y: -3 },
+            { x: 3, y: 3 },
+            { x: -3, y: 3 }
+        ],
+        holes: []
+    });
+    const upper = map.registerFloorFragment({
+        fragmentId: "building:placed-5:floor:upper",
+        surfaceId: "building:placed-5:surface:upper",
+        ownerSectionKey: "building:placed-5",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: -1, y: -1 },
+            { x: 1, y: -1 },
+            { x: 1, y: 1 },
+            { x: -1, y: 1 }
+        ],
+        holes: []
+    });
+    const object = {
+        type: "placedObject",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        x: 2,
+        y: 0,
+        z: 0,
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        currentMovementSupport: {
+            type: "floor",
+            layer: 1,
+            baseZ: 3,
+            fragmentId: upper.fragmentId,
+            surfaceId: upper.surfaceId,
+            ownerType: upper.ownerType,
+            ownerId: upper.ownerId,
+            sectionKey: upper.ownerSectionKey
+        },
+        groundRadius: 0.25
+    };
+
+    const result = map.validateActorMovementSupport(object);
+
+    assert.equal(result.changed, true);
+    assert.equal(result.nextSupport.fragmentId, lower.fragmentId);
+    assert.equal(object.currentLayerBaseZ, 0);
+    assert.equal(object.z, 0);
+});
+
+test("GameMap support validation reports void loss when no lower support exists", () => {
+    const map = createSupportValidationMap();
+    const upper = map.registerFloorFragment({
+        fragmentId: "building:placed-5:floor:upper",
+        surfaceId: "building:placed-5:surface:upper",
+        ownerSectionKey: "building:placed-5",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: -1, y: -1 },
+            { x: 1, y: -1 },
+            { x: 1, y: 1 },
+            { x: -1, y: 1 }
+        ],
+        holes: []
+    });
+    const actor = {
+        x: 2,
+        y: 0,
+        z: 3,
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        gone: false,
+        currentMovementSupport: {
+            type: "floor",
+            layer: 1,
+            baseZ: 3,
+            fragmentId: upper.fragmentId,
+            surfaceId: upper.surfaceId,
+            ownerType: upper.ownerType,
+            ownerId: upper.ownerId,
+            sectionKey: upper.ownerSectionKey
+        }
+    };
+
+    const result = map.validateActorMovementSupport(actor, {
+        allowOutdoorGround: false,
+        markLost: true
+    });
+
+    assert.equal(result.changed, false);
+    assert.equal(result.ownerChanged, false);
+    assert.equal(result.lost, true);
+    assert.equal(result.nextSupport, null);
+    assert.equal(actor.gone, true);
+    assert.equal(actor.lostToVoid, true);
+});
 
 function createNode(xindex, yindex, overrides = {}) {
     return {
@@ -1104,7 +1722,8 @@ test("GameMap trusts stored stair-local support on overlapping spiral turns", ()
     map.getStairTraversalFrame = () => stair.traversalFrame;
 
     const support = map.getActorStairSupportFromState({
-        _stairSupport: {
+        currentMovementSupport: {
+            type: "stair",
             stairId: stair.id,
             upDown: 0.99,
             leftRight: 1
@@ -1146,6 +1765,7 @@ test("Character applies pending stair exit support without recomputing stale sta
         prevX: 0,
         prevY: 0,
         movementVector: { x: 1, y: 0 },
+        currentMovementSupport: { type: "stair", stairId: "old_stair", upDown: 0.99, leftRight: 0.5 },
         _stairSupport: { stairId: "old_stair", upDown: 0.99, leftRight: 0.5 },
         _pendingVectorMovementSupport: {
             type: "floor",
@@ -1322,6 +1942,7 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
         currentLayerBaseZ: 0,
         groundRadius: 0,
         movementVector: { x: 0, y: 1 },
+        currentMovementSupport: actor.currentMovementSupport ? { ...actor.currentMovementSupport } : null,
         _stairSupport: { ...actor._stairSupport },
         updateHitboxes() {}
     });
@@ -1346,6 +1967,7 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
         frameRate: 1,
         moving: false,
         movementVector: { x: 0, y: 0.75 },
+        currentMovementSupport: actor.currentMovementSupport ? { ...actor.currentMovementSupport } : null,
         _stairSupport: { ...actor._stairSupport },
         isFrozen: () => false,
         getVectorMovementMaxSpeed: () => 1,
@@ -1687,6 +2309,172 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
     assert.equal(floorSideCharacter.moveDirection({ x: 0.4472, y: -0.8944 }, { lockMovementVector: true }), true);
     assert.ok(floorSideCharacter.x > 1.0, "stair side collision should preserve tangential motion");
     assert.ok(Math.hypot(floorSideCharacter.movementVector.x, floorSideCharacter.movementVector.y) > 0.01);
+
+    const wallBlocker = {
+        gone: false,
+        groundPlaneHitbox: {
+            intersects(hitbox) {
+                const radius = Number(hitbox && hitbox.radius) || 0;
+                const x = Number(hitbox && hitbox.x);
+                const y = Number(hitbox && hitbox.y);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+                if (x < -10 || x > 10) return null;
+                const wallY = 0.32;
+                const overlap = y + radius - wallY;
+                if (overlap <= 0) return null;
+                return { pushX: 0, pushY: -overlap };
+            }
+        }
+    };
+    const originalBuildingBlockerCollector = map.collectPrototypeBuildingMovementBlockersInBounds;
+    map.collectPrototypeBuildingMovementBlockersInBounds = () => [wallBlocker];
+    try {
+        const stairWallCharacter = Object.create(Character.prototype);
+        Object.assign(stairWallCharacter, {
+            type: "wizard",
+            map,
+            x: 1.0,
+            y: 0,
+            z: 1,
+            prevX: 1.0,
+            prevY: 0,
+            currentLayer: 0,
+            traversalLayer: 0,
+            currentLayerBaseZ: 0,
+            groundRadius: 0.3,
+            speed: 1,
+            frameRate: 1,
+            moving: false,
+            movementVector: { x: 0.2, y: 0.4 },
+            currentMovementSupport: actor.currentMovementSupport ? { ...actor.currentMovementSupport } : null,
+            _stairSupport: { ...firstStepSupport },
+            isFrozen: () => false,
+            getVectorMovementMaxSpeed: () => 1,
+            prepareVectorMovementContext() {
+                return {
+                    nearbyObjects: [wallBlocker],
+                    nearbyCharacters: [],
+                    forceTouchedObjects: new Set()
+                };
+            },
+            updateHitboxes() {}
+        });
+        assert.equal(stairWallCharacter.moveDirection({ x: 0.4472, y: 0.8944 }, { lockMovementVector: true }), true);
+        assert.ok(stairWallCharacter.x > 1.0, "stair wall collision should keep tangential stair movement");
+        assert.ok(stairWallCharacter.y < 0.05, "wall collision should slide instead of entering the wall");
+        assert.ok(Math.hypot(stairWallCharacter.movementVector.x, stairWallCharacter.movementVector.y) > 0.01);
+
+        const lowerEntryWallCharacter = Object.create(Character.prototype);
+        Object.assign(lowerEntryWallCharacter, {
+            type: "wizard",
+            map,
+            x: -0.25,
+            y: 0.02,
+            z: 0,
+            prevX: -0.25,
+            prevY: 0.02,
+            currentLayer: 0,
+            traversalLayer: 0,
+            currentLayerBaseZ: 0,
+            groundRadius: 0.3,
+            speed: 1,
+            frameRate: 1,
+            moving: false,
+            movementVector: { x: 0.5, y: 0.2 },
+            currentMovementSupport: {
+                type: "floor",
+                layer: 0,
+                baseZ: 0,
+                fragmentId: "lower",
+                surfaceId: "lower_surface",
+                node: lowerNode
+            },
+            isFrozen: () => false,
+            getVectorMovementMaxSpeed: () => 1,
+            prepareVectorMovementContext() {
+                return {
+                    nearbyObjects: [wallBlocker],
+                    nearbyCharacters: [],
+                    forceTouchedObjects: new Set()
+                };
+            },
+            updateHitboxes() {}
+        });
+        assert.equal(lowerEntryWallCharacter.moveDirection({ x: 0.928, y: 0.371 }, { lockMovementVector: true }), true);
+        assert.ok(lowerEntryWallCharacter._stairSupport, "wall-side lower entry should still enter the stair");
+        assert.equal(lowerEntryWallCharacter._stairSupport.stairId, "walkable_stairs");
+        assert.ok(
+            lowerEntryWallCharacter.y + lowerEntryWallCharacter.groundRadius <= 0.3201,
+            "entry support should not be accepted inside the wall"
+        );
+
+        const overlappingEntryWallBlocker = {
+            gone: false,
+            groundPlaneHitbox: {
+                intersects(hitbox) {
+                    const radius = Number(hitbox && hitbox.radius) || 0;
+                    const x = Number(hitbox && hitbox.x);
+                    const y = Number(hitbox && hitbox.y);
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+                    if (x < -10 || x > 10) return null;
+                    const wallY = 0.25;
+                    const overlap = y + radius - wallY;
+                    if (overlap <= 0) return null;
+                    return { pushX: 0, pushY: -overlap };
+                }
+            }
+        };
+        map.collectPrototypeBuildingMovementBlockersInBounds = () => [overlappingEntryWallBlocker];
+        const overlappedEntryCharacter = Object.create(Character.prototype);
+        Object.assign(overlappedEntryCharacter, {
+            type: "wizard",
+            map,
+            x: -0.25,
+            y: 0.02,
+            z: 0,
+            prevX: -0.25,
+            prevY: 0.02,
+            currentLayer: 0,
+            traversalLayer: 0,
+            currentLayerBaseZ: 0,
+            groundRadius: 0.3,
+            speed: 1,
+            frameRate: 1,
+            moving: false,
+            movementVector: { x: 0.5, y: 0.2 },
+            currentMovementSupport: {
+                type: "floor",
+                layer: 0,
+                baseZ: 0,
+                fragmentId: "lower",
+                surfaceId: "lower_surface",
+                node: lowerNode
+            },
+            isFrozen: () => false,
+            getVectorMovementMaxSpeed: () => 1,
+            prepareVectorMovementContext() {
+                return {
+                    nearbyObjects: [overlappingEntryWallBlocker],
+                    nearbyCharacters: [],
+                    forceTouchedObjects: new Set()
+                };
+            },
+            updateHitboxes() {}
+        });
+        assert.equal(overlappedEntryCharacter.moveDirection({ x: 0.928, y: 0.371 }, { lockMovementVector: true }), true);
+        assert.ok(overlappedEntryCharacter._stairSupport, "overlapping lower entry should slide into a valid stair support");
+        assert.ok(
+            overlappedEntryCharacter.y + overlappedEntryCharacter.groundRadius <= 0.2501,
+            "overlapping handoff support should be slid clear of the wall"
+        );
+        assert.ok(overlappedEntryCharacter.movementVector.x > 0.01, "overlapping handoff should keep tangential motion");
+        assert.ok(
+            Math.abs(overlappedEntryCharacter.movementVector.y) < 0.0001,
+            "overlapping handoff should remove retained into-wall momentum"
+        );
+    } finally {
+        map.collectPrototypeBuildingMovementBlockersInBounds = originalBuildingBlockerCollector;
+    }
 
     wideActor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(0.5, 0, wideActor).support;
     map.applyActorResolvedMovementSupport(wideActor, 0.5, 0);

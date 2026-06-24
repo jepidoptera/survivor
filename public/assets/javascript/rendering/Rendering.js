@@ -21,6 +21,7 @@
     const FLOOR_LEVEL0_BAKED_SURFACE_ENABLED = true;
     const FLOOR_LEVEL0_FORCE_BAKED_SURFACE = true;
     const FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED = true;
+    const FLOOR_LEVEL0_BAKE_ROAD_PATHS = false;
     const FLOOR_LEVEL0_CHUNK_TEXTURE_SIZE = 1024;
     const FLOOR_LEVEL0_CHUNK_TEXTURE_PX_PER_WORLD = 32;
     const FLOOR_LEVEL0_CHUNK_BUILDS_PER_FRAME = 1;
@@ -29,6 +30,7 @@
     const FLOOR_VISUAL_DEPTH_NEAR_METRIC = -128;
     const FLOOR_VISUAL_DEPTH_FAR_METRIC = 256;
     const FLOOR_VISUAL_DEPTH_BIAS_UNITS = 0.001;
+    const ROAD_PATH_DEPTH_BIAS_UNITS = FLOOR_VISUAL_DEPTH_BIAS_UNITS + 0.035;
     const FLOOR_VISUAL_HOLE_DEPTH_BIAS_UNITS = 0.02;
     const FLOOR_BELOW_CURRENT_DARKNESS_MULTIPLIER = 0.8;
     const BUILDING_CUTAWAY_GHOST_ALPHA = 0.1;
@@ -48,6 +50,8 @@
     const BUILDING_DOORWAY_TRANSITION_EXIT_SPAN_PADDING = 0.6;
     const BUILDING_INTERIOR_OVERLAY_Z = 2147483648;
     const BUILDING_INTERIOR_FOREGROUND_Z = 2147483650;
+    const BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS = 32;
+    const BUILDING_INTERIOR_LOWER_FLOOR_LIGHT_FACTOR = 0.62;
     const BUILDING_INTERIOR_WIZARD_HAT_Z = BUILDING_INTERIOR_FOREGROUND_Z + 1;
     const LOS_SHADOW_DEPTH_BIAS_UNITS = 0.004;
     const WIZARD_SHADOW_DEPTH_BIAS_UNITS = 0.02;
@@ -86,6 +90,44 @@ void main(void) {
     gl_Position = vec4(clip, nd * 2.0 - 1.0, 1.0);
     vUvs = aUvs;
     vWorldZ = uBaseZ;
+}
+`;
+    const ROAD_PATH_DEPTH_VS = `
+precision highp float;
+attribute vec2 aVertexPosition;
+attribute vec2 aUvs;
+attribute float aEdgeAlpha;
+uniform vec2 uScreenSize;
+uniform vec2 uCameraWorld;
+uniform float uCameraZ;
+uniform float uBaseZ;
+uniform float uDepthBias;
+uniform float uViewScale;
+uniform float uXyRatio;
+uniform vec2 uDepthRange;
+varying vec2 vUvs;
+varying float vWorldZ;
+varying float vEdgeAlpha;
+void main(void) {
+    float camDx = aVertexPosition.x - uCameraWorld.x;
+    float camDy = aVertexPosition.y - uCameraWorld.y;
+    float camDz = uBaseZ - uCameraZ;
+    float sx = max(1.0, uScreenSize.x);
+    float sy = max(1.0, uScreenSize.y);
+    float screenX = camDx * uViewScale;
+    float screenY = (camDy - camDz) * uViewScale * uXyRatio;
+    float depthMetric = camDy + camDz + uDepthBias;
+    float farMetric = uDepthRange.x;
+    float invSpan = max(1e-6, uDepthRange.y);
+    float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
+    vec2 clip = vec2(
+        (screenX / sx) * 2.0 - 1.0,
+        1.0 - (screenY / sy) * 2.0
+    );
+    gl_Position = vec4(clip, nd * 2.0 - 1.0, 1.0);
+    vUvs = aUvs;
+    vWorldZ = uBaseZ;
+    vEdgeAlpha = clamp(aEdgeAlpha, 0.0, 1.0);
 }
 `;
     const LOS_SHADOW_DEPTH_VS = `
@@ -136,6 +178,31 @@ uniform float uBuildingCutawayDataPass;
 uniform vec2 uBuildingCutawayDataZRange;
 void main(void) {
     vec4 outColor = texture2D(uSampler, vUvs) * uTint;
+    if (outColor.a < uAlphaCutoff) discard;
+    if (uBuildingCutawayDataPass > 0.5) {
+        float minZ = uBuildingCutawayDataZRange.x;
+        float invSpan = uBuildingCutawayDataZRange.y;
+        float encodedZ = clamp((vWorldZ - minZ) * invSpan, 0.0, 1.0);
+        gl_FragColor = vec4(encodedZ, 0.0, 0.0, 1.0);
+        return;
+    }
+    gl_FragColor = outColor;
+}
+`;
+    const ROAD_PATH_DEPTH_FS = `
+precision highp float;
+varying vec2 vUvs;
+varying float vWorldZ;
+varying float vEdgeAlpha;
+uniform sampler2D uSampler;
+uniform vec4 uTint;
+uniform float uAlphaCutoff;
+uniform float uBuildingCutawayDataPass;
+uniform vec2 uBuildingCutawayDataZRange;
+void main(void) {
+    vec4 sampleColor = texture2D(uSampler, fract(vUvs));
+    float fadeAlpha = clamp(uTint.a * vEdgeAlpha, 0.0, 1.0);
+    vec4 outColor = vec4(sampleColor.rgb * uTint.rgb * fadeAlpha, sampleColor.a * fadeAlpha);
     if (outColor.a < uAlphaCutoff) discard;
     if (uBuildingCutawayDataPass > 0.5) {
         float minZ = uBuildingCutawayDataZRange.x;
@@ -924,6 +991,39 @@ void main(void) {
         };
     }
 
+    function getWizardBodyFrameIndex(wizard, ctx = {}) {
+        if (!wizard) return 0;
+        const visualSpeed = Math.hypot(
+            Number(wizard?.movementVector?.x) || 0,
+            Number(wizard?.movementVector?.y) || 0
+        );
+        const wizardDead = !!wizard.dead;
+        const isVisuallyMoving = !wizardDead && (!!wizard.moving || visualSpeed > 0.02);
+        const rowIndex = Number.isInteger(wizard.lastDirectionRow)
+            ? ((wizard.lastDirectionRow % 12) + 12) % 12
+            : 0;
+
+        let frameIndex = rowIndex * 9;
+        if (!wizardDead && wizard.isJumping) {
+            frameIndex = rowIndex * 9 + 2;
+        } else if (isVisuallyMoving) {
+            const speedRatio = (wizard.speed > 0)
+                ? (visualSpeed / wizard.speed)
+                : 0;
+            const nowMs = Number.isFinite(ctx.renderNowMs) ? ctx.renderNowMs : performance.now();
+            const simFrameRate = Number.isFinite(ctx.frameRate) ? ctx.frameRate : 60;
+            const animSpeed = Number.isFinite(wizard.animationSpeedMultiplier)
+                ? wizard.animationSpeedMultiplier
+                : 1;
+            const simTicks = (nowMs / 1000) * simFrameRate;
+            const animFrame = Math.floor(simTicks * animSpeed * speedRatio / 2) % 8;
+            const effectiveAnimFrame = wizard.isMovingBackward ? (7 - animFrame) : animFrame;
+            frameIndex = rowIndex * 9 + 1 + effectiveAnimFrame;
+        }
+
+        return frameIndex;
+    }
+
     function buildPixiDisplayObjectCrashSignature(summary) {
         if (!summary) return "unknown";
         const tex = summary.texture || {};
@@ -1047,6 +1147,7 @@ void main(void) {
             this.buildingCutawayCompositeCache = null;
             this.buildingCutawayCompositeBillboardState = null;
             this.prototypeBuildingExteriorDepthState = null;
+            this.prototypeBuildingExteriorTransparentDepthState = null;
             this.buildingCutawayCompositePendingBaseTextures = new Set();
             this.layerTransitionSnapshotRenderTexture = null;
             this.layerTransitionSnapshotSprite = null;
@@ -1085,6 +1186,7 @@ void main(void) {
             this.groundVisibleNodeKeys = new Set();
             this.groundSpritePool = [];
             this.floorVisualContainer = null;
+            this.roadPathDepthContainer = null;
             this.floorVisualMeshByKey = new Map();
             this.floorVisualVisibleKeys = new Set();
             this.floorVisualCaveTexture = null;
@@ -1092,6 +1194,7 @@ void main(void) {
             this.floorVisualTextureConfigCache = null;
             this.floorVisualTextureConfigPromise = null;
             this.floorVisualDepthState = null;
+            this.roadPathDepthState = null;
             this.stairRenderObjectById = new Map();
             this.stairMeshById = new Map();
             this.stairDepthState = null;
@@ -1102,6 +1205,7 @@ void main(void) {
             this.level0GroundSurfaceBakeNodeCache = new Map();
             this.level0GroundSurfaceChunkCache = new Map();
             this.level0GroundSurfaceChunkTick = 0;
+            this.level0GroundCoverageVersion = 1;
             this.level0GroundSurfaceChunkBuildsThisFrame = 0;
             this.floorVisualChunkClipCache = new Map();
             this.floorVisualChunkClipTick = 0;
@@ -1109,6 +1213,7 @@ void main(void) {
             this.bakedLevel0SectionSignature = "";
             this.level0GroundSurfacePendingLoads = new Set();
             this.roadSpriteByObject = new Map();
+            this.roadPathMeshByObject = new Map();
             this.lastSectionInputItems = [];
             this.activeObjectDisplayObjects = new Set();
             this.activeDepthBillboardMeshes = new Set();
@@ -1118,6 +1223,14 @@ void main(void) {
             this.activePowerupDisplayObjects = new Set();
             this.activeProjectileDisplayObjects = new Set();
             this.scriptMessageTextObjects = new Map();
+            this.scriptScreenColorOverlay = null;
+            this.scriptScreenColorOverlayGraphics = null;
+            this.scriptScreenColorOverlayRefreshHandle = null;
+            this.wizardThoughtBubble = null;
+            this.wizardThoughtBubbleSprite = null;
+            this.wizardThoughtBubbleTexture = null;
+            this.wizardThoughtBubbleRefreshHandle = null;
+            this.wizardThoughtBubblePendingBaseTextures = new Set();
             this.pickRenderItems = [];
             this._buildingInteriorPickerFrame = null;
             this.losShadowGraphics = null;
@@ -1179,6 +1292,8 @@ void main(void) {
                 this._buildingInteriorPickerFrame.active = false;
                 this._buildingInteriorPickerFrame.buildingItems.clear();
                 this._buildingInteriorPickerFrame.allowedItems.clear();
+                this._buildingInteriorPickerFrame.triggers = [];
+                this._buildingInteriorPickerFrame.mapRef = null;
             }
         }
 
@@ -1189,8 +1304,31 @@ void main(void) {
             const opts = options && typeof options === "object" ? options : {};
             const forceInclude = !!opts.forceInclude;
             if (!forceInclude && !displayObj.visible) return;
-            if (!displayObj.parent && !(forceInclude && (item.type === "triggerArea" || item.isTriggerArea === true))) return;
+            if (!displayObj.parent && !forceInclude) return;
             this.pickRenderItems.push({ item, displayObj, forceInclude });
+        }
+
+        getGroundHitboxPickProxyForItem(item, layerRank = 1) {
+            if (!item) return null;
+            const hitbox = item.groundPlaneHitbox || item.visualHitbox || item.hitbox || null;
+            if (!hitbox) return null;
+            if (!(this.groundHitboxPickProxyByObject instanceof Map)) {
+                this.groundHitboxPickProxyByObject = new Map();
+            }
+            let proxy = this.groundHitboxPickProxyByObject.get(item) || null;
+            if (!proxy) {
+                proxy = {
+                    name: "renderingGroundHitboxPickProxy",
+                    visible: true,
+                    destroyed: false,
+                    _pickGroundHitboxProxy: true
+                };
+                this.groundHitboxPickProxyByObject.set(item, proxy);
+            }
+            proxy.visible = true;
+            proxy.destroyed = false;
+            proxy._pickLayerRank = Number.isFinite(layerRank) ? Number(layerRank) : 1;
+            return proxy;
         }
 
         getBuildingInteriorPickerFrameState() {
@@ -1198,7 +1336,9 @@ void main(void) {
                 this._buildingInteriorPickerFrame = {
                     active: false,
                     buildingItems: new Set(),
-                    allowedItems: new Set()
+                    allowedItems: new Set(),
+                    triggers: [],
+                    mapRef: null
                 };
             }
             return this._buildingInteriorPickerFrame;
@@ -1208,7 +1348,19 @@ void main(void) {
             const state = this._buildingInteriorPickerFrame;
             if (!state || state.active !== true || !item) return true;
             if (state.allowedItems.has(item)) return true;
+            if (this.shouldAllowPrototypeBuildingInteriorLiveRenderItem(item, state, state.mapRef || global.map || null)) return true;
             if (state.buildingItems.has(item)) return false;
+            const mapRef = state.mapRef || global.map || null;
+            const refs = this.collectFloorRefsForRenderItem(item, mapRef);
+            if (this.hasBuildingInteriorFloorRefs(refs)) {
+                const triggers = Array.isArray(state.triggers) ? state.triggers : [];
+                for (let i = 0; i < triggers.length; i++) {
+                    const trigger = triggers[i];
+                    if (!trigger || !trigger.building || !trigger.activeInteriorRegion) continue;
+                    if (!this.renderItemMatchesCutawayTrigger(item, trigger, mapRef)) continue;
+                    return this.renderItemMatchesActiveBuildingInteriorRegion(item, trigger, mapRef, refs);
+                }
+            }
             return true;
         }
 
@@ -1231,6 +1383,8 @@ void main(void) {
             state.active = false;
             state.buildingItems.clear();
             state.allowedItems.clear();
+            state.triggers = [];
+            state.mapRef = null;
 
             const triggers = Array.isArray(cutawayState && cutawayState.triggers) ? cutawayState.triggers : [];
             if (triggers.length === 0) return state;
@@ -1244,6 +1398,8 @@ void main(void) {
             }
 
             const mapRef = (ctx && ctx.map) || global.map || null;
+            state.triggers = triggers;
+            state.mapRef = mapRef;
             const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
             const dynamicCharacters = this.getBuildingInteriorDynamicCharacterCandidates(ctx, wizardRef);
 
@@ -1265,7 +1421,16 @@ void main(void) {
                     state.buildingItems.add(item);
                     const entryLevel = this.getBuildingInteriorEntryLayer(item, entry, activeLevel);
                     if (entryLevel === activeLevel) {
-                        state.allowedItems.add(item);
+                        const refs = Array.isArray(entry && entry.refs)
+                            ? entry.refs
+                            : this.collectFloorRefsForRenderItem(item, mapRef);
+                        if (
+                            this.isBuildingCutawayStructuralItem(item) ||
+                            !this.hasBuildingInteriorFloorRefs(refs) ||
+                            this.renderItemMatchesActiveBuildingInteriorRegion(item, trigger, mapRef, refs)
+                        ) {
+                            state.allowedItems.add(item);
+                        }
                     }
                 }
                 for (let j = 0; j < dynamicCharacters.length; j++) {
@@ -1283,9 +1448,89 @@ void main(void) {
                         state.allowedItems.add(character);
                     }
                 }
+                this.preparePrototypeBuildingInteriorBitmapPickerOverlay(ctx, cutawayState, trigger, state, mapRef);
             }
             state.active = hasActiveInterior;
             return state;
+        }
+
+        preparePrototypeBuildingInteriorBitmapPickerOverlay(ctx, cutawayState, trigger, pickerState, mapRef = null) {
+            if (!trigger || !trigger.activeInteriorRegion || !this.isPrototypeBuildingCutawayTrigger(trigger)) return 0;
+            const map = mapRef || (ctx && ctx.map) || global.map || null;
+            if (!map || typeof map.getPrototypeBuildingInteriorBitmap !== "function") return 0;
+            const placement = trigger.building && trigger.building._prototypeBuildingPlacement;
+            if (!placement || !placement.id) return 0;
+            const floorId = this.getPrototypeBuildingInteriorSourceFloorId(trigger, { required: false });
+            if (!floorId || !this.isPrototypeBuildingInteriorBitmapSourceFloorId(floorId)) return 0;
+            const cache = map.getPrototypeBuildingInteriorBitmap(placement.id, floorId);
+            if (!cache || cache.status !== "ready") return 0;
+            this.ensurePrototypeBuildingInteriorBitmapCoverageMetadata(ctx, trigger, cache);
+            if (!(cache.coveredObjectSet instanceof Set) || cache.coveredObjectSet.size === 0) return 0;
+            if (!(cache.objectRenderSignatures instanceof Map) || !(cache.objectPickerSignatures instanceof Map)) {
+                throw new Error(`prototype building interior ${cache.id || placement.id} coverage is missing object signatures`);
+            }
+            const region = trigger.activeInteriorRegion;
+            const objects = this.collectBuildingInteriorFloorRenderItems(ctx, region, map, trigger);
+            let added = 0;
+            for (let i = 0; i < objects.length; i++) {
+                const item = objects[i];
+                if (!item || item.gone || item.vanishing) continue;
+                if (!cache.coveredObjectSet.has(item)) continue;
+                if (
+                    cache.objectRenderSignatures.get(item) !== this.getFloorObjectRenderSignature(item) ||
+                    cache.objectPickerSignatures.get(item) !== this.getFloorObjectPickerSignature(item)
+                ) {
+                    continue;
+                }
+                if (pickerState && pickerState.buildingItems instanceof Set) pickerState.buildingItems.add(item);
+                if (pickerState && pickerState.allowedItems instanceof Set) pickerState.allowedItems.add(item);
+                if (this.addPrototypeBuildingInteriorBitmapPickerObject(ctx, item, trigger, cache, map)) {
+                    added += 1;
+                }
+            }
+            return added;
+        }
+
+        addPrototypeBuildingInteriorBitmapPickerObject(ctx, item, trigger, cache, mapRef = null) {
+            if (!item || item.gone || item.vanishing) return false;
+            if (!this.camera || typeof item.updateDepthBillboardMesh !== "function") return false;
+            if (typeof item.ensureSprite === "function") item.ensureSprite();
+            if (!item.pixiSprite) return false;
+            const region = trigger && trigger.activeInteriorRegion;
+            const activeLevel = this.getLayerIndexFromValue(region && region.level, this.getLayerIndexForObject(item, 0));
+            item._renderLayerIndex = activeLevel;
+            item._renderLayerFadeAlpha = 1;
+            item._renderLayerAlpha = 1;
+            item._renderLayerBaseZ = this.getLayerBaseZForObject(item, activeLevel);
+            const baseDepthBias = Number.isFinite(Number(item.renderDepthOffset)) ? Number(item.renderDepthOffset) : 0;
+            item._renderDepthBias = baseDepthBias + BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS;
+            if (
+                typeof PIXI !== "undefined" &&
+                PIXI.Sprite &&
+                this.isPlacedObjectEntity(item) &&
+                item.rotationAxis !== "spatial" &&
+                item.pixiSprite instanceof PIXI.Sprite
+            ) {
+                const lodTexturePath = this.resolvePlacedObjectLodTexturePath(item);
+                if (typeof lodTexturePath === "string" && lodTexturePath.length > 0 && lodTexturePath !== item._activeLodTexturePath) {
+                    item.pixiSprite.texture = PIXI.Texture.from(lodTexturePath);
+                    item._activeLodTexturePath = lodTexturePath;
+                }
+            }
+            this.applySpriteTransform(item);
+            const mesh = item.updateDepthBillboardMesh(ctx, this.camera, { alphaCutoff: TREE_ALPHA_CUTOFF });
+            if (!mesh) return false;
+            if (mesh.parent && typeof mesh.parent.removeChild === "function") {
+                mesh.parent.removeChild(mesh);
+            }
+            mesh.visible = false;
+            if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+                mesh.renderable = false;
+            }
+            mesh.alpha = 0;
+            item._prototypeInteriorBitmapPickerMesh = mesh;
+            this.addPickRenderItem(item, mesh, { forceInclude: true });
+            return true;
         }
 
         getLayerIndexFromValue(value, fallback = 0) {
@@ -1312,6 +1557,21 @@ void main(void) {
 
         getLayerIndexForObject(item, fallback = 0) {
             if (!item) return this.getLayerIndexFromValue(fallback, 0);
+            const membership = this.normalizeRenderFloorMembership(item._floorMembership) ||
+                this.normalizeRenderFloorMembership(item.floorMembership);
+            if (membership && membership.ownerType === "building") {
+                const floorSupportApi = global && global.FloorSupport ? global.FloorSupport : null;
+                const mapRef = global && global.map ? global.map : null;
+                if (floorSupportApi && typeof floorSupportApi.resolvePrototypeBuildingFloorFragment === "function") {
+                    const fragment = floorSupportApi.resolvePrototypeBuildingFloorFragment(mapRef, membership, { required: false });
+                    if (fragment && Number.isFinite(Number(fragment.level))) {
+                        return this.getLayerIndexFromValue(fragment.level, fallback);
+                    }
+                }
+                if (Number.isFinite(Number(membership.level))) {
+                    return this.getLayerIndexFromValue(membership.level, fallback);
+                }
+            }
             if (item.type === "wallSection" && item._prototypeBuildingPlacementId && Number.isFinite(item.traversalLayer)) {
                 return this.getLayerIndexFromValue(item.traversalLayer, fallback);
             }
@@ -1320,9 +1580,6 @@ void main(void) {
                     ? Number(FLOOR_LAYER_DEFAULT_HEIGHT_UNITS)
                     : 3;
                 return this.getLayerIndexFromValue(Math.floor((Number(item.bottomZ) / layerHeight) + 1e-6), fallback);
-            }
-            if (Number.isFinite(item._renderTraversalLayer)) {
-                return this.getLayerIndexFromValue(item._renderTraversalLayer, fallback);
             }
             if (Number.isFinite(item.traversalLayer)) {
                 return this.getLayerIndexFromValue(item.traversalLayer, fallback);
@@ -1340,7 +1597,70 @@ void main(void) {
             if (this.isCharacterRenderItem(item)) {
                 return 0;
             }
+            const support = item && item.currentMovementSupport && typeof item.currentMovementSupport === "object"
+                ? item.currentMovementSupport
+                : null;
+            if (support && Number.isFinite(Number(support.baseZ))) return Number(support.baseZ);
+            if (item && Number.isFinite(Number(item.currentLayerBaseZ))) return Number(item.currentLayerBaseZ);
+            if (item && Number.isFinite(Number(item._floorBaseZ))) return Number(item._floorBaseZ);
+            if (item && item.node && Number.isFinite(Number(item.node.baseZ))) return Number(item.node.baseZ);
+            const fragmentId = item && typeof item.fragmentId === "string" && item.fragmentId.length > 0
+                ? item.fragmentId
+                : (item && typeof item.node?.fragmentId === "string" ? item.node.fragmentId : "");
+            const mapRef = (item && item.map) || this.map || (typeof global !== "undefined" ? global.map : null);
+            const fragment = fragmentId && mapRef && mapRef.floorsById instanceof Map
+                ? mapRef.floorsById.get(fragmentId) || null
+                : null;
+            if (fragment && Number.isFinite(Number(fragment.nodeBaseZ))) return Number(fragment.nodeBaseZ);
+            if (item && Number.isFinite(Number(item._renderLayerBaseZ))) return Number(item._renderLayerBaseZ);
             return this.getLayerBaseZForLevel(this.getLayerIndexForObject(item, fallback));
+        }
+
+        getPlacementLayerBaseZForWizard(wizardRef = null, mapRef = null, placementLayer = 0, referencePoint = null) {
+            const layer = this.getLayerIndexFromValue(placementLayer, 0);
+            const wizardLayer = this.getLayerIndexFromValue(
+                wizardRef && Number.isFinite(wizardRef.currentLayer)
+                    ? wizardRef.currentLayer
+                    : (wizardRef && Number.isFinite(wizardRef.traversalLayer) ? wizardRef.traversalLayer : layer),
+                layer
+            );
+            const support = wizardRef && wizardRef.currentMovementSupport && typeof wizardRef.currentMovementSupport === "object"
+                ? wizardRef.currentMovementSupport
+                : null;
+            const supportLayer = support && Number.isFinite(Number(support.layer))
+                ? this.getLayerIndexFromValue(support.layer, wizardLayer)
+                : wizardLayer;
+            if (support && supportLayer === layer && Number.isFinite(Number(support.baseZ))) {
+                return Number(support.baseZ);
+            }
+            if (wizardLayer === layer && wizardRef && Number.isFinite(Number(wizardRef.currentLayerBaseZ))) {
+                return Number(wizardRef.currentLayerBaseZ);
+            }
+            const node = wizardRef && wizardRef.node && typeof wizardRef.node === "object" ? wizardRef.node : null;
+            const nodeLayer = node ? this.getLayerIndexForNode(node) : null;
+            if (node && nodeLayer === layer && Number.isFinite(Number(node.baseZ))) {
+                return Number(node.baseZ);
+            }
+            const pointX = Number.isFinite(referencePoint && referencePoint.x)
+                ? Number(referencePoint.x)
+                : (wizardRef && Number.isFinite(wizardRef.x) ? Number(wizardRef.x) : NaN);
+            const pointY = Number.isFinite(referencePoint && referencePoint.y)
+                ? Number(referencePoint.y)
+                : (wizardRef && Number.isFinite(wizardRef.y) ? Number(wizardRef.y) : NaN);
+            if (mapRef && mapRef.floorsById instanceof Map && Number.isFinite(pointX) && Number.isFinite(pointY)) {
+                let best = null;
+                for (const fragment of mapRef.floorsById.values()) {
+                    if (!fragment) continue;
+                    const fragmentLevel = this.getLayerIndexFromValue(fragment.level, 0);
+                    if (fragmentLevel !== layer) continue;
+                    if (!Number.isFinite(Number(fragment.nodeBaseZ))) continue;
+                    if (!isPointInsideFloorVisibilityFragment(fragment, pointX, pointY)) continue;
+                    const baseZ = Number(fragment.nodeBaseZ);
+                    if (!best || baseZ > best.baseZ) best = { baseZ };
+                }
+                if (best) return best.baseZ;
+            }
+            return this.getLayerBaseZForLevel(layer);
         }
 
         getRendererScreenSize(ctx = null) {
@@ -1572,45 +1892,38 @@ void main(void) {
             if (visualLayer !== physicalLayer) {
                 return this.getLayerBaseZForLevel(visualLayer);
             }
-            return Number.isFinite(wizard && wizard.currentLayerBaseZ)
+            const support = wizard && wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                ? wizard.currentMovementSupport
+                : null;
+            return Number.isFinite(support && support.baseZ)
+                ? Number(support.baseZ)
+                : Number.isFinite(wizard && wizard.currentLayerBaseZ)
                 ? Number(wizard.currentLayerBaseZ)
                 : this.getLayerBaseZForLevel(visualLayer);
         }
 
         getWizardContinuousWorldZ(wizardRef = null, fallbackBaseZ = 0) {
             const wizard = wizardRef || global.wizard || null;
-            const baseZ = Number.isFinite(wizard && wizard.currentLayerBaseZ)
-                ? Number(wizard.currentLayerBaseZ)
-                : (Number.isFinite(fallbackBaseZ) ? Number(fallbackBaseZ) : 0);
-            const fallState = wizard && wizard._floorFallState;
-            if (fallState && fallState.active && Number.isFinite(fallState.targetLayer)) {
-                const fromLayer = this.getLayerIndexFromValue(fallState.fromLayer, NaN);
-                const toLayer = this.getLayerIndexFromValue(fallState.targetLayer, NaN);
-                if (Number.isFinite(fromLayer) && Number.isFinite(toLayer) && toLayer < fromLayer) {
-                    return this.getLayerBaseZForLevel(toLayer);
-                }
-                if (Number.isFinite(Number(wizard.z))) {
-                    return baseZ + Number(wizard.z);
-                }
-            }
-            const stairSupport = wizard && wizard._stairSupport && typeof wizard._stairSupport === "object"
-                ? wizard._stairSupport
+            const support = wizard && wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                ? wizard.currentMovementSupport
                 : null;
-            if (stairSupport) {
-                if (Number.isFinite(Number(stairSupport.continuousBaseZ))) {
-                    return Number(stairSupport.continuousBaseZ);
+            const baseZ = Number.isFinite(support && support.baseZ)
+                ? Number(support.baseZ)
+                : (Number.isFinite(wizard && wizard.currentLayerBaseZ)
+                    ? Number(wizard.currentLayerBaseZ)
+                    : (Number.isFinite(fallbackBaseZ) ? Number(fallbackBaseZ) : 0));
+            if (support && support.type === "stair") {
+                if (Number.isFinite(Number(support.continuousBaseZ))) {
+                    return Number(support.continuousBaseZ);
                 }
-                if (Number.isFinite(Number(stairSupport.continuousLocalZ))) {
-                    return baseZ + Number(stairSupport.continuousLocalZ);
+                if (Number.isFinite(Number(support.continuousLocalZ))) {
+                    return baseZ + Number(support.continuousLocalZ);
                 }
-                if (Number.isFinite(Number(stairSupport.baseZ))) {
-                    return Number(stairSupport.baseZ);
-                }
-                if (Number.isFinite(Number(stairSupport.localZ))) {
-                    return baseZ + Number(stairSupport.localZ);
+                if (Number.isFinite(Number(support.localZ))) {
+                    return baseZ + Number(support.localZ);
                 }
             }
-            return baseZ;
+            return baseZ + (Number.isFinite(Number(wizard && wizard.z)) ? Number(wizard.z) : 0);
         }
 
         projectWorldPointToCutawayPlane(x, y, z = 0) {
@@ -1821,6 +2134,120 @@ void main(void) {
             return true;
         }
 
+        renderItemRefsMatchBuildingInteriorRegion(refs, region) {
+            if (!region || !Array.isArray(refs) || refs.length === 0) return false;
+            const regionFragmentId = typeof region.fragmentId === "string" ? region.fragmentId : "";
+            const regionSurfaceId = typeof region.surfaceId === "string" ? region.surfaceId : "";
+            for (let i = 0; i < refs.length; i++) {
+                const ref = refs[i];
+                if (!ref) continue;
+                if (ref.fragmentId && regionFragmentId) {
+                    if (regionFragmentId === ref.fragmentId) return true;
+                    continue;
+                }
+                if (regionSurfaceId && ref.surfaceId && regionSurfaceId === ref.surfaceId) return true;
+            }
+            return false;
+        }
+
+        normalizeRenderFloorMembership(membership) {
+            if (!membership || typeof membership !== "object") return null;
+            const ownerType = typeof membership.ownerType === "string" ? membership.ownerType : "";
+            const ownerId = typeof membership.ownerId === "string" ? membership.ownerId : "";
+            const floorId = typeof membership.floorId === "string" && membership.floorId.length > 0
+                ? membership.floorId
+                : (typeof membership.sourceFloorId === "string" ? membership.sourceFloorId : "");
+            if (!ownerType || !ownerId || !floorId) return null;
+            const normalized = { ownerType, ownerId, floorId };
+            if (Number.isFinite(Number(membership.level))) {
+                normalized.level = this.getLayerIndexFromValue(membership.level, 0);
+            }
+            return normalized;
+        }
+
+        getRenderItemFloorMembership(item, mapRef = null, refs = null) {
+            if (!item) return null;
+            const floorSupportApi = global && global.FloorSupport ? global.FloorSupport : null;
+            if (floorSupportApi && typeof floorSupportApi.getEntityFloorMembership === "function") {
+                const membership = floorSupportApi.getEntityFloorMembership(item, { map: mapRef || global.map || null });
+                if (membership) return this.normalizeRenderFloorMembership(membership);
+            }
+            return this.normalizeRenderFloorMembership(item._floorMembership) ||
+                this.normalizeRenderFloorMembership(item.floorMembership);
+        }
+
+        getBuildingInteriorRegionFloorMembership(region, trigger = null) {
+            if (!region) return null;
+            const floorSupportApi = global && global.FloorSupport ? global.FloorSupport : null;
+            const triggerBuildingId = typeof (trigger && trigger.buildingId) === "string" && trigger.buildingId.length > 0
+                ? trigger.buildingId
+                : (typeof (trigger && trigger.building && trigger.building.buildingId) === "string" && trigger.building.buildingId.length > 0
+                    ? trigger.building.buildingId
+                    : (typeof (trigger && trigger.building && trigger.building._prototypeBuildingPlacement && trigger.building._prototypeBuildingPlacement.id) === "string"
+                        ? trigger.building._prototypeBuildingPlacement.id
+                        : ""));
+            const fragment = region.fragment && typeof region.fragment === "object" ? region.fragment : null;
+            const ownerId = typeof (fragment && fragment.ownerId) === "string" && fragment.ownerId.length > 0
+                ? fragment.ownerId
+                : triggerBuildingId;
+            const ownerType = typeof (fragment && fragment.ownerType) === "string" && fragment.ownerType.length > 0
+                ? fragment.ownerType
+                : (ownerId && ownerId.startsWith("building:") ? "building" : "");
+            if (floorSupportApi && typeof floorSupportApi.createFloorMembership === "function") {
+                return this.normalizeRenderFloorMembership(floorSupportApi.createFloorMembership({
+                    fragment,
+                    ownerType,
+                    ownerId,
+                    fragmentId: typeof region.fragmentId === "string" ? region.fragmentId : "",
+                    surfaceId: typeof region.surfaceId === "string" ? region.surfaceId : "",
+                    floorId: typeof region._prototypeBuildingSourceFragmentId === "string" ? region._prototypeBuildingSourceFragmentId : ""
+                }));
+            }
+            const floorId = typeof (fragment && fragment._prototypeBuildingSourceFragmentId) === "string" && fragment._prototypeBuildingSourceFragmentId.length > 0
+                ? fragment._prototypeBuildingSourceFragmentId
+                : (typeof region._prototypeBuildingSourceFragmentId === "string" ? region._prototypeBuildingSourceFragmentId : "");
+            return this.normalizeRenderFloorMembership({ ownerType, ownerId, floorId });
+        }
+
+        floorMembershipsMatchForRender(itemMembership, regionMembership) {
+            const itemFloor = this.normalizeRenderFloorMembership(itemMembership);
+            const regionFloor = this.normalizeRenderFloorMembership(regionMembership);
+            if (!itemFloor || !regionFloor) return false;
+            if (itemFloor.ownerType !== regionFloor.ownerType) return false;
+            if (itemFloor.ownerId !== regionFloor.ownerId) return false;
+            if (itemFloor.floorId !== regionFloor.floorId) return false;
+            return true;
+        }
+
+        renderItemMembershipMatchesCutawayTrigger(item, trigger, mapRef = null, refs = null) {
+            const membership = this.getRenderItemFloorMembership(item, mapRef || global.map || null, refs);
+            if (!membership || membership.ownerType !== "building") return false;
+            const triggerBuildingId = typeof (trigger && trigger.buildingId) === "string" && trigger.buildingId.length > 0
+                ? trigger.buildingId
+                : (typeof (trigger && trigger.building && trigger.building.buildingId) === "string" && trigger.building.buildingId.length > 0
+                    ? trigger.building.buildingId
+                    : (typeof (trigger && trigger.building && trigger.building._prototypeBuildingPlacement && trigger.building._prototypeBuildingPlacement.id) === "string"
+                        ? trigger.building._prototypeBuildingPlacement.id
+                        : ""));
+            return !!triggerBuildingId && membership.ownerId === triggerBuildingId;
+        }
+
+        renderItemMembershipMatchesBuildingInteriorRegion(item, trigger, region, mapRef = null, refs = null) {
+            return this.floorMembershipsMatchForRender(
+                this.getRenderItemFloorMembership(item, mapRef || global.map || null, refs),
+                this.getBuildingInteriorRegionFloorMembership(region, trigger)
+            );
+        }
+
+        hasBuildingInteriorFloorRefs(refs) {
+            if (!Array.isArray(refs)) return false;
+            for (let i = 0; i < refs.length; i++) {
+                const ref = refs[i];
+                if (ref && (ref.fragmentId || ref.surfaceId)) return true;
+            }
+            return false;
+        }
+
         isBuildingInteriorOverlaySurfaceItem(item) {
             if (!item) return false;
             const type = typeof item.type === "string" ? item.type.trim().toLowerCase() : "";
@@ -1861,24 +2288,13 @@ void main(void) {
             if (regions.length === 0) return;
             const itemLevel = this.getLayerIndexFromValue(entry.level, 0);
             const refList = Array.isArray(refs) ? refs : [];
+            const hasFloorRefs = this.hasBuildingInteriorFloorRefs(refList);
             for (let i = 0; i < regions.length; i++) {
                 const region = regions[i];
                 if (!region || this.getLayerIndexFromValue(region.level, 0) !== itemLevel) continue;
-                let matches = false;
-                if (region.kind === "floorFragment") {
-                    for (let r = 0; r < refList.length; r++) {
-                        const ref = refList[r];
-                        if (!ref) continue;
-                        if (region.fragmentId && ref.fragmentId && region.fragmentId === ref.fragmentId) {
-                            matches = true;
-                            break;
-                        }
-                        if (region.surfaceId && ref.surfaceId && region.surfaceId === ref.surfaceId) {
-                            matches = true;
-                            break;
-                        }
-                    }
-                }
+                let matches = this.renderItemRefsMatchBuildingInteriorRegion(refList, region);
+                if (!matches && hasFloorRefs && region.kind === "floorFragment") continue;
+                if (!matches && hasFloorRefs && region.kind !== "floorFragment" && item.type !== "wallSection") continue;
                 if (!matches && region.polygon) {
                     matches = this.renderItemSamplesMatchPolygons(item, [region.polygon], map);
                 }
@@ -1886,15 +2302,20 @@ void main(void) {
             }
         }
 
-        renderItemMatchesBuildingInteriorRegion(cache, item, level, map) {
+        renderItemMatchesBuildingInteriorRegion(cache, item, level, map, refs = null) {
             if (!cache || !item || item.type === "roof") return false;
             if (this.isBuildingInteriorOverlaySurfaceItem(item)) return false;
             const regions = Array.isArray(cache.interiorRegions) ? cache.interiorRegions : [];
             if (regions.length === 0) return false;
             const itemLevel = this.getLayerIndexFromValue(level, 0);
+            const refList = Array.isArray(refs) ? refs : this.collectFloorRefsForRenderItem(item, map);
+            const hasFloorRefs = this.hasBuildingInteriorFloorRefs(refList);
             for (let i = 0; i < regions.length; i++) {
                 const region = regions[i];
                 if (!region || this.getLayerIndexFromValue(region.level, 0) !== itemLevel) continue;
+                if (this.renderItemRefsMatchBuildingInteriorRegion(refList, region)) return true;
+                if (hasFloorRefs && region.kind === "floorFragment") continue;
+                if (hasFloorRefs && region.kind !== "floorFragment" && item.type !== "wallSection") continue;
                 if (this.renderItemSamplesMatchPolygons(item, [region.polygon], map)) return true;
             }
             return false;
@@ -2249,6 +2670,19 @@ void main(void) {
             return fragmentIds;
         }
 
+        getBuildingInteriorActiveFloorFragmentIds(ctx = null, cutawayState = null) {
+            const state = cutawayState || (ctx && ctx._renderingLayerCutawayState) || this.getLayerCutawayState(ctx);
+            const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
+            const fragmentIds = new Set();
+            for (let i = 0; i < triggers.length; i++) {
+                const trigger = triggers[i];
+                if (!trigger || !trigger.activeInteriorRegion) continue;
+                const fragmentId = this.getBuildingInteriorRegionFragmentId(trigger.activeInteriorRegion);
+                if (fragmentId) fragmentIds.add(fragmentId);
+            }
+            return fragmentIds;
+        }
+
         getBuildingInteriorRegionFragmentId(region) {
             if (!region) return "";
             if (typeof region.fragmentId === "string" && region.fragmentId.length > 0) return region.fragmentId;
@@ -2271,10 +2705,14 @@ void main(void) {
         }
 
         buildBuildingInteriorRenderPlan(ctx, cutawayState) {
+            const diagnosticsEnabled = !!this.currentFrameMetrics;
+            const planStartMs = diagnosticsEnabled ? performance.now() : 0;
             if (!this._buildingInteriorRenderPlan) {
                 this._buildingInteriorRenderPlan = {
                     active: false,
                     items: new Set(),
+                    depthBumpedItems: new Set(),
+                    depthBumpRegions: [],
                     wallTopFaceOnly: new Map(),
                     doorInteriorSide: new Map()
                 };
@@ -2282,15 +2720,33 @@ void main(void) {
             const plan = this._buildingInteriorRenderPlan;
             plan.active = false;
             plan.items.clear();
+            if (!(plan.depthBumpedItems instanceof Set)) plan.depthBumpedItems = new Set();
+            plan.depthBumpedItems.clear();
+            if (!Array.isArray(plan.depthBumpRegions)) plan.depthBumpRegions = [];
+            plan.depthBumpRegions.length = 0;
             plan.wallTopFaceOnly.clear();
             if (!(plan.doorInteriorSide instanceof Map)) plan.doorInteriorSide = new Map();
             plan.doorInteriorSide.clear();
+            const finishPlan = () => {
+                if (diagnosticsEnabled) {
+                    const previousMs = Number(this.currentFrameMetrics.buildingInteriorPlanMs) || 0;
+                    this.setFrameMetric("buildingInteriorPlanMs", previousMs + (performance.now() - planStartMs));
+                    this.setFrameMetric("buildingInteriorPlanItems", plan.items instanceof Set ? plan.items.size : 0);
+                }
+                return plan;
+            };
             const triggers = Array.isArray(cutawayState && cutawayState.triggers) ? cutawayState.triggers : [];
-            if (triggers.length === 0) return plan;
+            if (triggers.length === 0) return finishPlan();
             const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
             const presentationWizardRef = this.getDoorwayTransitionPresentationWizard(cutawayState) || wizardRef;
             const mapRef = (ctx && ctx.map) || global.map || null;
             const dynamicCharacters = this.getBuildingInteriorDynamicCharacterCandidates(ctx, wizardRef);
+            const addDepthBumpedItem = (item) => {
+                if (item) plan.depthBumpedItems.add(item);
+            };
+            const addDepthBumpRegion = (region) => {
+                if (region && region.polygon) plan.depthBumpRegions.push(region);
+            };
             for (let i = 0; i < triggers.length; i++) {
                 const trigger = triggers[i];
                 const activeRegion = trigger && trigger.activeInteriorRegion;
@@ -2311,16 +2767,36 @@ void main(void) {
                     continue;
                 }
                 const activeRegionId = typeof activeRegion.id === "string" ? activeRegion.id : "";
-                const prototypeInteriorBitmapReady = this.isPrototypeBuildingInteriorBitmapReady(ctx, trigger);
+                addDepthBumpRegion(activeRegion);
+                const prototypeInteriorBitmapPresentableCache = this.getPresentablePrototypeBuildingInteriorBitmapCache(ctx, trigger);
+                const prototypeInteriorBitmapReady = !!prototypeInteriorBitmapPresentableCache ||
+                    this.isPrototypeBuildingInteriorBitmapReady(ctx, trigger);
                 if (prototypeInteriorBitmapReady) {
+                    const hasExplicitCoverage = this.prototypeBuildingInteriorBitmapHasExplicitCoverage(prototypeInteriorBitmapPresentableCache);
                     const regions = this.getBuildingInteriorOverlayRegionsForTrigger(trigger);
                     for (let regionIndex = 0; regionIndex < regions.length; regionIndex++) {
                         const region = regions[regionIndex];
                         if (!region) continue;
+                        const isActiveRegion = region === activeRegion || (
+                            activeRegionId &&
+                            typeof region.id === "string" &&
+                            region.id === activeRegionId
+                        );
                         for (let j = 0; j < dynamicCharacters.length; j++) {
                             const character = dynamicCharacters[j];
                             if (this.shouldRenderBuildingInteriorCharacter(character, region, ctx, wizardRef, mapRef)) {
                                 plan.items.add(character);
+                                if (isActiveRegion) addDepthBumpedItem(character);
+                            }
+                        }
+                        if (hasExplicitCoverage) {
+                            const floorRenderItems = this.collectBuildingInteriorFloorRenderItems(ctx, region, mapRef, trigger);
+                            for (let j = 0; j < floorRenderItems.length; j++) {
+                                const item = floorRenderItems[j];
+                                if (!item) continue;
+                                if (this.isPrototypeBuildingInteriorBitmapObjectCovered(item, cutawayState, mapRef, ctx)) continue;
+                                plan.items.add(item);
+                                if (isActiveRegion) addDepthBumpedItem(item);
                             }
                         }
                     }
@@ -2331,6 +2807,7 @@ void main(void) {
                     const item = entry && entry.item;
                     if (this.shouldRenderBuildingInteriorDoorItem(item, activeRegion, entry, ctx, wizardRef)) {
                         plan.items.add(item);
+                        addDepthBumpedItem(item);
                         const interiorSide = this.getBuildingInteriorMountedDoorSide(
                             item,
                             activeRegion,
@@ -2356,6 +2833,7 @@ void main(void) {
                         if (!item || item.gone || item.vanishing) continue;
                         if (this.shouldRenderBuildingInteriorDoorItem(item, region, entry, ctx, wizardRef)) {
                             plan.items.add(item);
+                            if (isActiveRegion) addDepthBumpedItem(item);
                             if (isActiveRegion) {
                                 const interiorSide = this.getBuildingInteriorMountedDoorSide(
                                     item,
@@ -2368,6 +2846,7 @@ void main(void) {
                         } else if (item.type === "wallSection") {
                             if (!this.shouldRenderBuildingInteriorOverlayWall(item, region, trigger, ctx, wizardRef)) continue;
                             plan.items.add(item);
+                            if (isActiveRegion) addDepthBumpedItem(item);
                             plan.wallTopFaceOnly.set(
                                 item,
                                 isActiveRegion ? this.shouldFlattenBuildingInteriorOverlayWall(item, ctx, presentationWizardRef) : false
@@ -2380,25 +2859,34 @@ void main(void) {
                                 continue;
                             }
                             plan.items.add(item);
+                            if (isActiveRegion) addDepthBumpedItem(item);
                         }
                     }
                     for (let j = 0; j < dynamicCharacters.length; j++) {
                         const character = dynamicCharacters[j];
                         if (this.shouldRenderBuildingInteriorCharacter(character, region, ctx, wizardRef, mapRef)) {
                             plan.items.add(character);
+                            if (isActiveRegion) addDepthBumpedItem(character);
                         }
                     }
-                    const floorRenderItems = this.collectBuildingInteriorFloorRenderItems(ctx, region, mapRef);
+                    const floorRenderItems = this.collectBuildingInteriorFloorRenderItems(ctx, region, mapRef, trigger);
                     for (let j = 0; j < floorRenderItems.length; j++) {
-                        if (floorRenderItems[j]) plan.items.add(floorRenderItems[j]);
+                        if (floorRenderItems[j]) {
+                            plan.items.add(floorRenderItems[j]);
+                            if (isActiveRegion) addDepthBumpedItem(floorRenderItems[j]);
+                        }
                     }
                 }
             }
             plan.active = plan.items.size > 0;
-            return plan;
+            return finishPlan();
         }
 
         isPrototypeBuildingInteriorBitmapReady(ctx, trigger) {
+            return !!this.getReadyPrototypeBuildingInteriorBitmapCache(ctx, trigger);
+        }
+
+        getPresentablePrototypeBuildingInteriorBitmapCache(ctx, trigger) {
             if (!this.isPrototypeBuildingCutawayTrigger(trigger) || !trigger.activeInteriorRegion) return false;
             const mapRef = (ctx && ctx.map) || global.map || null;
             if (!mapRef || typeof mapRef.getPrototypeBuildingInteriorBitmap !== "function") return false;
@@ -2413,7 +2901,24 @@ void main(void) {
             if (!cache.texture) {
                 throw new Error(`prototype building interior ${cache.id || placement.id} ready cache is missing its texture`);
             }
-            return true;
+            return cache;
+        }
+
+        getReadyPrototypeBuildingInteriorBitmapCache(ctx, trigger) {
+            const cache = this.getPresentablePrototypeBuildingInteriorBitmapCache(ctx, trigger);
+            if (!cache || cache.stale === true) return false;
+            return cache;
+        }
+
+        prototypeBuildingInteriorBitmapHasExplicitCoverage(cache) {
+            return !!(
+                cache &&
+                (
+                    Array.isArray(cache.coveredObjects) ||
+                    Array.isArray(cache.coveredObjectEntries) ||
+                    cache.coveredObjectSet instanceof Set
+                )
+            );
         }
 
         getCompiledBuildingRenderCache(ctx, map, building) {
@@ -2426,10 +2931,15 @@ void main(void) {
                 Array.isArray(building.renderCache.occlusionPolygons)
             ) {
                 this.incrementFrameMetric("buildingRenderCacheHits", 1);
+                this.recordMoveObjectPerf("rendering.buildingRenderCache.hit", {
+                    buildingId: building.buildingId || "",
+                    items: Array.isArray(building.renderCache.renderItems) ? building.renderCache.renderItems.length : null
+                });
                 return building.renderCache;
             }
             this.incrementFrameMetric("buildingRenderCacheMisses", 1);
-            const buildStartMs = diagnosticsEnabled ? performance.now() : 0;
+            const movePerfEnabled = !!(typeof globalThis !== "undefined" && globalThis.__moveObjectPerf);
+            const buildStartMs = (diagnosticsEnabled || movePerfEnabled) ? performance.now() : 0;
 
             const fragments = this.getBuildingFragments(map, building);
             const roofs = this.getRoofsForBuilding(ctx, map, building);
@@ -2544,6 +3054,15 @@ void main(void) {
             this.incrementFrameMetric("buildingRenderCacheGroundWalls", cache.groundProjectionWalls.length);
             if (diagnosticsEnabled) {
                 this.incrementFrameMetric("buildingRenderCacheBuildMs", performance.now() - buildStartMs);
+            }
+            if (movePerfEnabled) {
+                this.recordMoveObjectPerf("rendering.buildingRenderCache.build", {
+                    buildingId: building.buildingId || "",
+                    candidates: candidates.length,
+                    items: cache.renderItems.length,
+                    walls: cache.wallSections.length,
+                    manifestEntries: manifestEntries.length
+                }, performance.now() - buildStartMs);
             }
             return cache;
         }
@@ -3190,14 +3709,18 @@ void main(void) {
             const y = Number(resolvedPosition && resolvedPosition.y);
             if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
             const baseZ = Number.isFinite(wizardBaseZ) ? Number(wizardBaseZ) : 0;
-            const stairSupport = wizard && wizard._stairSupport && typeof wizard._stairSupport === "object"
-                ? wizard._stairSupport
+            const support = wizard && wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                ? wizard.currentMovementSupport
                 : null;
             let shadowLocalZ = 0;
-            if (stairSupport && Number.isFinite(Number(stairSupport.continuousLocalZ))) {
-                shadowLocalZ = Number(stairSupport.continuousLocalZ);
-            } else if (stairSupport && Number.isFinite(Number(stairSupport.localZ))) {
-                shadowLocalZ = Number(stairSupport.localZ);
+            if (wizard && wizard._floorFallState && wizard._floorFallState.active) {
+                shadowLocalZ = 0;
+            } else if (support && support.type === "stair" && Number.isFinite(Number(support.continuousLocalZ))) {
+                shadowLocalZ = Number(support.continuousLocalZ);
+            } else if (support && support.type === "stair" && Number.isFinite(Number(support.localZ))) {
+                shadowLocalZ = Number(support.localZ);
+            } else if (wizard && wizard.isJumping) {
+                shadowLocalZ = 0;
             } else {
                 const interpolatedZ = Number.isFinite(Number(resolvedPosition && resolvedPosition.z))
                     ? Number(resolvedPosition.z)
@@ -3214,15 +3737,28 @@ void main(void) {
             if (ctx && ctx._renderingLayerCutawayState) return ctx._renderingLayerCutawayState;
             const diagnosticsEnabled = !!this.currentFrameMetrics;
             const cutawayStartMs = diagnosticsEnabled ? performance.now() : 0;
+            let cutawayHeldDuringBubble = 0;
             let buildingsScanned = 0;
             let buildingBoundsTests = 0;
             let buildingPointTests = 0;
             let buildingTriggers = 0;
             let floorFallbackScanned = 0;
+            let bubbleShiftActive = false;
+            let cutawayRefreshDuringBubble = false;
             const finish = (state) => {
                 if (ctx && typeof ctx === "object") ctx._renderingLayerCutawayState = state;
+                if (
+                    (!bubbleShiftActive || cutawayRefreshDuringBubble) &&
+                    state &&
+                    !state._doorwayPresentationTransition &&
+                    !this.cutawayStateHasActiveInteriorRegion(state)
+                ) {
+                    const stableState = this.cloneBuildingDoorwayStablePresentationState(state);
+                    if (stableState) this._prototypeBubbleStableCutawayState = stableState;
+                }
                 if (diagnosticsEnabled) {
                     this.setFrameMetric("layerCutawayStateMs", performance.now() - cutawayStartMs);
+                    this.setFrameMetric("layerCutawayHeldDuringBubble", cutawayHeldDuringBubble);
                     this.setFrameMetric("layerCutawayBuildingsScanned", buildingsScanned);
                     this.setFrameMetric("layerCutawayBuildingBoundsTests", buildingBoundsTests);
                     this.setFrameMetric("layerCutawayBuildingPointTests", buildingPointTests);
@@ -3233,6 +3769,16 @@ void main(void) {
             };
             const map = ctx && ctx.map ? ctx.map : global.map || null;
             const wizard = (ctx && ctx.wizard) || global.wizard || null;
+            const bubbleShiftSession = (
+                map &&
+                map._prototypeBubbleShiftSession &&
+                map._prototypeBubbleShiftSession.completed !== true
+            ) ? map._prototypeBubbleShiftSession : null;
+            bubbleShiftActive = !!bubbleShiftSession;
+            cutawayRefreshDuringBubble = !!(
+                bubbleShiftSession &&
+                bubbleShiftSession.phase === "refresh"
+            );
             if (!(map && map.floorsById instanceof Map) || !wizard) {
                 this.buildingDoorwayPresentationTransition = null;
                 this.clearBuildingInteriorFloorTransitionState();
@@ -3252,6 +3798,35 @@ void main(void) {
             const nowMs = Number.isFinite(ctx && ctx.renderNowMs)
                 ? Number(ctx.renderNowMs)
                 : Date.now();
+
+            const canHoldCutawayDuringBubble = !!(
+                bubbleShiftActive &&
+                !cutawayRefreshDuringBubble &&
+                wizardLayer <= 0 &&
+                !this.buildingDoorwayPresentationTransition
+            );
+            if (canHoldCutawayDuringBubble) {
+                const stableState = this._prototypeBubbleStableCutawayState || null;
+                let heldState = stableState && !this.cutawayStateHasActiveInteriorRegion(stableState)
+                    ? this.cloneBuildingDoorwayStablePresentationState(stableState)
+                    : null;
+                if (!heldState) {
+                    heldState = {
+                        active: false,
+                        wizardLayer,
+                        wizardBaseZ: wizardWorldZ,
+                        wizardX: x,
+                        wizardY: y,
+                        triggers: [],
+                        hiddenFromLevel: Infinity,
+                        hiddenSurfaceIds: new Set(),
+                        hiddenFragmentIds: new Set()
+                    };
+                }
+                heldState._heldDuringPrototypeBubbleShift = true;
+                cutawayHeldDuringBubble = 1;
+                return finish(heldState);
+            }
 
             if (wizardLayer < 0) {
                 this.buildingDoorwayPresentationTransition = null;
@@ -3370,6 +3945,9 @@ void main(void) {
                         const groundProjectionPolygons = renderCache.groundProjectionPolygons;
                         const buildingAlpha = this.getBuildingCutawayEntryAlpha(building.buildingId, nowMs);
                         buildingBoundsTests += 1;
+                        if (!this.isCutawayPointInsideBounds(wizardProjection, renderCache.occlusionBounds)) {
+                            continue;
+                        }
                         buildingPointTests += 1;
                         const exteriorCache = this.getPrototypeBuildingExteriorBitmapForCutaway(ctx, map, placement);
                         if (!exteriorCache) continue;
@@ -3712,6 +4290,8 @@ void main(void) {
             for (let i = 0; i < triggers.length; i++) {
                 const trigger = triggers[i];
                 if (!trigger || !trigger.building) return false;
+                if (trigger.activeInteriorRegion) return false;
+                if (this.isPrototypeBuildingCutawayTrigger(trigger)) return false;
             }
             return true;
         }
@@ -3767,7 +4347,6 @@ void main(void) {
             };
             const pushNode = (node) => {
                 pushRef(node);
-                if (node && node.sourceNode) pushRef(node.sourceNode);
             };
             const pushEndpoint = (endpoint) => {
                 pushNode(endpoint);
@@ -3776,6 +4355,8 @@ void main(void) {
             };
 
             pushRef(item);
+            pushRef(item && item.currentMovementSupport);
+            pushRef(item && item._activeFloorFragment);
             pushNode(item && item.node);
             if (Array.isArray(item && item._indexedNodes)) {
                 item._indexedNodes.forEach(pushNode);
@@ -3878,7 +4459,6 @@ void main(void) {
             item.level = lowerLevel;
             item.traversalLayer = lowerLevel;
             item.currentLayer = lowerLevel;
-            item._renderTraversalLayer = lowerLevel;
             item.fragmentId = lowerFragmentId;
             item.surfaceId = lowerFragment && typeof lowerFragment.surfaceId === "string" ? lowerFragment.surfaceId : "";
             item.lowerFragmentId = lowerFragmentId;
@@ -3973,32 +4553,155 @@ void main(void) {
             const itemLevel = this.getBuildingInteriorEntryLayer(item, null, regionLevel);
             if (itemLevel !== regionLevel) return false;
             const refs = this.collectFloorRefsForRenderItem(item, mapRef || (ctx && ctx.map) || global.map || null);
-            const regionFragmentId = typeof region.fragmentId === "string" ? region.fragmentId : "";
-            const regionSurfaceId = typeof region.surfaceId === "string" ? region.surfaceId : "";
-            for (let i = 0; i < refs.length; i++) {
-                const ref = refs[i];
-                if (!ref) continue;
-                if (regionFragmentId && ref.fragmentId === regionFragmentId) return true;
-                if (regionSurfaceId && ref.surfaceId === regionSurfaceId) return true;
-            }
+            if (this.renderItemRefsMatchBuildingInteriorRegion(refs, region)) return true;
+            if (this.hasBuildingInteriorFloorRefs(refs) && region.kind === "floorFragment") return false;
             if (region.polygon) {
                 return this.renderItemSamplesMatchPolygons(item, [region.polygon], mapRef || (ctx && ctx.map) || global.map || null);
             }
             return false;
         }
 
-        collectBuildingInteriorFloorRenderItems(ctx, region, mapRef = null) {
+        collectBuildingInteriorFloorRenderItems(ctx, region, mapRef = null, trigger = null) {
             const out = [];
+            const seen = new Set();
+            const add = (item) => {
+                if (!item || seen.has(item)) return;
+                seen.add(item);
+                out.push(item);
+            };
             const map = mapRef || (ctx && ctx.map) || global.map || null;
-            if (!map || !(map.stairsById instanceof Map)) return out;
-            for (const stair of map.stairsById.values()) {
-                if (stair && stair.renderedByBuildingCutaway === true) continue;
-                const item = this.getStairRenderObject(stair, map);
-                if (this.shouldRenderBuildingInteriorFloorRenderItem(item, region, ctx, map)) {
-                    out.push(item);
+            if (!map) return out;
+            const canonicalObjects = this.getCanonicalFloorObjectsForBuildingInteriorRegion(region, map, trigger);
+            for (let i = 0; i < canonicalObjects.length; i++) {
+                const item = canonicalObjects[i];
+                if (this.shouldRenderBuildingInteriorFloorRenderItem(item, region, ctx, map)) add(item);
+            }
+            if (map.stairsById instanceof Map) {
+                for (const stair of map.stairsById.values()) {
+                    if (stair && stair.renderedByBuildingCutaway === true) continue;
+                    const item = this.getStairRenderObject(stair, map);
+                    if (this.shouldRenderBuildingInteriorFloorRenderItem(item, region, ctx, map)) {
+                        add(item);
+                    }
                 }
             }
             return out;
+        }
+
+        getCanonicalFloorObjectsForBuildingInteriorRegion(region, mapRef = null, trigger = null) {
+            const map = mapRef || global.map || null;
+            if (!map || typeof map.getObjectsForFloorMembership !== "function" || !region) return [];
+            const membership = this.getBuildingInteriorRegionFloorMembership(region, trigger);
+            if (!membership) return [];
+            return map.getObjectsForFloorMembership(membership);
+        }
+
+        getFloorObjectRenderSignature(item) {
+            if (!item || typeof item !== "object") return "";
+            const numberOrNull = (value) => Number.isFinite(Number(value)) ? Number(Number(value).toFixed(4)) : null;
+            const membership = item._floorMembership && typeof item._floorMembership === "object" ? item._floorMembership : null;
+            return JSON.stringify({
+                type: typeof item.type === "string" ? item.type : "",
+                objectType: typeof item.objectType === "string" ? item.objectType : "",
+                category: typeof item.category === "string" ? item.category : "",
+                texturePath: typeof item.texturePath === "string" ? item.texturePath : "",
+                imagePath: typeof item.imagePath === "string" ? item.imagePath : "",
+                imageFileName: typeof item.imageFileName === "string" ? item.imageFileName : "",
+                x: numberOrNull(item.x),
+                y: numberOrNull(item.y),
+                z: numberOrNull(item.z),
+                width: numberOrNull(item.width),
+                height: numberOrNull(item.height),
+                size: numberOrNull(item.size),
+                anchorX: numberOrNull(Number.isFinite(item.anchorX) ? item.anchorX : item.placeableAnchorX),
+                anchorY: numberOrNull(Number.isFinite(item.anchorY) ? item.anchorY : item.placeableAnchorY),
+                billboardAlpha: numberOrNull(item.billboardAlpha),
+                billboardTint: numberOrNull(item.billboardTint),
+                traversalLayer: numberOrNull(item.traversalLayer),
+                level: numberOrNull(item.level),
+                rotationAxis: typeof item.rotationAxis === "string" ? item.rotationAxis : "",
+                placementRotation: numberOrNull(item.placementRotation),
+                isOpen: item.isOpen === true,
+                visible: item.visible !== false,
+                scriptVisible: this.isScriptVisible(item),
+                ownerType: membership && typeof membership.ownerType === "string" ? membership.ownerType : "",
+                ownerId: membership && typeof membership.ownerId === "string" ? membership.ownerId : "",
+                floorId: membership && typeof membership.floorId === "string" ? membership.floorId : "",
+                floorLevel: this.getLayerIndexForObject(item, 0)
+            });
+        }
+
+        getFloorObjectPickerSignature(item) {
+            if (!item || typeof item !== "object") return "";
+            const hitbox = item.groundPlaneHitbox || item.visualHitbox || null;
+            const hitboxSignature = hitbox ? JSON.stringify({
+                type: hitbox.constructor && hitbox.constructor.name ? hitbox.constructor.name : "",
+                x: Number.isFinite(Number(hitbox.x)) ? Number(Number(hitbox.x).toFixed(4)) : null,
+                y: Number.isFinite(Number(hitbox.y)) ? Number(Number(hitbox.y).toFixed(4)) : null,
+                radius: Number.isFinite(Number(hitbox.radius)) ? Number(Number(hitbox.radius).toFixed(4)) : null,
+                points: Array.isArray(hitbox.points)
+                    ? hitbox.points.map(p => ({
+                        x: Number.isFinite(Number(p && p.x)) ? Number(Number(p.x).toFixed(4)) : null,
+                        y: Number.isFinite(Number(p && p.y)) ? Number(Number(p.y).toFixed(4)) : null
+                    }))
+                    : null
+            }) : "";
+            return `${this.getFloorObjectRenderSignature(item)}|picker:${hitboxSignature}`;
+        }
+
+        ensurePrototypeBuildingInteriorBitmapCoverageMetadata(ctx, trigger, cache) {
+            if (!cache || cache.status !== "ready") return cache;
+            if (!cache.texture) {
+                throw new Error(`prototype building interior ${cache.id || "(unknown)"} ready cache is missing its texture`);
+            }
+            if (cache.coveredObjectSet instanceof Set && cache.objectRenderSignatures instanceof Map && cache.objectPickerSignatures instanceof Map) {
+                return cache;
+            }
+            const coveredObjectSet = new Set();
+            const objectRenderSignatures = new Map();
+            const objectPickerSignatures = new Map();
+            const explicitCoveredObjects = Array.isArray(cache.coveredObjects)
+                ? cache.coveredObjects
+                : (Array.isArray(cache.coveredObjectEntries) ? cache.coveredObjectEntries.map(entry => entry && entry.item) : []);
+            for (let i = 0; i < explicitCoveredObjects.length; i++) {
+                const item = explicitCoveredObjects[i];
+                if (!item || item.gone || item.vanishing) continue;
+                coveredObjectSet.add(item);
+                objectRenderSignatures.set(item, this.getFloorObjectRenderSignature(item));
+                objectPickerSignatures.set(item, this.getFloorObjectPickerSignature(item));
+            }
+            cache.coveredObjectSet = coveredObjectSet;
+            cache.objectRenderSignatures = objectRenderSignatures;
+            cache.objectPickerSignatures = objectPickerSignatures;
+            return cache;
+        }
+
+        isPrototypeBuildingInteriorBitmapObjectCovered(item, cutawayState = null, mapRef = null, ctx = null) {
+            if (!item || item.gone || item.vanishing) return false;
+            const state = cutawayState || this.getLayerCutawayState(ctx);
+            const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
+            const map = mapRef || (ctx && ctx.map) || global.map || null;
+            if (!map || typeof map.getPrototypeBuildingInteriorBitmap !== "function") return false;
+            for (let i = 0; i < triggers.length; i++) {
+                const trigger = triggers[i];
+                if (!this.isPrototypeBuildingCutawayTrigger(trigger) || !trigger.activeInteriorRegion) continue;
+                const placement = trigger.building && trigger.building._prototypeBuildingPlacement;
+                if (!placement || !placement.id) continue;
+                const floorId = this.getPrototypeBuildingInteriorSourceFloorId(trigger, { required: false });
+                if (!floorId || !this.isPrototypeBuildingInteriorBitmapSourceFloorId(floorId)) continue;
+                const cache = map.getPrototypeBuildingInteriorBitmap(placement.id, floorId);
+                if (!cache || cache.status !== "ready") continue;
+                this.ensurePrototypeBuildingInteriorBitmapCoverageMetadata(ctx, trigger, cache);
+                if (!(cache.coveredObjectSet instanceof Set) || !cache.coveredObjectSet.has(item)) continue;
+                if (!(cache.objectRenderSignatures instanceof Map) || !(cache.objectPickerSignatures instanceof Map)) {
+                    throw new Error(`prototype building interior ${cache.id || placement.id} coverage is missing object signatures`);
+                }
+                return (
+                    cache.objectRenderSignatures.get(item) === this.getFloorObjectRenderSignature(item) &&
+                    cache.objectPickerSignatures.get(item) === this.getFloorObjectPickerSignature(item)
+                );
+            }
+            return false;
         }
 
         renderItemMatchesCutawayTrigger(item, trigger, mapRef = null) {
@@ -4031,12 +4734,135 @@ void main(void) {
             return this.renderItemSamplesMatchPolygons(item, polygons, mapRef || global.map || null);
         }
 
+        renderItemMatchesActiveBuildingInteriorRegion(item, trigger, mapRef = null, refs = null) {
+            if (!item || !trigger || !trigger.activeInteriorRegion) return false;
+            const refList = Array.isArray(refs) ? refs : this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
+            const hasRefs = this.hasBuildingInteriorFloorRefs(refList);
+            const itemMembership = this.getRenderItemFloorMembership(item, mapRef || global.map || null, refList);
+            if (!hasRefs && !itemMembership) return false;
+            const regions = this.getBuildingInteriorOverlayRegionsForTrigger(trigger);
+            const visibleRegions = regions.length > 0 ? regions : [trigger.activeInteriorRegion];
+            for (let i = 0; i < visibleRegions.length; i++) {
+                if (hasRefs && this.renderItemRefsMatchBuildingInteriorRegion(refList, visibleRegions[i])) return true;
+                if (itemMembership && this.floorMembershipsMatchForRender(itemMembership, this.getBuildingInteriorRegionFloorMembership(visibleRegions[i], trigger))) return true;
+            }
+            return false;
+        }
+
+        shouldHideRenderItemForExteriorBuildingCutaway(item, trigger, refs = null, mapRef = null) {
+            if (!item || !trigger || !trigger.building || trigger.activeInteriorRegion) return false;
+            if (item.type === "roof") return false;
+            if (this.isBuildingCutawayStructuralItem(item)) return false;
+            const refList = Array.isArray(refs) ? refs : this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
+            if (refList.length === 0) return false;
+            if (!this.renderItemMatchesCutawayTrigger(item, trigger, mapRef || global.map || null)) return false;
+            if (this.shouldRenderBuildingExteriorGroundDoorItem(item, null, trigger, null, null)) return false;
+            return true;
+        }
+
+        shouldRenderUnreferencedOutdoorItemThroughExteriorBuildingCutaway(item, cutawayState = null) {
+            if (!item || this.isBuildingCutawayStructuralItem(item) || item.type === "roof") return false;
+            const type = typeof item.type === "string" ? item.type.trim().toLowerCase() : "";
+            const category = typeof item.category === "string" ? item.category.trim().toLowerCase() : "";
+            if (!(type === "tree" || type === "flower" || category === "trees" || category === "flowers")) {
+                return false;
+            }
+            const triggers = Array.isArray(cutawayState && cutawayState.triggers) ? cutawayState.triggers : [];
+            for (let i = 0; i < triggers.length; i++) {
+                const trigger = triggers[i];
+                if (trigger && trigger.building && !trigger.activeInteriorRegion) return true;
+            }
+            return false;
+        }
+
+        getCutawayStateWithoutExteriorBuildingTriggers(cutawayState = null) {
+            const state = cutawayState || this.getLayerCutawayState(null);
+            if (!state || !Array.isArray(state.triggers) || state.triggers.length === 0) return state;
+            const triggers = state.triggers.filter(trigger => !(trigger && trigger.building && !trigger.activeInteriorRegion));
+            if (triggers.length === state.triggers.length) return state;
+            return {
+                ...state,
+                active: triggers.length > 0 || Number.isFinite(state.globalHiddenFromLevel),
+                triggers
+            };
+        }
+
+        shouldSuppressPrototypeBuildingInteriorLiveRenderItem(item, mapRef = null, cutawayState = null, ctx = null) {
+            if (!item) return false;
+            if (this.isBuildingCutawayStructuralItem(item)) {
+                const state = cutawayState || this.getLayerCutawayState(ctx);
+                const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
+                const renderMap = mapRef || (ctx && ctx.map) || global.map || null;
+                const bitmapCtx = renderMap ? { ...(ctx || {}), map: renderMap } : ctx;
+                const refs = this.collectFloorRefsForRenderItem(item, renderMap);
+                for (let i = 0; i < triggers.length; i++) {
+                    const trigger = triggers[i];
+                    if (!trigger || !trigger.activeInteriorRegion || !this.isPrototypeBuildingCutawayTrigger(trigger)) continue;
+                    if (!this.getPresentablePrototypeBuildingInteriorBitmapCache(bitmapCtx, trigger)) continue;
+                    if (
+                        this.renderItemMatchesCutawayTrigger(item, trigger, renderMap) ||
+                        this.renderItemMembershipMatchesCutawayTrigger(item, trigger, renderMap, refs)
+                    ) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            return this.isPrototypeBuildingInteriorBitmapObjectCovered(item, cutawayState, mapRef, ctx);
+        }
+
+        shouldAllowPrototypeBuildingInteriorLiveRenderItem(item, cutawayState = null, mapRef = null) {
+            if (!item) return false;
+            const state = cutawayState || this.getLayerCutawayState(null);
+            const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
+            if (triggers.length === 0) return false;
+            const refs = this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
+            const membership = this.getRenderItemFloorMembership(item, mapRef || global.map || null, refs);
+            if (!this.hasBuildingInteriorFloorRefs(refs) && !membership) return false;
+            for (let i = 0; i < triggers.length; i++) {
+                const trigger = triggers[i];
+                if (!trigger || !trigger.activeInteriorRegion || !this.isPrototypeBuildingCutawayTrigger(trigger)) continue;
+                if (
+                    !this.renderItemMatchesCutawayTrigger(item, trigger, mapRef || global.map || null) &&
+                    !this.renderItemMembershipMatchesCutawayTrigger(item, trigger, mapRef || global.map || null, refs)
+                ) {
+                    continue;
+                }
+                if (this.renderItemMatchesActiveBuildingInteriorRegion(item, trigger, mapRef || global.map || null, refs)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        shouldRenderPrototypeBuildingInteriorLiveItemAtFullAlpha(item, cutawayState = null, mapRef = null) {
+            return !!(
+                !this.shouldSuppressPrototypeBuildingInteriorLiveRenderItem(item, mapRef, cutawayState) &&
+                this.shouldAllowPrototypeBuildingInteriorLiveRenderItem(item, cutawayState, mapRef)
+            );
+        }
+
         renderItemSamplesMatchPolygons(item, polygons, mapRef = null) {
             if (!Array.isArray(polygons) || polygons.length === 0) return false;
             const samples = this.getCutawaySamplePointsForRenderItem(item, mapRef || global.map || null);
             for (let i = 0; i < samples.length; i++) {
                 const sample = samples[i];
                 if (sample && floorVisualPolygonsContainPoint(polygons, sample.x, sample.y)) return true;
+            }
+            return false;
+        }
+
+        shouldApplyBuildingInteriorActiveFloorDepthBumpToItem(item, itemLayer, plan = null, mapRef = null) {
+            if (!item || item.type === "roof" || !plan || !plan.active) return false;
+            if (plan.depthBumpedItems instanceof Set && plan.depthBumpedItems.has(item)) return true;
+            const regions = Array.isArray(plan.depthBumpRegions) ? plan.depthBumpRegions : [];
+            if (regions.length === 0) return false;
+            const layer = this.getLayerIndexFromValue(itemLayer, 0);
+            for (let i = 0; i < regions.length; i++) {
+                const region = regions[i];
+                if (!region || !region.polygon) continue;
+                if (this.getLayerIndexFromValue(region.level, 0) !== layer) continue;
+                if (this.renderItemSamplesMatchPolygons(item, [region.polygon], mapRef || global.map || null)) return true;
             }
             return false;
         }
@@ -4105,6 +4931,20 @@ void main(void) {
                 this.incrementFrameMetric("layerCutawayRenderItemFastPath", 1);
                 return false;
             }
+            const refs = this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
+            const triggers = Array.isArray(state.triggers) ? state.triggers : [];
+            for (let i = 0; i < triggers.length; i++) {
+                const trigger = triggers[i];
+                if (!trigger || !trigger.building || !trigger.activeInteriorRegion) continue;
+                if (item.type === "roof") continue;
+                if (refs.length === 0 || !this.renderItemMatchesCutawayTrigger(item, trigger, mapRef || global.map || null)) continue;
+                return !this.renderItemMatchesActiveBuildingInteriorRegion(item, trigger, mapRef || global.map || null, refs);
+            }
+            for (let i = 0; i < triggers.length; i++) {
+                if (this.shouldHideRenderItemForExteriorBuildingCutaway(item, triggers[i], refs, mapRef || global.map || null)) {
+                    return true;
+                }
+            }
             const currentBuildingCacheKey = mapRef
                 ? this.getBuildingRenderCacheKey(null, mapRef)
                 : null;
@@ -4116,8 +4956,6 @@ void main(void) {
             ) {
                 return false;
             }
-            const refs = this.collectFloorRefsForRenderItem(item, mapRef || global.map || null);
-            const triggers = Array.isArray(state.triggers) ? state.triggers : [];
             for (let i = 0; i < triggers.length; i++) {
                 const trigger = triggers[i];
                 if (!trigger || itemLevel < this.getLayerIndexFromValue(trigger.level, Infinity)) continue;
@@ -4132,10 +4970,13 @@ void main(void) {
                 : (item && item.type === "wallSection" && Number.isFinite(item.bottomZ)
                     ? Number(item.bottomZ)
                     : this.getLayerBaseZForLevel(itemLevel));
+            const worldPointCutawayState = this.shouldRenderUnreferencedOutdoorItemThroughExteriorBuildingCutaway(item, state)
+                ? this.getCutawayStateWithoutExteriorBuildingTriggers(state)
+                : state;
             const samples = this.getCutawaySamplePointsForRenderItem(item, mapRef || global.map || null);
             for (let i = 0; i < samples.length; i++) {
                 const sample = samples[i];
-                if (this.isWorldPointHiddenByLayerCutaway(sample.x, sample.y, itemLevel, state, sourceBaseZ)) return true;
+                if (this.isWorldPointHiddenByLayerCutaway(sample.x, sample.y, itemLevel, worldPointCutawayState, sourceBaseZ)) return true;
             }
             return false;
         }
@@ -4169,6 +5010,7 @@ void main(void) {
                     const entry = items[j];
                     const item = entry && entry.item;
                     if (!item || item.gone || item.vanishing) continue;
+                    if (!this.isBuildingCutawayStructuralItem(item)) continue;
                     const level = this.getLayerIndexFromValue(entry.level, 0);
                     if (this.shouldRenderBuildingExteriorGroundDoorItem(item, entry, trigger, ctx, wizardRef)) {
                         continue;
@@ -6058,6 +6900,18 @@ void main(void) {
             return state;
         }
 
+        ensurePrototypeBuildingExteriorTransparentDepthState() {
+            if (this.prototypeBuildingExteriorTransparentDepthState) return this.prototypeBuildingExteriorTransparentDepthState;
+            if (typeof PIXI === "undefined" || !PIXI.State) return null;
+            const state = new PIXI.State();
+            state.depthTest = true;
+            state.depthMask = false;
+            state.blend = true;
+            state.culling = false;
+            this.prototypeBuildingExteriorTransparentDepthState = state;
+            return state;
+        }
+
         renderBuildingCutawayCompositeBillboard(ctx, resources, cache, container = null) {
             if (!resources || !resources.sprite || !cache || !cache.anchor) return null;
             const staticProto = (typeof global.StaticObject === "function" && global.StaticObject.prototype)
@@ -6258,6 +7112,8 @@ void main(void) {
         }
 
         renderBuildingCutawayComposites(ctx, cutawayState, container = null, maskDisplayObjects = null, foregroundPlan = null) {
+            const movePerfEnabled = !!(typeof globalThis !== "undefined" && globalThis.__moveObjectPerf);
+            const compositeStartMs = movePerfEnabled ? performance.now() : 0;
             const triggers = this.getBuildingCutawayCompositeTriggers(cutawayState);
             if (triggers.length === 0) {
                 const rawTriggers = Array.isArray(cutawayState && cutawayState.triggers)
@@ -6302,6 +7158,11 @@ void main(void) {
                     this.setFrameMetric("objects3dBuildingCompositeCacheHits", 1);
                     this.setFrameMetric("objects3dBuildingCompositeCacheMisses", 1);
                     this.setFrameMetric("objects3dBuildingCompositePendingTextures", 0);
+                    if (movePerfEnabled) {
+                        this.recordMoveObjectPerf("rendering.cutawayComposite.staleMissingTrigger", {
+                            displayObjects: displayObjects.size
+                        }, performance.now() - compositeStartMs);
+                    }
                     return billboardMesh;
                 }
                 this.hideBuildingCutawayCompositeBillboard();
@@ -6313,6 +7174,11 @@ void main(void) {
                 this.setFrameMetric("objects3dBuildingCompositeCacheHits", 0);
                 this.setFrameMetric("objects3dBuildingCompositeCacheMisses", 0);
                 this.setFrameMetric("objects3dBuildingCompositePendingTextures", 0);
+                if (movePerfEnabled) {
+                    this.recordMoveObjectPerf("rendering.cutawayComposite.none", {
+                        rawTriggers: rawTriggers.length
+                    }, performance.now() - compositeStartMs);
+                }
                 return null;
             }
             this.buildingCutawayCompositeMissingTriggerFrames = 0;
@@ -6339,6 +7205,15 @@ void main(void) {
             );
             const displayObjects = this.getBuildingCutawayCompositeDisplayObjects(cutawayState);
             const originalDisplayObjects = this.getBuildingCutawayCompositeOriginalDisplayObjects(cutawayState);
+            if (movePerfEnabled) {
+                this.recordMoveObjectPerf("rendering.cutawayComposite.frame", {
+                    triggers: triggers.length,
+                    cacheUsable,
+                    staleCachePresentable,
+                    displayObjects: displayObjects.size,
+                    originalDisplayObjects: originalDisplayObjects.size
+                });
+            }
             let captureAnchor = cacheUsable
                 ? (this.buildingCutawayCompositeCache && this.buildingCutawayCompositeCache.anchor)
                 : this.getBuildingCutawayCompositeAnchor(cutawayState);
@@ -6482,6 +7357,7 @@ void main(void) {
             let rendered = cacheUsable;
             let dataRendered = cacheUsable && !!(this.buildingCutawayCompositeCache && this.buildingCutawayCompositeCache.dataTexture);
             if (!cacheUsable) {
+                const captureStartMs = movePerfEnabled ? performance.now() : 0;
                 const restoreWallCaptureGeometry = this.applyBuildingCutawayCompositeFullWallCaptureGeometry(ctx, foregroundPlan);
                 const restoreTree = this.isolateBuildingCutawayCompositeDisplayTree(displayObjects);
                 const restoreCaptureState = this.applyBuildingCutawayCompositeLocalCaptureState(
@@ -6521,6 +7397,13 @@ void main(void) {
                     restoreCaptureState();
                     restoreTree();
                     restoreWallCaptureGeometry();
+                    if (movePerfEnabled) {
+                        this.recordMoveObjectPerf("rendering.cutawayComposite.capture", {
+                            displayObjects: displayObjects.size,
+                            resourceWidth: resources.width,
+                            resourceHeight: resources.height
+                        }, performance.now() - captureStartMs);
+                    }
                 }
             }
             if (!rendered) {
@@ -6611,6 +7494,13 @@ void main(void) {
             this.setFrameMetric("objects3dBuildingCompositeCacheHits", cacheUsable ? 1 : 0);
             this.setFrameMetric("objects3dBuildingCompositeCacheMisses", cacheUsable ? 0 : 1);
             this.setFrameMetric("objects3dBuildingCompositePendingTextures", 0);
+            if (movePerfEnabled) {
+                this.recordMoveObjectPerf("rendering.cutawayComposite.total", {
+                    cacheUsable,
+                    displayObjects: displayObjects.size,
+                    hiddenOriginals
+                }, performance.now() - compositeStartMs);
+            }
             return billboardMesh;
         }
 
@@ -6760,6 +7650,7 @@ void main(void) {
                 this.setFrameMetric("objects3dBuildingInteriorPromoted", 0);
                 return 0;
             }
+            const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
             const promotedSet = new Set();
             let promoted = 0;
             const promoteItem = (item) => {
@@ -6778,7 +7669,7 @@ void main(void) {
                 const trigger = triggers[i];
                 const region = trigger && trigger.activeInteriorRegion;
                 if (!region) continue;
-                if (this.isPrototypeBuildingInteriorBitmapReady(ctx, trigger)) continue;
+                if (this.getPresentablePrototypeBuildingInteriorBitmapCache(ctx, trigger)) continue;
                 const regions = this.getBuildingInteriorOverlayRegionsForTrigger(trigger);
                 const visibleRegions = regions.length > 0 ? regions : [region];
                 for (let regionIndex = 0; regionIndex < visibleRegions.length; regionIndex++) {
@@ -6786,7 +7677,17 @@ void main(void) {
                     if (!visibleRegion) continue;
                     const entries = Array.isArray(visibleRegion.staticObjects) ? visibleRegion.staticObjects : [];
                     for (let j = 0; j < entries.length; j++) {
-                        const item = entries[j] && entries[j].item;
+                        const entry = entries[j];
+                        const item = entry && entry.item;
+                        if (
+                            item &&
+                            item.type !== "wallSection" &&
+                            !this.isBuildingCutawayDoorItem(item) &&
+                            !this.isBuildingInteriorOverlaySurfaceItem(item) &&
+                            !this.shouldRenderBuildingInteriorOverlayItem(item, visibleRegion, entry, ctx, wizardRef)
+                        ) {
+                            continue;
+                        }
                         promoteItem(item);
                     }
                 }
@@ -6795,6 +7696,46 @@ void main(void) {
                 foregroundPlan.items.forEach(item => promoteItem(item));
             }
             this.setFrameMetric("objects3dBuildingInteriorPromoted", promoted);
+            return promoted;
+        }
+
+        promotePrototypeBuildingInteriorLiveRenderItems(ctx, cutawayState, container, currentDisplayObjects = null, renderItems = [], foregroundPlan = null) {
+            const plannedItems = foregroundPlan &&
+                foregroundPlan.items instanceof Set
+                ? foregroundPlan.items
+                : null;
+            const fallbackCandidates = Array.isArray(renderItems) ? renderItems : [];
+            const candidateCount = plannedItems ? plannedItems.size : fallbackCandidates.length;
+            if (!container || candidateCount === 0) {
+                this.setFrameMetric("objects3dPrototypeInteriorLivePromoted", 0);
+                return 0;
+            }
+            const mapRef = (ctx && ctx.map) || global.map || null;
+            const promotedSet = new Set();
+            let promoted = 0;
+            const promoteCandidate = (item) => {
+                if (!item || item.gone || item.vanishing) return;
+                if (!this.shouldRenderPrototypeBuildingInteriorLiveItemAtFullAlpha(item, cutawayState, mapRef)) {
+                    return;
+                }
+                const displayObjects = this.collectBuildingInteriorDisplayObjectsForItem(item);
+                for (let d = 0; d < displayObjects.length; d++) {
+                    const displayObj = displayObjects[d];
+                    if (!displayObj || displayObj.visible === false || displayObj.renderable === false) continue;
+                    if (this.promoteDisplayObjectForBuildingInterior(displayObj, container, currentDisplayObjects, promotedSet)) {
+                        promoted += 1;
+                    }
+                    this.addPickRenderItem(item, displayObj, { forceInclude: true });
+                }
+            };
+            if (plannedItems) {
+                plannedItems.forEach(item => promoteCandidate(item));
+            } else {
+                for (let i = 0; i < fallbackCandidates.length; i++) {
+                    promoteCandidate(fallbackCandidates[i]);
+                }
+            }
+            this.setFrameMetric("objects3dPrototypeInteriorLivePromoted", promoted);
             return promoted;
         }
 
@@ -7141,7 +8082,31 @@ void main(void) {
             const itemLevel = Number.isFinite(entry && entry.level)
                 ? this.getLayerIndexFromValue(entry.level, regionLevel)
                 : this.getLayerIndexForObject(item, regionLevel);
-            return itemLevel === regionLevel;
+            if (itemLevel !== regionLevel) return false;
+            const refs = Array.isArray(entry && entry.refs)
+                ? entry.refs
+                : this.collectFloorRefsForRenderItem(item, (ctx && ctx.map) || global.map || null);
+            if (this.renderItemRefsMatchBuildingInteriorRegion(refs, region)) return true;
+            if (this.hasBuildingInteriorFloorRefs(refs)) return false;
+            if (!Array.isArray(refs) || refs.length === 0) return true;
+            if (region && region.polygon) {
+                return this.renderItemSamplesMatchPolygons(item, [region.polygon], (ctx && ctx.map) || global.map || null);
+            }
+            return false;
+        }
+
+        shouldRenderActiveInteriorItemLiveOverReadyBitmap(item, region, entry, ctx, wizardRef) {
+            if (!item || item.gone || item.vanishing) return false;
+            const isPlacedStaticObject = !!(
+                item.isPlacedObject === true ||
+                item.objectType === "placedObject" ||
+                item.type === "placedObject" ||
+                (item._floorMembership && typeof item._floorMembership === "object")
+            );
+            if (!isPlacedStaticObject) return false;
+            if (item.rotationAxis === "ground") return false;
+            if (this.isBuildingInteriorOverlaySurfaceItem(item)) return false;
+            return this.shouldRenderBuildingInteriorOverlayItem(item, region, entry, ctx, wizardRef);
         }
 
         getBuildingInteriorDynamicCharacterCandidates(ctx = null, wizardRef = null) {
@@ -7173,16 +8138,8 @@ void main(void) {
             const itemLevel = this.getLayerIndexForObject(item, regionLevel);
             if (itemLevel !== regionLevel) return false;
             const refs = this.collectFloorRefsForRenderItem(item, mapRef || (ctx && ctx.map) || global.map || null);
-            const regionFragmentId = region && typeof region.fragmentId === "string" ? region.fragmentId : "";
-            const regionSurfaceId = region && typeof region.surfaceId === "string" ? region.surfaceId : "";
-            if (refs.length > 0) {
-                for (let i = 0; i < refs.length; i++) {
-                    const ref = refs[i];
-                    if (!ref) continue;
-                    if (regionFragmentId && ref.fragmentId === regionFragmentId) return true;
-                    if (regionSurfaceId && ref.surfaceId === regionSurfaceId) return true;
-                }
-            }
+            if (this.renderItemRefsMatchBuildingInteriorRegion(refs, region)) return true;
+            if (this.hasBuildingInteriorFloorRefs(refs) && region.kind === "floorFragment") return false;
             if (region && region.polygon) {
                 return this.renderItemSamplesMatchPolygons(item, [region.polygon], mapRef || (ctx && ctx.map) || global.map || null);
             }
@@ -7624,6 +8581,13 @@ void main(void) {
                 return startZ + ((targetZ - startZ) * progress);
             }
             if (Number.isFinite(projectile.visualBaseZ)) return Number(projectile.visualBaseZ);
+            const support = projectile.currentMovementSupport && typeof projectile.currentMovementSupport === "object"
+                ? projectile.currentMovementSupport
+                : null;
+            if (support && Number.isFinite(Number(support.baseZ))) return Number(support.baseZ);
+            if (Number.isFinite(Number(projectile.currentLayerBaseZ))) return Number(projectile.currentLayerBaseZ);
+            if (Number.isFinite(Number(projectile._renderLayerBaseZ))) return Number(projectile._renderLayerBaseZ);
+            if (projectile.node && Number.isFinite(Number(projectile.node.baseZ))) return Number(projectile.node.baseZ);
             return 0;
         }
 
@@ -8249,7 +9213,7 @@ void main(void) {
 
             let targetWidth = 0;
             let targetHeight = 0;
-            if (item.type === "road") {
+            if (item.type === "road" || item.type === "roadPath") {
                 targetWidth = (item.width || 1) * this.camera.viewscale * 1.1547;
                 targetHeight = (item.height || 1) * this.camera.viewscale * this.camera.xyratio;
             } else if (item.rotationAxis === "ground") {
@@ -8500,7 +9464,7 @@ void main(void) {
 
         isLosOccluder(item) {
             if (!item || !item.groundPlaneHitbox) return false;
-            if (item.type === "road" || item.type === "firewall" || item.type === "roof") return false;
+            if (item.type === "road" || item.type === "roadPath" || item.type === "firewall" || item.type === "roof") return false;
             if (typeof item.castsLosShadows === "boolean" && !item.castsLosShadows) return false;
             const isAnimal = (typeof Animal !== "undefined" && item instanceof Animal);
             if (isAnimal) return false;
@@ -9260,7 +10224,7 @@ void main(void) {
             if (typeof Animal !== "undefined" && item instanceof Animal) return "animals";
             const rawType = typeof item.type === "string" ? item.type : "";
             const type = rawType.trim().toLowerCase();
-            if (type === "road") return "roads";
+            if (type === "road" || type === "roadpath") return "roads";
             if (type === "tree") return "trees";
             if (type === "flower") return "flowers";
             if (type === "wallsection") return "walls";
@@ -9406,12 +10370,12 @@ void main(void) {
                             duplicateRefsSkipped += 1;
                             continue;
                         }
-                        obj._renderTraversalLayer = Number.isFinite(obj.traversalLayer)
+                        const objRenderLayer = Number.isFinite(obj.traversalLayer)
                             ? this.getLayerIndexFromValue(obj.traversalLayer, nodeLayer)
                             : (Number.isFinite(obj.level)
                                 ? this.getLayerIndexFromValue(obj.level, nodeLayer)
                                 : nodeLayer);
-                        if (obj.type === "wallSection") addMountedWallCandidate(obj, obj._renderTraversalLayer);
+                        if (obj.type === "wallSection") addMountedWallCandidate(obj, objRenderLayer);
                         this.logPlaceObjectRenderDebug(
                             n >= nodes.length ? "collected-from-floor-node" : "collected-from-visible-node",
                             obj,
@@ -9541,7 +10505,6 @@ void main(void) {
                     }
                     addMountedWallCandidate(wall, wallLayer);
                     if (seen.has(wall)) continue;
-                    wall._renderTraversalLayer = wallLayer;
                     seen.add(wall);
                     out.push(wall);
                     globalWallsAdded += 1;
@@ -9582,7 +10545,8 @@ void main(void) {
                         skippedBuildingCutaway += 1;
                         continue;
                     }
-                    obj._renderTraversalLayer = wallLayer;
+                    if (!Number.isFinite(obj.traversalLayer)) obj.traversalLayer = wallLayer;
+                    if (!Number.isFinite(obj.level)) obj.level = wallLayer;
                     seen.add(obj);
                     out.push(obj);
                     mountedObjectsAdded += 1;
@@ -9606,11 +10570,6 @@ void main(void) {
                     continue;
                 }
                 if (seen.has(animal)) continue;
-                animal._renderTraversalLayer = Number.isFinite(animal.traversalLayer)
-                    ? Number(animal.traversalLayer)
-                    : (Number.isFinite(animal.currentLayer)
-                        ? Number(animal.currentLayer)
-                        : 0);
                 seen.add(animal);
                 out.push(animal);
                 animalsAdded += 1;
@@ -9654,26 +10613,89 @@ void main(void) {
         }
 
         getCameraWorldViewportBounds(ctx = null, margin = 0) {
+            return this.getCameraScreenSpaceWorldBoundsAtZ(ctx, margin, 0);
+        }
+
+        getCameraScreenSpaceWorldBoundsAtZ(ctx = null, margin = 0, worldZ = 0) {
             const cameraRef = (ctx && ctx.camera) || this.camera || {};
             const viewportRef = (ctx && ctx.viewport) || global.viewport || {};
             const x = Number(cameraRef.x);
             const y = Number(cameraRef.y);
+            const cameraZ = Number.isFinite(cameraRef.z)
+                ? Number(cameraRef.z)
+                : (Number.isFinite(viewportRef.z) ? Number(viewportRef.z) : 0);
             const width = Number.isFinite(cameraRef.width)
                 ? Number(cameraRef.width)
                 : Number(viewportRef.width);
             const height = Number.isFinite(cameraRef.height)
                 ? Number(cameraRef.height)
                 : Number(viewportRef.height);
-            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+            const z = Number.isFinite(Number(worldZ)) ? Number(worldZ) : cameraZ;
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height) || !Number.isFinite(cameraZ)) {
                 return null;
             }
             const pad = Number.isFinite(margin) ? Math.max(0, Number(margin)) : 0;
+            const projectedMinY = y + (z - cameraZ);
             return {
                 minX: x - pad,
-                minY: y - pad,
+                minY: projectedMinY - pad,
                 maxX: x + Math.max(0, width) + pad,
-                maxY: y + Math.max(0, height) + pad
+                maxY: projectedMinY + Math.max(0, height) + pad,
+                cameraZ,
+                worldZ: z
             };
+        }
+
+        getCameraScreenSpaceIndexBounds(ctx = null, margin = 0, zRange = null) {
+            const cameraRef = (ctx && ctx.camera) || this.camera || {};
+            const viewportRef = (ctx && ctx.viewport) || global.viewport || {};
+            const cameraZ = Number.isFinite(cameraRef.z)
+                ? Number(cameraRef.z)
+                : (Number.isFinite(viewportRef.z) ? Number(viewportRef.z) : 0);
+            const minZ = Number.isFinite(zRange && zRange.minZ) ? Number(zRange.minZ) : cameraZ;
+            const maxZ = Number.isFinite(zRange && zRange.maxZ) ? Number(zRange.maxZ) : cameraZ;
+            const lowBounds = this.getCameraScreenSpaceWorldBoundsAtZ(ctx, margin, Math.min(minZ, maxZ));
+            const highBounds = this.getCameraScreenSpaceWorldBoundsAtZ(ctx, margin, Math.max(minZ, maxZ));
+            if (!lowBounds || !highBounds) return null;
+            return {
+                minX: Math.min(lowBounds.minX, highBounds.minX),
+                maxX: Math.max(lowBounds.maxX, highBounds.maxX),
+                minY: Math.min(lowBounds.minY, highBounds.minY),
+                maxY: Math.max(lowBounds.maxY, highBounds.maxY),
+                cameraZ,
+                minZ: Math.min(minZ, maxZ),
+                maxZ: Math.max(minZ, maxZ)
+            };
+        }
+
+        getRenderableZRangeForViewportCull(ctx = null, mapRef = null) {
+            const cameraRef = (ctx && ctx.camera) || this.camera || {};
+            const viewportRef = (ctx && ctx.viewport) || global.viewport || {};
+            let minZ = Number.isFinite(cameraRef.z)
+                ? Number(cameraRef.z)
+                : (Number.isFinite(viewportRef.z) ? Number(viewportRef.z) : 0);
+            let maxZ = minZ;
+            const includeZ = (z) => {
+                const n = Number(z);
+                if (!Number.isFinite(n)) return;
+                minZ = Math.min(minZ, n);
+                maxZ = Math.max(maxZ, n);
+            };
+            includeZ(0);
+            const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
+            if (wizardRef) {
+                includeZ(this.getWizardVisualLayerBaseZ(wizardRef, this.getWizardVisualLayerIndex(wizardRef, 0)));
+                includeZ(this.getWizardContinuousWorldZ(wizardRef, maxZ));
+            }
+            const map = mapRef || (ctx && ctx.map) || null;
+            if (map && map.floorsById instanceof Map) {
+                for (const fragment of map.floorsById.values()) {
+                    if (fragment && Number.isFinite(Number(fragment.nodeBaseZ))) {
+                        includeZ(Number(fragment.nodeBaseZ));
+                    }
+                }
+            }
+            return { minZ, maxZ };
         }
 
         getCachedFloorFragmentOuter(fragment) {
@@ -9774,7 +10796,12 @@ void main(void) {
                 if (!section) return;
                 considered += 1;
                 const bounds = this.getCachedPrototypeSectionWorldBounds(section, state);
-                if (!this.floorFragmentBoundsIntersectViewport(bounds, viewportBounds)) return;
+                const sectionViewportBounds = this.getCameraScreenSpaceWorldBoundsAtZ(
+                    ctx,
+                    viewportBounds && Number.isFinite(viewportBounds.margin) ? viewportBounds.margin : 4,
+                    viewportBounds && Number.isFinite(viewportBounds.worldZ) ? viewportBounds.worldZ : (viewportBounds && Number.isFinite(viewportBounds.cameraZ) ? viewportBounds.cameraZ : 0)
+                ) || viewportBounds;
+                if (!this.floorFragmentBoundsIntersectViewport(bounds, sectionViewportBounds)) return;
                 inFrame += 1;
                 sectionKeys.add(sectionKey);
             });
@@ -9839,8 +10866,12 @@ void main(void) {
                     skippedInvalid += 1;
                     return;
                 }
+                const fragmentBaseZ = Number.isFinite(Number(fragment.nodeBaseZ))
+                    ? Number(fragment.nodeBaseZ)
+                    : this.getLayerBaseZForLevel(level);
+                const fragmentViewportBounds = this.getCameraScreenSpaceWorldBoundsAtZ(ctx, 4, fragmentBaseZ);
                 const bounds = this.getCachedFloorFragmentOuterBounds(fragment, outer);
-                if (!this.floorFragmentBoundsIntersectViewport(bounds, viewportBounds)) {
+                if (!this.floorFragmentBoundsIntersectViewport(bounds, fragmentViewportBounds)) {
                     skippedOffscreen += 1;
                     return;
                 }
@@ -9878,11 +10909,25 @@ void main(void) {
             const xScale = 0.866;
             const padX = 4;
             const padY = 4;
-            const minX = Math.floor((Number(cameraRef.x) || 0) / xScale) - padX;
-            const maxX = Math.ceil(((Number(cameraRef.x) || 0) + (Number(viewportRef.width) || 0)) / xScale) + padX;
-            const minY = Math.floor(Number(cameraRef.y) || 0) - padY;
-            const maxY = Math.ceil((Number(cameraRef.y) || 0) + (Number(viewportRef.height) || 0)) + padY;
-            const viewportBounds = this.getCameraWorldViewportBounds(ctx, 4);
+            const zRange = this.getRenderableZRangeForViewportCull(ctx, map);
+            const indexBounds = this.getCameraScreenSpaceIndexBounds(ctx, 4, zRange);
+            const minX = indexBounds
+                ? Math.floor(indexBounds.minX / xScale) - padX
+                : Math.floor((Number(cameraRef.x) || 0) / xScale) - padX;
+            const maxX = indexBounds
+                ? Math.ceil(indexBounds.maxX / xScale) + padX
+                : Math.ceil(((Number(cameraRef.x) || 0) + (Number(viewportRef.width) || 0)) / xScale) + padX;
+            const minY = indexBounds
+                ? Math.floor(indexBounds.minY) - padY
+                : Math.floor(Number(cameraRef.y) || 0) - padY;
+            const maxY = indexBounds
+                ? Math.ceil(indexBounds.maxY) + padY
+                : Math.ceil((Number(cameraRef.y) || 0) + (Number(viewportRef.height) || 0)) + padY;
+            const viewportBounds = this.getCameraScreenSpaceWorldBoundsAtZ(
+                ctx,
+                4,
+                Number.isFinite(cameraRef.z) ? Number(cameraRef.z) : (Number.isFinite(viewportRef.z) ? Number(viewportRef.z) : 0)
+            );
             const viewportSectionKeys = this.collectViewportFloorSectionKeys(ctx, map, viewportBounds);
             const useViewportSectionFilter = !!(map.floorsById instanceof Map && viewportBounds);
             const activeSectionKeys = (
@@ -9896,7 +10941,7 @@ void main(void) {
                 for (let i = 0; i < list.length; i++) {
                     const obj = list[i];
                     if (!obj || obj.gone || obj.vanishing || obj._prototypeParked === true) continue;
-                    if (obj.type === "road") continue;
+                    if (obj.type === "road" || obj.type === "roadPath") continue;
                     return true;
                 }
                 return false;
@@ -9908,7 +10953,7 @@ void main(void) {
                     for (let i = 0; i < list.length; i++) {
                         const obj = list[i];
                         if (!obj || obj.gone || obj.vanishing || obj._prototypeParked === true) continue;
-                        if (obj.type === "road") continue;
+                        if (obj.type === "road" || obj.type === "roadPath") continue;
                         return true;
                     }
                     return false;
@@ -9917,20 +10962,25 @@ void main(void) {
             };
             const shouldScanFloorObjectNode = (node) => {
                 if (!node) return false;
-                const sectionKey = typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "";
+                const ownerSectionKey = typeof node.ownerSectionKey === "string" && node.ownerSectionKey.length > 0
+                    ? node.ownerSectionKey
+                    : (typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "");
+                const activitySectionKey = typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0
+                    ? node._prototypeSectionKey
+                    : ownerSectionKey;
                 if (
-                    sectionKey &&
+                    ownerSectionKey &&
                     useViewportSectionFilter &&
-                    !viewportSectionKeys.has(sectionKey)
+                    !viewportSectionKeys.has(ownerSectionKey)
                 ) {
                     return false;
                 }
                 if (
                     !useViewportSectionFilter &&
-                    sectionKey &&
+                    activitySectionKey &&
                     activeSectionKeys instanceof Set &&
                     activeSectionKeys.size > 0 &&
-                    !activeSectionKeys.has(sectionKey)
+                    !activeSectionKeys.has(activitySectionKey)
                 ) {
                     return false;
                 }
@@ -9982,7 +11032,9 @@ void main(void) {
                         if (!shouldCacheFloorObjectNode(node)) return;
                         const yKey = Number.isFinite(node.yindex) ? Math.round(Number(node.yindex)) : null;
                         if (!Number.isFinite(yKey)) return;
-                        const sectionKey = typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "";
+                        const sectionKey = typeof node.ownerSectionKey === "string" && node.ownerSectionKey.length > 0
+                            ? node.ownerSectionKey
+                            : (typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : "");
                         let sectionRows = bySectionY.get(sectionKey);
                         if (!(sectionRows instanceof Map)) {
                             sectionRows = new Map();
@@ -10127,6 +11179,20 @@ void main(void) {
                             maxY
                         });
                     }
+                    return;
+                }
+                const nodeBaseZ = this.getLayerBaseZForNode(node);
+                const nodeViewportBounds = this.getCameraScreenSpaceWorldBoundsAtZ(ctx, 4, nodeBaseZ);
+                if (
+                    nodeViewportBounds &&
+                    (
+                        Number(node.x) < nodeViewportBounds.minX ||
+                        Number(node.x) > nodeViewportBounds.maxX ||
+                        Number(node.y) < nodeViewportBounds.minY ||
+                        Number(node.y) > nodeViewportBounds.maxY
+                    )
+                ) {
+                    skippedOffscreen += 1;
                     return;
                 }
                 const key = typeof node.id === "string" && node.id.length > 0
@@ -10332,10 +11398,20 @@ void main(void) {
             const padX = 4;
             const padY = 4;
             const xScale = 0.866;
-            const minX = Math.floor((Number(cam.x) || 0) / xScale) - padX;
-            const maxX = Math.ceil(((Number(cam.x) || 0) + (Number(ctx.viewport && ctx.viewport.width) || 0)) / xScale) + padX;
-            const minY = Math.floor(Number(cam.y) || 0) - padY;
-            const maxY = Math.ceil((Number(cam.y) || 0) + (Number(ctx.viewport && ctx.viewport.height) || 0)) + padY;
+            const zRange = this.getRenderableZRangeForViewportCull(ctx, map);
+            const indexBounds = this.getCameraScreenSpaceIndexBounds(ctx, 4, zRange);
+            const minX = indexBounds
+                ? Math.floor(indexBounds.minX / xScale) - padX
+                : Math.floor((Number(cam.x) || 0) / xScale) - padX;
+            const maxX = indexBounds
+                ? Math.ceil(indexBounds.maxX / xScale) + padX
+                : Math.ceil(((Number(cam.x) || 0) + (Number(ctx.viewport && ctx.viewport.width) || 0)) / xScale) + padX;
+            const minY = indexBounds
+                ? Math.floor(indexBounds.minY) - padY
+                : Math.floor(Number(cam.y) || 0) - padY;
+            const maxY = indexBounds
+                ? Math.ceil(indexBounds.maxY) + padY
+                : Math.ceil((Number(cam.y) || 0) + (Number(ctx.viewport && ctx.viewport.height) || 0)) + padY;
             let added = 0;
             for (const floorNodes of map.floorNodesById.values()) {
                 if (!Array.isArray(floorNodes) || floorNodes.length === 0) continue;
@@ -10348,6 +11424,19 @@ void main(void) {
                     const yi = Number(node.yindex);
                     if (!Number.isFinite(xi) || !Number.isFinite(yi)) continue;
                     if (xi < minX || xi > maxX || yi < minY || yi > maxY) continue;
+                    const nodeBaseZ = this.getLayerBaseZForNode(node);
+                    const nodeViewportBounds = this.getCameraScreenSpaceWorldBoundsAtZ(ctx, 4, nodeBaseZ);
+                    if (
+                        nodeViewportBounds &&
+                        (
+                            Number(node.x) < nodeViewportBounds.minX ||
+                            Number(node.x) > nodeViewportBounds.maxX ||
+                            Number(node.y) < nodeViewportBounds.minY ||
+                            Number(node.y) > nodeViewportBounds.maxY
+                        )
+                    ) {
+                        continue;
+                    }
                     if (addVisibleNode(node)) added += 1;
                 }
             }
@@ -10390,7 +11479,7 @@ void main(void) {
             if (item._flowerBurnFragmentContainer && Array.isArray(item._flowerBurnFragments) && item._flowerBurnFragments.length > 0) {
                 return false;
             }
-            if (item.type === "road" || item.type === "roof" || item.type === "wallSection") {
+            if (item.type === "road" || item.type === "roadPath" || item.type === "roof" || item.type === "wallSection") {
                 return false;
             }
             if (item.type === "triggerArea" || item.isTriggerArea === true) {
@@ -11619,6 +12708,15 @@ void main(void) {
             for (let i = 0; i < renderItems.length; i++) {
                 const item = renderItems[i];
                 if (!item || item.gone || item.vanishing) continue;
+                if (item.type === "roadPath") {
+                    if (item.pixiSprite) {
+                        item.pixiSprite.visible = false;
+                        if (Object.prototype.hasOwnProperty.call(item.pixiSprite, "renderable")) {
+                            item.pixiSprite.renderable = false;
+                        }
+                    }
+                    continue;
+                }
                 if (item.rotationAxis !== "ground") continue;
                 if (item.type === "triggerArea" || item.isTriggerArea === true) continue;
                 if (alreadyRenderedItems && alreadyRenderedItems.has(item)) {
@@ -11876,12 +12974,7 @@ void main(void) {
             const level0ChunkReadyCache = FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED ? (this._level0ChunkReadyCache.clear(), this._level0ChunkReadyCache) : null;
             if (!this._level0SectionAssetCache) this._level0SectionAssetCache = new Map();
             const level0SectionAssetCache = FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED ? (this._level0SectionAssetCache.clear(), this._level0SectionAssetCache) : null;
-            // Version key for per-node chunk coverage cache. Increments when a new chunk enters
-            // the cache (new area visible). Doesn't catch in-place signature changes, but those
-            // only happen during floor editing where the next tile render is still correct.
-            const _groundCovVer = (this.level0GroundSurfaceChunkCache instanceof Map)
-                ? this.level0GroundSurfaceChunkCache.size
-                : -1;
+            const _groundCovVer = Number(this.level0GroundCoverageVersion) || 0;
             if (!this._nonzeroFloorFragmentsByLevel) this._nonzeroFloorFragmentsByLevel = new Map();
             const nonzeroFloorFragmentsByLevel = this._nonzeroFloorFragmentsByLevel;
             nonzeroFloorFragmentsByLevel.clear();
@@ -11970,19 +13063,10 @@ void main(void) {
                 }
 
                 const textureStartMs = profiler ? performance.now() : 0;
-                const maxTextureIndex = Array.isArray(map.groundTextures) ? (map.groundTextures.length - 1) : 0;
-                const _baseId = Math.max(0, Math.min(12, Number.isFinite(node.groundTextureId) ? Math.floor(node.groundTextureId) : 0));
-                const _x = Number.isFinite(node.xindex) ? Math.floor(node.xindex) : 0;
-                const _y = Number.isFinite(node.yindex) ? Math.floor(node.yindex) : 0;
-                const _seed = ((_x * 73856093) ^ (_y * 19349663) ^ (_baseId * 83492791)) >>> 0;
-                const _variant = _seed % 4;
-                const _variantTextureIndex = _baseId + (_variant * 13);
-                const _tileCount = 52;
-                const _scrambledIndex = (_variantTextureIndex * 17) % _tileCount;
-                const textureIndex = Math.min(maxTextureIndex, (_tileCount <= (maxTextureIndex + 1)) ? _scrambledIndex : _variantTextureIndex);
-                const texture = (Array.isArray(map.groundTextures) && map.groundTextures[textureIndex])
-                    ? map.groundTextures[textureIndex]
-                    : PIXI.Texture.WHITE;
+                if (typeof map.getGroundTextureForNode !== "function") {
+                    throw new Error("ground tile rendering requires map.getGroundTextureForNode");
+                }
+                const texture = map.getGroundTextureForNode(node);
                 if (sprite.texture !== texture) {
                     sprite.texture = texture;
                 }
@@ -12078,6 +13162,40 @@ void main(void) {
             container.scale.set(1, 1);
         }
 
+        ensureRoadPathDepthContainer() {
+            const parent = this.layers && this.layers.depthObjects;
+            if (!parent || typeof PIXI === "undefined") return null;
+            const floorContainer = this.ensureFloorVisualContainer();
+            if (!this.roadPathDepthContainer) {
+                this.roadPathDepthContainer = new PIXI.Container();
+                this.roadPathDepthContainer.name = "renderingRoadPathDepthMeshes";
+                this.roadPathDepthContainer.interactiveChildren = false;
+            }
+            if (this.roadPathDepthContainer.parent !== parent) {
+                parent.addChild(this.roadPathDepthContainer);
+            }
+            if (
+                floorContainer &&
+                floorContainer.parent === parent &&
+                this.roadPathDepthContainer.parent === parent &&
+                typeof parent.getChildIndex === "function" &&
+                typeof parent.setChildIndex === "function"
+            ) {
+                const floorIndex = parent.getChildIndex(floorContainer);
+                const desiredIndex = Math.min(floorIndex + 1, parent.children.length - 1);
+                if (parent.getChildIndex(this.roadPathDepthContainer) !== desiredIndex) {
+                    parent.setChildIndex(this.roadPathDepthContainer, desiredIndex);
+                }
+            }
+            this.roadPathDepthContainer.position.set(0, 0);
+            this.roadPathDepthContainer.scale.set(1, 1);
+            this.roadPathDepthContainer.visible = true;
+            if (Object.prototype.hasOwnProperty.call(this.roadPathDepthContainer, "renderable")) {
+                this.roadPathDepthContainer.renderable = true;
+            }
+            return this.roadPathDepthContainer;
+        }
+
         getSelectedFloorVisualLevel() {
             return Number.isFinite(global.selectedFloorEditLevel)
                 ? Math.round(Number(global.selectedFloorEditLevel))
@@ -12151,8 +13269,15 @@ void main(void) {
             return out;
         }
 
-        getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY) {
+        getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY, map = null) {
             const tileCoordKeys = Array.isArray(asset && asset.tileCoordKeys) ? asset.tileCoordKeys : [];
+            const state = map && map._prototypeSectionState ? map._prototypeSectionState : null;
+            const prototypeNodeCount = state && state.allNodesByCoordKey instanceof Map
+                ? state.allNodesByCoordKey.size
+                : 0;
+            const prototypeSectionNodeCount = state && state.nodesBySectionKey instanceof Map
+                ? state.nodesBySectionKey.size
+                : 0;
             return [
                 Math.floor(Number(chunkX) || 0),
                 Math.floor(Number(chunkY) || 0),
@@ -12161,7 +13286,10 @@ void main(void) {
                 Number(asset && asset._level0RoadSurfaceVersion) || 0,
                 Number(asset && asset._level0GroundSurfaceVersion) || 0,
                 Number(asset && asset._level0SurfaceTextureReadyVersion) || 0,
-                tileCoordKeys.length
+                FLOOR_LEVEL0_BAKE_ROAD_PATHS ? 1 : 0,
+                tileCoordKeys.length,
+                prototypeNodeCount,
+                prototypeSectionNodeCount
             ].join(":");
         }
 
@@ -12172,7 +13300,7 @@ void main(void) {
                 this.level0GroundSurfaceChunkCache = new Map();
             }
             const cacheKey = this.getLevel0GroundSurfaceChunkKey(sectionKey, chunkX, chunkY);
-            const signature = this.getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY);
+            const signature = this.getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY, map);
             let cache = this.level0GroundSurfaceChunkCache.get(cacheKey);
             if (cache && cache.signature === signature && cache.ready === true && cache.texture && cache.bounds) {
                 cache.lastUsedTick = ++this.level0GroundSurfaceChunkTick;
@@ -12182,10 +13310,12 @@ void main(void) {
             const buildsThisFrame = Math.max(0, Number(this.level0GroundSurfaceChunkBuildsThisFrame) || 0);
             if (buildsThisFrame >= buildLimit) {
                 if (cache && cache.texture && cache.bounds) {
+                    const wasReady = cache.ready === true;
                     cache.ready = false;
                     cache.pending = true;
                     cache.targetSignature = signature;
                     cache.lastUsedTick = ++this.level0GroundSurfaceChunkTick;
+                    if (wasReady) this.bumpLevel0GroundCoverageVersion();
                     return cache;
                 }
                 return null;
@@ -12217,10 +13347,12 @@ void main(void) {
             pendingTexture = pendingTexture || !!(roadBake && roadBake.pending);
             if (pendingTexture) {
                 if (cache && cache.texture) {
+                    const wasReady = cache.ready === true;
                     cache.ready = false;
                     cache.targetSignature = signature;
                     cache.pending = true;
                     cache.lastUsedTick = ++this.level0GroundSurfaceChunkTick;
+                    if (wasReady) this.bumpLevel0GroundCoverageVersion();
                     return cache;
                 }
                 return null;
@@ -12249,6 +13381,7 @@ void main(void) {
             };
             cache.lastUsedTick = ++this.level0GroundSurfaceChunkTick;
             this.level0GroundSurfaceChunkCache.set(cacheKey, cache);
+            this.bumpLevel0GroundCoverageVersion();
             if (this.currentFrameMetrics) {
                 this.currentFrameMetrics.floorLevel0ChunkBuilds = (this.currentFrameMetrics.floorLevel0ChunkBuilds || 0) + 1;
                 this.currentFrameMetrics.floorLevel0ChunkGroundTiles = (this.currentFrameMetrics.floorLevel0ChunkGroundTiles || 0) + bakedGroundTiles;
@@ -12277,7 +13410,49 @@ void main(void) {
                 this.level0GroundSurfaceChunkCache.delete(key);
                 removed += 1;
             }
+            if (removed > 0) this.bumpLevel0GroundCoverageVersion();
             return removed;
+        }
+
+        bumpLevel0GroundCoverageVersion() {
+            this.level0GroundCoverageVersion = (Number(this.level0GroundCoverageVersion) || 0) + 1;
+            return this.level0GroundCoverageVersion;
+        }
+
+        resetLevel0GroundSurfaceCaches(reason = "") {
+            const destroyTexture = (cache) => {
+                if (cache && cache.texture && typeof cache.texture.destroy === "function") {
+                    cache.texture.destroy(true);
+                }
+            };
+            if (this.level0GroundSurfaceCache instanceof Map) {
+                for (const cache of this.level0GroundSurfaceCache.values()) destroyTexture(cache);
+                this.level0GroundSurfaceCache.clear();
+            } else {
+                this.level0GroundSurfaceCache = new Map();
+            }
+            if (this.level0GroundSurfaceChunkCache instanceof Map) {
+                for (const cache of this.level0GroundSurfaceChunkCache.values()) destroyTexture(cache);
+                this.level0GroundSurfaceChunkCache.clear();
+            } else {
+                this.level0GroundSurfaceChunkCache = new Map();
+            }
+            if (this.level0GroundSurfaceBakeNodeCache instanceof Map) {
+                this.level0GroundSurfaceBakeNodeCache.clear();
+            } else {
+                this.level0GroundSurfaceBakeNodeCache = new Map();
+            }
+            if (this._level0ChunkReadyCache instanceof Map) this._level0ChunkReadyCache.clear();
+            if (this._level0SectionAssetCache instanceof Map) this._level0SectionAssetCache.clear();
+            this.bakedLevel0SectionKeys = new Set();
+            this.bakedLevel0SectionSignature = "";
+            this.level0GroundSurfaceChunkBuildsThisFrame = 0;
+            this.bumpLevel0GroundCoverageVersion();
+            return {
+                ok: true,
+                reason: typeof reason === "string" ? reason : "",
+                coverageVersion: this.level0GroundCoverageVersion
+            };
         }
 
         trimFloorVisualChunkClipCache(limit = FLOOR_LEVEL0_CHUNK_CACHE_LIMIT * 4) {
@@ -12440,12 +13615,161 @@ void main(void) {
                 const cache = this.level0GroundSurfaceChunkCache instanceof Map
                     ? this.level0GroundSurfaceChunkCache.get(key)
                     : null;
-                const signature = this.getLevel0GroundSurfaceChunkSignature(asset, coord.chunkX, coord.chunkY);
+                const signature = this.getLevel0GroundSurfaceChunkSignature(asset, coord.chunkX, coord.chunkY, map);
                 if (!cache || cache.ready !== true || cache.signature !== signature || !cache.texture || !cache.bounds) {
                     return false;
                 }
             }
             return true;
+        }
+
+        getRoadPathVisualBounds(roadPath) {
+            const geometry = roadPath && roadPath.generatedGeometry;
+            const points = geometry && Array.isArray(geometry.outline)
+                ? geometry.outline
+                : (Array.isArray(roadPath && roadPath.outlinePolygon) ? roadPath.outlinePolygon : null);
+            if (!Array.isArray(points) || points.length < 3) {
+                throw new Error("Cannot resolve road path bake bounds without outline geometry.");
+            }
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            for (let i = 0; i < points.length; i++) {
+                const pt = points[i];
+                const x = Number(pt && pt.x);
+                const y = Number(pt && pt.y);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                    throw new Error("Cannot resolve road path bake bounds with non-finite outline point.");
+                }
+                minX = Math.min(minX, x);
+                minY = Math.min(minY, y);
+                maxX = Math.max(maxX, x);
+                maxY = Math.max(maxY, y);
+            }
+            return { minX, minY, maxX, maxY };
+        }
+
+        getRoadPathEndpointPair(roadPath) {
+            const geometry = roadPath && roadPath.generatedGeometry;
+            const points = geometry && Array.isArray(geometry.points)
+                ? geometry.points
+                : (Array.isArray(roadPath && roadPath.pathPoints) ? roadPath.pathPoints : null);
+            if (!Array.isArray(points) || points.length < 2) {
+                throw new Error("Cannot resolve road path endpoint continuity without path points.");
+            }
+            const normalizeEndpoint = (point, label) => {
+                const x = Number(point && point.x);
+                const y = Number(point && point.y);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                    throw new Error(`Cannot resolve road path endpoint continuity with non-finite ${label} point.`);
+                }
+                return { x, y };
+            };
+            return {
+                start: normalizeEndpoint(points[0], "start"),
+                end: normalizeEndpoint(points[points.length - 1], "end")
+            };
+        }
+
+        getRoadPathContinuityTextureKey(roadPath) {
+            const RoadClass = (typeof global !== "undefined" && global && global.Road)
+                ? global.Road
+                : ((typeof Road !== "undefined" && Road) ? Road : null);
+            const defaultTexturePath = RoadClass && typeof RoadClass._defaultFillTexturePath === "string"
+                ? RoadClass._defaultFillTexturePath
+                : "/assets/images/flooring/dirt.jpg";
+            const rawTexturePath = typeof (roadPath && roadPath.fillTexturePath) === "string" && roadPath.fillTexturePath.length > 0
+                ? roadPath.fillTexturePath
+                : defaultTexturePath;
+            if (RoadClass && typeof RoadClass._normalizeFillTexturePath === "function") {
+                return RoadClass._normalizeFillTexturePath(rawTexturePath);
+            }
+            return rawTexturePath;
+        }
+
+        getRoadPathContinuityMaterialKey(roadPath) {
+            const fallbackNode = typeof (roadPath && roadPath.getNode) === "function" ? roadPath.getNode() : (roadPath && roadPath.node);
+            const roadLayer = this.getLayerIndexForObject(roadPath, this.getLayerIndexForNode(fallbackNode || roadPath));
+            return `${roadLayer}:${this.getRoadPathContinuityTextureKey(roadPath)}`;
+        }
+
+        buildRoadPathEndpointContinuity(roadPaths) {
+            const out = new Map();
+            const buckets = new Map();
+            const eps = 1e-4;
+            const epsSq = eps * eps;
+            const bucketCoord = (value) => Math.floor(Number(value) / eps);
+            const bucketKey = (materialKey, bx, by) => `${materialKey}:${bx}:${by}`;
+            const markConnected = (a, b) => {
+                if (a.roadPath === b.roadPath || a.materialKey !== b.materialKey) return;
+                const dx = a.point.x - b.point.x;
+                const dy = a.point.y - b.point.y;
+                if ((dx * dx) + (dy * dy) > epsSq) return;
+                const aContinuity = out.get(a.roadPath);
+                const bContinuity = out.get(b.roadPath);
+                if (aContinuity) aContinuity[a.end === "start" ? "startConnected" : "endConnected"] = true;
+                if (bContinuity) bContinuity[b.end === "start" ? "startConnected" : "endConnected"] = true;
+            };
+            const addEndpoint = (endpoint) => {
+                const bx = bucketCoord(endpoint.point.x);
+                const by = bucketCoord(endpoint.point.y);
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        const existing = buckets.get(bucketKey(endpoint.materialKey, bx + dx, by + dy));
+                        if (!Array.isArray(existing)) continue;
+                        for (let i = 0; i < existing.length; i++) markConnected(endpoint, existing[i]);
+                    }
+                }
+                const key = bucketKey(endpoint.materialKey, bx, by);
+                let bucket = buckets.get(key);
+                if (!bucket) {
+                    bucket = [];
+                    buckets.set(key, bucket);
+                }
+                bucket.push(endpoint);
+            };
+            const iterable = roadPaths && typeof roadPaths[Symbol.iterator] === "function" ? roadPaths : [];
+            for (const roadPath of iterable) {
+                if (!roadPath || roadPath.gone || roadPath.type !== "roadPath") continue;
+                if (!out.has(roadPath)) out.set(roadPath, { startConnected: false, endConnected: false });
+                const pair = this.getRoadPathEndpointPair(roadPath);
+                const materialKey = this.getRoadPathContinuityMaterialKey(roadPath);
+                addEndpoint({ roadPath, end: "start", point: pair.start, materialKey });
+                addEndpoint({ roadPath, end: "end", point: pair.end, materialKey });
+            }
+            return out;
+        }
+
+        collectRoadPathContinuityObjectsFromNodes(nodes) {
+            const out = new Set();
+            const sourceNodes = Array.isArray(nodes) ? nodes : [];
+            for (let i = 0; i < sourceNodes.length; i++) {
+                const node = sourceNodes[i];
+                if (!node || !Array.isArray(node.objects)) continue;
+                for (let j = 0; j < node.objects.length; j++) {
+                    const obj = node.objects[j];
+                    if (!obj || obj.gone || obj.type !== "roadPath") continue;
+                    out.add(obj);
+                }
+            }
+            return out;
+        }
+
+        isRoadPathCoveredByReadyLevel0Chunks(ctx, roadPath) {
+            if (!FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED || !roadPath) return false;
+            const map = ctx && ctx.map;
+            const fallbackNode = typeof roadPath.getNode === "function" ? roadPath.getNode() : roadPath.node;
+            const roadLayer = this.getLayerIndexForObject(roadPath, this.getLayerIndexForNode(fallbackNode || roadPath));
+            if (roadLayer !== 0) return false;
+            const sectionKey = fallbackNode && typeof fallbackNode._prototypeSectionKey === "string" ? fallbackNode._prototypeSectionKey : "";
+            const state = map && map._prototypeSectionState;
+            const asset = sectionKey && state && state.sectionAssetsByKey instanceof Map
+                ? state.sectionAssetsByKey.get(sectionKey)
+                : null;
+            if (!asset) return false;
+            const bounds = this.getRoadPathVisualBounds(roadPath);
+            return this.isLevel0GroundSurfaceChunkReadyForBounds(sectionKey, asset, bounds, null, map);
         }
 
         getLevel0GroundSurfaceAssetTileCoordSet(asset) {
@@ -12462,7 +13786,7 @@ void main(void) {
             return set;
         }
 
-        isLevel0GroundSurfaceChunkReadyForBounds(sectionKey, asset, bounds, readyCache = null) {
+        isLevel0GroundSurfaceChunkReadyForBounds(sectionKey, asset, bounds, readyCache = null, map = null) {
             if (!FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED || !sectionKey || !asset || !bounds) return false;
             const coords = this.getLevel0GroundSurfaceChunkCoordsForBounds(bounds);
             if (coords.length === 0) return false;
@@ -12476,7 +13800,7 @@ void main(void) {
                 const cache = this.level0GroundSurfaceChunkCache instanceof Map
                     ? this.level0GroundSurfaceChunkCache.get(cacheKey)
                     : null;
-                const signature = this.getLevel0GroundSurfaceChunkSignature(asset, coord.chunkX, coord.chunkY);
+                const signature = this.getLevel0GroundSurfaceChunkSignature(asset, coord.chunkX, coord.chunkY, map);
                 const ready = !!(
                     cache &&
                     cache.ready === true &&
@@ -12534,7 +13858,8 @@ void main(void) {
                     maxX: x + width * 0.5,
                     maxY: y + height * 0.5
                 },
-                readyCache
+                readyCache,
+                map
             );
         }
 
@@ -12544,17 +13869,20 @@ void main(void) {
             const state = map && map._prototypeSectionState;
             if (!state || !(state.sectionAssetsByKey instanceof Map)) return new Set();
             if (FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED) {
+                let removedChunkedSectionCaches = 0;
                 if (this.level0GroundSurfaceCache instanceof Map) {
                     for (const [sectionKey, cache] of this.level0GroundSurfaceCache.entries()) {
                         if (cache && cache.texture && typeof cache.texture.destroy === "function") {
                             cache.texture.destroy(true);
                         }
                         this.level0GroundSurfaceCache.delete(sectionKey);
+                        removedChunkedSectionCaches += 1;
                         if (this.level0GroundSurfaceBakeNodeCache instanceof Map) {
                             this.level0GroundSurfaceBakeNodeCache.delete(sectionKey);
                         }
                     }
                 }
+                if (removedChunkedSectionCaches > 0) this.bumpLevel0GroundCoverageVersion();
                 this.bakedLevel0SectionKeys = new Set();
                 this.bakedLevel0SectionSignature = `chunked:${state.sectionAssetsByKey.size}`;
                 return this.bakedLevel0SectionKeys;
@@ -12625,6 +13953,7 @@ void main(void) {
                 Number(asset && asset._level0RoadSurfaceVersion) || 0,
                 Number(asset && asset._level0GroundSurfaceVersion) || 0,
                 Number(asset && asset._level0SurfaceTextureReadyVersion) || 0,
+                FLOOR_LEVEL0_BAKE_ROAD_PATHS ? 1 : 0,
                 tileCoordKeys.length,
                 Array.isArray(nodes) ? nodes.length : 0
             ].join(":");
@@ -12641,6 +13970,23 @@ void main(void) {
                 return this.isRoadCoveredByReadyLevel0Chunks(ctx, road);
             }
             const sectionKey = this.getRoadSectionKey(road);
+            if (!sectionKey) return false;
+            const sectionKeys = bakedSectionKeys instanceof Set
+                ? bakedSectionKeys
+                : this.getBakedLevel0SectionKeys(ctx);
+            return sectionKeys instanceof Set && sectionKeys.has(sectionKey);
+        }
+
+        isRoadPathBakedIntoLevel0Surface(ctx, roadPath, bakedSectionKeys = null) {
+            if (!FLOOR_LEVEL0_BAKE_ROAD_PATHS) return false;
+            if (!roadPath || roadPath.type !== "roadPath") return false;
+            const fallbackNode = typeof roadPath.getNode === "function" ? roadPath.getNode() : roadPath.node;
+            const roadLayer = this.getLayerIndexForObject(roadPath, this.getLayerIndexForNode(fallbackNode || roadPath));
+            if (roadLayer !== 0) return false;
+            if (FLOOR_LEVEL0_CHUNKED_SURFACE_ENABLED) {
+                return this.isRoadPathCoveredByReadyLevel0Chunks(ctx, roadPath);
+            }
+            const sectionKey = this.getRoadSectionKey(roadPath);
             if (!sectionKey) return false;
             const sectionKeys = bakedSectionKeys instanceof Set
                 ? bakedSectionKeys
@@ -12682,19 +14028,10 @@ void main(void) {
 
         drawLevel0GroundTileToCanvas(ctx2d, map, node, bounds, scale, sectionKey = "", asset = null) {
             if (!ctx2d || !map || !node || !bounds || !Number.isFinite(scale)) return false;
-            const maxTextureIndex = Array.isArray(map.groundTextures) ? (map.groundTextures.length - 1) : 0;
-            const _baseId = Math.max(0, Math.min(12, Number.isFinite(node.groundTextureId) ? Math.floor(node.groundTextureId) : 0));
-            const _x = Number.isFinite(node.xindex) ? Math.floor(node.xindex) : 0;
-            const _y = Number.isFinite(node.yindex) ? Math.floor(node.yindex) : 0;
-            const _seed = ((_x * 73856093) ^ (_y * 19349663) ^ (_baseId * 83492791)) >>> 0;
-            const _variant = _seed % 4;
-            const _variantTextureIndex = _baseId + (_variant * 13);
-            const _tileCount = 52;
-            const _scrambledIndex = (_variantTextureIndex * 17) % _tileCount;
-            const textureIndex = Math.min(maxTextureIndex, (_tileCount <= (maxTextureIndex + 1)) ? _scrambledIndex : _variantTextureIndex);
-            const texture = Array.isArray(map.groundTextures) && map.groundTextures[textureIndex]
-                ? map.groundTextures[textureIndex]
-                : PIXI.Texture.WHITE;
+            if (typeof map.getGroundTextureForNode !== "function") {
+                throw new Error("level 0 ground baking requires map.getGroundTextureForNode");
+            }
+            const texture = map.getGroundTextureForNode(node);
             if (!isRenderablePixiTexture(texture)) {
                 const baseTexture = texture && texture.baseTexture ? texture.baseTexture : null;
                 if (baseTexture && baseTexture.valid !== true) {
@@ -12747,9 +14084,216 @@ void main(void) {
             return { baked: 1, pending: false };
         }
 
+        drawRoadPathToLevel0GroundSurfaceCanvas(ctx2d, roadPath, node, bounds, scale, sectionKey = "", asset = null, options = null) {
+            if (!ctx2d || !roadPath || roadPath.gone || roadPath.type !== "roadPath" || !bounds || !Number.isFinite(scale)) {
+                return { baked: 0, pending: false };
+            }
+            const fallbackNode = node || (typeof roadPath.getNode === "function" ? roadPath.getNode() : roadPath.node);
+            const roadLayer = this.getLayerIndexForObject(roadPath, this.getLayerIndexForNode(fallbackNode || roadPath));
+            if (roadLayer !== 0) return { baked: 0, pending: false };
+            const geometry = roadPath.generatedGeometry || null;
+            const outline = geometry && Array.isArray(geometry.outline) ? geometry.outline : roadPath.outlinePolygon;
+            if (!Array.isArray(outline) || outline.length < 3) {
+                throw new Error("Cannot bake road path without outline geometry.");
+            }
+            const RoadClass = typeof global.Road !== "undefined" ? global.Road : null;
+            if (
+                !RoadClass ||
+                typeof RoadClass._getFillTexture !== "function" ||
+                !Number.isFinite(RoadClass._edgeFadePx) ||
+                !Number.isFinite(RoadClass._pixelsPerWorldUnit) ||
+                !(RoadClass._pixelsPerWorldUnit > 0)
+            ) {
+                throw new Error("Cannot bake road path without road texture and edge fade metrics.");
+            }
+            const fillTexturePath = (typeof roadPath.fillTexturePath === "string" && roadPath.fillTexturePath.length > 0)
+                ? roadPath.fillTexturePath
+                : RoadClass._defaultFillTexturePath;
+            const fillTexture = RoadClass._getFillTexture(fillTexturePath);
+            const fillBase = fillTexture && fillTexture.baseTexture ? fillTexture.baseTexture : null;
+            if (fillBase && fillBase.valid !== true) {
+                this.markLevel0GroundSurfacePendingTexture(sectionKey, fillBase, asset);
+                return { baked: 0, pending: true };
+            }
+            const source = this.getLevel0BakeImageSource(fillTexture);
+            if (!source) return { baked: 0, pending: true };
+            const textureRepeat = this.getFloorVisualTextureRepeat(fillTexturePath);
+            const repeatX = textureRepeat && Number.isFinite(textureRepeat.x) ? Math.max(0.0001, Number(textureRepeat.x)) : FLOOR_VISUAL_TEXTURE_WORLD_SCALE;
+            const repeatY = textureRepeat && Number.isFinite(textureRepeat.y) ? Math.max(0.0001, Number(textureRepeat.y)) : FLOOR_VISUAL_TEXTURE_WORLD_SCALE;
+            const tileWorldW = 1 / repeatX;
+            const tileWorldH = 1 / repeatY;
+            const tilePxW = Math.max(1, tileWorldW * scale);
+            const tilePxH = Math.max(1, tileWorldH * scale);
+            const fadePx = Math.max(0.0001, Number(RoadClass._edgeFadePx) / Number(RoadClass._pixelsPerWorldUnit)) * scale;
+            const canvasPoints = outline.map((pt, index) => {
+                const x = Number(pt && pt.x);
+                const y = Number(pt && pt.y);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                    throw new Error(`Cannot bake road path with non-finite outline point ${index}.`);
+                }
+                return {
+                    x: (x - bounds.minX) * scale,
+                    y: (y - bounds.minY) * scale,
+                    worldX: x,
+                    worldY: y
+                };
+            });
+            const pathBounds = this.getRoadPathVisualBounds(roadPath);
+            const drawMinX = Math.max(Number(bounds.minX), pathBounds.minX);
+            const drawMinY = Math.max(Number(bounds.minY), pathBounds.minY);
+            const drawMaxX = Math.min(Number(bounds.maxX), pathBounds.maxX);
+            const drawMaxY = Math.min(Number(bounds.maxY), pathBounds.maxY);
+            if (!(drawMaxX > drawMinX) || !(drawMaxY > drawMinY)) {
+                return { baked: 0, pending: false };
+            }
+            const sourceWidth = Number(source.naturalWidth || source.videoWidth || source.width) || 0;
+            const sourceHeight = Number(source.naturalHeight || source.videoHeight || source.height) || 0;
+            if (!(sourceWidth > 0) || !(sourceHeight > 0)) return { baked: 0, pending: true };
+            const pointInPolygon = (px, py, points) => {
+                let inside = false;
+                for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+                    const xi = points[i].x;
+                    const yi = points[i].y;
+                    const xj = points[j].x;
+                    const yj = points[j].y;
+                    const intersects = ((yi > py) !== (yj > py)) &&
+                        (px < ((xj - xi) * (py - yi)) / ((yj - yi) || 1e-7) + xi);
+                    if (intersects) inside = !inside;
+                }
+                return inside;
+            };
+            const targetCanvas = ctx2d.canvas || null;
+            const targetWidth = Math.max(1, Math.floor(Number(targetCanvas && targetCanvas.width) || 0));
+            const targetHeight = Math.max(1, Math.floor(Number(targetCanvas && targetCanvas.height) || 0));
+            if (!(targetWidth > 0) || !(targetHeight > 0)) {
+                throw new Error("Cannot bake road path without a target canvas.");
+            }
+            if (typeof document === "undefined" || !document || typeof document.createElement !== "function") {
+                throw new Error("Cannot bake road path alpha fade without canvas creation support.");
+            }
+            const fadePadPx = Math.max(2, Math.ceil(fadePx * 2));
+            const clipX = Math.max(0, Math.floor((drawMinX - bounds.minX) * scale - fadePadPx));
+            const clipY = Math.max(0, Math.floor((drawMinY - bounds.minY) * scale - fadePadPx));
+            const clipMaxX = Math.min(targetWidth, Math.ceil((drawMaxX - bounds.minX) * scale + fadePadPx));
+            const clipMaxY = Math.min(targetHeight, Math.ceil((drawMaxY - bounds.minY) * scale + fadePadPx));
+            const clipW = Math.max(0, clipMaxX - clipX);
+            const clipH = Math.max(0, clipMaxY - clipY);
+            if (!(clipW > 0) || !(clipH > 0)) return { baked: 0, pending: false };
+            const roadCanvas = document.createElement("canvas");
+            roadCanvas.width = clipW;
+            roadCanvas.height = clipH;
+            const roadCtx = roadCanvas.getContext("2d");
+            if (!roadCtx) {
+                throw new Error("Cannot bake road path without a temporary road canvas context.");
+            }
+            const localPoints = canvasPoints.map(pt => ({
+                x: pt.x - clipX,
+                y: pt.y - clipY
+            }));
+            const pathPointCount = geometry && Array.isArray(geometry.points)
+                ? geometry.points.length
+                : (Array.isArray(roadPath.pathPoints) ? roadPath.pathPoints.length : 0);
+            if (!(pathPointCount >= 2) || localPoints.length !== pathPointCount * 2) {
+                throw new Error("Cannot bake road path endpoint continuity without matching outline and path point geometry.");
+            }
+            const endpointContinuity = options && options.endpointContinuity ? options.endpointContinuity : null;
+            const suppressStartCapFade = !!(endpointContinuity && endpointContinuity.startConnected);
+            const suppressEndCapFade = !!(endpointContinuity && endpointContinuity.endConnected);
+            const endCapEdgeIndex = pathPointCount - 1;
+            const startCapEdgeIndex = localPoints.length - 1;
+            roadCtx.save();
+            roadCtx.beginPath();
+            for (let i = 0; i < localPoints.length; i++) {
+                const pt = localPoints[i];
+                if (i === 0) roadCtx.moveTo(pt.x, pt.y);
+                else roadCtx.lineTo(pt.x, pt.y);
+            }
+            roadCtx.closePath();
+            roadCtx.clip();
+            roadCtx.globalAlpha = Number.isFinite(roadPath.alpha) ? Math.max(0, Math.min(1, Number(roadPath.alpha))) : 1;
+            const startWorldX = Math.floor(drawMinX / tileWorldW) * tileWorldW;
+            const endWorldX = Math.ceil(drawMaxX / tileWorldW) * tileWorldW;
+            const startWorldY = Math.floor(drawMinY / tileWorldH) * tileWorldH;
+            const endWorldY = Math.ceil(drawMaxY / tileWorldH) * tileWorldH;
+            for (let wx = startWorldX; wx <= endWorldX; wx += tileWorldW) {
+                const dx = (wx - bounds.minX) * scale - clipX;
+                for (let wy = startWorldY; wy <= endWorldY; wy += tileWorldH) {
+                    const dy = (wy - bounds.minY) * scale - clipY;
+                    roadCtx.drawImage(source, 0, 0, sourceWidth, sourceHeight, dx, dy, tilePxW, tilePxH);
+                }
+            }
+            roadCtx.globalAlpha = 1;
+            roadCtx.globalCompositeOperation = "destination-out";
+            const centroid = localPoints.reduce((acc, pt) => {
+                acc.x += pt.x;
+                acc.y += pt.y;
+                return acc;
+            }, { x: 0, y: 0 });
+            centroid.x /= localPoints.length;
+            centroid.y /= localPoints.length;
+            for (let i = 0; i < localPoints.length; i++) {
+                if (
+                    (suppressEndCapFade && i === endCapEdgeIndex) ||
+                    (suppressStartCapFade && i === startCapEdgeIndex)
+                ) {
+                    continue;
+                }
+                const p0 = localPoints[i];
+                const p1 = localPoints[(i + 1) % localPoints.length];
+                const ex = p1.x - p0.x;
+                const ey = p1.y - p0.y;
+                const edgeLen = Math.hypot(ex, ey);
+                if (!(edgeLen > 0.0001)) continue;
+                const tx = ex / edgeLen;
+                const ty = ey / edgeLen;
+                let nx = -ey / edgeLen;
+                let ny = ex / edgeLen;
+                const mx = (p0.x + p1.x) * 0.5;
+                const my = (p0.y + p1.y) * 0.5;
+                const probe = Math.max(2, fadePx * 0.35);
+                const scoreA = pointInPolygon(mx + nx * probe, my + ny * probe, localPoints) ? 1 : 0;
+                const scoreB = pointInPolygon(mx - nx * probe, my - ny * probe, localPoints) ? 1 : 0;
+                if (scoreB > scoreA) {
+                    nx = -nx;
+                    ny = -ny;
+                } else if (scoreA === scoreB && ((centroid.x - mx) * nx + (centroid.y - my) * ny) < 0) {
+                    nx = -nx;
+                    ny = -ny;
+                }
+                const ext = fadePx * 1.5;
+                const a0 = { x: p0.x - tx * ext, y: p0.y - ty * ext };
+                const a1 = { x: p1.x + tx * ext, y: p1.y + ty * ext };
+                const b0 = { x: a0.x + nx * fadePx, y: a0.y + ny * fadePx };
+                const b1 = { x: a1.x + nx * fadePx, y: a1.y + ny * fadePx };
+                const grad = roadCtx.createLinearGradient(mx, my, mx + nx * fadePx, my + ny * fadePx);
+                grad.addColorStop(0, "rgba(0,0,0,1)");
+                grad.addColorStop(1, "rgba(0,0,0,0)");
+                roadCtx.fillStyle = grad;
+                roadCtx.beginPath();
+                roadCtx.moveTo(a0.x, a0.y);
+                roadCtx.lineTo(a1.x, a1.y);
+                roadCtx.lineTo(b1.x, b1.y);
+                roadCtx.lineTo(b0.x, b0.y);
+                roadCtx.closePath();
+                roadCtx.fill();
+            }
+            roadCtx.restore();
+
+            ctx2d.save();
+            ctx2d.globalAlpha = 1;
+            ctx2d.globalCompositeOperation = "source-over";
+            ctx2d.drawImage(roadCanvas, clipX, clipY);
+            ctx2d.restore();
+            return { baked: 1, pending: false };
+        }
+
         addRoadsToLevel0GroundSurfaceCanvas(ctx2d, nodes, bounds, scale, sectionKey = "", asset = null) {
             if (!ctx2d || !Array.isArray(nodes) || !bounds || typeof PIXI === "undefined") return { baked: 0, pending: false };
             const seenRoads = new Set();
+            const seenRoadPaths = new Set();
+            const roadPathContinuity = FLOOR_LEVEL0_BAKE_ROAD_PATHS
+                ? this.buildRoadPathEndpointContinuity(this.collectRoadPathContinuityObjectsFromNodes(nodes))
+                : null;
             let baked = 0;
             let pending = false;
             for (let i = 0; i < nodes.length; i++) {
@@ -12757,10 +14301,21 @@ void main(void) {
                 if (!node || !Array.isArray(node.objects)) continue;
                 for (let j = 0; j < node.objects.length; j++) {
                     const road = node.objects[j];
-                    if (!road || road.gone || road.type !== "road" || seenRoads.has(road)) continue;
-                    seenRoads.add(road);
-                    const roadBake = this.drawRoadToLevel0GroundSurfaceCanvas(ctx2d, road, node, bounds, scale, sectionKey, asset, {
-                        refreshTexture: true
+                    if (!road || road.gone) continue;
+                    if (road.type === "road") {
+                        if (seenRoads.has(road)) continue;
+                        seenRoads.add(road);
+                        const roadBake = this.drawRoadToLevel0GroundSurfaceCanvas(ctx2d, road, node, bounds, scale, sectionKey, asset, {
+                            refreshTexture: true
+                        });
+                        baked += roadBake && Number.isFinite(roadBake.baked) ? roadBake.baked : 0;
+                        pending = pending || !!(roadBake && roadBake.pending);
+                        continue;
+                    }
+                    if (!FLOOR_LEVEL0_BAKE_ROAD_PATHS || road.type !== "roadPath" || seenRoadPaths.has(road)) continue;
+                    seenRoadPaths.add(road);
+                    const roadBake = this.drawRoadPathToLevel0GroundSurfaceCanvas(ctx2d, road, node, bounds, scale, sectionKey, asset, {
+                        endpointContinuity: roadPathContinuity.get(road) || null
                     });
                     baked += roadBake && Number.isFinite(roadBake.baked) ? roadBake.baked : 0;
                     pending = pending || !!(roadBake && roadBake.pending);
@@ -12895,42 +14450,58 @@ void main(void) {
             const sectionNodes = state && state.nodesBySectionKey instanceof Map
                 ? (state.nodesBySectionKey.get(sectionKey) || [])
                 : [];
+            const out = [];
+            const seen = new Set();
+            const pushCandidateNode = (node) => {
+                if (!node || node._prototypeVoid === true) return;
+                const key = `${Number(node.xindex)},${Number(node.yindex)}`;
+                if (seen.has(key)) return;
+                seen.add(key);
+                out.push(node);
+            };
+            const padX = (Number(bounds.tileWorldW) || 1.2) * 3;
+            const padY = (Number(bounds.tileWorldH) || 1) * 3;
+            const minX = Number(rect.minX) - padX;
+            const maxX = Number(rect.maxX) + padX;
+            const minY = Number(rect.minY) - padY;
+            const maxY = Number(rect.maxY) + padY;
+            const nodeOverlapsCandidateBounds = (node) => {
+                const x = Number(node && node.x);
+                const y = Number(node && node.y);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+                return x >= minX && x <= maxX && y >= minY && y <= maxY;
+            };
+            const xScale = 0.866;
+            const padXi = Math.ceil((Number(bounds.tileWorldW) || 1.2) / xScale) + 2;
+            const padYi = Math.ceil(Number(bounds.tileWorldH) || 1) + 2;
+            const minXi = Math.floor(Number(rect.minX) / xScale) - padXi;
+            const maxXi = Math.ceil(Number(rect.maxX) / xScale) + padXi;
+            const minYi = Math.floor(Number(rect.minY)) - padYi;
+            const maxYi = Math.ceil(Number(rect.maxY)) + padYi;
+            if (state && state.allNodesByCoordKey instanceof Map && state.allNodesByCoordKey.size > 0) {
+                for (let xi = minXi; xi <= maxXi; xi++) {
+                    for (let yi = minYi; yi <= maxYi; yi++) {
+                        const node = state.allNodesByCoordKey.get(`${xi},${yi}`) || null;
+                        if (!node || !nodeOverlapsCandidateBounds(node)) continue;
+                        pushCandidateNode(node);
+                    }
+                }
+                return out;
+            }
             if (Array.isArray(sectionNodes) && sectionNodes.length > 0) {
-                const out = [];
-                const padX = (Number(bounds.tileWorldW) || 1.2) * 3;
-                const padY = (Number(bounds.tileWorldH) || 1) * 3;
-                const minX = Number(rect.minX) - padX;
-                const maxX = Number(rect.maxX) + padX;
-                const minY = Number(rect.minY) - padY;
-                const maxY = Number(rect.maxY) + padY;
                 for (let i = 0; i < sectionNodes.length; i++) {
                     const node = sectionNodes[i];
-                    const x = Number(node && node.x);
-                    const y = Number(node && node.y);
-                    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-                    if (x < minX || x > maxX || y < minY || y > maxY) continue;
-                    out.push(node);
+                    if (!nodeOverlapsCandidateBounds(node)) continue;
+                    pushCandidateNode(node);
                 }
                 return out;
             }
             if (typeof map.getNode !== "function") return [];
-            const out = [];
-            const seen = new Set();
-            const xScale = 0.866;
-            const padX = Math.ceil((Number(bounds.tileWorldW) || 1.2) / xScale) + 2;
-            const padY = Math.ceil(Number(bounds.tileWorldH) || 1) + 2;
-            const minXi = Math.floor(Number(rect.minX) / xScale) - padX;
-            const maxXi = Math.ceil(Number(rect.maxX) / xScale) + padX;
-            const minYi = Math.floor(Number(rect.minY)) - padY;
-            const maxYi = Math.ceil(Number(rect.maxY)) + padY;
             for (let xi = minXi; xi <= maxXi; xi++) {
                 for (let yi = minYi; yi <= maxYi; yi++) {
                     const node = map.getNode(xi, yi);
-                    if (!node || typeof node._prototypeSectionKey !== "string" || node._prototypeSectionKey !== sectionKey) continue;
-                    const key = `${node.xindex},${node.yindex}`;
-                    if (seen.has(key)) continue;
-                    seen.add(key);
-                    out.push(node);
+                    if (!node || !nodeOverlapsCandidateBounds(node)) continue;
+                    pushCandidateNode(node);
                 }
             }
             return out;
@@ -12990,6 +14561,10 @@ void main(void) {
                 ctx2d.clip();
                 ctx2d.clearRect(x, y, w, h);
                 const seenRoads = new Set();
+                const seenRoadPaths = new Set();
+                const roadPathContinuity = FLOOR_LEVEL0_BAKE_ROAD_PATHS
+                    ? this.buildRoadPathEndpointContinuity(this.collectRoadPathContinuityObjectsFromNodes(groundCandidateNodes))
+                    : null;
                 for (let i = 0; i < groundCandidateNodes.length; i++) {
                     if (this.drawLevel0GroundTileToCanvas(ctx2d, map, groundCandidateNodes[i], bounds, scale, sectionKey, asset)) {
                         bakedGroundTiles += 1;
@@ -13005,11 +14580,23 @@ void main(void) {
                     if (!node || !Array.isArray(node.objects)) continue;
                     for (let j = 0; j < node.objects.length; j++) {
                         const road = node.objects[j];
-                        if (!road || road.gone || road.type !== "road" || seenRoads.has(road)) continue;
-                        seenRoads.add(road);
-                        const roadBake = this.drawRoadToLevel0GroundSurfaceCanvas(ctx2d, road, node, bounds, scale, sectionKey, asset, {
-                            refreshTexture: false
-                        });
+                        if (!road || road.gone) continue;
+                        let roadBake = null;
+                        if (road.type === "road") {
+                            if (seenRoads.has(road)) continue;
+                            seenRoads.add(road);
+                            roadBake = this.drawRoadToLevel0GroundSurfaceCanvas(ctx2d, road, node, bounds, scale, sectionKey, asset, {
+                                refreshTexture: false
+                            });
+                        } else if (FLOOR_LEVEL0_BAKE_ROAD_PATHS && road.type === "roadPath") {
+                            if (seenRoadPaths.has(road)) continue;
+                            seenRoadPaths.add(road);
+                            roadBake = this.drawRoadPathToLevel0GroundSurfaceCanvas(ctx2d, road, node, bounds, scale, sectionKey, asset, {
+                                endpointContinuity: roadPathContinuity.get(road) || null
+                            });
+                        } else {
+                            continue;
+                        }
                         bakedRoads += roadBake && Number.isFinite(roadBake.baked) ? roadBake.baked : 0;
                         if (roadBake && roadBake.pending) {
                             pendingTexture = true;
@@ -13346,6 +14933,24 @@ void main(void) {
             state.blend = true;
             state.culling = false;
             this.floorVisualDepthState = state;
+            return state;
+        }
+
+        getRoadPathDepthState() {
+            if (this.roadPathDepthState) return this.roadPathDepthState;
+            if (typeof PIXI === "undefined" || !PIXI.State) {
+                throw new Error("road path alpha fade requires PIXI.State");
+            }
+            if (!PIXI.BLEND_MODES || !Object.prototype.hasOwnProperty.call(PIXI.BLEND_MODES, "NORMAL")) {
+                throw new Error("road path alpha fade requires PIXI.BLEND_MODES.NORMAL");
+            }
+            const state = new PIXI.State();
+            state.depthTest = true;
+            state.depthMask = false;
+            state.blend = true;
+            state.blendMode = PIXI.BLEND_MODES.NORMAL;
+            state.culling = false;
+            this.roadPathDepthState = state;
             return state;
         }
 
@@ -14069,6 +15674,7 @@ void main(void) {
             );
             const wizardLayer = this.getWizardVisualLayerIndex(wizard, 0);
             const cutawayState = this.getLayerCutawayState(ctx);
+            const activeInteriorFloorFragmentIds = this.getBuildingInteriorActiveFloorFragmentIds(ctx, cutawayState);
             const entries = [];
             const metrics = this.currentFrameMetrics || null;
             let scannedFragments = 0;
@@ -14110,6 +15716,9 @@ void main(void) {
                         ? Math.max(0, Math.min(1, Number(buildingCutawayTrigger.alpha)))
                         : BUILDING_CUTAWAY_GHOST_ALPHA;
                     const floorCutawayAlpha = buildingCutawayTrigger ? 1 : cutawayAlpha;
+                    const activeInteriorDepthBump = activeInteriorFloorFragmentIds.has(fragmentId)
+                        ? BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS
+                        : 0;
                     const sectionKey = typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : "";
                     const state = map._prototypeSectionState || null;
                     const asset = sectionKey && state && state.sectionAssetsByKey instanceof Map
@@ -14152,7 +15761,21 @@ void main(void) {
                                     if (chunkEntries[ce]) {
                                         chunkEntries[ce].buildingCutawayCompositeFrame = buildingCutawayCompositeFrame;
                                         chunkEntries[ce].buildingCutawayCompositeAlpha = buildingCutawayCompositeAlpha;
+                                        if (activeInteriorDepthBump > 0) {
+                                            const baseDepthBias = Number.isFinite(chunkEntries[ce].depthBias)
+                                                ? Number(chunkEntries[ce].depthBias)
+                                                : FLOOR_VISUAL_DEPTH_BIAS_UNITS;
+                                            chunkEntries[ce].depthBias = baseDepthBias + activeInteriorDepthBump;
+                                        }
                                     }
+                                }
+                            } else if (activeInteriorDepthBump > 0) {
+                                for (let ce = 0; ce < chunkEntries.length; ce++) {
+                                    if (!chunkEntries[ce]) continue;
+                                    const baseDepthBias = Number.isFinite(chunkEntries[ce].depthBias)
+                                        ? Number(chunkEntries[ce].depthBias)
+                                        : FLOOR_VISUAL_DEPTH_BIAS_UNITS;
+                                    chunkEntries[ce].depthBias = baseDepthBias + activeInteriorDepthBump;
                                 }
                             }
                             if (chunkEntries.length === 0) {
@@ -14207,7 +15830,7 @@ void main(void) {
                             level
                         ),
                         alpha: ((paintedTexturePath || level !== 0) ? 1 : defaultAlpha) * fadeMultiplier,
-                        depthBias: level === 0 ? (FLOOR_VISUAL_DEPTH_BIAS_UNITS - 0.005) : FLOOR_VISUAL_DEPTH_BIAS_UNITS,
+                        depthBias: (level === 0 ? (FLOOR_VISUAL_DEPTH_BIAS_UNITS - 0.005) : FLOOR_VISUAL_DEPTH_BIAS_UNITS) + activeInteriorDepthBump,
                         isHoleOverlay: false
                     });
                     if (buildingCutawayCompositeFrame > 0) {
@@ -14231,7 +15854,7 @@ void main(void) {
                             texturePath: "",
                             tint: this.getLayerDarkenedTint(FLOOR_VISUAL_HOLE_FILL, level),
                             alpha: fadeMultiplier,
-                            depthBias: FLOOR_VISUAL_HOLE_DEPTH_BIAS_UNITS,
+                            depthBias: FLOOR_VISUAL_HOLE_DEPTH_BIAS_UNITS + activeInteriorDepthBump,
                             isHoleOverlay: true
                         });
                         if (buildingCutawayCompositeFrame > 0) {
@@ -14516,8 +16139,472 @@ void main(void) {
                 this.roadSpriteByObject.delete(road);
                 roadDestroyedSprites += 1;
             };
+            const destroyRoadPathMesh = (roadPath, mesh) => {
+                if (mesh) {
+                    if (mesh.parent) {
+                        mesh.parent.removeChild(mesh);
+                    }
+                    if (roadPath && roadPath._renderingDisplayObject === mesh) {
+                        roadPath._renderingDisplayObject = null;
+                    }
+                    if (
+                        mesh.destroyed !== true &&
+                        typeof mesh.destroy === "function" &&
+                        mesh.geometry &&
+                        Number.isFinite(mesh.geometry.refCount)
+                    ) {
+                        try {
+                            mesh.destroy({ children: false, texture: false, baseTexture: false });
+                        } catch (error) {
+                            const message = error && error.message ? String(error.message) : "";
+                            if (!message.includes("refCount")) throw error;
+                            mesh.geometry = null;
+                            mesh.shader = null;
+                            mesh.state = null;
+                        }
+                    } else {
+                        mesh.visible = false;
+                        if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+                            mesh.renderable = false;
+                        }
+                    }
+                }
+                if (this.roadPathMeshByObject instanceof Map) {
+                    this.roadPathMeshByObject.delete(roadPath);
+                }
+            };
+            const getRoadPathFillTexturePath = (roadPath) => {
+                const RoadClass = (typeof Road !== "undefined" && Road)
+                    ? Road
+                    : ((global && global.Road) ? global.Road : null);
+                const defaultTexturePath = RoadClass && typeof RoadClass._defaultFillTexturePath === "string"
+                    ? RoadClass._defaultFillTexturePath
+                    : "/assets/images/flooring/dirt.jpg";
+                const normalizeTexturePath = (texturePath) => {
+                    if (typeof texturePath !== "string" || texturePath.length === 0) return "";
+                    if (RoadClass && typeof RoadClass._normalizeFillTexturePath === "function") {
+                        return RoadClass._normalizeFillTexturePath(texturePath);
+                    }
+                    return texturePath;
+                };
+                const defaultNormalized = normalizeTexturePath(defaultTexturePath) || defaultTexturePath;
+                const selectedTexturePath = wizard && typeof wizard.selectedFlooringTexture === "string" && wizard.selectedFlooringTexture.length > 0
+                    ? normalizeTexturePath(wizard.selectedFlooringTexture)
+                    : "";
+                const objectTexturePath = roadPath && typeof roadPath.fillTexturePath === "string" && roadPath.fillTexturePath.length > 0
+                    ? normalizeTexturePath(roadPath.fillTexturePath)
+                    : "";
+                if (
+                    selectedTexturePath &&
+                    selectedTexturePath !== defaultNormalized &&
+                    (!objectTexturePath || objectTexturePath === defaultNormalized)
+                ) {
+                    return selectedTexturePath;
+                }
+                return objectTexturePath || selectedTexturePath || defaultNormalized;
+            };
+            const getRoadPathFillTexture = (texturePath) => {
+                const texture = this.getFloorVisualTexture({ texturePath });
+                const baseTexture = texture && texture.baseTexture ? texture.baseTexture : null;
+                if (baseTexture) {
+                    if (PIXI.WRAP_MODES) baseTexture.wrapMode = PIXI.WRAP_MODES.REPEAT;
+                    if (PIXI.SCALE_MODES) baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR;
+                    if (
+                        baseTexture &&
+                        baseTexture.valid !== true &&
+                        typeof baseTexture.once === "function" &&
+                        baseTexture._roadPathTextureRefreshPending !== true
+                    ) {
+                        baseTexture._roadPathTextureRefreshPending = true;
+                        baseTexture.once("loaded", () => {
+                            baseTexture._roadPathTextureRefreshPending = false;
+                            if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                                globalThis.presentGameFrame();
+                            }
+                        });
+                    }
+                }
+                return texture || PIXI.Texture.WHITE;
+            };
+            const getRoadPathTextureRepeat = (texturePath) => {
+                const repeat = this.getFloorVisualTextureRepeat(texturePath);
+                return {
+                    x: repeat && Number.isFinite(repeat.x) ? Number(repeat.x) : FLOOR_VISUAL_TEXTURE_WORLD_SCALE,
+                    y: repeat && Number.isFinite(repeat.y) ? Number(repeat.y) : FLOOR_VISUAL_TEXTURE_WORLD_SCALE
+                };
+            };
+            const resolveRoadPathFillTexturePathForView = (roadPath, texturePath) => {
+                const RoadClass = (typeof Road !== "undefined" && Road)
+                    ? Road
+                    : ((global && global.Road) ? global.Road : null);
+                if (!RoadClass || typeof RoadClass.resolveFillTexturePathForSize !== "function") {
+                    return texturePath;
+                }
+                const roadWidth = Number.isFinite(roadPath && roadPath.roadWidth)
+                    ? Math.max(0.001, Number(roadPath.roadWidth))
+                    : (Number.isFinite(roadPath && roadPath.width) ? Math.max(0.001, Number(roadPath.width)) : 1);
+                const roadScreenWidth = roadWidth * (Number(cam.viewscale) || 1) * 1.1547;
+                const roadScreenHeight = roadWidth * (Number(cam.viewscale) || 1) * (Number(cam.xyratio) || 1);
+                const lodMetric = typeof RoadClass.getFillTextureLodMetric === "function"
+                    ? RoadClass.getFillTextureLodMetric(texturePath, roadScreenWidth, roadScreenHeight)
+                    : Math.max(roadScreenWidth, roadScreenHeight);
+                return RoadClass.resolveFillTexturePathForSize(texturePath, lodMetric);
+            };
+            const getRoadPathEdgeFadeWorldUnits = () => {
+                const RoadClass = (typeof Road !== "undefined" && Road)
+                    ? Road
+                    : ((global && global.Road) ? global.Road : null);
+                if (
+                    !RoadClass ||
+                    !Number.isFinite(RoadClass._edgeFadePx) ||
+                    !Number.isFinite(RoadClass._pixelsPerWorldUnit) ||
+                    !(RoadClass._pixelsPerWorldUnit > 0)
+                ) {
+                    throw new Error("Cannot render road path alpha fade without road edge fade metrics.");
+                }
+                return Math.max(0.0001, Number(RoadClass._edgeFadePx) / Number(RoadClass._pixelsPerWorldUnit));
+            };
+            const buildRoadPathMeshData = (roadPath, segments, textureRepeat, endpointContinuity = null) => {
+                const repeatX = textureRepeat && Number.isFinite(textureRepeat.x)
+                    ? Number(textureRepeat.x)
+                    : FLOOR_VISUAL_TEXTURE_WORLD_SCALE;
+                const repeatY = textureRepeat && Number.isFinite(textureRepeat.y)
+                    ? Number(textureRepeat.y)
+                    : FLOOR_VISUAL_TEXTURE_WORLD_SCALE;
+                const edgeFadeWorldUnits = getRoadPathEdgeFadeWorldUnits();
+                const maxUvSpanPerQuad = 0.5;
+                const emitted = [];
+                let pathDistance = 0;
+                const suppressStartFade = !!(endpointContinuity && endpointContinuity.startConnected);
+                const suppressEndFade = !!(endpointContinuity && endpointContinuity.endConnected);
+                const lerpPoint = (from, to, t) => ({
+                    x: Number(from.x) + (Number(to.x) - Number(from.x)) * t,
+                    y: Number(from.y) + (Number(to.y) - Number(from.y)) * t
+                });
+                let totalPathLength = 0;
+                for (let s = 0; s < segments.length; s++) {
+                    const segment = segments[s];
+                    const polygon = segment && Array.isArray(segment.polygon) ? segment.polygon : null;
+                    if (!polygon || polygon.length !== 4) {
+                        throw new Error(`Cannot render road path segment ${s} without four-point polygon geometry.`);
+                    }
+                    const leftStart = polygon[0];
+                    const leftEnd = polygon[1];
+                    const rightEnd = polygon[2];
+                    const rightStart = polygon[3];
+                    const startPoint = segment && segment.startPoint ? segment.startPoint : {
+                        x: (Number(leftStart.x) + Number(rightStart.x)) * 0.5,
+                        y: (Number(leftStart.y) + Number(rightStart.y)) * 0.5
+                    };
+                    const endPoint = segment && segment.endPoint ? segment.endPoint : {
+                        x: (Number(leftEnd.x) + Number(rightEnd.x)) * 0.5,
+                        y: (Number(leftEnd.y) + Number(rightEnd.y)) * 0.5
+                    };
+                    const length = Math.hypot(
+                        Number(endPoint.x) - Number(startPoint.x),
+                        Number(endPoint.y) - Number(startPoint.y)
+                    );
+                    if (!(length > 0)) {
+                        throw new Error(`Cannot render road path segment ${s} with zero visual length.`);
+                    }
+                    totalPathLength += length;
+                }
+                if (!(totalPathLength > 0)) {
+                    throw new Error("Cannot render road path with zero total visual length.");
+                }
+                const addSortedUniqueCut = (cuts, value) => {
+                    if (!Number.isFinite(value)) {
+                        throw new Error("Cannot render road path mesh with non-finite fade cut.");
+                    }
+                    const clamped = Math.max(0, Math.min(1, Number(value)));
+                    for (let i = 0; i < cuts.length; i++) {
+                        if (Math.abs(cuts[i] - clamped) < 1e-5) return;
+                    }
+                    cuts.push(clamped);
+                    cuts.sort((a, b) => a - b);
+                };
+                const computeRoadPathEdgeAlpha = (widthAtPoint, crossT, distanceAlongPath) => {
+                    if (!Number.isFinite(widthAtPoint) || !(widthAtPoint > 0)) {
+                        throw new Error("Cannot render road path alpha fade with invalid segment width.");
+                    }
+                    if (!Number.isFinite(distanceAlongPath)) {
+                        throw new Error("Cannot render road path alpha fade with non-finite path distance.");
+                    }
+                    const lateralDistance = Math.min(crossT, 1 - crossT) * widthAtPoint;
+                    let endDistance = Infinity;
+                    if (!suppressStartFade) endDistance = Math.min(endDistance, distanceAlongPath);
+                    if (!suppressEndFade) endDistance = Math.min(endDistance, totalPathLength - distanceAlongPath);
+                    return Math.max(0, Math.min(1, Math.min(lateralDistance, endDistance) / edgeFadeWorldUnits));
+                };
+                const emitVertex = (point, u, v, edgeAlpha) => {
+                    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+                        throw new Error("Cannot render road path mesh with non-finite point.");
+                    }
+                    if (!Number.isFinite(u) || !Number.isFinite(v)) {
+                        throw new Error("Cannot render road path mesh with non-finite texture coordinates.");
+                    }
+                    if (!Number.isFinite(edgeAlpha)) {
+                        throw new Error("Cannot render road path mesh with non-finite edge alpha.");
+                    }
+                    emitted.push({ x: Number(point.x), y: Number(point.y), u, v, edgeAlpha: Math.max(0, Math.min(1, Number(edgeAlpha))) });
+                };
+                const emitQuad = (v00, v10, v11, v01) => {
+                    emitVertex(v00.point, v00.u, v00.v, v00.edgeAlpha);
+                    emitVertex(v10.point, v10.u, v10.v, v10.edgeAlpha);
+                    emitVertex(v11.point, v11.u, v11.v, v11.edgeAlpha);
+                    emitVertex(v00.point, v00.u, v00.v, v00.edgeAlpha);
+                    emitVertex(v11.point, v11.u, v11.v, v11.edgeAlpha);
+                    emitVertex(v01.point, v01.u, v01.v, v01.edgeAlpha);
+                };
+                for (let s = 0; s < segments.length; s++) {
+                    const segment = segments[s];
+                    const polygon = segment && Array.isArray(segment.polygon) ? segment.polygon : null;
+                    if (!polygon || polygon.length !== 4) {
+                        throw new Error(`Cannot render road path segment ${s} without four-point polygon geometry.`);
+                    }
+                    const leftStart = polygon[0];
+                    const leftEnd = polygon[1];
+                    const rightEnd = polygon[2];
+                    const rightStart = polygon[3];
+                    const startPoint = segment && segment.startPoint ? segment.startPoint : {
+                        x: (Number(leftStart.x) + Number(rightStart.x)) * 0.5,
+                        y: (Number(leftStart.y) + Number(rightStart.y)) * 0.5
+                    };
+                    const endPoint = segment && segment.endPoint ? segment.endPoint : {
+                        x: (Number(leftEnd.x) + Number(rightEnd.x)) * 0.5,
+                        y: (Number(leftEnd.y) + Number(rightEnd.y)) * 0.5
+                    };
+                    const length = Math.hypot(
+                        Number(endPoint.x) - Number(startPoint.x),
+                        Number(endPoint.y) - Number(startPoint.y)
+                    );
+                    if (!(length > 0)) {
+                        throw new Error(`Cannot render road path segment ${s} with zero visual length.`);
+                    }
+                    const startWidth = Math.hypot(
+                        Number(rightStart.x) - Number(leftStart.x),
+                        Number(rightStart.y) - Number(leftStart.y)
+                    );
+                    const endWidth = Math.hypot(
+                        Number(rightEnd.x) - Number(leftEnd.x),
+                        Number(rightEnd.y) - Number(leftEnd.y)
+                    );
+                    const width = Math.max(0.001, startWidth, endWidth);
+                    const uvSpan = Math.max(length * repeatX, width * repeatY);
+                    const subdivisions = Math.max(1, Math.ceil(uvSpan / maxUvSpanPerQuad));
+                    if (subdivisions > 4096) {
+                        throw new Error(`Cannot render road path segment ${s}; visual tessellation would require ${subdivisions} subdivisions.`);
+                    }
+                    const lengthCuts = [];
+                    for (let i = 0; i <= subdivisions; i++) {
+                        addSortedUniqueCut(lengthCuts, i / subdivisions);
+                    }
+                    addSortedUniqueCut(lengthCuts, edgeFadeWorldUnits / length);
+                    addSortedUniqueCut(lengthCuts, 1 - (edgeFadeWorldUnits / length));
+                    addSortedUniqueCut(lengthCuts, 0.5);
+                    const widthCuts = [0, 1];
+                    addSortedUniqueCut(widthCuts, edgeFadeWorldUnits / width);
+                    addSortedUniqueCut(widthCuts, 1 - (edgeFadeWorldUnits / width));
+                    addSortedUniqueCut(widthCuts, 0.5);
+                    const makeVertex = (t, crossT) => {
+                        const left = lerpPoint(leftStart, leftEnd, t);
+                        const right = lerpPoint(rightStart, rightEnd, t);
+                        const widthAtPoint = Math.hypot(right.x - left.x, right.y - left.y);
+                        const point = {
+                            x: left.x + (right.x - left.x) * crossT,
+                            y: left.y + (right.y - left.y) * crossT
+                        };
+                        const distanceAlongPath = pathDistance + length * t;
+                        return {
+                            point,
+                            u: distanceAlongPath * repeatX,
+                            v: crossT * width * repeatY,
+                            edgeAlpha: computeRoadPathEdgeAlpha(widthAtPoint, crossT, distanceAlongPath)
+                        };
+                    };
+                    for (let i = 0; i < lengthCuts.length - 1; i++) {
+                        const t0 = lengthCuts[i];
+                        const t1 = lengthCuts[i + 1];
+                        if (!(t1 - t0 > 1e-6)) continue;
+                        for (let j = 0; j < widthCuts.length - 1; j++) {
+                            const c0 = widthCuts[j];
+                            const c1 = widthCuts[j + 1];
+                            if (!(c1 - c0 > 1e-6)) continue;
+                            emitQuad(
+                                makeVertex(t0, c0),
+                                makeVertex(t1, c0),
+                                makeVertex(t1, c1),
+                                makeVertex(t0, c1)
+                            );
+                        }
+                    }
+                    pathDistance += length;
+                }
+                const vertexCount = emitted.length;
+                if (vertexCount <= 0) {
+                    throw new Error("Cannot render road path without generated visual mesh vertices.");
+                }
+                const vertexData = new Float32Array(vertexCount * 2);
+                const worldPositionData = new Float32Array(vertexCount * 3);
+                const uvData = new Float32Array(vertexCount * 2);
+                const edgeAlphaData = new Float32Array(vertexCount);
+                const indexData = vertexCount > 65535
+                    ? new Uint32Array(vertexCount)
+                    : new Uint16Array(vertexCount);
+                let minUx = Infinity;
+                let minUy = Infinity;
+                for (let i = 0; i < emitted.length; i++) {
+                    minUx = Math.min(minUx, emitted[i].u);
+                    minUy = Math.min(minUy, emitted[i].v);
+                }
+                const uvOffsetX = Number.isFinite(minUx) ? Math.floor(minUx) : 0;
+                const uvOffsetY = Number.isFinite(minUy) ? Math.floor(minUy) : 0;
+                for (let i = 0; i < emitted.length; i++) {
+                    const point = emitted[i];
+                    vertexData[i * 2] = point.x;
+                    vertexData[i * 2 + 1] = point.y;
+                    worldPositionData[i * 3] = point.x;
+                    worldPositionData[i * 3 + 1] = point.y;
+                    worldPositionData[i * 3 + 2] = 0;
+                    uvData[i * 2] = point.u - uvOffsetX;
+                    uvData[i * 2 + 1] = point.v - uvOffsetY;
+                    edgeAlphaData[i] = point.edgeAlpha;
+                    indexData[i] = i;
+                }
+                return { vertexData, worldPositionData, uvData, edgeAlphaData, indexData, vertexCount };
+            };
+            const createRoadPathMesh = (meshData) => {
+                if (
+                    typeof PIXI === "undefined" ||
+                    !PIXI.Geometry ||
+                    !PIXI.Mesh ||
+                    !PIXI.Shader ||
+                    !PIXI.Texture
+                ) {
+                    throw new Error("Cannot render road path polygon mesh because Pixi mesh support is unavailable.");
+                }
+                const geometry = new PIXI.Geometry()
+                    .addAttribute("aVertexPosition", meshData.vertexData, 2)
+                    .addAttribute("aWorldPosition", meshData.worldPositionData, 3)
+                    .addAttribute("aUvs", meshData.uvData, 2)
+                    .addAttribute("aEdgeAlpha", meshData.edgeAlphaData, 1)
+                    .addIndex(meshData.indexData);
+                const shader = PIXI.Shader.from(ROAD_PATH_DEPTH_VS, ROAD_PATH_DEPTH_FS, {
+                    uScreenSize: new Float32Array([1, 1]),
+                    uCameraWorld: new Float32Array([0, 0]),
+                    uCameraZ: 0,
+                    uBaseZ: 0,
+                    uDepthBias: ROAD_PATH_DEPTH_BIAS_UNITS,
+                    uViewScale: 1,
+                    uXyRatio: 1,
+                    uDepthRange: new Float32Array([
+                        FLOOR_VISUAL_DEPTH_FAR_METRIC,
+                        1 / Math.max(1e-6, FLOOR_VISUAL_DEPTH_FAR_METRIC - FLOOR_VISUAL_DEPTH_NEAR_METRIC)
+                    ]),
+                    uTint: new Float32Array([1, 1, 1, 1]),
+                    uAlphaCutoff: 0.001,
+                    uBuildingCutawayDataPass: 0,
+                    uBuildingCutawayDataZRange: new Float32Array([
+                        BUILDING_CUTAWAY_DATA_MIN_Z,
+                        1 / Math.max(1e-6, BUILDING_CUTAWAY_DATA_MAX_Z - BUILDING_CUTAWAY_DATA_MIN_Z)
+                    ]),
+                    uSampler: PIXI.Texture.WHITE
+                });
+                const state = this.getRoadPathDepthState();
+                const mesh = new PIXI.Mesh(
+                    geometry,
+                    shader,
+                    state || undefined,
+                    PIXI.DRAW_MODES ? PIXI.DRAW_MODES.TRIANGLES : undefined
+                );
+                mesh.name = "renderingRoadPathPolygon";
+                mesh.interactive = false;
+                mesh.blendMode = PIXI.BLEND_MODES.NORMAL;
+                mesh.tint = 0x9b8162;
+                mesh._roadPathVertexCount = meshData.vertexCount;
+                return mesh;
+            };
+            const updateRoadPathMeshGeometry = (mesh, meshData) => {
+                const geometry = mesh && mesh.geometry ? mesh.geometry : null;
+                const positionBuffer = geometry && typeof geometry.getBuffer === "function"
+                    ? geometry.getBuffer("aVertexPosition")
+                    : null;
+                const uvBuffer = geometry && typeof geometry.getBuffer === "function"
+                    ? geometry.getBuffer("aUvs")
+                    : null;
+                const edgeAlphaBuffer = geometry && typeof geometry.getBuffer === "function"
+                    ? geometry.getBuffer("aEdgeAlpha")
+                    : null;
+                const worldPositionBuffer = geometry && typeof geometry.getBuffer === "function"
+                    ? geometry.getBuffer("aWorldPosition")
+                    : null;
+                if (!positionBuffer || !positionBuffer.data || positionBuffer.data.length !== meshData.vertexData.length) {
+                    return false;
+                }
+                positionBuffer.data.set(meshData.vertexData);
+                positionBuffer.update();
+                if (worldPositionBuffer && worldPositionBuffer.data && worldPositionBuffer.data.length === meshData.worldPositionData.length) {
+                    worldPositionBuffer.data.set(meshData.worldPositionData);
+                    worldPositionBuffer.update();
+                }
+                if (uvBuffer && uvBuffer.data && uvBuffer.data.length === meshData.uvData.length) {
+                    uvBuffer.data.set(meshData.uvData);
+                    uvBuffer.update();
+                } else {
+                    return false;
+                }
+                if (edgeAlphaBuffer && edgeAlphaBuffer.data && edgeAlphaBuffer.data.length === meshData.edgeAlphaData.length) {
+                    edgeAlphaBuffer.data.set(meshData.edgeAlphaData);
+                    edgeAlphaBuffer.update();
+                } else {
+                    return false;
+                }
+                mesh._roadPathVertexCount = meshData.vertexCount;
+                return true;
+            };
+            const updateRoadPathMeshUniforms = (mesh, tint, alpha, baseZ, texture) => {
+                const uniforms = mesh && mesh.shader && mesh.shader.uniforms ? mesh.shader.uniforms : null;
+                if (!uniforms) return false;
+                const appRef = (ctx && ctx.app) || (typeof app !== "undefined" && app) || global.app || null;
+                const screenW = (appRef && appRef.screen && Number.isFinite(appRef.screen.width))
+                    ? Number(appRef.screen.width)
+                    : 1;
+                const screenH = (appRef && appRef.screen && Number.isFinite(appRef.screen.height))
+                    ? Number(appRef.screen.height)
+                    : 1;
+                if (uniforms.uScreenSize) {
+                    uniforms.uScreenSize[0] = Math.max(1, screenW);
+                    uniforms.uScreenSize[1] = Math.max(1, screenH);
+                }
+                if (uniforms.uCameraWorld) {
+                    uniforms.uCameraWorld[0] = Number(cam.x) || 0;
+                    uniforms.uCameraWorld[1] = Number(cam.y) || 0;
+                }
+                uniforms.uCameraZ = Number(cam.z) || 0;
+                uniforms.uBaseZ = Number.isFinite(baseZ) ? Number(baseZ) : 0;
+                uniforms.uDepthBias = ROAD_PATH_DEPTH_BIAS_UNITS;
+                uniforms.uViewScale = Number(cam.viewscale) || 1;
+                uniforms.uXyRatio = Number(cam.xyratio) || 1;
+                if (uniforms.uDepthRange) {
+                    uniforms.uDepthRange[0] = FLOOR_VISUAL_DEPTH_FAR_METRIC;
+                    uniforms.uDepthRange[1] = 1 / Math.max(1e-6, FLOOR_VISUAL_DEPTH_FAR_METRIC - FLOOR_VISUAL_DEPTH_NEAR_METRIC);
+                }
+                if (uniforms.uTint) {
+                    const color = Number.isFinite(tint) ? Math.max(0, Math.min(0xffffff, Math.floor(tint))) : 0xffffff;
+                    uniforms.uTint[0] = ((color >> 16) & 0xff) / 255;
+                    uniforms.uTint[1] = ((color >> 8) & 0xff) / 255;
+                    uniforms.uTint[2] = (color & 0xff) / 255;
+                    uniforms.uTint[3] = Number.isFinite(alpha) ? Math.max(0, Math.min(1, Number(alpha))) : 1;
+                }
+                uniforms.uAlphaCutoff = 0.001;
+                uniforms.uBuildingCutawayDataPass = 0;
+                uniforms.uSampler = texture || PIXI.Texture.WHITE;
+                return true;
+            };
 
             const visibleRoadObjects = new Set();
+            const visibleRoadPathObjects = new Set();
+            const continuityRoadPathObjects = new Set();
             const nodes = Array.isArray(visibleNodes) ? visibleNodes : [];
             const bakedLevel0SectionKeys = this.getBakedLevel0SectionKeys(ctx);
             let roadsSkippedForLevel0Bake = 0;
@@ -14526,11 +16613,37 @@ void main(void) {
                 if (!node || !Array.isArray(node.objects)) continue;
                 for (let i = 0; i < node.objects.length; i++) {
                     const obj = node.objects[i];
-                    if (!obj || obj.gone || obj.type !== "road") continue;
+                    if (!obj || obj.gone) continue;
+                    if (obj.type !== "road" && obj.type !== "roadPath") continue;
                     if (!this.isScriptVisible(obj)) continue;
                     const roadLayer = this.getLayerIndexForNode(obj && obj.node ? obj.node : node);
                     if (mazeLayerOnly && roadLayer !== wizardLayer && !this.isFallRevealHiddenLayer(roadLayer)) continue;
                     if (this.isRenderItemHiddenByLayerCutaway(obj, roadLayer, cutawayState, map)) continue;
+                    if (obj.type === "roadPath") {
+                        continuityRoadPathObjects.add(obj);
+                        if (this.isRoadPathBakedIntoLevel0Surface(ctx, obj, bakedLevel0SectionKeys)) {
+                            const bakedMesh = this.roadPathMeshByObject instanceof Map
+                                ? this.roadPathMeshByObject.get(obj)
+                                : null;
+                            if (bakedMesh) {
+                                bakedMesh.visible = false;
+                                if (Object.prototype.hasOwnProperty.call(bakedMesh, "renderable")) {
+                                    bakedMesh.renderable = false;
+                                }
+                            }
+                            if (obj._renderingDisplayObject === bakedMesh) {
+                                obj._renderingDisplayObject = null;
+                            }
+                            const pickProxy = this.getGroundHitboxPickProxyForItem(obj, 1);
+                            if (pickProxy) {
+                                this.addPickRenderItem(obj, pickProxy, { forceInclude: true });
+                            }
+                            roadsSkippedForLevel0Bake += 1;
+                            continue;
+                        }
+                        visibleRoadPathObjects.add(obj);
+                        continue;
+                    }
                     if (this.isRoadBakedIntoLevel0Surface(ctx, obj, bakedLevel0SectionKeys)) {
                         const bakedSprite = this.roadSpriteByObject.get(obj);
                         if (bakedSprite) {
@@ -14546,6 +16659,102 @@ void main(void) {
                         continue;
                     }
                     visibleRoadObjects.add(obj);
+                }
+            }
+            const roadPathEndpointContinuity = this.buildRoadPathEndpointContinuity(continuityRoadPathObjects);
+
+            if (!(this.roadPathMeshByObject instanceof Map)) {
+                this.roadPathMeshByObject = new Map();
+            }
+            const roadPathContainer = visibleRoadPathObjects.size > 0
+                ? this.ensureRoadPathDepthContainer()
+                : null;
+            if (visibleRoadPathObjects.size > 0 && !roadPathContainer) {
+                throw new Error("Cannot render road path alpha fade without a depth-layer road path container.");
+            }
+            for (const roadPath of visibleRoadPathObjects) {
+                const geometry = roadPath && roadPath.generatedGeometry;
+                const segments = geometry && Array.isArray(geometry.segments) ? geometry.segments : null;
+                if (!segments || segments.length === 0) {
+                    throw new Error("Cannot render road path without generated segment geometry.");
+                }
+                const roadPathRenderZ = Number.isFinite(roadPath.renderZ)
+                    ? Number(roadPath.renderZ)
+                    : 0.001;
+                const roadLayer = this.getLayerIndexForNode(roadPath && roadPath.node ? roadPath.node : roadPath);
+                const roadBaseZ = this.getLayerBaseZForNode(roadPath && roadPath.node ? roadPath.node : roadPath);
+                const fillTexturePath = resolveRoadPathFillTexturePathForView(
+                    roadPath,
+                    getRoadPathFillTexturePath(roadPath)
+                );
+                const fillTexture = getRoadPathFillTexture(fillTexturePath);
+                const textureRepeat = getRoadPathTextureRepeat(fillTexturePath);
+                const meshData = buildRoadPathMeshData(
+                    roadPath,
+                    segments,
+                    textureRepeat,
+                    roadPathEndpointContinuity.get(roadPath) || null
+                );
+                let mesh = this.roadPathMeshByObject.get(roadPath);
+                const textureRepeatSignature = this.getFloorVisualTextureRepeatSignature(textureRepeat);
+                if (
+                    mesh &&
+                    (
+                        Number(mesh._roadPathVertexCount) !== meshData.vertexCount ||
+                        mesh._roadPathTextureRepeatSignature !== textureRepeatSignature
+                    )
+                ) {
+                    destroyRoadPathMesh(roadPath, mesh);
+                    mesh = null;
+                }
+                if (!mesh) {
+                    mesh = createRoadPathMesh(meshData);
+                    this.roadPathMeshByObject.set(roadPath, mesh);
+                } else if (!updateRoadPathMeshGeometry(mesh, meshData)) {
+                    destroyRoadPathMesh(roadPath, mesh);
+                    mesh = createRoadPathMesh(meshData);
+                    this.roadPathMeshByObject.set(roadPath, mesh);
+                }
+                if (mesh.parent !== roadPathContainer) {
+                    roadPathContainer.addChild(mesh);
+                }
+                const alpha = (Number.isFinite(roadPath.alpha) ? roadPath.alpha : 1) * this.getLiveLayerFadeMultiplier(
+                    roadLayer,
+                    nowMs
+                );
+                mesh._roadPathTextureRepeatSignature = textureRepeatSignature;
+                mesh._roadPathFillTexturePath = fillTexturePath;
+                updateRoadPathMeshUniforms(mesh, 0xffffff, alpha, roadBaseZ + roadPathRenderZ, fillTexture);
+                mesh.tint = 0xffffff;
+                mesh.alpha = 1;
+                mesh.position.set(0, 0);
+                mesh.scale.set(1, 1);
+                mesh.visible = true;
+                if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+                    mesh.renderable = true;
+                }
+                mesh._lastVisibleAtMs = nowMs;
+                roadPath._renderingDisplayObject = mesh;
+                this.applyLayerDarknessToDisplayObject(mesh, this.getLayerDarknessMultiplier(roadLayer));
+                this.addPickRenderItem(roadPath, mesh);
+            }
+            for (const [roadPath, mesh] of this.roadPathMeshByObject.entries()) {
+                if (!roadPath || roadPath.gone) {
+                    destroyRoadPathMesh(roadPath, mesh);
+                    continue;
+                }
+                if (!visibleRoadPathObjects.has(roadPath) && mesh) {
+                    const lastVisibleAtMs = Number.isFinite(mesh._lastVisibleAtMs)
+                        ? Number(mesh._lastVisibleAtMs)
+                        : 0;
+                    if (lastVisibleAtMs > 0 && (nowMs - lastVisibleAtMs) > hiddenSpriteGraceMs) {
+                        destroyRoadPathMesh(roadPath, mesh);
+                        continue;
+                    }
+                    mesh.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
+                        mesh.renderable = false;
+                    }
                 }
             }
 
@@ -14904,7 +17113,7 @@ void main(void) {
                             const existingColor = drawnMarkers.get(markerKey);
                             if (existingColor === 0x3399ff || existingColor === color) continue;
                             drawnMarkers.set(markerKey, {
-                                sourceNode,
+                                fromNode: sourceNode,
                                 destinationNode,
                                 incomingDir,
                                 color
@@ -14913,9 +17122,9 @@ void main(void) {
                     }
 
                     for (const marker of drawnMarkers.values()) {
-                        if (!marker || !marker.sourceNode || !marker.destinationNode) continue;
-                        const sourceWorldX = Number(marker.sourceNode.x) || 0;
-                        const sourceWorldY = Number(marker.sourceNode.y) || 0;
+                        if (!marker || !marker.fromNode || !marker.destinationNode) continue;
+                        const sourceWorldX = Number(marker.fromNode.x) || 0;
+                        const sourceWorldY = Number(marker.fromNode.y) || 0;
                         const destinationWorldX = Number(marker.destinationNode.x) || 0;
                         const destinationWorldY = Number(marker.destinationNode.y) || 0;
                         const dxWorld = sourceWorldX - destinationWorldX;
@@ -15222,15 +17431,36 @@ void main(void) {
                     });
                     return false;
                 }
-                const layerAlpha = this.getLiveLayerFadeMultiplier(itemLayer, renderNowMs);
+                const planHasItem = buildingInteriorRenderPlan.items.has(item);
+                const prototypeInteriorLiveFullAlpha = !planHasItem &&
+                    this.shouldRenderPrototypeBuildingInteriorLiveItemAtFullAlpha(item, cutawayState, mapRef);
+                if (
+                    !planHasItem &&
+                    this.shouldSuppressPrototypeBuildingInteriorLiveRenderItem(item, mapRef, cutawayState, ctx) &&
+                    !prototypeInteriorLiveFullAlpha
+                ) {
+                    this.logPlaceObjectRenderDebug("filter-drop-prototype-building-interior-live", item, {
+                        itemLayer
+                    });
+                    return false;
+                }
+                const layerAlpha = prototypeInteriorLiveFullAlpha
+                    ? 1
+                    : this.getLiveLayerFadeMultiplier(itemLayer, renderNowMs);
                 const cutawayAlpha = this.getBuildingCutawayAlphaForItem(item);
                 const renderAlpha = this.getRenderAlphaForObjectItem(item, layerAlpha, cutawayAlpha, buildingInteriorRenderPlan);
                 item._renderLayerIndex = itemLayer;
                 item._renderLayerFadeAlpha = layerAlpha;
                 item._renderLayerAlpha = renderAlpha;
-                item._renderLayerBaseZ = this.isCharacterRenderItem(item)
-                    ? 0
-                    : this.getLayerBaseZForLevel(itemLayer);
+                item._renderLayerBaseZ = this.getLayerBaseZForObject(item, itemLayer);
+                const baseRenderDepthBias = Number.isFinite(item.renderDepthOffset)
+                    ? Number(item.renderDepthOffset)
+                    : 0;
+                item._renderDepthBias = baseRenderDepthBias + (
+                    this.shouldApplyBuildingInteriorActiveFloorDepthBumpToItem(item, itemLayer, buildingInteriorRenderPlan, mapRef)
+                        ? BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS
+                        : 0
+                );
                 if (
                     !buildingInteriorRenderPlan.items.has(item) &&
                     this.isRenderItemHiddenByLayerCutaway(item, itemLayer, cutawayState, mapRef)
@@ -15418,6 +17648,15 @@ void main(void) {
                 if (!item) continue;
                 if (depthBillboardRenderedItems.has(item)) continue;
                 if (groundObjectsRenderedItems.has(item)) continue;
+                if (item.type === "roadPath") {
+                    if (item.pixiSprite) {
+                        item.pixiSprite.visible = false;
+                        if (Object.prototype.hasOwnProperty.call(item.pixiSprite, "renderable")) {
+                            item.pixiSprite.renderable = false;
+                        }
+                    }
+                    continue;
+                }
                 if (item.type === "triggerArea") {
                     const triggerOverlayContainer = (!showPickerScreen && this.layers && this.layers.ui)
                         ? this.layers.ui
@@ -15600,6 +17839,14 @@ void main(void) {
                     if (mesh) currentDisplayObjects.add(mesh);
                 });
             }
+            this.promotePrototypeBuildingInteriorLiveRenderItems(
+                ctx,
+                cutawayState,
+                container,
+                currentDisplayObjects,
+                renderItems,
+                buildingInteriorRenderPlan
+            );
             this.renderPrototypeBuildingExteriorGroundDoors(
                 ctx,
                 cutawayState,
@@ -15738,32 +17985,7 @@ void main(void) {
                 wizardSprite.parent.removeChild(wizardSprite);
             }
 
-            const visualSpeed = Math.hypot(
-                Number(wizard?.movementVector?.x) || 0,
-                Number(wizard?.movementVector?.y) || 0
-            );
-            const isVisuallyMoving = !!wizard.moving || visualSpeed > 0.02;
-            const rowIndex = Number.isInteger(wizard.lastDirectionRow)
-                ? ((wizard.lastDirectionRow % 12) + 12) % 12
-                : 0;
-
-            let frameIndex = rowIndex * 9;
-            if (wizard.isJumping) {
-                frameIndex = rowIndex * 9 + 2;
-            } else if (isVisuallyMoving) {
-                const speedRatio = (wizard.speed > 0)
-                    ? (visualSpeed / wizard.speed)
-                    : 0;
-                const nowMs = Number.isFinite(ctx.renderNowMs) ? ctx.renderNowMs : performance.now();
-                const simFrameRate = Number.isFinite(ctx.frameRate) ? ctx.frameRate : 60;
-                const animSpeed = Number.isFinite(wizard.animationSpeedMultiplier)
-                    ? wizard.animationSpeedMultiplier
-                    : 1;
-                const simTicks = (nowMs / 1000) * simFrameRate;
-                const animFrame = Math.floor(simTicks * animSpeed * speedRatio / 2) % 8;
-                const effectiveAnimFrame = wizard.isMovingBackward ? (7 - animFrame) : animFrame;
-                frameIndex = rowIndex * 9 + 1 + effectiveAnimFrame;
-            }
+            const frameIndex = getWizardBodyFrameIndex(wizard, ctx);
 
             if (Array.isArray(ctx.wizardFrames) && ctx.wizardFrames[frameIndex]) {
                 try {
@@ -15793,21 +18015,35 @@ void main(void) {
                     y: Number.isFinite(wizard.y) ? wizard.y : 0,
                     z: Number.isFinite(wizard.z) ? wizard.z : 0
                 };
-            const wizardLayer = this.getLayerIndexFromValue(wizard.currentLayer, 0);
-            const wizardLayerBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
-                ? Number(wizard.currentLayerBaseZ)
-                : this.getLayerBaseZForLevel(wizardLayer);
+            const support = wizard && wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                ? wizard.currentMovementSupport
+                : null;
+            const wizardLayer = this.getLayerIndexFromValue(
+                support && Number.isFinite(support.layer)
+                    ? support.layer
+                    : wizard.currentLayer,
+                0
+            );
+            const wizardLayerBaseZ = support && Number.isFinite(support.baseZ)
+                ? Number(support.baseZ)
+                : (Number.isFinite(wizard.currentLayerBaseZ)
+                    ? Number(wizard.currentLayerBaseZ)
+                    : this.getLayerBaseZForLevel(wizardLayer));
             const pGround = this.camera.worldToScreen(renderPos.x, renderPos.y, wizardLayerBaseZ);
             const interpolatedJumpHeight = Number.isFinite(renderPos.z) ? renderPos.z : 0;
             const jumpHeight = Number.isFinite(wizard.jumpHeight) ? Math.max(0, Number(wizard.jumpHeight)) : 0;
-            const stairShadowLocalZ = wizard._stairSupport &&
-                typeof wizard._stairSupport === "object" &&
-                Number.isFinite(Number(wizard._stairSupport.localZ))
-                ? Number(wizard._stairSupport.localZ)
-                : null;
-            const shadowLocalZ = stairShadowLocalZ !== null
-                ? stairShadowLocalZ
-                : Math.max(0, interpolatedJumpHeight - jumpHeight);
+            let shadowLocalZ = 0;
+            if (wizard._floorFallState && wizard._floorFallState.active) {
+                shadowLocalZ = 0;
+            } else if (support && support.type === "stair" && Number.isFinite(Number(support.continuousLocalZ))) {
+                shadowLocalZ = Number(support.continuousLocalZ);
+            } else if (support && support.type === "stair" && Number.isFinite(Number(support.localZ))) {
+                shadowLocalZ = Number(support.localZ);
+            } else if (wizard.isJumping) {
+                shadowLocalZ = 0;
+            } else {
+                shadowLocalZ = Math.max(0, interpolatedJumpHeight - jumpHeight);
+            }
             const jumpOffsetPx = interpolatedJumpHeight * this.camera.viewscale * this.camera.xyratio;
             const wizardCenterY = pGround.y - jumpOffsetPx - (this.camera.viewscale * 0.25);
             const renderNowMs = Number.isFinite(ctx.renderNowMs)
@@ -16026,6 +18262,83 @@ void main(void) {
             }
         }
 
+        applyPowerupPremultipliedDisplayAlpha(powerup, depthMesh, displayAlpha) {
+            if (!powerup || !depthMesh) return;
+            const alpha = Math.max(0, Math.min(1, Number.isFinite(displayAlpha) ? Number(displayAlpha) : 1));
+            const sprite = powerup.pixiSprite || null;
+            const baseAlpha = Math.max(0, Math.min(1, Number.isFinite(sprite && sprite.alpha)
+                ? Number(sprite.alpha)
+                : (Number.isFinite(powerup.billboardAlpha) ? Number(powerup.billboardAlpha) : 1)));
+            const uniforms = depthMesh.shader && depthMesh.shader.uniforms ? depthMesh.shader.uniforms : null;
+            const uTint = uniforms && uniforms.uTint && uniforms.uTint.length >= 4 ? uniforms.uTint : null;
+            if (!uTint) {
+                if (alpha < 0.999 || baseAlpha < 0.999) {
+                    throw new Error(`powerup ${powerup.id || powerup.scriptingName || powerup.imageFileName || "(unknown)"} fade requires depth billboard uTint uniform`);
+                }
+                return;
+            }
+            const finalAlpha = baseAlpha * alpha;
+            uTint[0] *= finalAlpha;
+            uTint[1] *= finalAlpha;
+            uTint[2] *= finalAlpha;
+            uTint[3] = finalAlpha;
+        }
+
+        isPowerupBillboardTextureReady(texture) {
+            if (!texture) return false;
+            if (typeof PIXI !== "undefined" && PIXI.Texture) {
+                if (texture === PIXI.Texture.WHITE || texture === PIXI.Texture.EMPTY) return false;
+            }
+            const baseTexture = texture.baseTexture || null;
+            if (!baseTexture || baseTexture.valid !== true) return false;
+            const frame = texture.frame || texture.orig || null;
+            const width = Number(frame && frame.width);
+            const height = Number(frame && frame.height);
+            return width > 0 && height > 0;
+        }
+
+        watchPowerupPendingTexture(texture) {
+            const baseTexture = texture && texture.baseTexture ? texture.baseTexture : null;
+            if (!baseTexture || baseTexture.valid === true || typeof baseTexture.once !== "function") return;
+            if (!(this._powerupPendingBaseTextures instanceof Set)) {
+                this._powerupPendingBaseTextures = new Set();
+            }
+            if (this._powerupPendingBaseTextures.has(baseTexture)) return;
+            this._powerupPendingBaseTextures.add(baseTexture);
+            let completed = false;
+            const onReady = () => {
+                if (completed) return;
+                completed = true;
+                this._powerupPendingBaseTextures.delete(baseTexture);
+                if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                    globalThis.presentGameFrame();
+                }
+            };
+            baseTexture.once("loaded", onReady);
+            baseTexture.once("error", onReady);
+        }
+
+        hidePowerupDisplayObjects(powerup, sprite = null) {
+            const spriteRef = sprite || (powerup && powerup.pixiSprite) || null;
+            if (spriteRef) {
+                spriteRef.visible = false;
+                if (Object.prototype.hasOwnProperty.call(spriteRef, "renderable")) {
+                    spriteRef.renderable = false;
+                }
+            }
+            const depthMesh = powerup && powerup._renderingDepthMesh ? powerup._renderingDepthMesh : null;
+            if (depthMesh) {
+                depthMesh.visible = false;
+                if (Object.prototype.hasOwnProperty.call(depthMesh, "renderable")) {
+                    depthMesh.renderable = false;
+                }
+            }
+            if (powerup) {
+                powerup._renderingDepthMesh = null;
+                powerup._renderingDisplayObject = null;
+            }
+        }
+
         renderPowerups(ctx) {
             const depthContainer = this.layers.depthObjects;
             if (!depthContainer) return;
@@ -16037,8 +18350,10 @@ void main(void) {
                 !this.isOmnivisionActive(wizard) &&
                 wizard
             );
+            const renderNowMs = Number.isFinite(ctx && ctx.renderNowMs) ? Number(ctx.renderNowMs) : Date.now();
             const wizardLayer = this.getWizardVisualLayerIndex(wizard, 0);
             const cutawayState = this.getLayerCutawayState(ctx);
+            const buildingInteriorRenderPlan = this.buildBuildingInteriorRenderPlan(ctx, cutawayState);
 
             const list = Array.isArray(ctx && ctx.powerups)
                 ? ctx.powerups
@@ -16047,7 +18362,6 @@ void main(void) {
             this._powerupDisplayObjectIdx = ((this._powerupDisplayObjectIdx || 0) + 1) % 2;
             const currentDisplayObjects = this._powerupDisplayObjectSets[this._powerupDisplayObjectIdx];
             currentDisplayObjects.clear();
-            const renderNowMs = Number.isFinite(ctx && ctx.renderNowMs) ? Number(ctx.renderNowMs) : Date.now();
 
             for (let i = 0; i < list.length; i++) {
                 const powerup = list[i];
@@ -16062,30 +18376,28 @@ void main(void) {
                 if (typeof powerup.updateSpriteAnimation === "function") {
                     powerup.updateSpriteAnimation();
                 }
+                const basePowerupAlpha = Math.max(0, Math.min(1, Number.isFinite(powerup.billboardAlpha)
+                    ? Number(powerup.billboardAlpha)
+                    : (Number.isFinite(sprite.alpha) ? Number(sprite.alpha) : 1)));
+                sprite.alpha = basePowerupAlpha;
                 const powerupLayer = this.getLayerIndexForObject(powerup, 0);
                 powerup._renderLayerIndex = powerupLayer;
                 const powerupOnFallRevealLayer = this.isFallRevealHiddenLayer(powerupLayer);
                 const powerupLayerAlpha = this.getLiveLayerFadeMultiplier(powerupLayer, renderNowMs);
-                const insideBuildingUpperFloor = !!(cutawayState && cutawayState.active && wizardLayer > 0);
-                const upperFloorPowerupOnWrongLayer = powerupLayer > 0 && powerupLayer !== wizardLayer;
+                const activeLayerTransition = this._layerFadeTransition || null;
+                const powerupLayerIsUpwardTransitionDestination = !!(
+                    activeLayerTransition &&
+                    powerupLayer === this.getLayerIndexFromValue(activeLayerTransition.toLayer, powerupLayer) &&
+                    powerupLayer === wizardLayer &&
+                    this.getLayerIndexFromValue(activeLayerTransition.toLayer, powerupLayer) >
+                        this.getLayerIndexFromValue(activeLayerTransition.fromLayer, powerupLayer)
+                );
                 if (
-                    ((mazeLosActive || insideBuildingUpperFloor) && powerupLayer !== wizardLayer && !powerupOnFallRevealLayer) ||
-                    (upperFloorPowerupOnWrongLayer && !powerupOnFallRevealLayer) ||
-                    !(powerupLayerAlpha > 0.001) ||
+                    (mazeLosActive && powerupLayer !== wizardLayer && !powerupOnFallRevealLayer) ||
+                    (!(powerupLayerAlpha > 0.001) && !powerupLayerIsUpwardTransitionDestination) ||
                     this.isRenderItemHiddenByLayerCutaway(powerup, powerupLayer, cutawayState, mapRef)
                 ) {
-                    sprite.visible = false;
-                    if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
-                        sprite.renderable = false;
-                    }
-                    if (powerup._renderingDepthMesh) {
-                        powerup._renderingDepthMesh.visible = false;
-                        if (Object.prototype.hasOwnProperty.call(powerup._renderingDepthMesh, "renderable")) {
-                            powerup._renderingDepthMesh.renderable = false;
-                        }
-                    }
-                    powerup._renderingDepthMesh = null;
-                    powerup._renderingDisplayObject = null;
+                    this.hidePowerupDisplayObjects(powerup, sprite);
                     continue;
                 }
 
@@ -16095,25 +18407,35 @@ void main(void) {
                     (mazeLosActive || !this.isForceVisible(powerup)) &&
                     this.isRadialItemHiddenByLos(powerup, wizard, mapRef)
                 ) {
-                    sprite.visible = false;
-                    if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
-                        sprite.renderable = false;
-                    }
-                    if (powerup._renderingDepthMesh) {
-                        powerup._renderingDepthMesh.visible = false;
-                        if (Object.prototype.hasOwnProperty.call(powerup._renderingDepthMesh, "renderable")) {
-                            powerup._renderingDepthMesh.renderable = false;
-                        }
-                    }
-                    powerup._renderingDepthMesh = null;
-                    powerup._renderingDisplayObject = null;
+                    this.hidePowerupDisplayObjects(powerup, sprite);
                     continue;
                 }
 
                 const point = this.camera.worldToScreen(
                     powerup.x,
                     powerup.y,
-                    Number.isFinite(powerup.z) ? powerup.z : 0
+                    (() => {
+                        const support = powerup.currentMovementSupport && typeof powerup.currentMovementSupport === "object"
+                            ? powerup.currentMovementSupport
+                            : null;
+                        const floorBaseZ = Number.isFinite(support && support.baseZ)
+                            ? Number(support.baseZ)
+                            : (Number.isFinite(powerup.currentLayerBaseZ)
+                                ? Number(powerup.currentLayerBaseZ)
+                                : (Number.isFinite(powerup._floorBaseZ)
+                                    ? Number(powerup._floorBaseZ)
+                                    : this.getLayerBaseZForLevel(powerupLayer)));
+                        powerup._renderLayerBaseZ = floorBaseZ;
+                        return floorBaseZ + (Number.isFinite(powerup.z) ? Number(powerup.z) : 0);
+                    })()
+                );
+                const basePowerupDepthBias = Number.isFinite(powerup.renderDepthOffset)
+                    ? Number(powerup.renderDepthOffset)
+                    : 0;
+                powerup._renderDepthBias = basePowerupDepthBias + (
+                    this.shouldApplyBuildingInteriorActiveFloorDepthBumpToItem(powerup, powerupLayer, buildingInteriorRenderPlan, mapRef)
+                        ? BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS
+                        : 0
                 );
                 const w = Number.isFinite(powerup.width) ? Math.max(0.01, Number(powerup.width)) : 0.8;
                 const h = Number.isFinite(powerup.height) ? Math.max(0.01, Number(powerup.height)) : 0.8;
@@ -16121,6 +18443,11 @@ void main(void) {
                 if (typeof lodTexturePath === "string" && lodTexturePath.length > 0 && lodTexturePath !== powerup._activeLodTexturePath) {
                     sprite.texture = PIXI.Texture.from(lodTexturePath);
                     powerup._activeLodTexturePath = lodTexturePath;
+                }
+                if (!this.isPowerupBillboardTextureReady(sprite.texture)) {
+                    this.watchPowerupPendingTexture(sprite.texture);
+                    this.hidePowerupDisplayObjects(powerup, sprite);
+                    continue;
                 }
                 sprite.x = point.x;
                 sprite.y = point.y;
@@ -16133,12 +18460,7 @@ void main(void) {
                 }
 
                 if (!depthMesh) {
-                    sprite.visible = false;
-                    if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
-                        sprite.renderable = false;
-                    }
-                    powerup._renderingDepthMesh = null;
-                    powerup._renderingDisplayObject = null;
+                    this.hidePowerupDisplayObjects(powerup, sprite);
                     continue;
                 }
 
@@ -16148,7 +18470,7 @@ void main(void) {
                 if (depthMesh.parent !== targetContainer) {
                     targetContainer.addChild(depthMesh);
                 }
-                depthMesh.alpha = powerupLayerAlpha;
+                depthMesh.alpha = 1;
                 depthMesh.visible = true;
                 if (Object.prototype.hasOwnProperty.call(depthMesh, "renderable")) {
                     depthMesh.renderable = true;
@@ -16161,6 +18483,7 @@ void main(void) {
                 powerup._renderingDepthMesh = depthMesh;
                 powerup._renderingDisplayObject = depthMesh;
                 this.applyLayerDarknessForItem(powerup, powerupLayer, depthMesh);
+                this.applyPowerupPremultipliedDisplayAlpha(powerup, depthMesh, 1);
                 if (this.applySinkClip(powerup, depthMesh)) {
                     currentDisplayObjects.add(depthMesh);
                     this.addPickRenderItem(powerup, depthMesh, { forceInclude: true });
@@ -16457,6 +18780,8 @@ void main(void) {
             }
 
             const activeKeys = new Set();
+            const wizardLayerIndex = wizard ? this.getWizardVisualLayerIndex(wizard, 0) : null;
+            const wizardFloorMembership = wizard ? this.getRenderItemFloorMembership(wizard, mapRef) : null;
             const parseScriptMessageColor = (value, fallback = 0xFFFFFF) => {
                 if (Number.isFinite(value)) {
                     return Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(value))));
@@ -16484,6 +18809,23 @@ void main(void) {
 
                 const worldPos = this.resolveInterpolatedItemWorldPosition(item, mapRef);
                 if (!worldPos) continue;
+                const itemLayerIndex = this.getLayerIndexForObject(
+                    item,
+                    Number.isFinite(wizardLayerIndex) ? wizardLayerIndex : 0
+                );
+                if (wizard && itemLayerIndex !== wizardLayerIndex) {
+                    continue;
+                }
+                const itemFloorMembership = this.getRenderItemFloorMembership(item, mapRef);
+                if (
+                    wizard &&
+                    itemFloorMembership &&
+                    wizardFloorMembership &&
+                    !this.floorMembershipsMatchForRender(itemFloorMembership, wizardFloorMembership)
+                ) {
+                    continue;
+                }
+                const itemLayerBaseZ = this.getLayerBaseZForObject(item, itemLayerIndex);
                 if (
                     mazeLosActive &&
                     this.isWorldPointInLosShadow(worldPos.x, worldPos.y, wizard, mapRef)
@@ -16544,7 +18886,7 @@ void main(void) {
                     // is centred on its appearance rather than its anchor point.
                     let visCenterX = worldPos.x;
                     let visCenterY = worldPos.y;
-                    let visCenterZ = Number.isFinite(item.z) ? item.z : 0;
+                    let visCenterZ = Number.isFinite(item.z) ? Number(item.z) : 0;
 
                     const itemW = Number.isFinite(item.width) ? item.width : 0;
                     const itemH = Number.isFinite(item.height) ? item.height : 0;
@@ -16585,7 +18927,7 @@ void main(void) {
                     const screenPos = this.camera.worldToScreen(
                         visCenterX + offsetX,
                         visCenterY + offsetY,
-                        visCenterZ
+                        itemLayerBaseZ + visCenterZ
                     );
                     entry.textObj.x = screenPos.x;
                     entry.textObj.y = screenPos.y;
@@ -16604,6 +18946,521 @@ void main(void) {
                     this.scriptMessageTextObjects.delete(key);
                 }
             }
+        }
+
+        startWizardThoughtBubble(wizardRef, text, duration) {
+            if (!wizardRef || typeof wizardRef !== "object") {
+                throw new Error("wizard.thoughtBubble requires a wizard object");
+            }
+            const bubbleText = String(text === undefined || text === null ? "" : text);
+            if (!bubbleText.trim().length) {
+                throw new Error("wizard.thoughtBubble text cannot be empty");
+            }
+            const durationSeconds = Number(duration);
+            if (!Number.isFinite(durationSeconds)) {
+                throw new Error("wizard.thoughtBubble duration must be a finite number of seconds");
+            }
+            const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now();
+            this.destroyWizardThoughtBubbleTexture();
+            this.wizardThoughtBubble = {
+                wizard: wizardRef,
+                text: bubbleText,
+                startedAtMs: null,
+                requestedAtMs: nowMs,
+                durationMs: Math.max(0, durationSeconds * 1000),
+                fadeMs: 500,
+                baseViewscale: null,
+                pivotX: 0,
+                pivotY: 0,
+                smallRadiusPx: 0,
+                smallDiameterPx: 0,
+                cloudTextureReady: false,
+                cloudTextureError: null
+            };
+            this.scheduleWizardThoughtBubbleRefresh();
+            if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                globalThis.presentGameFrame();
+            }
+            return true;
+        }
+
+        scheduleWizardThoughtBubbleRefresh() {
+            if (this.wizardThoughtBubbleRefreshHandle !== null) return;
+            if (typeof requestAnimationFrame !== "function") return;
+            this.wizardThoughtBubbleRefreshHandle = requestAnimationFrame(() => {
+                this.wizardThoughtBubbleRefreshHandle = null;
+                if (!this.wizardThoughtBubble) return;
+                if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                    globalThis.presentGameFrame();
+                }
+                if (this.wizardThoughtBubble) {
+                    this.scheduleWizardThoughtBubbleRefresh();
+                }
+            });
+        }
+
+        destroyWizardThoughtBubbleTexture() {
+            if (this.wizardThoughtBubbleTexture) {
+                this.wizardThoughtBubbleTexture.destroy(true);
+                this.wizardThoughtBubbleTexture = null;
+            }
+            if (this.wizardThoughtBubbleSprite) {
+                this.wizardThoughtBubbleSprite.texture = (typeof PIXI !== "undefined" && PIXI.Texture) ? PIXI.Texture.EMPTY : null;
+                this.wizardThoughtBubbleSprite.visible = false;
+            }
+        }
+
+        clearWizardThoughtBubble() {
+            this.wizardThoughtBubble = null;
+            if (this.wizardThoughtBubbleRefreshHandle !== null && typeof cancelAnimationFrame === "function") {
+                cancelAnimationFrame(this.wizardThoughtBubbleRefreshHandle);
+            }
+            this.wizardThoughtBubbleRefreshHandle = null;
+            this.destroyWizardThoughtBubbleTexture();
+            if (this.wizardThoughtBubbleSprite && this.wizardThoughtBubbleSprite.parent) {
+                this.wizardThoughtBubbleSprite.parent.removeChild(this.wizardThoughtBubbleSprite);
+            }
+        }
+
+        getWizardThoughtBubbleAlpha(nowMs) {
+            const bubble = this.wizardThoughtBubble;
+            if (!bubble) return 0;
+            if (!Number.isFinite(bubble.startedAtMs)) return 1;
+            const elapsedMs = Math.max(0, nowMs - bubble.startedAtMs);
+            if (elapsedMs <= bubble.durationMs) return 1;
+            if (bubble.fadeMs <= 0) return 0;
+            const fadeElapsedMs = elapsedMs - bubble.durationMs;
+            const fadeProgress = Math.max(0, Math.min(1, fadeElapsedMs / bubble.fadeMs));
+            return 1 - fadeProgress;
+        }
+
+        getWizardThoughtBubbleCloudTexture(bubble) {
+            if (typeof PIXI === "undefined" || !PIXI.Texture) {
+                throw new Error("wizard.thoughtBubble requires PIXI.Texture");
+            }
+            const texture = PIXI.Texture.from("/assets/images/cloud.png");
+            const baseTexture = texture && texture.baseTexture ? texture.baseTexture : null;
+            if (!baseTexture) {
+                throw new Error("wizard.thoughtBubble missing cloud base texture");
+            }
+            if (baseTexture.valid === true) {
+                bubble.cloudTextureReady = true;
+                return texture;
+            }
+            if (bubble.cloudTextureError) {
+                throw new Error(`wizard.thoughtBubble failed to load /assets/images/cloud.png: ${bubble.cloudTextureError}`);
+            }
+            if (!this.wizardThoughtBubblePendingBaseTextures.has(baseTexture)) {
+                if (typeof baseTexture.once !== "function") {
+                    throw new Error("wizard.thoughtBubble cloud texture cannot report load completion");
+                }
+                this.wizardThoughtBubblePendingBaseTextures.add(baseTexture);
+                baseTexture.once("loaded", () => {
+                    this.wizardThoughtBubblePendingBaseTextures.delete(baseTexture);
+                    if (this.wizardThoughtBubble) {
+                        this.wizardThoughtBubble.cloudTextureReady = true;
+                    }
+                    if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                        globalThis.presentGameFrame();
+                    }
+                });
+                baseTexture.once("error", (error) => {
+                    this.wizardThoughtBubblePendingBaseTextures.delete(baseTexture);
+                    if (this.wizardThoughtBubble) {
+                        this.wizardThoughtBubble.cloudTextureError = error && error.message ? error.message : "texture error";
+                    }
+                    if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                        globalThis.presentGameFrame();
+                    }
+                });
+            }
+            return null;
+        }
+
+        ensureWizardThoughtBubbleTexture(ctx, bubble) {
+            if (this.wizardThoughtBubbleTexture) return true;
+            if (typeof PIXI === "undefined" || !PIXI.Container || !PIXI.Graphics || !PIXI.Sprite || !PIXI.Text || !PIXI.Rectangle) {
+                throw new Error("wizard.thoughtBubble requires Pixi display classes");
+            }
+            const appRef = (ctx && ctx.app) || global.app || null;
+            const renderer = appRef && appRef.renderer ? appRef.renderer : null;
+            if (!renderer || typeof renderer.generateTexture !== "function") {
+                throw new Error("wizard.thoughtBubble requires a Pixi renderer");
+            }
+            const cloudTexture = this.getWizardThoughtBubbleCloudTexture(bubble);
+            if (!cloudTexture) {
+                return false;
+            }
+
+            const baseViewscale = Math.max(1, Number(this.camera && this.camera.viewscale) || 40);
+            bubble.baseViewscale = baseViewscale;
+            const smallDiameter = Math.max(18, Math.min(52, baseViewscale * 0.42));
+            const r1 = smallDiameter * 0.5;
+            const r2 = smallDiameter * 0.75;
+            const r3 = smallDiameter;
+            const outlineWidth = Math.max(2, Math.round(smallDiameter * 0.09));
+            const fontSize = Math.max(16, Math.min(30, Math.round(smallDiameter * 0.78)));
+            const textLength = bubble.text.replace(/\s+/g, " ").trim().length;
+            const cloudWidth = Math.max(230, Math.min(560, 210 + textLength * fontSize * 0.22));
+            const cloudHeight = cloudWidth * (772 / 1173);
+            const padding = Math.max(10, outlineWidth * 3);
+            const baseCloudX = padding;
+            const cloudX = baseCloudX + (cloudWidth * 0.3);
+            const cloudY = padding;
+            const circleShiftX = r1 * 0.5;
+            const c3x = baseCloudX + cloudWidth * 0.52 + circleShiftX;
+            const c3y = cloudY + cloudHeight + smallDiameter * 0.5 + r3;
+            const c2x = c3x - smallDiameter * 1.5;
+            const c2y = c3y + smallDiameter * 1.25;
+            const c1x = c2x - smallDiameter * 1.08;
+            const c1y = c2y + smallDiameter * 1.0;
+            const chainDx = c3x - c1x;
+            const chainDy = c3y - c1y;
+            const chainLength = Math.max(1e-6, Math.hypot(chainDx, chainDy));
+            const chainUnitX = chainDx / chainLength;
+            const chainUnitY = chainDy / chainLength;
+            const spreadC1x = c1x - (chainUnitX * smallDiameter);
+            const spreadC1y = c1y - (chainUnitY * smallDiameter);
+            const spreadC3x = c3x + (chainUnitX * r3 * 2 / 3);
+            const spreadC3y = c3y + (chainUnitY * r3 * 2 / 3);
+            const strokePad = Math.max(1, outlineWidth);
+            const relC2x = c2x - spreadC1x;
+            const relC2y = c2y - spreadC1y;
+            const relC3x = spreadC3x - spreadC1x;
+            const relC3y = spreadC3y - spreadC1y;
+            const relCloudX = Math.max(cloudX - spreadC1x - r1, -r1);
+            const relCloudY = cloudY - spreadC1y + r1;
+            const originX = r1 + strokePad;
+            const relMinY = Math.min(
+                -r1 - strokePad,
+                relC2y - r2 - strokePad,
+                relC3y - r3 - strokePad,
+                relCloudY
+            );
+            const relMaxY = Math.max(
+                r1 + strokePad,
+                relC2y + r2 + strokePad,
+                relC3y + r3 + strokePad,
+                relCloudY + cloudHeight
+            );
+            const originY = -relMinY;
+            const drawC1x = originX;
+            const drawC1y = originY;
+            const drawC2x = originX + relC2x;
+            const drawC2y = originY + relC2y;
+            const drawC3x = originX + relC3x;
+            const drawC3y = originY + relC3y;
+            const drawCloudX = originX + relCloudX;
+            const drawCloudY = originY + relCloudY;
+            const width = Math.ceil(Math.max(
+                drawC1x + r1 + strokePad,
+                drawC2x + r2 + strokePad,
+                drawC3x + r3 + strokePad,
+                drawCloudX + cloudWidth
+            ));
+            const height = Math.ceil(relMaxY - relMinY);
+
+            const textureContainer = new PIXI.Container();
+            const circles = new PIXI.Graphics();
+            circles.lineStyle(outlineWidth, 0x000000, 1);
+            circles.beginFill(0xffffff, 1);
+            circles.drawCircle(drawC1x, drawC1y, r1);
+            circles.drawCircle(drawC2x, drawC2y, r2);
+            circles.drawCircle(drawC3x, drawC3y, r3);
+            circles.endFill();
+            textureContainer.addChild(circles);
+
+            const cloud = new PIXI.Sprite(cloudTexture);
+            cloud.x = drawCloudX;
+            cloud.y = drawCloudY;
+            cloud.width = cloudWidth;
+            cloud.height = cloudHeight;
+            textureContainer.addChild(cloud);
+
+            const textObj = new PIXI.Text(bubble.text, {
+                fontFamily: "Arial, Helvetica, sans-serif",
+                fontSize,
+                fontWeight: "bold",
+                fill: 0x000000,
+                align: "center",
+                wordWrap: true,
+                wordWrapWidth: cloudWidth * 0.62,
+                lineJoin: "round"
+            });
+            textObj.anchor.set(0.5, 0.5);
+            textObj.x = drawCloudX + cloudWidth * 0.5;
+            textObj.y = drawCloudY + cloudHeight * 0.48;
+            textureContainer.addChild(textObj);
+
+            const texture = renderer.generateTexture(textureContainer, {
+                region: new PIXI.Rectangle(0, 0, width, height),
+                resolution: 1
+            });
+            textureContainer.destroy({ children: true });
+            if (!texture) {
+                throw new Error("wizard.thoughtBubble failed to generate render texture");
+            }
+            this.wizardThoughtBubbleTexture = texture;
+            bubble.pivotX = 0;
+            bubble.pivotY = height;
+            bubble.smallRadiusPx = r1;
+            bubble.smallDiameterPx = smallDiameter;
+            return true;
+        }
+
+        renderWizardThoughtBubble(ctx) {
+            const bubble = this.wizardThoughtBubble;
+            if (!bubble) {
+                this.clearWizardThoughtBubble();
+                return;
+            }
+            const nowMs = Number.isFinite(ctx && ctx.renderNowMs)
+                ? Number(ctx.renderNowMs)
+                : ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                    ? performance.now()
+                    : Date.now());
+            const alpha = this.getWizardThoughtBubbleAlpha(nowMs);
+            if (!(alpha > 0)) {
+                this.clearWizardThoughtBubble();
+                return;
+            }
+            const wizard = bubble.wizard || (ctx && ctx.wizard) || global.wizard || null;
+            if (!wizard || wizard.gone || !Number.isFinite(wizard.x) || !Number.isFinite(wizard.y)) {
+                this.clearWizardThoughtBubble();
+                return;
+            }
+            if (!this.ensureWizardThoughtBubbleTexture(ctx, bubble)) {
+                this.scheduleWizardThoughtBubbleRefresh();
+                return;
+            }
+            if (!Number.isFinite(bubble.startedAtMs)) {
+                bubble.startedAtMs = nowMs;
+            }
+            const container = this.layers && this.layers.scriptMessages ? this.layers.scriptMessages : null;
+            if (!container) {
+                throw new Error("wizard.thoughtBubble requires the scriptMessages render layer");
+            }
+            let sprite = this.wizardThoughtBubbleSprite;
+            if (!sprite) {
+                sprite = new PIXI.Sprite(this.wizardThoughtBubbleTexture);
+                sprite.name = "wizardThoughtBubble";
+                sprite.interactive = false;
+                sprite.interactiveChildren = false;
+                this.wizardThoughtBubbleSprite = sprite;
+            } else if (sprite.texture !== this.wizardThoughtBubbleTexture) {
+                sprite.texture = this.wizardThoughtBubbleTexture;
+            }
+            if (sprite.parent !== container) {
+                container.addChild(sprite);
+            }
+
+            const renderAlphaValue = Number.isFinite(ctx && ctx.renderAlpha)
+                ? Math.max(0, Math.min(1, Number(ctx.renderAlpha)))
+                : 1;
+            const renderPos = (wizard && typeof wizard.getInterpolatedPosition === "function")
+                ? wizard.getInterpolatedPosition(renderAlphaValue)
+                : {
+                    x: Number(wizard.x),
+                    y: Number(wizard.y),
+                    z: Number.isFinite(wizard.z) ? Number(wizard.z) : 0
+                };
+            const support = wizard && wizard.currentMovementSupport && typeof wizard.currentMovementSupport === "object"
+                ? wizard.currentMovementSupport
+                : null;
+            const wizardLayer = this.getLayerIndexFromValue(
+                support && Number.isFinite(support.layer) ? support.layer : wizard.currentLayer,
+                0
+            );
+            const wizardLayerBaseZ = support && Number.isFinite(support.baseZ)
+                ? Number(support.baseZ)
+                : (Number.isFinite(wizard.currentLayerBaseZ)
+                    ? Number(wizard.currentLayerBaseZ)
+                    : this.getLayerBaseZForLevel(wizardLayer));
+            const pGround = this.camera.worldToScreen(renderPos.x, renderPos.y, wizardLayerBaseZ);
+            const viewScale = Math.max(1, Number(this.camera && this.camera.viewscale) || Number(bubble.baseViewscale) || 40);
+            const xyRatio = Math.max(0.0001, Number(this.camera && this.camera.xyratio) || 0.66);
+            const localZ = Number.isFinite(renderPos.z) ? Number(renderPos.z) : 0;
+            const jumpOffsetPx = localZ * viewScale * xyRatio;
+            const wizardCenterY = pGround.y - jumpOffsetPx - (viewScale * 0.25);
+            const scale = Number.isFinite(bubble.baseViewscale) && bubble.baseViewscale > 0
+                ? (viewScale / bubble.baseViewscale)
+                : 1;
+            const smallDiameter = Math.max(1, Number(bubble.smallDiameterPx) || (bubble.smallRadiusPx * 2) || 1) * scale;
+            const wizardHeadX = pGround.x;
+            const wizardHeadY = wizardCenterY - (viewScale * 0.45);
+            const bubbleCornerX = wizardHeadX + (smallDiameter * 0.15);
+            const bubbleCornerY = wizardHeadY - (smallDiameter * 0.1) - (smallDiameter * 0.5);
+
+            sprite.pivot.set(bubble.pivotX, bubble.pivotY);
+            sprite.position.set(bubbleCornerX, bubbleCornerY);
+            sprite.scale.set(scale, scale);
+            sprite.alpha = alpha;
+            sprite.visible = true;
+            if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
+                sprite.renderable = true;
+            }
+            this.scheduleWizardThoughtBubbleRefresh();
+        }
+
+        parseScriptScreenColor(value) {
+            if (Number.isFinite(value)) {
+                const numeric = Math.floor(Number(value));
+                if (numeric < 0 || numeric > 0xFFFFFF) {
+                    throw new Error(`screenColor color number out of range: ${value}`);
+                }
+                return numeric;
+            }
+            const text = String(value === undefined || value === null ? "" : value).trim();
+            if (/^#?[0-9a-fA-F]{6}$/.test(text)) {
+                return parseInt(text.replace(/^#/, ""), 16);
+            }
+            if (/^0x[0-9a-fA-F]{6}$/.test(text)) {
+                return parseInt(text.slice(2), 16);
+            }
+            throw new Error(`invalid screenColor color '${text}'`);
+        }
+
+        startScriptScreenColorOverlay(color, opacity, duration, fade) {
+            const parsedColor = this.parseScriptScreenColor(color);
+            const parsedOpacity = Number(opacity);
+            const parsedDuration = Number(duration);
+            const parsedFade = Number(fade);
+            if (!Number.isFinite(parsedOpacity)) {
+                throw new Error("screenColor opacity must be a finite number");
+            }
+            if (!Number.isFinite(parsedDuration)) {
+                throw new Error("screenColor duration must be a finite number of seconds");
+            }
+            if (!Number.isFinite(parsedFade)) {
+                throw new Error("screenColor fade must be a finite number of seconds");
+            }
+            const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now();
+            this.scriptScreenColorOverlay = {
+                color: parsedColor,
+                opacity: Math.max(0, Math.min(1, parsedOpacity)),
+                startedAtMs: nowMs,
+                durationMs: Math.max(0, parsedDuration * 1000),
+                fadeMs: Math.max(0, parsedFade * 1000)
+            };
+            this.scheduleScriptScreenColorOverlayRefresh();
+            if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                globalThis.presentGameFrame();
+            }
+            return true;
+        }
+
+        scheduleScriptScreenColorOverlayRefresh() {
+            if (this.scriptScreenColorOverlayRefreshHandle !== null) return;
+            if (typeof requestAnimationFrame !== "function") return;
+            this.scriptScreenColorOverlayRefreshHandle = requestAnimationFrame(() => {
+                this.scriptScreenColorOverlayRefreshHandle = null;
+                if (!this.scriptScreenColorOverlay) return;
+                if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
+                    globalThis.presentGameFrame();
+                }
+                if (this.scriptScreenColorOverlay) {
+                    this.scheduleScriptScreenColorOverlayRefresh();
+                }
+            });
+        }
+
+        clearScriptScreenColorOverlay() {
+            this.scriptScreenColorOverlay = null;
+            if (this.scriptScreenColorOverlayRefreshHandle !== null && typeof cancelAnimationFrame === "function") {
+                cancelAnimationFrame(this.scriptScreenColorOverlayRefreshHandle);
+            }
+            this.scriptScreenColorOverlayRefreshHandle = null;
+            const gfx = this.scriptScreenColorOverlayGraphics;
+            if (gfx) {
+                gfx.visible = false;
+                if (gfx.parent) gfx.parent.removeChild(gfx);
+                if (typeof gfx.clear === "function") gfx.clear();
+            }
+        }
+
+        getScriptScreenColorOverlayOpacity(nowMs) {
+            const overlay = this.scriptScreenColorOverlay;
+            if (!overlay) return 0;
+            const elapsedMs = Math.max(0, nowMs - overlay.startedAtMs);
+            const opacity = Math.max(0, Math.min(1, Number(overlay.opacity) || 0));
+            if (elapsedMs <= overlay.durationMs) {
+                return opacity;
+            }
+            if (overlay.fadeMs <= 0) {
+                return 0;
+            }
+            const fadeElapsedMs = elapsedMs - overlay.durationMs;
+            const fadeProgress = Math.max(0, Math.min(1, fadeElapsedMs / overlay.fadeMs));
+            return opacity * (1 - fadeProgress);
+        }
+
+        renderScriptScreenColorOverlay(ctx) {
+            if (!this.scriptScreenColorOverlay) {
+                this.clearScriptScreenColorOverlay();
+                return;
+            }
+            if (typeof PIXI === "undefined" || !PIXI.Graphics) {
+                throw new Error("screenColor overlay requires PIXI.Graphics");
+            }
+            const appRef = (ctx && ctx.app) || global.app || null;
+            const stage = appRef && appRef.stage ? appRef.stage : null;
+            if (!stage) {
+                throw new Error("screenColor overlay requires the Pixi app stage");
+            }
+            const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now();
+            const alpha = this.getScriptScreenColorOverlayOpacity(nowMs);
+            if (!(alpha > 0)) {
+                this.clearScriptScreenColorOverlay();
+                return;
+            }
+            let gfx = this.scriptScreenColorOverlayGraphics;
+            if (!gfx) {
+                gfx = new PIXI.Graphics();
+                gfx.name = "scriptScreenColorOverlay";
+                gfx.interactive = false;
+                gfx.interactiveChildren = false;
+                this.scriptScreenColorOverlayGraphics = gfx;
+            }
+            const screen = appRef.screen || {};
+            const renderer = appRef.renderer || {};
+            const width = Math.max(1, Number(screen.width) || Number(renderer.width) || Number(global.innerWidth) || 1);
+            const height = Math.max(1, Number(screen.height) || Number(renderer.height) || Number(global.innerHeight) || 1);
+            gfx.clear();
+            gfx.beginFill(this.scriptScreenColorOverlay.color, 1);
+            gfx.drawRect(0, 0, width, height);
+            gfx.endFill();
+            gfx.alpha = alpha;
+            gfx.visible = true;
+            gfx.position.set(0, 0);
+            gfx.scale.set(1, 1);
+            if (gfx.parent !== stage) {
+                stage.addChild(gfx);
+            }
+            const cursorLayerRef = global.cursorLayer || null;
+            if (
+                cursorLayerRef &&
+                cursorLayerRef.parent === stage &&
+                typeof stage.getChildIndex === "function" &&
+                typeof stage.setChildIndex === "function"
+            ) {
+                const gfxIndex = stage.getChildIndex(gfx);
+                const cursorIndex = stage.getChildIndex(cursorLayerRef);
+                const targetIndex = gfxIndex < cursorIndex
+                    ? Math.max(0, cursorIndex - 1)
+                    : Math.max(0, cursorIndex);
+                if (gfxIndex !== targetIndex) {
+                    stage.setChildIndex(gfx, targetIndex);
+                }
+            } else if (typeof stage.setChildIndex === "function" && Array.isArray(stage.children)) {
+                stage.setChildIndex(gfx, Math.max(0, stage.children.length - 1));
+            }
+            this.scheduleScriptScreenColorOverlayRefresh();
         }
 
         getMousePosRef(ctx) {
@@ -16897,6 +19754,10 @@ void main(void) {
             if (this.roadPlacementPreviewContainer) {
                 this.roadPlacementPreviewContainer.visible = false;
             }
+            if (this.roadPlacementPreviewGraphics) {
+                this.roadPlacementPreviewGraphics.clear();
+                this.roadPlacementPreviewGraphics.visible = false;
+            }
             if (this.roadPlacementPreviewSpriteByKey && this.roadPlacementPreviewSpriteByKey.size > 0) {
                 for (const sprite of this.roadPlacementPreviewSpriteByKey.values()) {
                     if (!sprite) continue;
@@ -17091,168 +19952,21 @@ void main(void) {
             if (!this.roadPlacementPreviewSpriteByKey) {
                 this.roadPlacementPreviewSpriteByKey = new Map();
             }
+            if (!this.roadPlacementPreviewGraphics) {
+                this.roadPlacementPreviewGraphics = new PIXI.Graphics();
+                this.roadPlacementPreviewGraphics.name = "renderingRoadPathPlacementPreview";
+                this.roadPlacementPreviewGraphics.interactive = false;
+                this.roadPlacementPreviewContainer.addChild(this.roadPlacementPreviewGraphics);
+            } else if (this.roadPlacementPreviewGraphics.parent !== this.roadPlacementPreviewContainer) {
+                this.roadPlacementPreviewContainer.addChild(this.roadPlacementPreviewGraphics);
+            }
 
             const previewContainer = this.roadPlacementPreviewContainer;
             const previewSpriteByKey = this.roadPlacementPreviewSpriteByKey;
-
-            const wizard = (ctx && ctx.wizard) || global.wizard || null;
-            const mapRef = (ctx && ctx.map) || (wizard && wizard.map) || global.map || null;
-            const mousePosRef = this.getMousePosRef(ctx);
-            const RoadClass = (typeof global.Road !== "undefined") ? global.Road : null;
-            if (
-                !wizard ||
-                wizard.currentSpell !== "buildroad" ||
-                !wizard.roadLayoutMode ||
-                !wizard.roadStartPoint ||
-                !mapRef ||
-                typeof mapRef.getHexLine !== "function" ||
-                typeof mapRef.worldToNode !== "function" ||
-                !RoadClass ||
-                typeof RoadClass._getTextureForMaskAndPhase !== "function" ||
-                !mousePosRef ||
-                !Number.isFinite(mousePosRef.worldX) ||
-                !Number.isFinite(mousePosRef.worldY)
-            ) {
-                this.clearRoadPlacementPreview();
-                return;
-            }
-
-            const startNode = wizard.roadStartPoint;
-            const endNode = mapRef.worldToNode(mousePosRef.worldX, mousePosRef.worldY);
-            if (!startNode || !endNode) {
-                this.clearRoadPlacementPreview();
-                return;
-            }
-
-            const configuredRoadWidth = Number.isFinite(wizard.selectedRoadWidth)
-                ? Math.max(1, Math.min(5, Math.round(Number(wizard.selectedRoadWidth))))
-                : (
-                    (typeof roadWidth !== "undefined" && Number.isFinite(roadWidth))
-                        ? Number(roadWidth)
-                        : ((Number.isFinite(global.roadWidth) ? Number(global.roadWidth) : 3))
-                );
-            const width = (startNode === endNode) ? 1 : configuredRoadWidth;
-            const roadNodes = mapRef.getHexLine(startNode, endNode, width);
-            if (!Array.isArray(roadNodes) || roadNodes.length === 0) {
-                this.clearRoadPlacementPreview();
-                return;
-            }
-
-            const oddDirections = Array.isArray(RoadClass._oddDirections) && RoadClass._oddDirections.length > 0
-                ? RoadClass._oddDirections.slice()
-                : [1, 3, 5, 7, 9, 11];
-            const fillTexturePath = (
-                typeof wizard.selectedFlooringTexture === "string" &&
-                wizard.selectedFlooringTexture.length > 0
-            )
-                ? wizard.selectedFlooringTexture
-                : (
-                    (typeof RoadClass._defaultFillTexturePath === "string" && RoadClass._defaultFillTexturePath.length > 0)
-                        ? RoadClass._defaultFillTexturePath
-                        : "/assets/images/flooring/dirt.jpg"
-                );
-
-            const previewKeys = new Set();
-            const roadNodeByKey = new Map();
-            for (let i = 0; i < roadNodes.length; i++) {
-                const node = roadNodes[i];
-                if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) continue;
-                const key = `${node.xindex},${node.yindex}`;
-                if (previewKeys.has(key)) continue;
-                previewKeys.add(key);
-                roadNodeByKey.set(key, node);
-            }
-
-            const hasRoadObjectAtNode = (node) => {
-                if (!node || !Array.isArray(node.objects)) return false;
-                if (RoadClass && typeof RoadClass.hasMatchingRoadAtNode === "function") {
-                    return RoadClass.hasMatchingRoadAtNode(node, fillTexturePath);
-                }
-                for (let i = 0; i < node.objects.length; i++) {
-                    const obj = node.objects[i];
-                    if (obj && obj.type === "road" && !obj.gone && !obj.vanishing) return true;
-                }
-                return false;
-            };
-
-            const activeKeys = new Set();
-            for (const [key, node] of roadNodeByKey.entries()) {
-                const neighborDirections = [];
-                for (let i = 0; i < oddDirections.length; i++) {
-                    const dir = oddDirections[i];
-                    const neighbor = node.neighbors && node.neighbors[dir];
-                    if (!neighbor) continue;
-                    const neighborKey = `${neighbor.xindex},${neighbor.yindex}`;
-                    if (previewKeys.has(neighborKey) || hasRoadObjectAtNode(neighbor)) {
-                        neighborDirections.push(dir);
-                    }
-                }
-                const mask = (typeof RoadClass._getNeighborMask === "function")
-                    ? RoadClass._getNeighborMask(neighborDirections)
-                    : 0;
-                const roadScreenWidth = this.camera.viewscale * 1.1547;
-                const roadScreenHeight = this.camera.viewscale * this.camera.xyratio;
-                const lodMetric = (typeof RoadClass.getFillTextureLodMetric === "function")
-                    ? RoadClass.getFillTextureLodMetric(fillTexturePath, roadScreenWidth, roadScreenHeight)
-                    : Math.max(roadScreenWidth, roadScreenHeight);
-                const resolvedFillTexturePath = (typeof RoadClass.resolveFillTexturePathForSize === "function")
-                    ? RoadClass.resolveFillTexturePathForSize(fillTexturePath, lodMetric)
-                    : fillTexturePath;
-                const metrics = (typeof RoadClass._getTextureTileMetrics === "function")
-                    ? RoadClass._getTextureTileMetrics(resolvedFillTexturePath)
-                    : { tileW: 1, tileH: 1 };
-                const pixelsPerWorldUnit = Number.isFinite(RoadClass._pixelsPerWorldUnit)
-                    ? Number(RoadClass._pixelsPerWorldUnit)
-                    : ((128 * 2) / 1.1547);
-                const phaseX = (((Number(node.x) * pixelsPerWorldUnit) % metrics.tileW) + metrics.tileW) % metrics.tileW;
-                const phaseY = (((Number(node.y) * pixelsPerWorldUnit) % metrics.tileH) + metrics.tileH) % metrics.tileH;
-                const textureRef = RoadClass._getTextureForMaskAndPhase(mask, phaseX, phaseY, resolvedFillTexturePath);
-                const textureCacheKey = (textureRef && typeof textureRef.key === "string") ? textureRef.key : "";
-                const texture = (textureRef && textureRef.entry && isRenderablePixiTexture(textureRef.entry.texture))
-                    ? textureRef.entry.texture
-                    : null;
-                if (!texture) {
-                    const existingSprite = previewSpriteByKey.get(key);
-                    if (existingSprite) {
-                        syncRoadRenderSpriteTextureRetention(existingSprite, null);
-                        existingSprite.visible = false;
-                        if (Object.prototype.hasOwnProperty.call(existingSprite, "renderable")) {
-                            existingSprite.renderable = false;
-                        }
-                    }
-                    continue;
-                }
-
-                let sprite = previewSpriteByKey.get(key);
-                if (!sprite) {
-                    sprite = new PIXI.Sprite(texture);
-                    sprite.anchor.set(0.5, 0.5);
-                    sprite.name = `renderingRoadPlacementTile:${key}`;
-                    previewSpriteByKey.set(key, sprite);
-                    previewContainer.addChild(sprite);
-                } else if (sprite.texture !== texture) {
-                    sprite.texture = texture;
-                }
-                syncRoadRenderSpriteTextureRetention(sprite, { _roadTextureCacheKey: textureCacheKey });
-                if (sprite.parent !== previewContainer) {
-                    previewContainer.addChild(sprite);
-                }
-
-                const center = this.camera.worldToScreen(Number(node.x), Number(node.y), 0);
-                sprite.x = center.x;
-                sprite.y = center.y;
-                sprite.width = this.camera.viewscale * 1.1547;
-                sprite.height = this.camera.viewscale * this.camera.xyratio;
-                sprite.alpha = 0.5;
-                sprite.visible = true;
-                if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
-                    sprite.renderable = true;
-                }
-                activeKeys.add(key);
-            }
-
-            for (const [key, sprite] of previewSpriteByKey.entries()) {
-                if (!sprite || activeKeys.has(key)) continue;
+            const g = this.roadPlacementPreviewGraphics;
+            g.clear();
+            for (const sprite of previewSpriteByKey.values()) {
+                if (!sprite) continue;
                 syncRoadRenderSpriteTextureRetention(sprite, null);
                 sprite.visible = false;
                 if (Object.prototype.hasOwnProperty.call(sprite, "renderable")) {
@@ -17260,7 +19974,206 @@ void main(void) {
                 }
             }
 
-            previewContainer.visible = activeKeys.size > 0;
+            const wizard = (ctx && ctx.wizard) || global.wizard || null;
+            const mapRef = (ctx && ctx.map) || (wizard && wizard.map) || global.map || null;
+            const mousePosRef = this.getMousePosRef(ctx);
+            const RoadPathClass = (typeof global.RoadPath !== "undefined") ? global.RoadPath : null;
+            const draft = wizard && wizard.roadPathDraft ? wizard.roadPathDraft : null;
+            const draftPoints = draft && Array.isArray(draft.points) ? draft.points : [];
+            const selectedRoadPath = (
+                wizard &&
+                wizard.currentSpell === "buildroad" &&
+                wizard.selectedRoadPath &&
+                !wizard.selectedRoadPath.gone &&
+                wizard.selectedRoadPath.type === "roadPath"
+            ) ? wizard.selectedRoadPath : null;
+            const hasActivePlacementDraft = !!(
+                wizard &&
+                wizard.currentSpell === "buildroad" &&
+                wizard.roadLayoutMode &&
+                draftPoints.length >= 1
+            );
+            if (
+                !wizard ||
+                wizard.currentSpell !== "buildroad" ||
+                (!hasActivePlacementDraft && !selectedRoadPath)
+            ) {
+                this.clearRoadPlacementPreview();
+                return;
+            }
+
+            const renderZ = 0.001;
+            const drawPointMarker = (point, color, radius = 4, strokeColor = 0x1d140c) => {
+                const screen = this.camera.worldToScreen(Number(point.x), Number(point.y), renderZ);
+                g.lineStyle(2, strokeColor, 0.9);
+                g.beginFill(color, 0.96);
+                g.drawCircle(screen.x, screen.y, radius);
+                g.endFill();
+            };
+            const drawPathLine = (points, color, alpha = 0.95, width = 2) => {
+                if (!Array.isArray(points) || points.length < 2) return;
+                g.lineStyle(width, color, alpha);
+                for (let i = 0; i < points.length; i++) {
+                    const point = points[i];
+                    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+                        throw new Error(`Cannot draw road path edit line because point ${i} is invalid.`);
+                    }
+                    const screen = this.camera.worldToScreen(Number(point.x), Number(point.y), renderZ);
+                    if (i === 0) g.moveTo(screen.x, screen.y);
+                    else g.lineTo(screen.x, screen.y);
+                }
+            };
+            const drawOutlinePolygon = (outline, color, alpha = 0.95, width = 2) => {
+                if (!Array.isArray(outline) || outline.length < 3) {
+                    throw new Error("Cannot draw selected road path without polygon outline geometry.");
+                }
+                g.lineStyle(width, color, alpha);
+                for (let i = 0; i < outline.length; i++) {
+                    const point = outline[i];
+                    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+                        throw new Error(`Cannot draw selected road path outline because point ${i} is invalid.`);
+                    }
+                    const screen = this.camera.worldToScreen(Number(point.x), Number(point.y), renderZ);
+                    if (i === 0) g.moveTo(screen.x, screen.y);
+                    else g.lineTo(screen.x, screen.y);
+                }
+                const first = this.camera.worldToScreen(Number(outline[0].x), Number(outline[0].y), renderZ);
+                g.lineTo(first.x, first.y);
+            };
+            const drawSelectedRoadPathOverlay = (roadPath) => {
+                const geometry = roadPath && roadPath.generatedGeometry;
+                const outline = geometry && Array.isArray(geometry.outline)
+                    ? geometry.outline
+                    : (Array.isArray(roadPath && roadPath.outlinePolygon) ? roadPath.outlinePolygon : null);
+                const points = geometry && Array.isArray(geometry.points)
+                    ? geometry.points
+                    : (Array.isArray(roadPath && roadPath.pathPoints) ? roadPath.pathPoints : null);
+                if (!Array.isArray(points) || points.length < 2) {
+                    throw new Error("Cannot draw selected road path without editable path points.");
+                }
+                drawOutlinePolygon(outline, 0x7bdcff, 0.95, 2);
+                drawPathLine(points, 0xffffff, 0.72, 1);
+                for (let i = 0; i < points.length; i++) {
+                    const endpoint = i === 0 || i === points.length - 1;
+                    drawPointMarker(points[i], endpoint ? 0x7bdcff : 0xf4efe5, endpoint ? 6 : 4, 0x102a36);
+                }
+            };
+
+            if (selectedRoadPath) {
+                drawSelectedRoadPathOverlay(selectedRoadPath);
+            }
+
+            if (
+                !hasActivePlacementDraft ||
+                !mapRef ||
+                !RoadPathClass ||
+                typeof RoadPathClass.computeGeometry !== "function" ||
+                !mousePosRef ||
+                !Number.isFinite(mousePosRef.worldX) ||
+                !Number.isFinite(mousePosRef.worldY)
+            ) {
+                g.visible = !!selectedRoadPath;
+                previewContainer.visible = !!selectedRoadPath;
+                if (previewContainer.visible) this.promoteInteriorPresentationDisplayObject(previewContainer, ctx);
+                return;
+            }
+
+            const configuredRoadWidth = Number.isFinite(draft.width)
+                ? Math.max(0.25, Number(draft.width))
+                : (Number.isFinite(wizard.selectedRoadWidth)
+                ? Math.max(0.25, Number(wizard.selectedRoadWidth))
+                : (
+                    (typeof roadWidth !== "undefined" && Number.isFinite(roadWidth))
+                        ? Number(roadWidth)
+                        : ((Number.isFinite(global.roadWidth) ? Number(global.roadWidth) : 3))
+                ));
+
+            const wrapPreviewPoint = (x, y) => {
+                let outX = Number(x);
+                let outY = Number(y);
+                if (!Number.isFinite(outX) || !Number.isFinite(outY)) return null;
+                if (typeof mapRef.wrapWorldX === "function") outX = mapRef.wrapWorldX(outX);
+                if (typeof mapRef.wrapWorldY === "function") outY = mapRef.wrapWorldY(outY);
+                return { x: outX, y: outY };
+            };
+            const pointsMatch = (a, b, epsilon = 1e-5) => {
+                if (!a || !b) return false;
+                const ax = Number(a.x);
+                const ay = Number(a.y);
+                const bx = Number(b.x);
+                const by = Number(b.y);
+                if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return false;
+                const dx = (typeof mapRef.shortestDeltaX === "function")
+                    ? mapRef.shortestDeltaX(ax, bx)
+                    : (bx - ax);
+                const dy = (typeof mapRef.shortestDeltaY === "function")
+                    ? mapRef.shortestDeltaY(ay, by)
+                    : (by - ay);
+                return Math.abs(dx) <= epsilon && Math.abs(dy) <= epsilon;
+            };
+            const candidateNode = typeof mapRef.worldToNode === "function"
+                ? mapRef.worldToNode(mousePosRef.worldX, mousePosRef.worldY)
+                : null;
+            const candidatePoint = candidateNode && Number.isFinite(candidateNode.x) && Number.isFinite(candidateNode.y)
+                ? wrapPreviewPoint(candidateNode.x, candidateNode.y)
+                : wrapPreviewPoint(mousePosRef.worldX, mousePosRef.worldY);
+            if (!candidatePoint) {
+                this.clearRoadPlacementPreview();
+                return;
+            }
+
+            const committedPoints = draftPoints.map((point, index) => {
+                const wrapped = wrapPreviewPoint(point && point.x, point && point.y);
+                if (!wrapped) {
+                    throw new Error(`Cannot preview road path because draft point ${index} is invalid.`);
+                }
+                return wrapped;
+            });
+            const lastPoint = committedPoints[committedPoints.length - 1];
+            const previewPoints = pointsMatch(lastPoint, candidatePoint)
+                ? committedPoints.slice()
+                : committedPoints.concat(candidatePoint);
+            const drawGeometry = (geometry, fillAlpha, strokeColor, strokeAlpha) => {
+                if (!geometry || !Array.isArray(geometry.segments)) return;
+                g.beginFill(0x9b8162, fillAlpha);
+                g.lineStyle(2, strokeColor, strokeAlpha);
+                for (let i = 0; i < geometry.segments.length; i++) {
+                    const polygon = geometry.segments[i].polygon;
+                    if (!Array.isArray(polygon) || polygon.length < 3) {
+                        throw new Error(`Cannot preview road path segment ${i} without polygon geometry.`);
+                    }
+                    for (let p = 0; p < polygon.length; p++) {
+                        const screen = this.camera.worldToScreen(Number(polygon[p].x), Number(polygon[p].y), renderZ);
+                        if (p === 0) g.moveTo(screen.x, screen.y);
+                        else g.lineTo(screen.x, screen.y);
+                    }
+                    const first = this.camera.worldToScreen(Number(polygon[0].x), Number(polygon[0].y), renderZ);
+                    g.lineTo(first.x, first.y);
+                }
+                g.endFill();
+            };
+
+            let candidateWasInvalid = false;
+            if (previewPoints.length >= 2) {
+                try {
+                    drawGeometry(RoadPathClass.computeGeometry(previewPoints, configuredRoadWidth), 0.5, 0xffd27a, 0.9);
+                } catch (error) {
+                    candidateWasInvalid = true;
+                    if (committedPoints.length >= 2) {
+                        drawGeometry(RoadPathClass.computeGeometry(committedPoints, configuredRoadWidth), 0.42, 0xffd27a, 0.75);
+                    }
+                }
+            }
+            for (let i = 0; i < committedPoints.length; i++) {
+                drawPointMarker(committedPoints[i], i === committedPoints.length - 1 ? 0xffd27a : 0xf4efe5, 4);
+            }
+            if (candidateWasInvalid) {
+                drawPointMarker(candidatePoint, 0xff5656, 5);
+            } else if (!pointsMatch(lastPoint, candidatePoint)) {
+                drawPointMarker(candidatePoint, 0xffd27a, 4);
+            }
+            g.visible = true;
+            previewContainer.visible = true;
             if (previewContainer.visible) this.promoteInteriorPresentationDisplayObject(previewContainer, ctx);
         }
 
@@ -17767,9 +20680,7 @@ void main(void) {
                     : (Number.isFinite(wizard.selectedFloorEditLevel) ? wizard.selectedFloorEditLevel : 0),
                 0
             );
-            const placementLayerBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
-                ? Number(wizard.currentLayerBaseZ)
-                : this.getLayerBaseZForLevel(placementLayer);
+            const placementLayerBaseZ = this.getPlacementLayerBaseZForWizard(wizard, mapRef, placementLayer);
             const projectedLayerPoint = this.resolveScreenPointOnLayerPlane(
                 mousePosRef.screenX,
                 mousePosRef.screenY,
@@ -17818,7 +20729,6 @@ void main(void) {
                 previewItem.centerSnapGuide = null;
                 previewItem.traversalLayer = placementLayer;
                 previewItem.level = placementLayer;
-                previewItem._renderTraversalLayer = placementLayer;
                 previewItem._renderLayerBaseZ = placementLayerBaseZ;
                 return previewItem;
             }
@@ -17910,7 +20820,6 @@ void main(void) {
             previewItem.category = selectedCategory;
             previewItem.traversalLayer = placementLayer;
             previewItem.level = placementLayer;
-            previewItem._renderTraversalLayer = placementLayer;
             previewItem._renderLayerBaseZ = placementLayerBaseZ;
             
             if (wizard.selectedPlaceableCompositeLayersByTexture && wizard.selectedPlaceableCompositeLayersByTexture[texturePath]) {
@@ -18368,6 +21277,13 @@ void main(void) {
             const g = this.buildingPlacementPreviewGraphics;
             g.clear();
             const wizard = (ctx && ctx.wizard) || global.wizard || null;
+            if (wizard && this.getWizardVisualLayerIndex(wizard, 0) < 0) {
+                g.visible = false;
+                if (Object.prototype.hasOwnProperty.call(g, "renderable")) {
+                    g.renderable = false;
+                }
+                return;
+            }
             const mapRef = (ctx && ctx.map) || (wizard && wizard.map) || global.map || null;
             const spellSystemRef = (typeof SpellSystem !== "undefined")
                 ? SpellSystem
@@ -18456,6 +21372,9 @@ void main(void) {
             }
 
             g.visible = drawn > 0;
+            if (Object.prototype.hasOwnProperty.call(g, "renderable")) {
+                g.renderable = g.visible;
+            }
             if (g.visible) {
                 this.promoteInteriorPresentationDisplayObject(g, ctx);
             }
@@ -18666,7 +21585,7 @@ void main(void) {
             proxy.traversalLayer = level;
             proxy.level = level;
             proxy._renderLayerIndex = level;
-            proxy._renderLayerBaseZ = this.getLayerBaseZForLevel(level);
+            proxy._renderLayerBaseZ = this.getLayerBaseZForObject(item, level);
             proxy._renderLayerFadeAlpha = 1;
             proxy._renderLayerAlpha = 1;
             proxy._renderDepthBias = Number.isFinite(item.renderDepthOffset) ? Number(item.renderDepthOffset) : 0;
@@ -19252,7 +22171,7 @@ void main(void) {
             proxy.placementRotation = 0;
             proxy.map = (ctx && ctx.map) || (this.camera && this.camera.map) || global.map || null;
             proxy._renderLayerBaseZ = 0;
-            proxy._renderDepthBias = 0;
+            proxy._renderDepthBias = Number.isFinite(options && options.depthBias) ? Number(options.depthBias) : 0;
             const mesh = proxy.updateDepthBillboardMesh(ctx, this.camera, {
                 alphaCutoff: 0.01,
                 groundPlaneVisualLift: 0,
@@ -19282,6 +22201,18 @@ void main(void) {
                 uniforms.uBuildingExteriorDepthMetricRange[0] = Number(cache.depthMetric.min);
                 uniforms.uBuildingExteriorDepthMetricRange[1] = 1 / Math.max(1e-6, Number(cache.depthMetric.span));
             }
+            const lightFactor = Number.isFinite(options && options.lightFactor)
+                ? Math.max(0, Math.min(1, Number(options.lightFactor)))
+                : 1;
+            if (lightFactor < 0.999) {
+                if (!uniforms.uTint || uniforms.uTint.length < 4) {
+                    throw new Error(`prototype building interior ${cache.id || placement.id} light tint requires uTint support`);
+                }
+                const tint = Number.isFinite(sprite.tint) ? Math.max(0, Math.min(0xffffff, Math.floor(sprite.tint))) : 0xffffff;
+                uniforms.uTint[0] = (((tint >> 16) & 0xff) / 255) * lightFactor;
+                uniforms.uTint[1] = (((tint >> 8) & 0xff) / 255) * lightFactor;
+                uniforms.uTint[2] = ((tint & 0xff) / 255) * lightFactor;
+            }
             const container = this.layers && this.layers.objects3d;
             if (!container) {
                 throw new Error(`prototype building interior ${cache.id || placement.id} requires the 3D objects layer`);
@@ -19304,6 +22235,9 @@ void main(void) {
             const cutawayState = (ctx && ctx._renderingLayerCutawayState) || this.getLayerCutawayState(ctx);
             const triggers = Array.isArray(cutawayState && cutawayState.triggers) ? cutawayState.triggers : [];
             const renderedMeshes = new Set();
+            this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame = new Set();
+            this._prototypeBuildingInteriorPendingPlacementIdsThisFrame = new Set();
+            this._prototypeBuildingInteriorHeldPlacementIdsThisFrame = new Set();
             const hasPrototypeInterior = triggers.some(trigger => (
                 this.isPrototypeBuildingCutawayTrigger(trigger) &&
                 trigger.activeInteriorRegion
@@ -19324,7 +22258,19 @@ void main(void) {
                 if (cache && cache.status === "error") {
                     throw new Error(`prototype building interior ${cache.id || placement.id} bitmap failed: ${cache.error || "unknown error"}`);
                 }
-                if ((!cache || cache.status === "loading") && typeof mapRef.requestPrototypeBuildingInteriorBitmap === "function") {
+                if (
+                    (
+                        !cache ||
+                        cache.status === "loading" ||
+                        (cache.status === "ready" && cache.stale === true)
+                    ) &&
+                    typeof mapRef.requestPrototypeBuildingInteriorBitmap === "function"
+                ) {
+                    this.recordMoveObjectPerf("rendering.prototypeInteriorBitmap.requestCall", {
+                        placementId: placement.id || "",
+                        floorId,
+                        previousStatus: cache && cache.status || "missing"
+                    });
                     cache = mapRef.requestPrototypeBuildingInteriorBitmap(placement, floorId, {
                         app: (ctx && ctx.app) || global.app || null,
                         renderer: (ctx && ctx.app && ctx.app.renderer) || (global.app && global.app.renderer) || null,
@@ -19339,16 +22285,57 @@ void main(void) {
                 }
                 return cache;
             };
-            const renderInteriorFloor = (placement, floorId, options = null) => {
+            const renderInteriorFloor = (placement, floorId, options = null, cacheOverride = null) => {
                 if (!this.isPrototypeBuildingInteriorBitmapSourceFloorId(floorId)) return null;
-                const cache = resolveInteriorCache(placement, floorId);
+                const cache = cacheOverride || resolveInteriorCache(placement, floorId);
                 if (cache && cache.status === "ready") {
-                    const mesh = this.renderPrototypeBuildingInteriorBitmap(ctx, placement, cache, options);
+                    const movePerfEnabled = !!(typeof globalThis !== "undefined" && globalThis.__moveObjectPerf);
+                    const renderStartMs = movePerfEnabled ? performance.now() : 0;
+                    if (cache.lowerFloorsBitmap) {
+                        if (cache.lowerFloorsBitmap.status !== "ready") {
+                            throw new Error(`prototype building interior ${cache.id || placement.id} lower-floors bitmap is not ready`);
+                        }
+                        const lowerMesh = this.renderPrototypeBuildingInteriorBitmap(ctx, placement, cache.lowerFloorsBitmap, {
+                            alpha: Number.isFinite(options && options.alpha) ? Number(options.alpha) : 1,
+                            zIndexOffset: -0.001,
+                            depthBias: 0,
+                            lightFactor: BUILDING_INTERIOR_LOWER_FLOOR_LIGHT_FACTOR
+                        });
+                        if (lowerMesh) {
+                            activeIds.add(cache.lowerFloorsBitmap.id);
+                            renderedMeshes.add(lowerMesh);
+                            this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame.add(placement.id);
+                        }
+                    }
+                    const mesh = this.renderPrototypeBuildingInteriorBitmap(ctx, placement, cache, {
+                        ...(options || {}),
+                        zIndexOffset: Number.isFinite(options && options.zIndexOffset)
+                            ? Number(options.zIndexOffset)
+                            : 0.002,
+                        depthBias: Number.isFinite(options && options.depthBias)
+                            ? Number(options.depthBias)
+                            : BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS
+                    });
+                    if (movePerfEnabled) {
+                        this.recordMoveObjectPerf("rendering.prototypeInteriorBitmap.renderMesh", {
+                            placementId: placement.id || "",
+                            floorId,
+                            cacheId: cache.id || "",
+                            hasMesh: !!mesh
+                        }, performance.now() - renderStartMs);
+                    }
                     if (mesh) {
                         activeIds.add(cache.id);
                         renderedMeshes.add(mesh);
+                        this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame.add(placement.id);
+                        if (typeof mapRef.releasePrototypeBuildingInteriorBitmapReplacement === "function") {
+                            mapRef.releasePrototypeBuildingInteriorBitmapReplacement(cache);
+                        }
                     }
                     return mesh;
+                }
+                if (cache && cache.status === "loading") {
+                    this._prototypeBuildingInteriorPendingPlacementIdsThisFrame.add(placement.id);
                 }
                 return null;
             };
@@ -19367,7 +22354,6 @@ void main(void) {
                     ? transition.fromSourceFloorId
                     : "";
                 const progress = Number(transition && transition.progress);
-                const transitionAlphas = this.getPrototypeBuildingInteriorBitmapTransitionAlphas(transition);
                 const hasOutgoingSnapshot = !!(
                     fromFloorId &&
                     fromFloorId !== floorId &&
@@ -19376,9 +22362,10 @@ void main(void) {
                     progress < 1
                 );
                 let outgoingSnapshotReady = false;
+                let fromCache = null;
                 if (hasOutgoingSnapshot) {
                     const snapshotSignature = this.getPrototypeBuildingInteriorFloorSnapshotSignature(ctx, placement, transition);
-                    const fromCache = resolveInteriorCache(placement, fromFloorId);
+                    fromCache = resolveInteriorCache(placement, fromFloorId);
                     if (fromCache && fromCache.status === "ready") {
                         this.capturePrototypeBuildingInteriorFloorSnapshot(ctx, placement, fromCache, transition);
                     }
@@ -19389,10 +22376,36 @@ void main(void) {
                         snapshot.signature === snapshotSignature
                     );
                 }
-                renderInteriorFloor(placement, floorId, { alpha: transitionAlphas.toAlpha, zIndexOffset: 0 });
+                const incomingCache = this.isPrototypeBuildingInteriorBitmapSourceFloorId(floorId)
+                    ? resolveInteriorCache(placement, floorId)
+                    : null;
+                const incomingReady = !!(incomingCache && incomingCache.status === "ready");
+                if (incomingCache && incomingCache.status === "loading") {
+                    this._prototypeBuildingInteriorPendingPlacementIdsThisFrame.add(placement.id);
+                }
+                if (!incomingReady && hasOutgoingSnapshot && fromCache && fromCache.status === "ready") {
+                    const heldMesh = renderInteriorFloor(placement, fromFloorId, {
+                        alpha: 1,
+                        zIndexOffset: 0
+                    }, fromCache);
+                    if (heldMesh) this._prototypeBuildingInteriorHeldPlacementIdsThisFrame.add(placement.id);
+                    continue;
+                }
+                const snapshotTransition = incomingReady
+                    ? transition
+                    : (hasOutgoingSnapshot ? { ...transition, progress: 0 } : transition);
+                const transitionAlphas = this.getPrototypeBuildingInteriorBitmapTransitionAlphas(snapshotTransition);
+                if (!hasOutgoingSnapshot || incomingReady) {
+                    renderInteriorFloor(placement, floorId, { alpha: transitionAlphas.toAlpha, zIndexOffset: 0 }, incomingCache);
+                }
                 if (outgoingSnapshotReady) {
-                    const snapshotDisplay = this.renderPrototypeBuildingInteriorFloorSnapshot(ctx, transition);
-                    if (snapshotDisplay) renderedSnapshotThisFrame = true;
+                    const snapshotDisplay = this.renderPrototypeBuildingInteriorFloorSnapshot(ctx, snapshotTransition);
+                    if (snapshotDisplay) {
+                        renderedSnapshotThisFrame = true;
+                        renderedMeshes.add(snapshotDisplay);
+                        this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame.add(placement.id);
+                        this._prototypeBuildingInteriorHeldPlacementIdsThisFrame.add(placement.id);
+                    }
                 }
             }
             this.hideUnusedPrototypeBuildingInteriors(activeIds);
@@ -19404,6 +22417,46 @@ void main(void) {
 
         isPrototypeBuildingExteriorHiddenByInteriorCutaway(placement, ctx = null) {
             if (!placement || typeof placement.id !== "string") return false;
+            const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
+            const support = wizardRef && wizardRef.currentMovementSupport && typeof wizardRef.currentMovementSupport === "object"
+                ? wizardRef.currentMovementSupport
+                : null;
+            const supportMembership = support && support.floorMembership && typeof support.floorMembership === "object"
+                ? support.floorMembership
+                : null;
+            const wizardMembership = wizardRef && wizardRef._floorMembership && typeof wizardRef._floorMembership === "object"
+                ? wizardRef._floorMembership
+                : null;
+            if (
+                (
+                    support &&
+                    support.ownerType === "building" &&
+                    support.ownerId === placement.id
+                ) ||
+                (
+                    supportMembership &&
+                    supportMembership.ownerType === "building" &&
+                    supportMembership.ownerId === placement.id
+                ) ||
+                (
+                    wizardMembership &&
+                    wizardMembership.ownerType === "building" &&
+                    wizardMembership.ownerId === placement.id
+                )
+            ) {
+                return true;
+            }
+            const mapRef = (ctx && ctx.map) || global.map || null;
+            if (mapRef && typeof mapRef.getPrototypeWorldScope === "function") {
+                const scope = mapRef.getPrototypeWorldScope();
+                if (
+                    scope &&
+                    scope.type === "building" &&
+                    scope.id === placement.id
+                ) {
+                    return true;
+                }
+            }
             const state = (ctx && ctx._renderingLayerCutawayState) || this.getLayerCutawayState(ctx);
             const triggers = Array.isArray(state && state.triggers) ? state.triggers : [];
             for (let i = 0; i < triggers.length; i++) {
@@ -19430,13 +22483,22 @@ void main(void) {
                 const trigger = triggers[i];
                 const triggerPlacement = trigger && trigger.building && trigger.building._prototypeBuildingPlacement;
                 if (!triggerPlacement || triggerPlacement.id !== placement.id) continue;
-                if (trigger.activeInteriorRegion) continue;
+                if (trigger.activeInteriorRegion) {
+                    alpha = Math.min(alpha, BUILDING_CUTAWAY_INTERIOR_ALPHA);
+                    continue;
+                }
                 const triggerAlpha = Number.isFinite(trigger.alpha)
                     ? Math.max(0, Math.min(1, Number(trigger.alpha)))
                     : BUILDING_CUTAWAY_GHOST_ALPHA;
                 alpha = Math.min(alpha, triggerAlpha);
             }
             return alpha;
+        }
+
+        shouldPickPrototypeBuildingExteriorAtAlpha(alpha) {
+            const value = Number(alpha);
+            if (!Number.isFinite(value)) return true;
+            return value > BUILDING_CUTAWAY_GHOST_ALPHA + 0.001;
         }
 
         renderPrototypeBuildingExteriorBitmap(ctx, placement, cache, options = null) {
@@ -19478,7 +22540,9 @@ void main(void) {
             if (typeof this.flipBuildingCutawayCompositeBillboardUvs === "function") {
                 this.flipBuildingCutawayCompositeBillboardUvs(mesh, sprite.texture);
             }
-            const exteriorDepthState = this.ensurePrototypeBuildingExteriorDepthState();
+            const exteriorDepthState = alpha < 0.999
+                ? this.ensurePrototypeBuildingExteriorTransparentDepthState()
+                : this.ensurePrototypeBuildingExteriorDepthState();
             if (exteriorDepthState) mesh.state = exteriorDepthState;
             if (typeof PIXI !== "undefined" && PIXI.BLEND_MODES) {
                 mesh.blendMode = PIXI.BLEND_MODES.NORMAL;
@@ -19520,7 +22584,9 @@ void main(void) {
             if (!pickTarget) {
                 throw new Error(`prototype building exterior ${cache.id || placement.id} could not create its picker target`);
             }
-            this.addPickRenderItem(pickTarget, mesh, { forceInclude: true });
+            if (this.shouldPickPrototypeBuildingExteriorAtAlpha(alpha)) {
+                this.addPickRenderItem(pickTarget, mesh, { forceInclude: true });
+            }
             return mesh;
         }
 
@@ -19643,12 +22709,37 @@ void main(void) {
                 this.hideUnusedPrototypeBuildingExteriors(new Set());
                 return;
             }
+            const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
+            if (wizardRef && this.getWizardVisualLayerIndex(wizardRef, 0) < 0) {
+                this.hideUnusedPrototypeBuildingExteriors(new Set());
+                return;
+            }
             const placements = mapRef.getPrototypeBuildingPlacements();
             const activeIds = new Set();
+            const interiorRenderedIds = this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame instanceof Set
+                ? this._prototypeBuildingInteriorRenderedPlacementIdsThisFrame
+                : null;
+            const interiorPendingIds = this._prototypeBuildingInteriorPendingPlacementIdsThisFrame instanceof Set
+                ? this._prototypeBuildingInteriorPendingPlacementIdsThisFrame
+                : null;
+            const interiorHeldIds = this._prototypeBuildingInteriorHeldPlacementIdsThisFrame instanceof Set
+                ? this._prototypeBuildingInteriorHeldPlacementIdsThisFrame
+                : null;
             for (let i = 0; i < placements.length; i++) {
                 const placement = placements[i];
                 if (!placement || !placement.id) continue;
-                if (this.isPrototypeBuildingExteriorHiddenByInteriorCutaway(placement, ctx)) continue;
+                const waitingForPrototypeInterior = !!(
+                    interiorPendingIds &&
+                    interiorPendingIds.has(placement.id)
+                );
+                if (
+                    interiorRenderedIds &&
+                    interiorRenderedIds.has(placement.id) &&
+                    (!waitingForPrototypeInterior || (interiorHeldIds && interiorHeldIds.has(placement.id)))
+                ) continue;
+                if (this.isPrototypeBuildingExteriorHiddenByInteriorCutaway(placement, ctx)) {
+                    if (!waitingForPrototypeInterior) continue;
+                }
                 let cache = typeof mapRef.getPrototypeBuildingExteriorBitmap === "function"
                     ? mapRef.getPrototypeBuildingExteriorBitmap(placement.id)
                     : null;
@@ -19712,12 +22803,10 @@ void main(void) {
             }
 
             const mapRef = (ctx && ctx.map) || wizard.map || global.map || null;
-            const placementLayerBaseZ = Number.isFinite(wizard.currentLayerBaseZ)
-                ? Number(wizard.currentLayerBaseZ)
-                : 0;
             const placementLayer = Number.isFinite(wizard.currentLayer)
                 ? Math.round(Number(wizard.currentLayer))
                 : 0;
+            const placementLayerBaseZ = this.getPlacementLayerBaseZForWizard(wizard, mapRef, placementLayer);
             const projectedPoint = this.resolveScreenPointOnLayerPlane(
                 mousePosRef.screenX,
                 mousePosRef.screenY,
@@ -19731,7 +22820,7 @@ void main(void) {
             const worldY = (projectedPoint && Number.isFinite(projectedPoint.y))
                 ? projectedPoint.y
                 : mousePosRef.worldY;
-            const worldZ = placementLayerBaseZ;
+            const worldZ = 0;
             const width = Number.isFinite(previewConfig && previewConfig.width)
                 ? Math.max(0.01, Number(previewConfig.width))
                 : 0.8;
@@ -19776,6 +22865,10 @@ void main(void) {
             previewItem.y = worldY;
             previewItem.z = worldZ;
             previewItem.traversalLayer = placementLayer;
+            previewItem.currentLayer = placementLayer;
+            previewItem.currentLayerBaseZ = placementLayerBaseZ;
+            previewItem._floorBaseZ = placementLayerBaseZ;
+            previewItem._renderLayerBaseZ = placementLayerBaseZ;
             previewItem.width = width;
             previewItem.height = height;
             previewItem.renderZ = worldY;
@@ -19911,6 +23004,17 @@ void main(void) {
             if (!this.currentFrameMetrics || !metricName) return value;
             this.currentFrameMetrics[metricName] = value;
             return value;
+        }
+
+        recordMoveObjectPerf(name, data = null, elapsedMs = null) {
+            if (
+                typeof globalThis === "undefined" ||
+                !globalThis.__moveObjectPerf ||
+                typeof globalThis.__recordMoveObjectPerf !== "function"
+            ) {
+                return;
+            }
+            globalThis.__recordMoveObjectPerf(name, data, elapsedMs);
         }
 
         incrementFrameMetric(metricName, delta = 1) {
@@ -20076,8 +23180,12 @@ void main(void) {
             const visibleNodes = this.profileDrawPassSection("collectVisibleNodes", () =>
                 this.collectVisibleNodes(ctx, 4, 4)
             );
+            let preparedCutawayState = null;
             this.profileDrawPassSection("prepareLayerCutawayFrame", () => {
-                const cutawayState = this.prepareLayerCutawayFrame(ctx, ctx.map || global.map || null, ctx.wizard || global.wizard || null);
+                preparedCutawayState = this.prepareLayerCutawayFrame(ctx, ctx.map || global.map || null, ctx.wizard || global.wizard || null);
+            });
+            this.profileDrawPassSection("prepareBuildingInteriorPickerFrame", () => {
+                const cutawayState = preparedCutawayState || this.prepareLayerCutawayFrame(ctx, ctx.map || global.map || null, ctx.wizard || global.wizard || null);
                 this.prepareBuildingInteriorPickerFrame(ctx, cutawayState);
             });
             const visibleObjects = this.profileDrawPassSection("collectVisibleObjects", () =>
@@ -20182,6 +23290,9 @@ void main(void) {
             });
             this.profileDrawPassSection("renderScriptMessages", () => {
                 this.renderScriptMessages(ctx);
+            });
+            this.profileDrawPassSection("renderWizardThoughtBubble", () => {
+                this.renderWizardThoughtBubble(ctx);
             });
             if (this.scenePicker && typeof this.scenePicker.renderHoverHighlight === "function") {
                 this.profileDrawPassSection("scenePicker.renderHoverHighlight", () => {
@@ -20300,6 +23411,25 @@ void main(void) {
             }
             const frameElapsedMs = performance.now() - frameStartMs;
             this.recordDrawPassSection("renderFrame.total", frameElapsedMs);
+            if (typeof globalThis !== "undefined" && globalThis.__moveObjectPerf) {
+                const sections = this.currentFrameDrawSections || Object.create(null);
+                const metrics = this.currentFrameMetrics || Object.create(null);
+                const getMs = (name) => Number(sections[name] || 0);
+                const getMetric = (name) => Number(metrics[name] || 0);
+                this.recordMoveObjectPerf("rendering.frame", {
+                    visibleNodes: getMetric("visibleNodes"),
+                    visibleObjects: Array.isArray(visibleObjects) ? visibleObjects.length : null,
+                    collectVisibleObjectsMs: getMs("collectVisibleObjects"),
+                    prepareLayerCutawayFrameMs: getMs("prepareLayerCutawayFrame"),
+                    prepareBuildingInteriorPickerFrameMs: getMs("prepareBuildingInteriorPickerFrame"),
+                    renderObjects3DMs: getMs("renderObjects3D"),
+                    renderPrototypeBuildingExteriorsMs: getMs("renderPrototypeBuildingExteriors"),
+                    scenePickerHoverMs: getMs("scenePicker.renderHoverHighlight"),
+                    buildingRenderCacheBuildMs: getMetric("buildingRenderCacheBuildMs"),
+                    objects3dBuildingCompositeMs: getMetric("objects3dBuildingCompositeMs"),
+                    buildingInteriorPlanMs: getMetric("buildingInteriorPlanMs")
+                }, frameElapsedMs);
+            }
             if (typeof globalThis !== "undefined") {
                 globalThis.renderingLiveStats = {
                     groundCached: this.groundSpriteByNodeKey instanceof Map
@@ -20351,7 +23481,13 @@ void main(void) {
                 globalThis.drawPerfBreakdown = {
                     lazyMs: 0,
                     prepMs: getMs("resetWallDepthGeometryBudget") + getMs("camera.update"),
-                    collectMs: getMs("collectVisibleNodes") + getMs("prepareLayerCutawayFrame") + getMs("collectVisibleObjects") + getMs("syncOnscreenObjectsCache"),
+                    collectMs: getMs("collectVisibleNodes") + getMs("prepareLayerCutawayFrame") + getMs("prepareBuildingInteriorPickerFrame") + getMs("collectVisibleObjects") + getMs("syncOnscreenObjectsCache"),
+                    collectVisibleNodesMs: getMs("collectVisibleNodes"),
+                    collectCutawayMs: getMs("prepareLayerCutawayFrame") + getMs("prepareBuildingInteriorPickerFrame"),
+                    collectLayerCutawayMs: getMs("prepareLayerCutawayFrame"),
+                    collectInteriorPickerMs: getMs("prepareBuildingInteriorPickerFrame"),
+                    collectVisibleObjectsMs: getMs("collectVisibleObjects"),
+                    collectOnscreenCacheMs: getMs("syncOnscreenObjectsCache"),
                     losMs: getMs("updateLosState") + getMs("updateWallLosIlluminationTallies"),
                     composeMs: frameElapsedMs,
                     passWorldMs:
@@ -20599,6 +23735,67 @@ void main(void) {
                 addTypeBreakdownMetrics("objects3dRenderItems");
                 addTypeBreakdownMetrics("buildingRenderCacheCandidates");
                 globalThis.renderingFrameMetrics = { ...metrics };
+                const bubbleSession = ctx && ctx.map && ctx.map._prototypeBubbleShiftSession &&
+                    ctx.map._prototypeBubbleShiftSession.completed !== true
+                    ? ctx.map._prototypeBubbleShiftSession
+                    : null;
+                if (bubbleSession) {
+                    if (!bubbleSession.renderStats || typeof bubbleSession.renderStats !== "object") {
+                        bubbleSession.renderStats = {
+                            frames: 0,
+                            composeMs: 0,
+                            collectMs: 0,
+                            cutawayMs: 0,
+                            layerCutawayMs: 0,
+                            layerCutawayStateMs: 0,
+                            buildingFlagMs: 0,
+                            interiorPickerMs: 0,
+                            interiorPlanMs: 0,
+                            cutawayHeldFrames: 0,
+                            visibleObjectsMax: 0,
+                            visibleNodesMax: 0,
+                            maxFrameMs: 0,
+                            maxCutawayMs: 0,
+                            maxCutawayFrame: null
+                        };
+                    }
+                    const renderStats = bubbleSession.renderStats;
+                    const collectMs = getMs("collectVisibleNodes") + getMs("prepareLayerCutawayFrame") + getMs("prepareBuildingInteriorPickerFrame") + getMs("collectVisibleObjects") + getMs("syncOnscreenObjectsCache");
+                    const layerCutawayMs = getMs("prepareLayerCutawayFrame");
+                    const interiorPickerMs = getMs("prepareBuildingInteriorPickerFrame");
+                    const cutawayMs = layerCutawayMs + interiorPickerMs;
+                    renderStats.frames += 1;
+                    renderStats.composeMs += frameElapsedMs;
+                    renderStats.collectMs += collectMs;
+                    renderStats.cutawayMs += cutawayMs;
+                    renderStats.layerCutawayMs += layerCutawayMs;
+                    renderStats.layerCutawayStateMs += getMetric("layerCutawayStateMs");
+                    renderStats.buildingFlagMs += getMetric("objects3dBuildingFlagMs");
+                    renderStats.interiorPickerMs += interiorPickerMs;
+                    renderStats.interiorPlanMs += getMetric("buildingInteriorPlanMs");
+                    renderStats.cutawayHeldFrames += getMetric("layerCutawayHeldDuringBubble") > 0 ? 1 : 0;
+                    renderStats.visibleObjectsMax = Math.max(renderStats.visibleObjectsMax || 0, visibleObjectsCount);
+                    renderStats.visibleNodesMax = Math.max(renderStats.visibleNodesMax || 0, getMetric("visibleNodes"));
+                    if (frameElapsedMs > (Number(renderStats.maxFrameMs) || 0)) {
+                        renderStats.maxFrameMs = frameElapsedMs;
+                    }
+                    if (cutawayMs > (Number(renderStats.maxCutawayMs) || 0)) {
+                        renderStats.maxCutawayMs = cutawayMs;
+                        renderStats.maxCutawayFrame = {
+                            composeMs: frameElapsedMs,
+                            collectMs,
+                            cutawayMs,
+                            layerCutawayMs,
+                            layerCutawayStateMs: getMetric("layerCutawayStateMs"),
+                            buildingFlagMs: getMetric("objects3dBuildingFlagMs"),
+                            interiorPickerMs,
+                            interiorPlanMs: getMetric("buildingInteriorPlanMs"),
+                            cutawayHeldDuringBubble: getMetric("layerCutawayHeldDuringBubble"),
+                            visibleNodes: getMetric("visibleNodes"),
+                            visibleObjects: visibleObjectsCount
+                        };
+                    }
+                }
             } else if (typeof globalThis !== "undefined") {
                 globalThis.drawPerfBreakdown = null;
                 globalThis.renderingFrameMetrics = null;
@@ -20617,6 +23814,9 @@ void main(void) {
                     drawNodeInspectorOverlay(this.layers.ui, this.camera);
                 }
             });
+            this.profileDrawPassSection("renderScriptScreenColorOverlay", () => {
+                this.renderScriptScreenColorOverlay(ctx);
+            });
             this._activeDrawFrameId = 0;
             return true;
         }
@@ -20625,6 +23825,9 @@ void main(void) {
     let singleton = null;
 
     const renderingApi = {
+        getWizardBodyFrameIndex(wizard, ctx = {}) {
+            return getWizardBodyFrameIndex(wizard, ctx);
+        },
         renderFrame(ctx) {
             if (!global.RenderingCamera || !global.RenderingLayers || typeof PIXI === "undefined") {
                 return false;
@@ -20648,6 +23851,30 @@ void main(void) {
         },
         getLayers() {
             return singleton && singleton.layers ? singleton.layers : null;
+        },
+        screenColor(color, opacity, duration, fade) {
+            if (!global.RenderingCamera || !global.RenderingLayers || typeof PIXI === "undefined") {
+                throw new Error("screenColor requires the Rendering runtime");
+            }
+            if (!singleton) singleton = new RenderingImpl();
+            return singleton.startScriptScreenColorOverlay(color, opacity, duration, fade);
+        },
+        thoughtBubble(wizardRef, text, duration) {
+            if (!global.RenderingCamera || !global.RenderingLayers || typeof PIXI === "undefined") {
+                throw new Error("wizard.thoughtBubble requires the Rendering runtime");
+            }
+            if (!singleton) singleton = new RenderingImpl();
+            return singleton.startWizardThoughtBubble(wizardRef, text, duration);
+        },
+        resetLevel0GroundSurfaceCaches(reason = "") {
+            if (!singleton) {
+                return {
+                    ok: true,
+                    skipped: true,
+                    reason: typeof reason === "string" ? reason : ""
+                };
+            }
+            return singleton.resetLevel0GroundSurfaceCaches(reason);
         },
         isBuildingInteriorPresentationActive(ctx = null) {
             if (!singleton || typeof singleton.isBuildingInteriorPresentationActive !== "function") return false;

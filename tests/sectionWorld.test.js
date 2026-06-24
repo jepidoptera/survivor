@@ -1,9 +1,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const filesystem = require("../public/assets/javascript/filesystem.js");
+const FloorSupport = require("../public/assets/javascript/shared/FloorSupport.js");
 const {
     createSectionWorldAssetHelpers
 } = require("../public/assets/javascript/prototypes/sectionWorldAssets.js");
+const {
+    createSectionWorldBubbleSyncHelpers
+} = require("../public/assets/javascript/prototypes/sectionWorldBubbleSync.js");
 
 const {
     attachPrototypeApis,
@@ -13,6 +17,7 @@ const {
     initializePrototypeRuntimeState,
     shouldParkPrototypeRuntimeObject
 } = require("../public/assets/javascript/prototypes/sectionWorld.js");
+const sectionGeometry = require("../public/assets/javascript/map/sectionGeometry.js");
 
 class TestNode {
     constructor(xindex, yindex) {
@@ -44,6 +49,7 @@ class TestNode {
 
 const PROTOTYPE_GLOBAL_KEYS = [
     "Animal",
+    "FloorSupport",
     "Powerup",
     "Road",
     "StaticObject",
@@ -62,6 +68,7 @@ const savedGlobals = new Map();
 for (const key of PROTOTYPE_GLOBAL_KEYS) {
     savedGlobals.set(key, globalThis[key]);
 }
+globalThis.FloorSupport = FloorSupport;
 
 function restorePrototypeGlobals() {
     for (const [key, value] of savedGlobals.entries()) {
@@ -204,6 +211,52 @@ function createPrototypeMap() {
             for (const fragmentId of fragmentIds) {
                 const floorNode = this.floorNodeIndex.get(this.getFloorNodeKey(x, y, surfaceId, fragmentId)) || null;
                 if (floorNode) return floorNode;
+            }
+            return null;
+        },
+        getFloorNodeAtLayer(x, y, layer = 0, options = {}) {
+            const targetLayer = Number.isFinite(Number(layer)) ? Math.round(Number(layer)) : 0;
+            const xi = Number(x);
+            const yi = Number(y);
+            if (!Number.isFinite(xi) || !Number.isFinite(yi)) return null;
+            if (targetLayer === 0) return this.worldToNode(xi, yi);
+            const fragmentId = typeof (options && options.fragmentId) === "string" ? options.fragmentId : "";
+            const surfaceId = typeof (options && options.surfaceId) === "string" ? options.surfaceId : "";
+            if (fragmentId && this.floorNodeIndex instanceof Map) {
+                const fragment = this.floorsById instanceof Map ? this.floorsById.get(fragmentId) || null : null;
+                const nodeSurfaceId = surfaceId || (fragment && typeof fragment.surfaceId === "string" ? fragment.surfaceId : "");
+                const directNode = this.floorNodeIndex.get(this.getFloorNodeKey(xi, yi, nodeSurfaceId, fragmentId)) || null;
+                if (directNode) return directNode;
+            }
+            if (this.floorNodesById instanceof Map) {
+                for (const nodes of this.floorNodesById.values()) {
+                    if (!Array.isArray(nodes)) continue;
+                    for (let i = 0; i < nodes.length; i++) {
+                        const candidate = nodes[i];
+                        if (!candidate) continue;
+                        if (Number(candidate.xindex) !== xi || Number(candidate.yindex) !== yi) continue;
+                        const candidateLayer = Number.isFinite(Number(candidate.traversalLayer))
+                            ? Math.round(Number(candidate.traversalLayer))
+                            : (Number.isFinite(Number(candidate.level)) ? Math.round(Number(candidate.level)) : 0);
+                        if (candidateLayer !== targetLayer) continue;
+                        if (fragmentId && candidate.fragmentId !== fragmentId) continue;
+                        if (surfaceId && candidate.surfaceId !== surfaceId) continue;
+                        return candidate;
+                    }
+                }
+            }
+            if (fragmentId && (!options || options.allowScan !== false) && this.floorsById instanceof Map) {
+                const fragment = this.floorsById.get(fragmentId) || null;
+                const fragmentLayer = Number.isFinite(Number(fragment && fragment.level))
+                    ? Math.round(Number(fragment.level))
+                    : 0;
+                const sourceNode = options && options.sourceNode ? options.sourceNode : this.worldToNode(xi, yi);
+                if (fragment && fragmentLayer === targetLayer && sourceNode) {
+                    return this.createFloorNodeFromSource(sourceNode, fragment, {
+                        baseZ: Number.isFinite(Number(fragment.nodeBaseZ)) ? Number(fragment.nodeBaseZ) : targetLayer * 3,
+                        traversalLayer: targetLayer
+                    });
+                }
             }
             return null;
         },
@@ -357,6 +410,15 @@ function createPrototypeMap() {
     };
 }
 
+function createBubbleSyncTestHelpers(map) {
+    return createSectionWorldBubbleSyncHelpers(map, {
+        updatePrototypeGpuDebugStats() {},
+        updatePrototypeSeamSegmentsForSections() {},
+        applyPrototypeSectionClearanceChunk() {},
+        sortPrototypeLoadedNodes() {}
+    });
+}
+
 function createEmptyPrototypeState() {
     return createPrototypeState({
         radius: 3,
@@ -434,6 +496,243 @@ test("prototype bubble parked object reuse requires parked state, type match, an
     assert.equal(canReusePrototypeParkedRuntimeObject(parkedTree, "tree", "{\"id\":2}"), false);
     assert.equal(canReusePrototypeParkedRuntimeObject({ ...parkedTree, _prototypeParked: false }, "tree", "{\"id\":1}"), false);
     assert.equal(canReusePrototypeParkedRuntimeObject({ ...parkedTree, gone: true }, "tree", "{\"id\":1}"), false);
+});
+
+test("prototype bubble shift keeps a short settle phase after work drains", () => {
+    const previousProfileSetting = globalThis.prototypeBubbleShiftProfile;
+    globalThis.prototypeBubbleShiftProfile = false;
+    try {
+        const map = {
+            _prototypeSectionState: { activeCenterKey: "1,0", loadedNodes: [] },
+            getPrototypeWorldScope() {
+                return { type: "sectionWorld" };
+            }
+        };
+        const helpers = createBubbleSyncTestHelpers(map);
+        const session = helpers.createPrototypeAsyncBubbleShiftSession(0, "0,0", 0, {
+            frameBudgetMs: 10,
+            settleFrames: 1
+        });
+        session.queue.push(helpers.createPrototypeTask("test.noop", () => {}));
+        map._prototypeBubbleShiftSession = session;
+
+        helpers.advancePrototypeAsyncBubbleShiftSession(session, { frameBudgetMs: 10, settleFrames: 1 });
+        assert.equal(session.phase, "settle");
+        assert.equal(session.completed, false);
+        assert.equal(session.settleFramesRemaining, 1);
+        assert.equal(map._prototypeBubbleShiftSession, session);
+
+        helpers.advancePrototypeAsyncBubbleShiftSession(session, { frameBudgetMs: 10, settleFrames: 1 });
+        assert.equal(session.phase, "refresh");
+        assert.equal(session.completed, false);
+        assert.equal(session.settleFrameCount, 1);
+        assert.equal(session.settleFramesRemaining, 0);
+        assert.equal(session.cutawayRefreshReadyToComplete, true);
+        assert.equal(map._prototypeBubbleShiftSession, session);
+
+        helpers.advancePrototypeAsyncBubbleShiftSession(session, { frameBudgetMs: 10, settleFrames: 1 });
+        assert.equal(session.completed, true);
+        assert.equal(session.cutawayRefreshFrameCount, 1);
+        assert.equal(map._prototypeBubbleShiftSession, null);
+    } finally {
+        if (previousProfileSetting === undefined) {
+            delete globalThis.prototypeBubbleShiftProfile;
+        } else {
+            globalThis.prototypeBubbleShiftProfile = previousProfileSetting;
+        }
+    }
+});
+
+test("prototype bubble shift bypasses settle while in building scope", () => {
+    const previousProfileSetting = globalThis.prototypeBubbleShiftProfile;
+    globalThis.prototypeBubbleShiftProfile = false;
+    try {
+        const map = {
+            _prototypeSectionState: { activeCenterKey: "1,0", loadedNodes: [] },
+            getPrototypeWorldScope() {
+                return { type: "building", id: "building:test" };
+            }
+        };
+        const helpers = createBubbleSyncTestHelpers(map);
+        const session = helpers.createPrototypeAsyncBubbleShiftSession(0, "0,0", 0, {
+            frameBudgetMs: 10,
+            settleFrames: 1
+        });
+        session.queue.push(helpers.createPrototypeTask("test.noop", () => {}));
+        map._prototypeBubbleShiftSession = session;
+
+        helpers.advancePrototypeAsyncBubbleShiftSession(session, { frameBudgetMs: 10, settleFrames: 1 });
+
+        assert.equal(session.completed, true);
+        assert.equal(session.settleSkippedReason, "building-scope");
+        assert.equal(map._prototypeBubbleShiftSession, null);
+    } finally {
+        if (previousProfileSetting === undefined) {
+            delete globalThis.prototypeBubbleShiftProfile;
+        } else {
+            globalThis.prototypeBubbleShiftProfile = previousProfileSetting;
+        }
+    }
+});
+
+test("prototype section bubble is a hysteretic four-section set independent of exact section resolution", () => {
+    const map = createPrototypeMap();
+    map.prepareFloorSectionUnregister = () => 0;
+    map.commitFloorSectionUnregister = () => 0;
+    map.prepareFloorSectionFragments = () => [];
+    map.addFloorSectionNodeBatch = () => 0;
+    map.finalizeFloorSectionNodes = () => 0;
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.roof = null;
+
+    const radius = 10;
+    const basis = sectionGeometry.getSectionBasisVectors(radius);
+    const anchorCenter = { q: 0, r: 0 };
+    const makeSection = (coord) => {
+        const key = sectionGeometry.makeSectionKey(coord);
+        const centerAxial = sectionGeometry.computeSectionCenterAxial(coord, basis, anchorCenter);
+        const centerOffset = sectionGeometry.axialToEvenQOffset(centerAxial);
+        return {
+            id: `section-${key}`,
+            key,
+            coord: { q: coord.q, r: coord.r },
+            centerAxial,
+            centerOffset,
+            centerWorld: sectionGeometry.offsetToWorld(centerOffset),
+            neighborKeys: [],
+            tileCoordKeys: [key],
+            groundTextureId: 0,
+            groundTiles: { [key]: 0 },
+            walls: [],
+            objects: [],
+            animals: [],
+            powerups: []
+        };
+    };
+    const coords = [
+        { q: -1, r: 0 },
+        { q: 0, r: -1 },
+        { q: 0, r: 0 },
+        { q: 0, r: 1 },
+        { q: 1, r: -1 },
+        { q: 1, r: 0 },
+        { q: 1, r: 1 },
+        { q: 2, r: -1 },
+        { q: 2, r: 0 }
+    ];
+
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        radius,
+        anchorCenter,
+        sections: coords.map(makeSection)
+    })), true);
+    const resolveExactSectionKey = (point) => sectionGeometry.makeSectionKey(
+        sectionGeometry.resolvePrototypeSectionCoordForWorldPosition(
+            map._prototypeSectionState,
+            point.x,
+            point.y
+        )
+    );
+
+    const nearBoundaryActor = { x: 9, y: 1 };
+    assert.equal(resolveExactSectionKey(nearBoundaryActor), "1,0");
+    assert.equal(map.updatePrototypeSectionBubble(nearBoundaryActor, { force: true }), true);
+    assert.deepEqual(
+        Array.from(map.getPrototypeBubbleSectionKeys()).sort(),
+        ["0,0", "0,1", "1,-1", "1,0"]
+    );
+    assert.equal(map.getPrototypeBubbleSectionKeys().size, 4);
+    assert.ok(map._prototypeBubbleShiftSession);
+    assert.equal(map._prototypeBubbleShiftSession.frameSliceCount, 0);
+    assert.equal(map.flushPrototypeBubbleShiftSession(), true);
+
+    const insideHysteresisActor = { x: 17, y: 1 };
+    assert.equal(resolveExactSectionKey(insideHysteresisActor), "1,0");
+    assert.equal(map.updatePrototypeSectionBubble(insideHysteresisActor), false);
+    assert.deepEqual(
+        Array.from(map.getPrototypeBubbleSectionKeys()).sort(),
+        ["0,0", "0,1", "1,-1", "1,0"]
+    );
+
+    const pastHysteresisActor = { x: 25, y: 1 };
+    assert.equal(resolveExactSectionKey(pastHysteresisActor), "2,0");
+    assert.equal(map.updatePrototypeSectionBubble(pastHysteresisActor), true);
+    assert.deepEqual(
+        Array.from(map.getPrototypeBubbleSectionKeys()).sort(),
+        ["1,0", "1,1", "2,-1", "2,0"]
+    );
+    assert.equal(map.getPrototypeBubbleSectionKeys().size, 4);
+});
+
+test("screen-space section bubble chooses sections visible at the current camera z", () => {
+    const map = createPrototypeMap();
+    map.prepareFloorSectionUnregister = () => 0;
+    map.commitFloorSectionUnregister = () => 0;
+    map.prepareFloorSectionFragments = () => [];
+    map.addFloorSectionNodeBatch = () => 0;
+    map.finalizeFloorSectionNodes = () => 0;
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.roof = null;
+
+    const radius = 10;
+    const basis = sectionGeometry.getSectionBasisVectors(radius);
+    const anchorCenter = { q: 0, r: 0 };
+    const makeSection = (coord) => {
+        const key = sectionGeometry.makeSectionKey(coord);
+        const centerAxial = sectionGeometry.computeSectionCenterAxial(coord, basis, anchorCenter);
+        const centerOffset = sectionGeometry.axialToEvenQOffset(centerAxial);
+        return {
+            id: `section-${key}`,
+            key,
+            coord: { q: coord.q, r: coord.r },
+            centerAxial,
+            centerOffset,
+            centerWorld: sectionGeometry.offsetToWorld(centerOffset),
+            neighborKeys: [],
+            tileCoordKeys: [key],
+            groundTextureId: 0,
+            groundTiles: { [key]: 0 },
+            walls: [],
+            objects: [],
+            animals: [],
+            powerups: []
+        };
+    };
+
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        radius,
+        anchorCenter,
+        sections: [
+            makeSection({ q: 0, r: 0 }),
+            makeSection({ q: 0, r: 1 })
+        ]
+    })), true);
+    map._prototypeSectionState.activeSectionLimit = 1;
+
+    const actor = {
+        x: 0,
+        y: 0.5,
+        currentMovementSupport: { type: "floor", layer: 1, baseZ: 10 },
+        currentLayerBaseZ: 10
+    };
+    assert.equal(map.updatePrototypeSectionBubble(actor, {
+        force: true,
+        useScreenSpaceSections: true,
+        viewport: { x: -5, y: 20, width: 30, height: 8, z: 10 },
+        cameraZ: 10,
+        sectionBaseZ: 0,
+        viewscale: 1,
+        xyratio: 1
+    }), true);
+    assert.deepEqual(Array.from(map.getPrototypeBubbleSectionKeys()), ["0,1"]);
 });
 
 test("prototype canOccupyWorldPosition checks blockers on the actor floor layer", () => {
@@ -543,44 +842,33 @@ test("loadPrototypeSectionWorld canonicalizes section and tile draw order to y-t
     );
 });
 
-test("prototype viewport visible node lookup scans only the sorted y band in draw order", () => {
+test("prototype viewport visible node lookup uses screen-space projection for node baseZ", () => {
     const map = createPrototypeMap();
     const state = createEmptyPrototypeState();
     attachPrototypeApis(map, state);
 
-    let offscreenCoordinateReads = 0;
-    const sentinelLoadedNode = { xindex: -100, yindex: -100 };
-    Object.defineProperty(sentinelLoadedNode, "x", {
-        get() {
-            offscreenCoordinateReads += 1;
-            return -100;
-        }
-    });
-    Object.defineProperty(sentinelLoadedNode, "y", {
-        get() {
-            offscreenCoordinateReads += 1;
-            return -100;
-        }
-    });
-
     const nodeA = new TestNode(1, 0);
     const nodeB = new TestNode(2, 0);
     const nodeC = new TestNode(0, 1);
+    const upperProjectedNode = new TestNode(1, 7);
+    upperProjectedNode.baseZ = 7;
+    const groundNodeAtSameY = new TestNode(2, 7);
     const hiddenNode = new TestNode(12, 12);
-    state.loadedNodes = [sentinelLoadedNode, nodeA, nodeB, nodeC, hiddenNode];
+    state.loadedNodes = [nodeA, nodeB, nodeC, upperProjectedNode, groundNodeAtSameY, hiddenNode];
     state.loadedNodesByCoordKey = new Map([
         [`${nodeB.xindex},${nodeB.yindex}`, nodeB],
         [`${nodeA.xindex},${nodeA.yindex}`, nodeA],
         [`${nodeC.xindex},${nodeC.yindex}`, nodeC],
+        [`${upperProjectedNode.xindex},${upperProjectedNode.yindex}`, upperProjectedNode],
+        [`${groundNodeAtSameY.xindex},${groundNodeAtSameY.yindex}`, groundNodeAtSameY],
         [`${hiddenNode.xindex},${hiddenNode.yindex}`, hiddenNode]
     ]);
 
-    const visible = map.getVisibleNodesInViewport({ x: 0, y: 0, width: 3, height: 2 }, 0, 0);
+    const visible = map.getVisibleNodesInViewport({ x: 0, y: 0, z: 0, width: 3, height: 2 }, 0, 0);
 
-    assert.equal(offscreenCoordinateReads, 0);
     assert.deepEqual(
         visible.map((node) => `${node.xindex},${node.yindex}`),
-        ["1,0", "2,0", "0,1"]
+        ["1,0", "2,0", "0,1", "1,7"]
     );
 });
 
@@ -1124,6 +1412,10 @@ test("direct prototype runtime sync settles pending layout before syncing walls 
     });
 
     assert.equal(map.loadPrototypeSectionWorld(bundle), true);
+    map._prototypeSectionState.activeSectionLimit = 3;
+    assert.equal(map.setPrototypeActiveCenterKey("0,0"), true);
+    map.syncPrototypeWalls();
+    map.syncPrototypeObjects();
     assert.equal(map._prototypeSectionState.activeCenterKey, "0,0");
 
     assert.equal(map.setPrototypeActiveCenterKey("1,0"), true);
@@ -1138,6 +1430,92 @@ test("direct prototype runtime sync settles pending layout before syncing walls 
     assert.deepEqual(activeWallIds, [102, 103, 104]);
     assert.deepEqual(activeObjectIds, [202, 203, 204]);
     assert.equal(map._prototypeSectionState.pendingLayoutTransition, null);
+});
+
+test("bubble runtime sync hydrates store-backed active sections before collecting walls", async () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.roof = null;
+
+    const removedWallIds = [];
+    globalThis.WallSectionUnit = {
+        loadJson(record, mapRef) {
+            return {
+                ...record,
+                map: mapRef,
+                gone: false,
+                remove() {
+                    this.gone = true;
+                    removedWallIds.push(this.id);
+                }
+            };
+        }
+    };
+
+    const makeSection = (key, q, r, wallId = null) => ({
+        id: `section-${key}`,
+        key,
+        coord: { q, r },
+        centerAxial: { q: q * 5, r: r * 5 },
+        centerOffset: { x: q * 5, y: r * 5 },
+        centerWorld: { x: q * 5 * 0.866, y: r * 5 },
+        neighborKeys: [],
+        tileCoordKeys: [key],
+        groundTextureId: 0,
+        groundTiles: { [key]: 0 },
+        walls: wallId === null ? [] : [{
+            id: wallId,
+            startPoint: { x: q * 10, y: 0 },
+            endPoint: { x: q * 10 + 1, y: 0 },
+            height: 1,
+            thickness: 0.1,
+            bottomZ: 0,
+            traversalLayer: 0,
+            level: 0
+        }],
+        objects: [],
+        animals: [],
+        powerups: []
+    });
+
+    const hydratedTwo = makeSection("2,0", 2, 0, 104);
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        sections: [
+            makeSection("-1,0", -1, 0),
+            makeSection("0,0", 0, 0),
+            makeSection("1,0", 1, 0),
+            hydratedTwo
+        ]
+    })), true);
+    map._prototypeSectionState.activeSectionLimit = 3;
+    assert.equal(map.setPrototypeActiveCenterKey("0,0"), true);
+    map.syncPrototypeWalls();
+
+    const placeholderTwo = map.getPrototypeSectionAsset("2,0");
+    placeholderTwo._prototypeSectionHydrated = false;
+    placeholderTwo.walls = [];
+    map._prototypeSectionState.loadedSectionAssetKeys.delete("2,0");
+    map.setPrototypeSectionAssetLoader(async (sectionKeys) => (
+        sectionKeys.includes("2,0") ? [hydratedTwo] : []
+    ));
+
+    assert.equal(map.setPrototypeActiveCenterKey("2,0"), true);
+    const session = map.schedulePrototypeRuntimeSync({ frameBudgetMs: 0.25 });
+    assert.equal(session.pendingPromise, undefined);
+    assert.equal(map.advancePrototypeBubbleShiftSession({ frameBudgetMs: 0.25 }), false);
+    assert.ok(session.pendingPromise);
+    await session.pendingPromise;
+    assert.equal(map.flushPrototypeBubbleShiftSession({ maxTasks: 200000 }), true);
+
+    const rehydrated = map.getPrototypeSectionAsset("2,0");
+    assert.equal(rehydrated._prototypeSectionHydrated, true);
+    assert.equal(rehydrated.walls.length, 1);
+    assert.equal(map._prototypeWallState.activeRuntimeWallsByRecordId.has(104), true);
+    assert.deepEqual(removedWallIds, []);
 });
 
 test("schedulePrototypeRuntimeSync prunes animals from sections leaving the target bubble before async teardown completes", () => {
@@ -1196,6 +1574,8 @@ test("schedulePrototypeRuntimeSync prunes animals from sections leaving the targ
     });
 
     assert.equal(map.loadPrototypeSectionWorld(bundle), true);
+    map._prototypeSectionState.activeSectionLimit = 3;
+    assert.equal(map.setPrototypeActiveCenterKey("0,0"), true);
     assert.equal(map.syncPrototypeAnimals(), true);
     assert.equal(globalThis.animals.length, 1);
     assert.equal(map._prototypeAnimalState.activeRuntimeAnimalsByRecordId.size, 1);
@@ -1273,6 +1653,8 @@ test("schedulePrototypeRuntimeSync loads newly entering walls and unloads walls 
     });
 
     assert.equal(map.loadPrototypeSectionWorld(bundle), true);
+    map._prototypeSectionState.activeSectionLimit = 3;
+    assert.equal(map.setPrototypeActiveCenterKey("0,0"), true);
     assert.equal(map.syncPrototypeWalls(), true);
     assert.deepEqual(Array.from(map._prototypeWallState.activeRuntimeWallsByRecordId.keys()).sort((a, b) => a - b), [101, 102, 103]);
 
@@ -1385,6 +1767,8 @@ test("schedulePrototypeRuntimeSync leaves changed runtime walls intact during sc
             makeSection("2,0", 2, 0, 104)
         ]
     })), true);
+    map._prototypeSectionState.activeSectionLimit = 3;
+    assert.equal(map.setPrototypeActiveCenterKey("0,0"), true);
     assert.equal(map.syncPrototypeWalls(), true);
     map.getPrototypeSectionKeyForWorldPoint = () => "0,0";
     const changedRuntimeWall = map._prototypeWallState.activeRuntimeWallsByRecordId.get(102);
@@ -3297,6 +3681,916 @@ test("syncPrototypeObjects persists dirty placed objects using indexed section o
     assert.equal(map._prototypeObjectState.activeRuntimeObjectsByRecordId.size, 1);
 });
 
+test("syncPrototypeObjects transfers dirty placed objects from section to building owner", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: "building:transfer-house",
+            name: "transfer house",
+            sourceBuildingSaveName: "transfer house",
+            buildingSaveName: "transfer house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [],
+            animals: [],
+            triggers: [],
+            loadState: "interior"
+        }],
+        sections: [
+            {
+                id: "section-0,0",
+                key: "0,0",
+                coord: { q: 0, r: 0 },
+                centerAxial: { q: 0, r: 0 },
+                centerOffset: { x: 0, y: 0 },
+                neighborKeys: [],
+                tileCoordKeys: ["0,0"],
+                groundTextureId: 0,
+                groundTiles: { "0,0": 0 },
+                walls: [],
+                objects: [
+                    {
+                        id: 42,
+                        type: "placedObject",
+                        category: "furniture",
+                        texturePath: "/assets/images/furniture/chair.png",
+                        x: 0,
+                        y: 0
+                    }
+                ],
+                animals: [],
+                powerups: [],
+                buildingRefs: [{ id: "building:transfer-house", shell: true }]
+            }
+        ]
+    })), true);
+
+    const sectionAsset = map.getPrototypeSectionAsset("0,0");
+    assert.equal(sectionAsset.objects.length, 1);
+    const runtimeObj = {
+        type: "placedObject",
+        category: "furniture",
+        x: 0,
+        y: 0,
+        map,
+        gone: false,
+        vanishing: false,
+        _prototypeRuntimeRecord: true,
+        _prototypeObjectManaged: true,
+        _prototypeRecordId: 42,
+        _prototypeOwnerSectionKey: "0,0",
+        _prototypeOwnerType: "section",
+        _prototypeOwnerId: "0,0",
+        _prototypeOwnerSignature: "section:0,0",
+        _prototypePersistenceSignature: JSON.stringify({
+            type: "placedObject",
+            category: "furniture",
+            x: 0,
+            y: 0,
+            texturePath: "/assets/images/furniture/chair.png"
+        }),
+        currentMovementSupport: {
+            type: "floor",
+            layer: 0,
+            baseZ: 0,
+            ownerType: "building",
+            ownerId: "building:transfer-house",
+            sectionKey: "building:transfer-house",
+            fragmentId: "building:transfer-house:floor:floor-0",
+            surfaceId: "building:transfer-house:surface:floor-0"
+        },
+        saveJson() {
+            return {
+                type: "placedObject",
+                category: "furniture",
+                x: 0,
+                y: 0,
+                texturePath: "/assets/images/furniture/chair.png"
+            };
+        }
+    };
+    map.objects.push(runtimeObj);
+    map._prototypeObjectState.activeRuntimeObjectsByRecordId.set(42, runtimeObj);
+    map._prototypeObjectState.dirtyRuntimeObjects.add(runtimeObj);
+    map._prototypeObjectState.captureScanNeeded = true;
+
+    assert.equal(map.syncPrototypeObjects(), true);
+
+    const instances = map.exportPrototypeBuildingInstances();
+    const building = instances.find((instance) => instance && instance.id === "building:transfer-house");
+    assert.ok(building);
+    assert.deepEqual(sectionAsset.objects, []);
+    assert.equal(building.objects.length, 1);
+    assert.equal(building.objects[0].id, 42);
+    assert.equal(building.objects[0].category, "furniture");
+    assert.equal(map._prototypeObjectState.activeRuntimeObjectsByRecordId.get(42), runtimeObj);
+    assert.equal(runtimeObj._prototypeOwnerSectionKey, "");
+    assert.equal(runtimeObj._prototypeOwnerType, "building");
+    assert.equal(runtimeObj._prototypeOwnerId, "building:transfer-house");
+    assert.equal(runtimeObj._prototypeOwnerSignature, "building:building:transfer-house");
+    assert.deepEqual(map.getPrototypeDirtyWorldUnits(), {
+        sections: ["0,0"],
+        buildings: ["building:transfer-house"]
+    });
+});
+
+test("syncPrototypeObjects transfers dirty placed objects from building to section owner", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: "building:transfer-house",
+            name: "transfer house",
+            sourceBuildingSaveName: "transfer house",
+            buildingSaveName: "transfer house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [
+                {
+                    id: 77,
+                    type: "placedObject",
+                    category: "furniture",
+                    texturePath: "/assets/images/furniture/table.png",
+                    x: 4,
+                    y: 4
+                }
+            ],
+            animals: [],
+            triggers: [],
+            loadState: "interior"
+        }],
+        sections: [
+            {
+                id: "section-0,0",
+                key: "0,0",
+                coord: { q: 0, r: 0 },
+                centerAxial: { q: 0, r: 0 },
+                centerOffset: { x: 0, y: 0 },
+                neighborKeys: [],
+                tileCoordKeys: ["0,0"],
+                groundTextureId: 0,
+                groundTiles: { "0,0": 0 },
+                walls: [],
+                objects: [],
+                animals: [],
+                powerups: [],
+                buildingRefs: [{ id: "building:transfer-house", shell: true }]
+            }
+        ]
+    })), true);
+
+    const sectionAsset = map.getPrototypeSectionAsset("0,0");
+    assert.equal(sectionAsset.objects.length, 0);
+    const runtimeObj = {
+        type: "placedObject",
+        category: "furniture",
+        x: 4,
+        y: 4,
+        map,
+        gone: false,
+        vanishing: false,
+        _prototypeRuntimeRecord: true,
+        _prototypeObjectManaged: true,
+        _prototypeRecordId: 77,
+        _prototypeOwnerSectionKey: "",
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:transfer-house",
+        _prototypeOwnerSignature: "building:building:transfer-house",
+        _prototypePersistenceSignature: JSON.stringify({
+            type: "placedObject",
+            category: "furniture",
+            x: 4,
+            y: 4,
+            texturePath: "/assets/images/furniture/table.png"
+        }),
+        currentMovementSupport: {
+            type: "ground",
+            layer: 0,
+            baseZ: 0,
+            ownerType: "section",
+            ownerId: "0,0",
+            sectionKey: "0,0"
+        },
+        saveJson() {
+            return {
+                type: "placedObject",
+                category: "furniture",
+                x: 4,
+                y: 4,
+                texturePath: "/assets/images/furniture/table.png"
+            };
+        }
+    };
+    map.objects.push(runtimeObj);
+    map._prototypeObjectState.activeRuntimeObjectsByRecordId.set(77, runtimeObj);
+    map._prototypeObjectState.dirtyRuntimeObjects.add(runtimeObj);
+    map._prototypeObjectState.captureScanNeeded = true;
+
+    assert.equal(map.syncPrototypeObjects(), true);
+
+    const instances = map.exportPrototypeBuildingInstances();
+    const building = instances.find((instance) => instance && instance.id === "building:transfer-house");
+    assert.ok(building);
+    assert.deepEqual(building.objects, []);
+    assert.equal(sectionAsset.objects.length, 1);
+    assert.equal(sectionAsset.objects[0].id, 77);
+    assert.equal(sectionAsset.objects[0].category, "furniture");
+    assert.equal(runtimeObj._prototypeOwnerSectionKey, "0,0");
+    assert.equal(runtimeObj._prototypeOwnerType, "section");
+    assert.equal(runtimeObj._prototypeOwnerId, "0,0");
+    assert.equal(runtimeObj._prototypeOwnerSignature, "section:0,0");
+    assert.deepEqual(map.getPrototypeDirtyWorldUnits(), {
+        sections: ["0,0"],
+        buildings: ["building:transfer-house"]
+    });
+});
+
+test("syncPrototypeAnimals transfers dirty animals from section to building owner", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: "building:animal-house",
+            name: "animal house",
+            sourceBuildingSaveName: "animal house",
+            buildingSaveName: "animal house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [],
+            animals: [],
+            powerups: [],
+            triggers: [],
+            loadState: "interior"
+        }],
+        sections: [
+            {
+                id: "section-0,0",
+                key: "0,0",
+                coord: { q: 0, r: 0 },
+                centerAxial: { q: 0, r: 0 },
+                centerOffset: { x: 0, y: 0 },
+                neighborKeys: [],
+                tileCoordKeys: ["0,0"],
+                groundTextureId: 0,
+                groundTiles: { "0,0": 0 },
+                walls: [],
+                objects: [],
+                animals: [{ id: 31, type: "goat", x: 0, y: 0, hp: 12 }],
+                powerups: [],
+                buildingRefs: [{ id: "building:animal-house", shell: true }]
+            }
+        ]
+    })), true);
+
+    const runtimeAnimal = {
+        type: "goat",
+        x: 0,
+        y: 0,
+        map,
+        gone: false,
+        vanishing: false,
+        dead: false,
+        _prototypeRuntimeRecord: true,
+        _prototypeRecordId: 31,
+        _prototypeOwnerSectionKey: "0,0",
+        _prototypeOwnerType: "section",
+        _prototypeOwnerId: "0,0",
+        _prototypeOwnerSignature: "section:0,0",
+        _prototypePersistenceSignature: JSON.stringify({ type: "goat", x: 0, y: 0, hp: 12 }),
+        currentMovementSupport: {
+            type: "floor",
+            layer: 1,
+            baseZ: 3,
+            ownerType: "building",
+            ownerId: "building:animal-house",
+            sectionKey: "building:animal-house",
+            fragmentId: "building:animal-house:floor:1",
+            surfaceId: "building:animal-house:surface:1"
+        },
+        saveJson() {
+            return { type: "goat", x: 0, y: 0, hp: 12, traversalLayer: 1 };
+        }
+    };
+    globalThis.animals.push(runtimeAnimal);
+    map._prototypeAnimalState.activeRuntimeAnimalsByRecordId.set(31, runtimeAnimal);
+
+    assert.equal(map.syncPrototypeAnimals(), true);
+
+    const sectionAsset = map.getPrototypeSectionAsset("0,0");
+    const building = map.exportPrototypeBuildingInstances().find((instance) => instance.id === "building:animal-house");
+    assert.deepEqual(sectionAsset.animals, []);
+    assert.equal(building.animals.length, 1);
+    assert.equal(building.animals[0].id, 31);
+    assert.equal(building.animals[0].type, "goat");
+    assert.equal(runtimeAnimal._prototypeOwnerSectionKey, "");
+    assert.equal(runtimeAnimal._prototypeOwnerType, "building");
+    assert.equal(runtimeAnimal._prototypeOwnerId, "building:animal-house");
+    assert.deepEqual(map.getPrototypeDirtyWorldUnits(), {
+        sections: ["0,0"],
+        buildings: ["building:animal-house"]
+    });
+});
+
+test("syncPrototypeAnimals loads building-owned animal records", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    let loadOptions = null;
+    globalThis.Animal = {
+        loadJson(record, mapRef, options = {}) {
+            loadOptions = options;
+            return {
+                ...record,
+                map: mapRef,
+                saveJson() {
+                    return { ...record };
+                },
+                removeFromGame() {
+                    this.gone = true;
+                }
+            };
+        }
+    };
+
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: "building:animal-house",
+            name: "animal house",
+            sourceBuildingSaveName: "animal house",
+            buildingSaveName: "animal house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [],
+            animals: [{ id: 41, type: "deer", x: 0, y: 0 }],
+            powerups: [],
+            triggers: [],
+            loadState: "interior"
+        }],
+        sections: [
+            {
+                id: "section-0,0",
+                key: "0,0",
+                coord: { q: 0, r: 0 },
+                centerAxial: { q: 0, r: 0 },
+                centerOffset: { x: 0, y: 0 },
+                neighborKeys: [],
+                tileCoordKeys: ["0,0"],
+                groundTextureId: 0,
+                groundTiles: { "0,0": 0 },
+                walls: [],
+                objects: [],
+                animals: [],
+                powerups: [],
+                buildingRefs: [{ id: "building:animal-house", shell: true }]
+            }
+        ]
+    })), true);
+
+    assert.equal(map.syncPrototypeAnimals(), true);
+
+    assert.equal(globalThis.animals.length, 1);
+    assert.equal(globalThis.animals[0]._prototypeOwnerType, "building");
+    assert.equal(globalThis.animals[0]._prototypeOwnerId, "building:animal-house");
+    assert.equal(globalThis.animals[0]._prototypeOwnerSectionKey, "");
+    assert.equal(loadOptions.targetSectionKey, "building:animal-house");
+});
+
+test("syncPrototypePowerups captures new building-owned powerups", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: "building:power-house",
+            name: "power house",
+            sourceBuildingSaveName: "power house",
+            buildingSaveName: "power house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [],
+            animals: [],
+            powerups: [],
+            triggers: [],
+            loadState: "interior"
+        }],
+        sections: [
+            {
+                id: "section-0,0",
+                key: "0,0",
+                coord: { q: 0, r: 0 },
+                centerAxial: { q: 0, r: 0 },
+                centerOffset: { x: 0, y: 0 },
+                neighborKeys: [],
+                tileCoordKeys: ["0,0"],
+                groundTextureId: 0,
+                groundTiles: { "0,0": 0 },
+                walls: [],
+                objects: [],
+                animals: [],
+                powerups: [],
+                buildingRefs: [{ id: "building:power-house", shell: true }]
+            }
+        ]
+    })), true);
+
+    const runtimePowerup = {
+        type: "powerup",
+        file: "blackdiamond.png",
+        imageFileName: "blackdiamond.png",
+        x: 0,
+        y: 0,
+        z: 3,
+        map,
+        gone: false,
+        collected: false,
+        currentMovementSupport: {
+            type: "floor",
+            layer: 1,
+            baseZ: 3,
+            ownerType: "building",
+            ownerId: "building:power-house",
+            sectionKey: "building:power-house",
+            fragmentId: "building:power-house:floor:1",
+            surfaceId: "building:power-house:surface:1"
+        },
+        saveJson() {
+            return { type: "powerup", file: "blackdiamond.png", x: 0, y: 0, z: 3, traversalLayer: 1 };
+        }
+    };
+    globalThis.powerups.push(runtimePowerup);
+
+    assert.equal(map.syncPrototypePowerups(), true);
+
+    const sectionAsset = map.getPrototypeSectionAsset("0,0");
+    const building = map.exportPrototypeBuildingInstances().find((instance) => instance.id === "building:power-house");
+    assert.deepEqual(sectionAsset.powerups, []);
+    assert.equal(building.powerups.length, 1);
+    assert.equal(building.powerups[0].id, 1);
+    assert.equal(building.powerups[0].file, "blackdiamond.png");
+    assert.equal(runtimePowerup._prototypeRuntimeRecord, true);
+    assert.equal(runtimePowerup._prototypeOwnerType, "building");
+    assert.equal(runtimePowerup._prototypeOwnerId, "building:power-house");
+    assert.deepEqual(map.getPrototypeDirtyWorldUnits(), {
+        sections: [],
+        buildings: ["building:power-house"]
+    });
+});
+
+test("syncPrototypePowerups loads building-owned powerup records", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.Powerup = {
+        loadJson(record) {
+            return {
+                ...record,
+                saveJson() {
+                    return { ...record };
+                }
+            };
+        }
+    };
+
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: "building:power-house",
+            name: "power house",
+            sourceBuildingSaveName: "power house",
+            buildingSaveName: "power house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [],
+            animals: [],
+            powerups: [{ id: 51, type: "powerup", file: "blackdiamond.png", x: 0, y: 0 }],
+            triggers: [],
+            loadState: "interior"
+        }],
+        sections: [
+            {
+                id: "section-0,0",
+                key: "0,0",
+                coord: { q: 0, r: 0 },
+                centerAxial: { q: 0, r: 0 },
+                centerOffset: { x: 0, y: 0 },
+                neighborKeys: [],
+                tileCoordKeys: ["0,0"],
+                groundTextureId: 0,
+                groundTiles: { "0,0": 0 },
+                walls: [],
+                objects: [],
+                animals: [],
+                powerups: [],
+                buildingRefs: [{ id: "building:power-house", shell: true }]
+            }
+        ]
+    })), true);
+
+    assert.equal(map.syncPrototypePowerups(), true);
+
+    assert.equal(globalThis.powerups.length, 1);
+    assert.equal(globalThis.powerups[0]._prototypeOwnerType, "building");
+    assert.equal(globalThis.powerups[0]._prototypeOwnerId, "building:power-house");
+    assert.equal(globalThis.powerups[0]._prototypeOwnerSectionKey, "");
+});
+
+test("syncPrototypeObjects loads building-owned furniture records", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    let loadOptions = null;
+    globalThis.StaticObject = {
+        loadJson(record, mapRef, options = {}) {
+            loadOptions = options;
+            return {
+                ...record,
+                map: mapRef,
+                gone: false,
+                node: mapRef.worldToNode(record.x, record.y) || new TestNode(record.x, record.y),
+                saveJson() {
+                    return { ...record };
+                },
+                removeFromGame() {
+                    this.gone = true;
+                }
+            };
+        }
+    };
+
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: "building:object-house",
+            name: "object house",
+            sourceBuildingSaveName: "object house",
+            buildingSaveName: "object house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [{
+                id: 61,
+                type: "placedObject",
+                category: "furniture",
+                texturePath: "/assets/images/furniture/crystal%20ball.png",
+                x: 0,
+                y: 0
+            }],
+            animals: [],
+            powerups: [],
+            triggers: [],
+            loadState: "interior"
+        }],
+        sections: [
+            {
+                id: "section-0,0",
+                key: "0,0",
+                coord: { q: 0, r: 0 },
+                centerAxial: { q: 0, r: 0 },
+                centerOffset: { x: 0, y: 0 },
+                neighborKeys: [],
+                tileCoordKeys: ["0,0"],
+                groundTextureId: 0,
+                groundTiles: { "0,0": 0 },
+                walls: [],
+                objects: [],
+                animals: [],
+                powerups: [],
+                buildingRefs: [{ id: "building:object-house", shell: true }]
+            }
+        ]
+    })), true);
+
+    assert.equal(map.syncPrototypeObjects(), true);
+
+    assert.equal(loadOptions.targetSectionKey, "building:object-house");
+    assert.equal(map._prototypeObjectState.activeRuntimeObjectsByRecordId.size, 1);
+    const runtimeObj = map._prototypeObjectState.activeRuntimeObjectsByRecordId.get(61);
+    assert.ok(runtimeObj);
+    assert.equal(runtimeObj.category, "furniture");
+    assert.equal(runtimeObj._prototypeOwnerType, "building");
+    assert.equal(runtimeObj._prototypeOwnerId, "building:object-house");
+    assert.equal(runtimeObj._prototypeOwnerSignature, "building:building:object-house");
+    assert.equal(runtimeObj._prototypeOwnerSectionKey, "");
+    assert.equal(map._prototypeObjectState.nextRecordId, 62);
+
+    const nextRuntimeObj = {
+        type: "placedObject",
+        category: "furniture",
+        x: 1,
+        y: 1,
+        gone: false,
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:object-house",
+        saveJson() {
+            return {
+                type: "placedObject",
+                category: "furniture",
+                texturePath: "/assets/images/furniture/crystal%20ball.png",
+                x: 1,
+                y: 1
+            };
+        },
+        removeFromGame() {
+            this.gone = true;
+        }
+    };
+    map._prototypeObjectState.dirtyRuntimeObjects.add(nextRuntimeObj);
+    map._prototypeObjectState.captureScanNeeded = true;
+
+    assert.equal(map.syncPrototypeObjects(), true);
+    const instance = map._prototypeBuildingState.buildingInstancesById.get("building:object-house");
+    assert.ok(instance);
+    assert.deepEqual(instance.objects.map(record => record.id).sort((a, b) => a - b), [61, 62]);
+    assert.equal(map._prototypeObjectState.activeRuntimeObjectsByRecordId.get(61), runtimeObj);
+    assert.equal(map._prototypeObjectState.activeRuntimeObjectsByRecordId.get(62), nextRuntimeObj);
+});
+
+test("schedulePrototypeRuntimeSync loads building-owned furniture records", async () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.roof = null;
+    let loadOptions = null;
+    globalThis.StaticObject = {
+        loadJson(record, mapRef, options = {}) {
+            loadOptions = options;
+            return {
+                ...record,
+                map: mapRef,
+                gone: false,
+                node: mapRef.worldToNode(record.x, record.y) || new TestNode(record.x, record.y),
+                saveJson() {
+                    return { ...record };
+                },
+                removeFromGame() {
+                    this.gone = true;
+                }
+            };
+        }
+    };
+
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: "building:async-object-house",
+            name: "async object house",
+            sourceBuildingSaveName: "async object house",
+            buildingSaveName: "async object house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [{
+                id: 63,
+                type: "placedObject",
+                category: "furniture",
+                texturePath: "/assets/images/furniture/crystal%20ball.png",
+                x: 0,
+                y: 0
+            }],
+            animals: [],
+            powerups: [],
+            triggers: [],
+            loadState: "interior"
+        }],
+        sections: [
+            {
+                id: "section-0,0",
+                key: "0,0",
+                coord: { q: 0, r: 0 },
+                centerAxial: { q: 0, r: 0 },
+                centerOffset: { x: 0, y: 0 },
+                neighborKeys: [],
+                tileCoordKeys: ["0,0"],
+                groundTextureId: 0,
+                groundTiles: { "0,0": 0 },
+                walls: [],
+                objects: [],
+                animals: [],
+                powerups: [],
+                buildingRefs: [{ id: "building:async-object-house", shell: true }]
+            }
+        ]
+    })), true);
+
+    const session = map.schedulePrototypeRuntimeSync({ frameBudgetMs: 10 });
+    for (let i = 0; i < 10; i++) {
+        const activeSession = map._prototypeBubbleShiftSession;
+        if (!activeSession || activeSession.completed === true) break;
+        if (activeSession.pendingPromise) {
+            await activeSession.pendingPromise;
+        }
+        map.flushPrototypeBubbleShiftSession({ maxTasks: 200000 });
+    }
+    assert.equal(!map._prototypeBubbleShiftSession || map._prototypeBubbleShiftSession.completed === true, true);
+
+    assert.equal(loadOptions.targetSectionKey, "building:async-object-house");
+    assert.equal(map._prototypeObjectState.activeRuntimeObjectsByRecordId.size, 1);
+    const runtimeObj = map._prototypeObjectState.activeRuntimeObjectsByRecordId.get(63);
+    assert.ok(runtimeObj);
+    assert.equal(runtimeObj.category, "furniture");
+    assert.equal(runtimeObj._prototypeOwnerType, "building");
+    assert.equal(runtimeObj._prototypeOwnerId, "building:async-object-house");
+    assert.equal(runtimeObj._prototypeOwnerSignature, "building:building:async-object-house");
+    assert.equal(runtimeObj._prototypeOwnerSectionKey, "");
+});
+
+test("syncPrototypeObjects restores floor refs for building-owned upper-floor furniture", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    map.registerStairRuntimeRecord = (record) => record;
+    map.unregisterFloorFragments = (fragmentIds) => {
+        const ids = Array.isArray(fragmentIds) ? fragmentIds : Array.from(fragmentIds || []);
+        for (const fragmentId of ids) {
+            const fragment = map.floorsById instanceof Map ? map.floorsById.get(fragmentId) : null;
+            if (fragment && map.floorFragmentsBySurfaceId instanceof Map) {
+                const surfaceSet = map.floorFragmentsBySurfaceId.get(fragment.surfaceId);
+                if (surfaceSet instanceof Set) surfaceSet.delete(fragmentId);
+            }
+            if (map.floorsById instanceof Map) map.floorsById.delete(fragmentId);
+            if (map.floorNodesById instanceof Map) map.floorNodesById.delete(fragmentId);
+        }
+        return ids.length;
+    };
+    let indexedNodes = null;
+    globalThis.StaticObject = {
+        loadJson(record, mapRef) {
+            return {
+                ...record,
+                map: mapRef,
+                gone: false,
+                node: mapRef.worldToNode(record.x, record.y) || new TestNode(record.x, record.y),
+                _indexedNodes: [],
+                setIndexedNodes(nodes, primaryNode = null) {
+                    indexedNodes = nodes;
+                    this._indexedNodes = nodes;
+                    this.node = primaryNode || nodes[0] || null;
+                    if (this.node) {
+                        this.surfaceId = this.node.surfaceId || "";
+                        this.fragmentId = this.node.fragmentId || "";
+                    }
+                },
+                saveJson() {
+                    return { ...record };
+                },
+                removeFromGame() {
+                    this.gone = true;
+                }
+            };
+        }
+    };
+
+    const buildingId = "building:floor-ref-object-house";
+    const fragmentId = `${buildingId}:floor:upper`;
+    const surfaceId = `${buildingId}:surface:upper-surface`;
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: buildingId,
+            name: "floor ref object house",
+            sourceBuildingSaveName: "floor ref object house",
+            buildingSaveName: "floor ref object house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [{
+                fragmentId: "upper",
+                surfaceId: "upper-surface",
+                traversalLayer: 1,
+                outerPolygon: [
+                    { x: 0, y: 0 },
+                    { x: 10, y: 0 },
+                    { x: 10, y: 10 },
+                    { x: 0, y: 10 }
+                ]
+            }],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [{
+                id: 64,
+                type: "placedObject",
+                category: "furniture",
+                texturePath: "/assets/images/furniture/crystal%20ball.png",
+                x: 3,
+                y: 3,
+                traversalLayer: 1,
+                level: 1
+            }],
+            animals: [],
+            powerups: [],
+            triggers: [],
+            loadState: "interior"
+        }],
+        sections: [{
+            id: "section-0,0",
+            key: "0,0",
+            coord: { q: 0, r: 0 },
+            centerAxial: { q: 0, r: 0 },
+            centerOffset: { x: 0, y: 0 },
+            neighborKeys: [],
+            tileCoordKeys: ["0,0"],
+            groundTextureId: 0,
+            groundTiles: { "0,0": 0 },
+            walls: [],
+            objects: [],
+            animals: [],
+            powerups: [],
+            buildingRefs: [{ id: buildingId, shell: true }]
+        }]
+    })), true);
+
+    assert.equal(map.syncPrototypeObjects(), true);
+
+    const runtimeObj = map._prototypeObjectState.activeRuntimeObjectsByRecordId.get(64);
+    assert.ok(runtimeObj);
+    assert.equal(runtimeObj.fragmentId, fragmentId);
+    assert.equal(runtimeObj.surfaceId, surfaceId);
+    assert.equal(runtimeObj.currentMovementSupport.fragmentId, fragmentId);
+    assert.equal(runtimeObj.currentMovementSupport.surfaceId, surfaceId);
+    assert.equal(runtimeObj.node.fragmentId, fragmentId);
+    assert.equal(Array.isArray(indexedNodes), true);
+    assert.equal(indexedNodes[0].fragmentId, fragmentId);
+});
+
 test("syncPrototypeObjects reloads untouched furniture records using their section when point lookup misses", () => {
     const map = createPrototypeMap();
     attachPrototypeApis(map, createEmptyPrototypeState());
@@ -3442,6 +4736,608 @@ test("syncPrototypeObjects prunes orphaned upper-floor placed object records bef
     assert.equal(warning[0], "[prototype object sanitize] removed orphaned upper-floor placed objects");
     assert.equal(warning[1].count, 1);
     assert.equal(warning[1].samples[0].fragmentId, "floor_area:-4,0:7:0");
+});
+
+test("syncPrototypeObjects prunes invalid building-owned upper-floor placed objects before load", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: "building:bad-object-house",
+            name: "bad object house",
+            sourceBuildingSaveName: "bad object house",
+            buildingSaveName: "bad object house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [{
+                id: 701,
+                type: "placedObject",
+                category: "furniture",
+                texturePath: "/assets/images/furniture/crystal%20ball.png",
+                x: 3,
+                y: 3,
+                traversalLayer: 1,
+                level: 1
+            }],
+            animals: [],
+            powerups: [],
+            triggers: [],
+            loadState: "interior"
+        }],
+        sections: [{
+            id: "section-0,0",
+            key: "0,0",
+            coord: { q: 0, r: 0 },
+            centerAxial: { q: 0, r: 0 },
+            centerOffset: { x: 0, y: 0 },
+            neighborKeys: [],
+            tileCoordKeys: ["0,0"],
+            groundTextureId: 0,
+            groundTiles: { "0,0": 0 },
+            walls: [],
+            objects: [],
+            animals: [],
+            powerups: [],
+            buildingRefs: [{ id: "building:bad-object-house", shell: true }]
+        }]
+    })), true);
+
+    let loadCalled = false;
+    globalThis.StaticObject = {
+        loadJson() {
+            loadCalled = true;
+            throw new Error("invalid building-owned upper-floor object should be pruned before load");
+        }
+    };
+    const originalWarn = console.warn;
+    let warning = null;
+    console.warn = (...args) => {
+        warning = args;
+    };
+    try {
+        assert.equal(map.syncPrototypeObjects(), true);
+    } finally {
+        console.warn = originalWarn;
+    }
+
+    const instance = map._prototypeBuildingState.buildingInstancesById.get("building:bad-object-house");
+    assert.ok(instance);
+    assert.equal(instance.objects.length, 0);
+    assert.equal(loadCalled, false);
+    assert.equal(map._prototypeObjectState.activeRuntimeObjectsByRecordId.size, 0);
+    assert.equal(warning[0], "[prototype object sanitize] removed orphaned upper-floor placed objects");
+    assert.equal(warning[1].count, 1);
+    assert.equal(warning[1].samples[0].ownerType, "building");
+    assert.equal(warning[1].samples[0].buildingId, "building:bad-object-house");
+    assert.equal(warning[1].samples[0].fragmentId, "");
+});
+
+test("syncPrototypeObjects keeps building-owned objects on prototype building floor fragments", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+
+    const fragmentId = "building:valid-object-house:floor:upper";
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: "building:valid-object-house",
+            name: "valid object house",
+            sourceBuildingSaveName: "valid object house",
+            buildingSaveName: "valid object house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [{
+                id: 702,
+                type: "placedObject",
+                category: "furniture",
+                texturePath: "/assets/images/furniture/crystal%20ball.png",
+                x: 3,
+                y: 3,
+                traversalLayer: 1,
+                level: 1,
+                fragmentId,
+                surfaceId: "building:valid-object-house:surface:upper"
+            }],
+            animals: [],
+            powerups: [],
+            triggers: [],
+            loadState: "interior"
+        }],
+        sections: [{
+            id: "section-0,0",
+            key: "0,0",
+            coord: { q: 0, r: 0 },
+            centerAxial: { q: 0, r: 0 },
+            centerOffset: { x: 0, y: 0 },
+            neighborKeys: [],
+            tileCoordKeys: ["0,0"],
+            groundTextureId: 0,
+            groundTiles: { "0,0": 0 },
+            walls: [],
+            objects: [],
+            animals: [],
+            powerups: [],
+            buildingRefs: [{ id: "building:valid-object-house", shell: true }]
+        }]
+    })), true);
+
+    map.floorBuildingByFragmentId = new Map();
+    map.ensureFloorBuildings = () => new Map();
+    map.floorsById.set(fragmentId, {
+        fragmentId,
+        surfaceId: "building:valid-object-house:surface:upper",
+        ownerType: "building",
+        ownerId: "building:valid-object-house",
+        renderedByBuildingCutaway: true,
+        level: 1
+    });
+
+    let loadCalled = false;
+    globalThis.StaticObject = {
+        loadJson(record, mapRef) {
+            loadCalled = true;
+            return {
+                ...record,
+                map: mapRef,
+                gone: false,
+                node: mapRef.worldToNode(record.x, record.y) || new TestNode(record.x, record.y),
+                saveJson() {
+                    return { ...record };
+                },
+                removeFromGame() {
+                    this.gone = true;
+                }
+            };
+        }
+    };
+
+    assert.equal(map.syncPrototypeObjects(), true);
+    assert.equal(loadCalled, true);
+    assert.equal(map._prototypeObjectState.activeRuntimeObjectsByRecordId.size, 1);
+    const runtimeObj = map._prototypeObjectState.activeRuntimeObjectsByRecordId.get(702);
+    assert.ok(runtimeObj);
+    assert.equal(runtimeObj.fragmentId, fragmentId);
+    assert.equal(runtimeObj._prototypeOwnerType, "building");
+    assert.equal(runtimeObj._prototypeOwnerId, "building:valid-object-house");
+
+    runtimeObj.gone = true;
+    map._prototypeObjectState.captureScanNeeded = false;
+    assert.equal(map.syncPrototypeObjects(), true);
+    const instance = map._prototypeBuildingState.buildingInstancesById.get("building:valid-object-house");
+    assert.ok(instance);
+    assert.equal(instance.objects.length, 0);
+    assert.equal(map._prototypeObjectState.activeRuntimeObjectsByRecordId.has(702), false);
+});
+
+test("syncPrototypeObjects preserves building-owned upper-floor records when runtime floors are unloaded", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+
+    const buildingId = "building:outside-object-house";
+    const fragmentId = `${buildingId}:floor:upper`;
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: buildingId,
+            name: "outside object house",
+            sourceBuildingSaveName: "outside object house",
+            buildingSaveName: "outside object house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [{
+                fragmentId: "upper",
+                surfaceId: "upper-surface",
+                traversalLayer: 1,
+                outerPolygon: [
+                    { x: 0, y: 0 },
+                    { x: 10, y: 0 },
+                    { x: 10, y: 10 },
+                    { x: 0, y: 10 }
+                ]
+            }],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [{
+                id: 703,
+                type: "placedObject",
+                category: "furniture",
+                texturePath: "/assets/images/furniture/crystal%20ball.png",
+                x: 3,
+                y: 3,
+                traversalLayer: 1,
+                level: 1,
+                fragmentId,
+                surfaceId: `${buildingId}:surface:upper-surface`,
+                floorMembership: {
+                    ownerType: "building",
+                    ownerId: buildingId,
+                    floorId: "upper",
+                    level: 1
+                }
+            }],
+            animals: [],
+            powerups: [],
+            triggers: [],
+            loadState: "shell"
+        }],
+        sections: [{
+            id: "section-0,0",
+            key: "0,0",
+            coord: { q: 0, r: 0 },
+            centerAxial: { q: 0, r: 0 },
+            centerOffset: { x: 0, y: 0 },
+            neighborKeys: [],
+            tileCoordKeys: ["0,0"],
+            groundTextureId: 0,
+            groundTiles: { "0,0": 0 },
+            walls: [],
+            objects: [],
+            animals: [],
+            powerups: [],
+            buildingRefs: [{ id: buildingId, shell: true }]
+        }]
+    })), true);
+
+    map.resetFloorRuntimeState();
+    map._prototypeSectionState.activeSectionKeys = new Set();
+    globalThis.StaticObject = {
+        loadJson() {
+            throw new Error("building-owned object should not load when its building is outside the active sections");
+        }
+    };
+    const originalWarn = console.warn;
+    let warning = null;
+    console.warn = (...args) => {
+        warning = args;
+    };
+    try {
+        assert.equal(map.syncPrototypeObjects(), false);
+    } finally {
+        console.warn = originalWarn;
+    }
+
+    const instance = map._prototypeBuildingState.buildingInstancesById.get(buildingId);
+    assert.ok(instance);
+    assert.equal(instance.objects.length, 1);
+    assert.equal(instance.objects[0].id, 703);
+    assert.equal(instance.objects[0].fragmentId, fragmentId);
+    assert.deepEqual(instance.objects[0].floorMembership, {
+        ownerType: "building",
+        ownerId: buildingId,
+        floorId: "upper",
+        level: 1
+    });
+    assert.equal(warning, null);
+});
+
+test("syncPrototypeObjects migrates section-owned building-floor objects into building records", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+
+    const buildingId = "building:migrate-object-house";
+    const fragmentId = `${buildingId}:floor:upper`;
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: buildingId,
+            name: "migrate object house",
+            sourceBuildingSaveName: "migrate object house",
+            buildingSaveName: "migrate object house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [{
+                fragmentId: "upper",
+                surfaceId: "upper-surface",
+                traversalLayer: 1,
+                outerPolygon: [
+                    { x: 0, y: 0 },
+                    { x: 10, y: 0 },
+                    { x: 10, y: 10 },
+                    { x: 0, y: 10 }
+                ]
+            }],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [],
+            animals: [],
+            powerups: [],
+            triggers: [],
+            loadState: "shell"
+        }],
+        sections: [{
+            id: "section-0,0",
+            key: "0,0",
+            coord: { q: 0, r: 0 },
+            centerAxial: { q: 0, r: 0 },
+            centerOffset: { x: 0, y: 0 },
+            neighborKeys: [],
+            tileCoordKeys: ["0,0"],
+            groundTextureId: 0,
+            groundTiles: { "0,0": 0 },
+            walls: [],
+            objects: [{
+                id: 704,
+                type: "placedObject",
+                category: "furniture",
+                texturePath: "/assets/images/furniture/crystal%20ball.png",
+                x: 3,
+                y: 3,
+                traversalLayer: 1,
+                level: 1,
+                fragmentId,
+                surfaceId: `${buildingId}:surface:upper-surface`
+            }],
+            animals: [],
+            powerups: [],
+            buildingRefs: [{ id: buildingId, shell: true }]
+        }]
+    })), true);
+
+    map.resetFloorRuntimeState();
+    map._prototypeSectionState.activeSectionKeys = new Set();
+    const originalWarn = console.warn;
+    const originalInfo = console.info;
+    let warning = null;
+    let info = null;
+    console.warn = (...args) => {
+        warning = args;
+    };
+    console.info = (...args) => {
+        info = args;
+    };
+    try {
+        assert.equal(map.syncPrototypeObjects(), true);
+    } finally {
+        console.warn = originalWarn;
+        console.info = originalInfo;
+    }
+
+    const sectionAsset = map.getPrototypeSectionAsset("0,0");
+    const instance = map._prototypeBuildingState.buildingInstancesById.get(buildingId);
+    assert.ok(sectionAsset);
+    assert.ok(instance);
+    assert.equal(sectionAsset.objects.length, 0);
+    assert.equal(instance.objects.length, 1);
+    assert.equal(instance.objects[0].id, 704);
+    assert.equal(instance.objects[0].fragmentId, fragmentId);
+    assert.equal(warning, null);
+    assert.equal(info[0], "[prototype object sanitize] moved section-owned building-floor objects into building records");
+    assert.equal(info[1].count, 1);
+});
+
+test("syncPrototypeObjects normalizes raw editor-building floor ids while migrating section objects", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+
+    const buildingId = "building:raw-migrate-object-house";
+    const runtimeFragmentId = `${buildingId}:floor:upper`;
+    const runtimeSurfaceId = `${buildingId}:surface:upper-surface`;
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: buildingId,
+            name: "raw migrate object house",
+            sourceBuildingSaveName: "raw migrate object house",
+            buildingSaveName: "raw migrate object house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [{
+                fragmentId: "upper",
+                surfaceId: "upper-surface",
+                traversalLayer: 1,
+                outerPolygon: [
+                    { x: 0, y: 0 },
+                    { x: 10, y: 0 },
+                    { x: 10, y: 10 },
+                    { x: 0, y: 10 }
+                ]
+            }],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [],
+            animals: [],
+            powerups: [],
+            triggers: [],
+            loadState: "shell"
+        }],
+        sections: [{
+            id: "section-0,0",
+            key: "0,0",
+            coord: { q: 0, r: 0 },
+            centerAxial: { q: 0, r: 0 },
+            centerOffset: { x: 0, y: 0 },
+            neighborKeys: [],
+            tileCoordKeys: ["0,0"],
+            groundTextureId: 0,
+            groundTiles: { "0,0": 0 },
+            walls: [],
+            objects: [{
+                id: 705,
+                type: "placedObject",
+                category: "furniture",
+                texturePath: "/assets/images/furniture/crystal%20ball.png",
+                x: 3,
+                y: 3,
+                traversalLayer: 1,
+                level: 1,
+                fragmentId: "upper",
+                surfaceId: "upper-surface"
+            }],
+            animals: [],
+            powerups: [],
+            buildingRefs: [{ id: buildingId, shell: true }]
+        }]
+    })), true);
+
+    map.resetFloorRuntimeState();
+    map._prototypeSectionState.activeSectionKeys = new Set();
+    const originalWarn = console.warn;
+    const originalInfo = console.info;
+    let warning = null;
+    let info = null;
+    console.warn = (...args) => {
+        warning = args;
+    };
+    console.info = (...args) => {
+        info = args;
+    };
+    try {
+        assert.equal(map.syncPrototypeObjects(), true);
+    } finally {
+        console.warn = originalWarn;
+        console.info = originalInfo;
+    }
+
+    const sectionAsset = map.getPrototypeSectionAsset("0,0");
+    const instance = map._prototypeBuildingState.buildingInstancesById.get(buildingId);
+    assert.ok(sectionAsset);
+    assert.ok(instance);
+    assert.equal(sectionAsset.objects.length, 0);
+    assert.equal(instance.objects.length, 1);
+    assert.equal(instance.objects[0].id, 705);
+    assert.equal(instance.objects[0].fragmentId, runtimeFragmentId);
+    assert.equal(instance.objects[0].surfaceId, runtimeSurfaceId);
+    assert.equal(warning, null);
+    assert.equal(info[0], "[prototype object sanitize] moved section-owned building-floor objects into building records");
+    assert.equal(info[1].count, 1);
+});
+
+test("syncPrototypeObjects normalizes raw editor-building floor ids on building records", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    globalThis.map = map;
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+
+    const buildingId = "building:raw-building-object-house";
+    const runtimeFragmentId = `${buildingId}:floor:upper`;
+    const runtimeSurfaceId = `${buildingId}:surface:upper-surface`;
+    assert.equal(map.loadPrototypeSectionWorld(createPrototypeBundle({
+        buildings: [{
+            schema: "survivor-building-v1",
+            id: buildingId,
+            name: "raw building object house",
+            sourceBuildingSaveName: "raw building object house",
+            buildingSaveName: "raw building object house",
+            transform: { x: 0, y: 0, rotation: 0 },
+            floorFragments: [{
+                fragmentId: "upper",
+                surfaceId: "upper-surface",
+                traversalLayer: 1,
+                outerPolygon: [
+                    { x: 0, y: 0 },
+                    { x: 10, y: 0 },
+                    { x: 10, y: 10 },
+                    { x: 0, y: 10 }
+                ]
+            }],
+            wallSections: [],
+            mountedWallObjects: [],
+            footprintPolygons: [],
+            movementBlockerPolygons: [],
+            touchedSectionKeys: ["0,0"],
+            objects: [{
+                id: 706,
+                type: "placedObject",
+                category: "furniture",
+                texturePath: "/assets/images/furniture/crystal%20ball.png",
+                x: 3,
+                y: 3,
+                traversalLayer: 1,
+                level: 1,
+                fragmentId: "upper",
+                surfaceId: "upper-surface"
+            }],
+            animals: [],
+            powerups: [],
+            triggers: [],
+            loadState: "shell"
+        }],
+        sections: [{
+            id: "section-0,0",
+            key: "0,0",
+            coord: { q: 0, r: 0 },
+            centerAxial: { q: 0, r: 0 },
+            centerOffset: { x: 0, y: 0 },
+            neighborKeys: [],
+            tileCoordKeys: ["0,0"],
+            groundTextureId: 0,
+            groundTiles: { "0,0": 0 },
+            walls: [],
+            objects: [],
+            animals: [],
+            powerups: [],
+            buildingRefs: [{ id: buildingId, shell: true }]
+        }]
+    })), true);
+
+    map.resetFloorRuntimeState();
+    map._prototypeSectionState.activeSectionKeys = new Set();
+    const originalWarn = console.warn;
+    const originalInfo = console.info;
+    let warning = null;
+    let info = null;
+    console.warn = (...args) => {
+        warning = args;
+    };
+    console.info = (...args) => {
+        info = args;
+    };
+    try {
+        assert.equal(map.syncPrototypeObjects(), true);
+    } finally {
+        console.warn = originalWarn;
+        console.info = originalInfo;
+    }
+
+    const instance = map._prototypeBuildingState.buildingInstancesById.get(buildingId);
+    assert.ok(instance);
+    assert.equal(instance.objects.length, 1);
+    assert.equal(instance.objects[0].id, 706);
+    assert.equal(instance.objects[0].fragmentId, runtimeFragmentId);
+    assert.equal(instance.objects[0].surfaceId, runtimeSurfaceId);
+    assert.equal(warning, null);
+    assert.equal(info[0], "[prototype object sanitize] normalized building-floor object floor refs");
+    assert.equal(info[1].count, 1);
 });
 
 test("loadPrototypeSectionWorld extracts trigger records into a registry and materializes them for active sections", () => {

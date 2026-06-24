@@ -85,6 +85,15 @@ test("debug hitbox projection keeps character z absolute on floor layers", () =>
     assert.equal(context.resolveDebugHitboxWorldZ(actor), -6);
 });
 
+test("debug hitbox projection uses floor support when character z is local zero", () => {
+    const context = loadDebugContext();
+    const actor = new context.Character();
+    actor.z = 0;
+    actor.currentMovementSupport = { type: "floor", layer: 1, baseZ: 3 };
+
+    assert.equal(context.resolveDebugHitboxWorldZ(actor), 3);
+});
+
 test("debug hitbox projection adds wizard floor base to local jump z", () => {
     const context = loadDebugContext();
     const wizard = new context.Wizard();

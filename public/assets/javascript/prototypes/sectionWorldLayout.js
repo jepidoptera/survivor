@@ -21,13 +21,17 @@
         if (!buildingState || typeof map.setPrototypeBuildingDesiredPlacementIds !== "function") return null;
         const desiredBuildingIds = new Set();
         const keys = activeSectionKeys instanceof Set ? activeSectionKeys : new Set();
-        keys.forEach((sectionKey) => {
-            const ids = buildingState.buildingIdsBySectionKey instanceof Map
-                ? buildingState.buildingIdsBySectionKey.get(sectionKey)
-                : null;
-            if (!(ids instanceof Set)) return;
-            ids.forEach((id) => desiredBuildingIds.add(id));
-        });
+        if (typeof map.collectPrototypeBuildingIdsForSectionKeys === "function") {
+            map.collectPrototypeBuildingIdsForSectionKeys(keys).forEach((id) => desiredBuildingIds.add(id));
+        } else {
+            keys.forEach((sectionKey) => {
+                const ids = buildingState.buildingIdsBySectionKey instanceof Map
+                    ? buildingState.buildingIdsBySectionKey.get(sectionKey)
+                    : null;
+                if (!(ids instanceof Set)) return;
+                ids.forEach((id) => desiredBuildingIds.add(id));
+            });
+        }
         const result = map.setPrototypeBuildingDesiredPlacementIds(desiredBuildingIds);
         if (desiredBuildingIds.size > 0 && typeof map.ensurePrototypeBuildingPlacementsForSectionKeys === "function") {
             map.ensurePrototypeBuildingPlacementsForSectionKeys(keys).catch((error) => {
@@ -91,14 +95,27 @@
             ensureSectionsMs += layoutNow() - ensureStart;
         }
         if (!state.sectionsByKey.has(nextCenterKey)) return false;
-        const centerSection = state.sectionsByKey.get(nextCenterKey);
-        const ensureNeighborsStart = layoutNow();
-        for (let i = 0; i < SECTION_DIRECTIONS.length; i++) {
-            ensurePrototypeSectionExists(map, state, addSectionCoords(centerSection.coord, SECTION_DIRECTIONS[i]));
+        let nextActiveKeys = state.nextActiveSectionKeys instanceof Set
+            ? new Set(state.nextActiveSectionKeys)
+            : getBubbleKeysForCenter(state, nextCenterKey);
+        if (!(nextActiveKeys instanceof Set) || nextActiveKeys.size === 0) {
+            nextActiveKeys = new Set([nextCenterKey]);
         }
+        const ensureNeighborsStart = layoutNow();
+        nextActiveKeys.forEach((sectionKey) => {
+            if (state.sectionsByKey.has(sectionKey)) return;
+            const [qRaw, rRaw] = String(sectionKey).split(",");
+            ensurePrototypeSectionExists(map, state, {
+                q: Number(qRaw) || 0,
+                r: Number(rRaw) || 0
+            });
+        });
+        nextActiveKeys.forEach((sectionKey) => {
+            if (!state.sectionsByKey.has(sectionKey)) nextActiveKeys.delete(sectionKey);
+        });
+        if (nextActiveKeys.size === 0) nextActiveKeys.add(nextCenterKey);
         ensureSectionsMs += layoutNow() - ensureNeighborsStart;
 
-        const nextActiveKeys = getBubbleKeysForCenter(state, nextCenterKey);
         const compareStart = layoutNow();
         let changed = state.activeCenterKey !== nextCenterKey || state.activeSectionKeys.size !== nextActiveKeys.size;
         if (!changed) {
@@ -138,22 +155,23 @@
         });
         keysToDeactivate.sort(compareSectionKeysByCenter);
         keysToActivate.sort(compareSectionKeysByCenter);
-        let materializedActiveSections = false;
-        const targetActiveKeysArray = Array.from(nextActiveKeys);
-        for (let i = 0; i < targetActiveKeysArray.length; i++) {
-            const sectionKey = targetActiveKeysArray[i];
-            const asset = state.sectionAssetsByKey instanceof Map ? state.sectionAssetsByKey.get(sectionKey) : null;
-            const hasNodes = state.nodesBySectionKey instanceof Map && state.nodesBySectionKey.has(sectionKey);
-            if (!asset || hasNodes || asset._prototypeSectionHydrated !== true || state.useSparseNodes !== true) continue;
-            addSparseNodesForSection(map, state, asset);
-            refreshSparseNodesForSectionAsset(map, state, asset);
-            materializedActiveSections = true;
-        }
-        if (materializedActiveSections) {
-            rebuildPrototypeFloorRuntime(map, state);
-        }
-
         const shouldApplyLayoutSynchronously = previousActiveKeys.size === 0;
+        let materializedActiveSections = false;
+        if (shouldApplyLayoutSynchronously) {
+            const targetActiveKeysArray = Array.from(nextActiveKeys);
+            for (let i = 0; i < targetActiveKeysArray.length; i++) {
+                const sectionKey = targetActiveKeysArray[i];
+                const asset = state.sectionAssetsByKey instanceof Map ? state.sectionAssetsByKey.get(sectionKey) : null;
+                const hasNodes = state.nodesBySectionKey instanceof Map && state.nodesBySectionKey.has(sectionKey);
+                if (!asset || hasNodes || asset._prototypeSectionHydrated !== true || state.useSparseNodes !== true) continue;
+                addSparseNodesForSection(map, state, asset);
+                refreshSparseNodesForSectionAsset(map, state, asset);
+                materializedActiveSections = true;
+            }
+            if (materializedActiveSections) {
+                rebuildPrototypeFloorRuntime(map, state);
+            }
+        }
         if (shouldApplyLayoutSynchronously) {
             const keysToDeactivateSet = new Set(keysToDeactivate);
             const deactivateStart = layoutNow();
@@ -194,6 +212,7 @@
             activateMs += layoutNow() - activateStart;
 
             state.activeSectionKeys = nextActiveKeys;
+            state.activeBubbleSectionKeys = new Set(nextActiveKeys);
             state.actualActiveSectionKeys = new Set(nextActiveKeys);
             updatePrototypeActiveBuildingSelection(map, nextActiveKeys);
             const rebuildLoadedStart = layoutNow();
@@ -242,6 +261,7 @@
         }
 
         state.activeSectionKeys = nextActiveKeys;
+        state.activeBubbleSectionKeys = new Set(nextActiveKeys);
         updatePrototypeActiveBuildingSelection(map, nextActiveKeys);
         state.pendingLayoutTransition = {
             targetActiveKeys: new Set(nextActiveKeys),

@@ -1,14 +1,14 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -149.3183690270323,
-    "y": 209.49460804460037,
+    "x": -42.886161760047536,
+    "y": 116.91154519494762,
     "z": 0,
-    "currentLayer": 0,
-    "traversalLayer": 0,
-    "currentLayerBaseZ": 0,
-    "surfaceId": "overworld_ground_surface",
-    "fragmentId": "section:-4,0:ground",
+    "currentLayer": 8,
+    "traversalLayer": 8,
+    "currentLayerBaseZ": 30,
+    "surfaceId": "building:placed-9:surface:floor-fragment-71",
+    "fragmentId": "building:placed-9:floor:floor-fragment-71",
     "hp": 100,
     "maxHp": 100,
     "mp": 100,
@@ -24,22 +24,21 @@
     "shieldHp": 0,
     "maxShieldHp": 0,
     "food": 0,
-    "currentSpell": "flooredit",
-    "activeAura": "healing",
+    "currentSpell": "editscript",
+    "activeAura": "speed",
     "activeAuras": [
-      "healing",
       "speed"
     ],
     "unlockedMagic": [],
     "selectedFlooringTexture": "/assets/images/flooring/dirt.jpg",
     "selectedTreeTextureVariant": "random",
-    "selectedPlaceableCategory": "roof",
-    "selectedPlaceableTexturePath": "/assets/images/roofs/smallshingles.png",
+    "selectedPlaceableCategory": "furniture",
+    "selectedPlaceableTexturePath": "/assets/images/furniture/armor.png",
     "selectedPlaceableByCategory": {
-      "flowers": "/assets/images/flowers/thornflowers.png",
+      "flowers": "/assets/images/flowers/white%20rosebush.png",
       "windows": "/assets/images/windows/very%20plain%20arch.png",
       "doors": "/assets/images/doors/door2.png",
-      "furniture": "/assets/images/furniture/crystal%20ball.png",
+      "furniture": "/assets/images/furniture/armor.png",
       "signs": "/assets/images/signs/princess.png",
       "roof": "/assets/images/roofs/smallshingles.png"
     },
@@ -58,24 +57,36 @@
       "/assets/images/furniture/hexrug.png": 0,
       "/assets/images/furniture/crystal%20ball.png": 0,
       "/assets/images/windows/pointy%20arch%20window.png": 0,
-      "/assets/images/windows/very%20plain%20arch.png": 0
+      "/assets/images/windows/very%20plain%20arch.png": 0,
+      "/assets/images/furniture/redrug.png": 0,
+      "/assets/images/furniture/table.png": 0,
+      "/assets/images/furniture/bed.png": 0,
+      "/assets/images/furniture/bed2.png": 0,
+      "/assets/images/furniture/armor.png": 0,
+      "/assets/images/flowers/white%20rosebush.png": 0
     },
-    "selectedPlaceableScale": 1.023,
+    "selectedPlaceableScale": 1.5,
     "selectedPlaceableScaleByTexture": {
       "/assets/images/doors/door5.png": 1,
       "/assets/images/windows/window.png": 0.997,
       "/assets/images/roofs/smallshingles.png": 1.023,
       "/assets/images/roofs/slate.png": 1,
       "/assets/images/furniture/chair.png": 1,
-      "/assets/images/furniture/circlerug.png": 4,
+      "/assets/images/furniture/circlerug.png": 5.146,
       "/assets/images/doors/door2.png": 1.932,
       "/assets/images/flowers/red%20flower.png": 0.55,
       "/assets/images/flowers/fireflower.png": 5,
       "/assets/images/flowers/thornflowers.png": 5,
       "/assets/images/furniture/hexrug.png": 4,
-      "/assets/images/furniture/crystal%20ball.png": 1.979,
+      "/assets/images/furniture/crystal%20ball.png": 1.372,
       "/assets/images/windows/pointy%20arch%20window.png": 1.468,
-      "/assets/images/windows/very%20plain%20arch.png": 1.81
+      "/assets/images/windows/very%20plain%20arch.png": 1.81,
+      "/assets/images/furniture/redrug.png": 4,
+      "/assets/images/furniture/table.png": 2.733,
+      "/assets/images/furniture/bed.png": 6.196,
+      "/assets/images/furniture/bed2.png": 3.657,
+      "/assets/images/furniture/armor.png": 1.5,
+      "/assets/images/flowers/white%20rosebush.png": 2.773
     },
     "selectedPlaceableRotation": 0,
     "selectedPlaceableRotationByTexture": {
@@ -92,9 +103,15 @@
       "/assets/images/furniture/hexrug.png": 0,
       "/assets/images/furniture/crystal%20ball.png": 30,
       "/assets/images/windows/pointy%20arch%20window.png": 0,
-      "/assets/images/windows/very%20plain%20arch.png": 0
+      "/assets/images/windows/very%20plain%20arch.png": 0,
+      "/assets/images/furniture/redrug.png": 0,
+      "/assets/images/furniture/table.png": 30,
+      "/assets/images/furniture/bed.png": 0,
+      "/assets/images/furniture/bed2.png": 0,
+      "/assets/images/furniture/armor.png": 0,
+      "/assets/images/flowers/white%20rosebush.png": 0
     },
-    "selectedPlaceableRotationAxis": "visual",
+    "selectedPlaceableRotationAxis": "none",
     "selectedPlaceableRotationAxisByTexture": {
       "/assets/images/doors/door5.png": "spatial",
       "/assets/images/windows/window.png": "spatial",
@@ -109,10 +126,16 @@
       "/assets/images/furniture/hexrug.png": "ground",
       "/assets/images/furniture/crystal%20ball.png": "visual",
       "/assets/images/windows/pointy%20arch%20window.png": "spatial",
-      "/assets/images/windows/very%20plain%20arch.png": "spatial"
+      "/assets/images/windows/very%20plain%20arch.png": "spatial",
+      "/assets/images/furniture/redrug.png": "ground",
+      "/assets/images/furniture/table.png": "visual",
+      "/assets/images/furniture/bed.png": "visual",
+      "/assets/images/furniture/bed2.png": "visual",
+      "/assets/images/furniture/armor.png": "none",
+      "/assets/images/flowers/white%20rosebush.png": "none"
     },
     "selectedPlaceableAnchorX": 0.5,
-    "selectedPlaceableAnchorY": 0.5,
+    "selectedPlaceableAnchorY": 0.9,
     "selectedPlaceableAnchorXByTexture": {
       "/assets/images/doors/door5.png": 0.5,
       "/assets/images/windows/window.png": 0.5,
@@ -127,7 +150,13 @@
       "/assets/images/furniture/hexrug.png": 0.5,
       "/assets/images/furniture/crystal%20ball.png": 0.5,
       "/assets/images/windows/pointy%20arch%20window.png": 0.5,
-      "/assets/images/windows/very%20plain%20arch.png": 0.5
+      "/assets/images/windows/very%20plain%20arch.png": 0.5,
+      "/assets/images/furniture/redrug.png": 0.5,
+      "/assets/images/furniture/table.png": 0.5,
+      "/assets/images/furniture/bed.png": 0.5,
+      "/assets/images/furniture/bed2.png": 0.5,
+      "/assets/images/furniture/armor.png": 0.5,
+      "/assets/images/flowers/white%20rosebush.png": 0.5
     },
     "selectedPlaceableAnchorYByTexture": {
       "/assets/images/doors/door5.png": 1,
@@ -143,14 +172,20 @@
       "/assets/images/furniture/hexrug.png": 0.5,
       "/assets/images/furniture/crystal%20ball.png": 0.5,
       "/assets/images/windows/pointy%20arch%20window.png": 0.5,
-      "/assets/images/windows/very%20plain%20arch.png": 0.5
+      "/assets/images/windows/very%20plain%20arch.png": 0.5,
+      "/assets/images/furniture/redrug.png": 0.5,
+      "/assets/images/furniture/table.png": 0.5,
+      "/assets/images/furniture/bed.png": 0.5,
+      "/assets/images/furniture/bed2.png": 0.5,
+      "/assets/images/furniture/armor.png": 0.9,
+      "/assets/images/flowers/white%20rosebush.png": 0.5
     },
-    "selectedPowerupPlacementScale": 1,
-    "selectedPowerupFileName": "chalice.png",
-    "selectedEditorCategory": "powerups",
-    "selectedFloorEditLevel": 0,
-    "selectedWallHeight": 3,
-    "selectedWallThickness": 0.375,
+    "selectedPowerupPlacementScale": 1.269,
+    "selectedPowerupFileName": "spellbook2.png",
+    "selectedEditorCategory": "furniture",
+    "selectedFloorEditLevel": 8,
+    "selectedWallHeight": 6,
+    "selectedWallThickness": 0.25,
     "selectedRoadWidth": 3,
     "selectedWallTexture": "/assets/images/walls/stonewall.png",
     "selectedRoofOverhang": 0.6875,
@@ -222,18 +257,18 @@
     ],
     "inventory": {
       "spellCredits": 4,
-      "gold": 420
+      "gold": 6690
     },
     "scriptingName": "human1",
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -180.3183690270323,
-      "y": 182.4839606997006
+      "x": -58.382423950652274,
+      "y": 95.61802564506615
     }
   },
   "los": {
     "mazeMode": false
   },
-  "activeCenterKey": "-4,0"
+  "activeCenterKey": "-2,-1"
 }

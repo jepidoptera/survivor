@@ -80,7 +80,10 @@ class Teleport extends globalThis.Spell {
             ? Number(options.destinationBaseZ)
             : (Number.isFinite(destinationNode && destinationNode.baseZ)
                 ? Number(destinationNode.baseZ)
-                : destinationLayer * 3);
+                : null);
+        if (!Number.isFinite(destinationBaseZ)) {
+            throw new Error(`teleport destination layer ${destinationLayer} requires destinationBaseZ or node baseZ`);
+        }
         const destinationFragmentId = typeof (options && options.destinationFragmentId) === "string"
             ? options.destinationFragmentId
             : (typeof (destinationNode && destinationNode.fragmentId) === "string" ? destinationNode.fragmentId : "");
@@ -116,12 +119,31 @@ class Teleport extends globalThis.Spell {
         wizard.node = destinationNode || null;
         if (destinationNode && typeof wizard.syncTraversalLayerFromNode === "function") {
             wizard.syncTraversalLayerFromNode(destinationNode);
+        } else if (wizard.map && typeof wizard.map.setActorCurrentMovementSupport === "function" && destinationFragmentId && wizard.map.floorsById instanceof Map) {
+            const destinationFragment = wizard.map.floorsById.get(destinationFragmentId) || null;
+            if (!destinationFragment) {
+                throw new Error(`teleport destination references missing floor fragment ${destinationFragmentId}`);
+            }
+            wizard.map.setActorCurrentMovementSupport(wizard, {
+                type: "floor",
+                layer: destinationLayer,
+                baseZ: destinationBaseZ,
+                fragment: destinationFragment,
+                fragmentId: destinationFragmentId,
+                surfaceId: destinationSurfaceId,
+                node: destinationNode || null
+            }, {
+                suppressLayerTransition: true
+            });
         } else {
             wizard.currentLayer = destinationLayer;
             wizard.traversalLayer = destinationLayer;
             wizard.currentLayerBaseZ = destinationBaseZ;
             if (destinationSurfaceId) wizard.surfaceId = destinationSurfaceId;
             if (destinationFragmentId) wizard.fragmentId = destinationFragmentId;
+            wizard.currentMovementSupport = destinationLayer === 0
+                ? { type: "ground", layer: 0, baseZ: 0 }
+                : null;
         }
         wizard.z = 0;
         wizard._floorFallState = null;
@@ -133,6 +155,16 @@ class Teleport extends globalThis.Spell {
         wizard.prevX = destinationX;
         wizard.prevY = destinationY;
         wizard.updateHitboxes();
+        const mapRef = wizard.map || null;
+        if (mapRef && typeof mapRef.updatePrototypeSectionBubble === "function") {
+            const scope = typeof mapRef.getPrototypeWorldScope === "function"
+                ? mapRef.getPrototypeWorldScope()
+                : null;
+            const teleportedIntoBuildingScope = !!(scope && scope.type === "building");
+            mapRef.updatePrototypeSectionBubble(wizard, teleportedIntoBuildingScope
+                ? { reason: "teleport" }
+                : { force: true, advanceImmediately: true, reason: "teleport" });
+        }
         if (typeof centerViewport === "function") {
             centerViewport(wizard, 0);
         }

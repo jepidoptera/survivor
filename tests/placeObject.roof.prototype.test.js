@@ -11,6 +11,10 @@ const GLOBAL_KEYS = [
     "message",
     "document",
     "Scripting",
+    "FloorSupport",
+    "applyEditorPlacementSupport",
+    "invalidatePlacedObjectPrototypeBuildingInteriorBitmap",
+    "resolveEditorPlacementTarget",
     "viewport",
     "viewscale",
     "xyratio",
@@ -197,7 +201,6 @@ test("placing furniture uses the wizard's current layer", () => {
     assert.equal(placed[0].options.level, 2);
     assert.equal(placed[0].traversalLayer, 2);
     assert.equal(placed[0].level, 2);
-    assert.equal(placed[0]._renderTraversalLayer, 2);
     assert.equal(placed[0]._renderLayerBaseZ, 6);
 });
 
@@ -484,7 +487,6 @@ test("placing furniture while physically on upper level attaches to upper floor 
     assert.equal(placed[0].y, 8.75);
     assert.equal(placed[0].traversalLayer, 2);
     assert.equal(placed[0].level, 2);
-    assert.equal(placed[0]._renderTraversalLayer, 2);
     assert.equal(placed[0]._renderLayerBaseZ, 6);
     assert.equal(placed[0].node, upperNode);
     assert.equal(placed[0].surfaceId, "upper-surface");
@@ -495,4 +497,146 @@ test("placing furniture while physically on upper level attaches to upper floor 
     assert.equal(queriedLayers.length, 2);
     assert.equal(queriedLayers[0].layer, 2);
     assert.equal(queriedLayers[1].layer, 2);
+});
+
+test("placing visual furniture on a building floor invalidates that floor interior bitmap", () => {
+    const FloorSupport = require("../public/assets/javascript/shared/FloorSupport.js");
+    class Spell {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.visible = true;
+        }
+
+        detachPixiSprite() {}
+    }
+
+    const placed = [];
+    class PlacedObject {
+        constructor(location, map, options) {
+            this.x = location.x;
+            this.y = location.y;
+            this.map = map;
+            this.options = options;
+            this.type = "placedObject";
+            this.objectType = "placedObject";
+            this.isPlacedObject = true;
+            this.traversalLayer = Number.isFinite(options.traversalLayer) ? Number(options.traversalLayer) : 0;
+            this.level = this.traversalLayer;
+            this.node = map.worldToNode(this.x, this.y);
+            if (this.node && this.traversalLayer !== 0 && typeof map.getFloorNodeAtLayer === "function") {
+                const upperNode = map.getFloorNodeAtLayer(this.node.xindex, this.node.yindex, this.traversalLayer, {
+                    surfaceId: typeof location.surfaceId === "string" ? location.surfaceId : "",
+                    fragmentId: typeof location.fragmentId === "string" ? location.fragmentId : "",
+                    allowScan: true
+                });
+                if (upperNode) this.node = upperNode;
+            }
+            if (this.node && typeof this.node.addObject === "function") this.node.addObject(this);
+            placed.push(this);
+        }
+
+        saveJson() {
+            return {};
+        }
+    }
+
+    const buildingFragment = {
+        ownerType: "building",
+        ownerId: "building:placed-4",
+        ownerSectionKey: "building:placed-4",
+        fragmentId: "building:placed-4:floor:floor-fragment-34",
+        surfaceId: "building:placed-4:surface:floor-fragment-34",
+        _prototypeBuildingSourceFragmentId: "floor-fragment-34",
+        level: 1
+    };
+    const groundNode = { xindex: -157, yindex: 210, addObject() {} };
+    const upperNodeObjects = [];
+    const upperNode = {
+        xindex: -157,
+        yindex: 210,
+        surfaceId: buildingFragment.surfaceId,
+        fragmentId: buildingFragment.fragmentId,
+        level: 1,
+        traversalLayer: 1,
+        addObject(object) {
+            upperNodeObjects.push(object);
+        }
+    };
+    const invalidations = [];
+    const map = {
+        _prototypeBuildingState: {},
+        wrapWorldX(value) {
+            return value;
+        },
+        wrapWorldY(value) {
+            return value;
+        },
+        worldToNode() {
+            return groundNode;
+        },
+        getFloorNodeAtLayer() {
+            return upperNode;
+        },
+        invalidatePrototypeBuildingInteriorBitmap(ref) {
+            invalidations.push(ref);
+            return { ...ref, changed: true };
+        },
+        objects: []
+    };
+
+    globalThis.Spell = Spell;
+    globalThis.PlacedObject = PlacedObject;
+    globalThis.SpellSystem = null;
+    globalThis.FloorSupport = FloorSupport;
+    globalThis.resolveEditorPlacementTarget = () => ({
+        x: -136,
+        y: 210,
+        layer: 1,
+        baseZ: 3,
+        fragmentId: buildingFragment.fragmentId,
+        surfaceId: buildingFragment.surfaceId,
+        floorTarget: { fragment: buildingFragment }
+    });
+    globalThis.document = {
+        createElement() {
+            return {};
+        }
+    };
+    globalThis.message = () => {};
+    globalThis.Scripting = null;
+    globalThis.wizard = {
+        map,
+        currentLayer: 1,
+        currentLayerBaseZ: 3,
+        selectedPlaceableCategory: "furniture",
+        selectedPlaceableTexturePath: "/assets/images/furniture/crystal%20ball.png",
+        selectedPlaceableScale: 1,
+        selectedPlaceableScaleMin: 0.2,
+        selectedPlaceableScaleMax: 5,
+        selectedPlaceableRotation: 30,
+        selectedPlaceableRotationAxis: "visual",
+        selectedPlaceableAnchorX: 0.5,
+        selectedPlaceableAnchorY: 0.5,
+        selectedPlaceableRenderOffset: 0
+    };
+
+    delete require.cache[require.resolve("../public/assets/javascript/spells/PlaceObject.js")];
+    require("../public/assets/javascript/spells/PlaceObject.js");
+
+    const spell = new globalThis.PlaceObject(0, 0);
+    spell.cast(-136, 210);
+
+    assert.equal(placed.length, 1);
+    assert.equal(upperNodeObjects[0], placed[0]);
+    assert.deepEqual(placed[0]._floorMembership, {
+        ownerType: "building",
+        ownerId: "building:placed-4",
+        floorId: "floor-fragment-34",
+        level: 1
+    });
+    assert.deepEqual(invalidations, [{
+        placementId: "building:placed-4",
+        floorId: "floor-fragment-34"
+    }]);
 });

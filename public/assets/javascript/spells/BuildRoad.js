@@ -13,6 +13,11 @@ class BuildRoad extends globalThis.Spell {
     }
     
     cast(targetX, targetY) {
+        message("Path roads are placed by selecting Road, then clicking a start and end point.");
+        return this;
+    }
+
+    castLegacyTileRoad(targetX, targetY) {
         // Check magic
         if (!globalThis.Spell.canAffordMagicCost(this.magicCost, wizard)) {
             globalThis.Spell.indicateInsufficientMagic();

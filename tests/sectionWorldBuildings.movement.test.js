@@ -126,6 +126,107 @@ function createPrototypeNodeMap(width = 12, height = 12, options = {}) {
     };
 }
 
+function installBuildingFloorMaterializationTestApis(map) {
+    const offsets = [
+        { x: 1, y: 0 },
+        { x: -1, y: 0 },
+        { x: 0, y: 1 },
+        { x: 0, y: -1 }
+    ];
+    map.floorNodeIndex = new Map();
+    map.getFloorNodeKey = (nodeOrX, y = null, surfaceId = "", fragmentId = "") => {
+        if (nodeOrX && typeof nodeOrX === "object") {
+            return `${Number(nodeOrX.xindex)},${Number(nodeOrX.yindex)},${nodeOrX.surfaceId || ""},${nodeOrX.fragmentId || ""}`;
+        }
+        return `${Number(nodeOrX)},${Number(y)},${surfaceId || ""},${fragmentId || ""}`;
+    };
+    map.isPointSupportedByFloorFragment = (fragment, x, y) => {
+        const poly = Array.isArray(fragment && fragment.outerPolygon) ? fragment.outerPolygon : [];
+        if (poly.length < 3) return false;
+        let inside = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const xi = Number(poly[i].x);
+            const yi = Number(poly[i].y);
+            const xj = Number(poly[j].x);
+            const yj = Number(poly[j].y);
+            const intersects = ((yi > y) !== (yj > y)) &&
+                (x < ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-9) + xi);
+            if (intersects) inside = !inside;
+        }
+        return inside;
+    };
+    map.registerFloorNode = function registerFloorNode(node, fragment) {
+        node.surfaceId = fragment.surfaceId;
+        node.fragmentId = fragment.fragmentId;
+        node.ownerSectionKey = fragment.ownerSectionKey || "";
+        node.id = this.getFloorNodeKey(node);
+        if (!this.floorNodesById.has(fragment.fragmentId)) this.floorNodesById.set(fragment.fragmentId, []);
+        this.floorNodesById.get(fragment.fragmentId).push(node);
+        this.floorNodeIndex.set(node.id, node);
+        const layerKey = this.getFloorLayerNodeKey(node.xindex, node.yindex, node.traversalLayer);
+        if (!this.floorNodeLayerIndex.has(layerKey)) this.floorNodeLayerIndex.set(layerKey, []);
+        this.floorNodeLayerIndex.get(layerKey).push(node);
+        return node;
+    };
+    map._connectFloorNodesIncremental = function connectFloorNodesIncremental(nodes) {
+        for (const node of nodes) {
+            for (let i = 0; i < node.neighborOffsets.length; i++) {
+                const offset = node.neighborOffsets[i];
+                const key = this.getFloorNodeKey(
+                    node.xindex + offset.x,
+                    node.yindex + offset.y,
+                    node.surfaceId,
+                    node.fragmentId
+                );
+                node.neighbors[i] = this.floorNodeIndex.get(key) || null;
+            }
+        }
+    };
+    map.unregisterFloorFragments = function unregisterFloorFragments(fragmentIds) {
+        for (const fragmentId of fragmentIds) {
+            const nodes = this.floorNodesById.get(fragmentId) || [];
+            for (const node of nodes) {
+                this.floorNodeIndex.delete(node.id);
+                const layerKey = this.getFloorLayerNodeKey(node.xindex, node.yindex, node.traversalLayer);
+                const layerNodes = this.floorNodeLayerIndex.get(layerKey) || [];
+                const index = layerNodes.indexOf(node);
+                if (index >= 0) layerNodes.splice(index, 1);
+            }
+            this.floorNodesById.delete(fragmentId);
+            this.floorsById.delete(fragmentId);
+        }
+        return fragmentIds.length;
+    };
+    map.worldToNode = function worldToNode(x, y) {
+        let best = null;
+        let bestDist = Infinity;
+        for (const node of this._prototypeSectionState.allNodesByCoordKey.values()) {
+            const dx = Number(node.x) - Number(x);
+            const dy = Number(node.y) - Number(y);
+            const dist = dx * dx + dy * dy;
+            if (dist < bestDist) {
+                best = node;
+                bestDist = dist;
+            }
+        }
+        if (best) return best;
+        const xi = Math.round(Number(x) / 0.866);
+        const yi = Math.round(Number(y) - (xi % 2 === 0 ? 0.5 : 0));
+        return {
+            xindex: xi,
+            yindex: yi,
+            x: xi * 0.866,
+            y: yi + (xi % 2 === 0 ? 0.5 : 0),
+            neighborOffsets: offsets.slice(),
+            objects: []
+        };
+    };
+    map.getFloorNodeAtLayer = function getFloorNodeAtLayer(x, y, layer, options = {}) {
+        const key = this.getFloorNodeKey(x, y, options.surfaceId || "", options.fragmentId || "");
+        return this.floorNodeIndex.get(key) || null;
+    };
+}
+
 function createPlacement(id = "building:test-house") {
     return {
         schema: "survivor-building-placement-v1",
@@ -390,7 +491,7 @@ test("building placements write lightweight refs into every touched section", ()
 
     assert.deepEqual(placement.overlappedSectionKeys, ["0,0"]);
     assert.deepEqual(sectionA.buildingRefs, [
-        { id: "building:section-ref-house", buildingSaveName: "test house" }
+        { id: "building:section-ref-house", shell: true }
     ]);
     assert.deepEqual(sectionB.buildingRefs, []);
 
@@ -402,8 +503,41 @@ test("building placements write lightweight refs into every touched section", ()
 
     assert.deepEqual(sectionA.buildingRefs, []);
     assert.deepEqual(sectionB.buildingRefs, [
-        { id: "building:section-ref-house", buildingSaveName: "test house" }
+        { id: "building:section-ref-house", shell: true }
     ]);
+});
+
+test("building placement creates an owned instance save unit", () => {
+    const map = {};
+    const sectionA = createSectionAsset("0,0", [
+        { x: -1, y: -1 },
+        { x: 6, y: -1 },
+        { x: 6, y: 6 },
+        { x: -1, y: 6 }
+    ]);
+    installSectionAssets(map, [sectionA]);
+    buildings.installSectionWorldBuildingApis(map);
+
+    const buildingData = createBuildingSaveWithDoorAndColumn();
+    const placement = map.addPrototypeBuildingPlacement({
+        id: "building:owned-house",
+        buildingSaveName: "test house",
+        transform: { x: 0, y: 0, rotation: 0 }
+    }, { buildingData });
+
+    buildingData.floorFragments[0].outerPolygon[0].x = 999;
+    const instances = map.exportPrototypeBuildingInstances();
+    assert.equal(instances.length, 1);
+    assert.equal(instances[0].schema, "survivor-building-v1");
+    assert.equal(instances[0].id, "building:owned-house");
+    assert.equal(instances[0].sourceBuildingSaveName, "test house");
+    assert.deepEqual(instances[0].transform, placement.transform);
+    assert.deepEqual(instances[0].touchedSectionKeys, ["0,0"]);
+    assert.notEqual(instances[0].floorFragments[0].outerPolygon[0].x, 999);
+    assert.deepEqual(map.getPrototypeDirtyWorldUnits(), {
+        sections: ["0,0"],
+        buildings: ["building:owned-house"]
+    });
 });
 
 test("active section building ensure loads only referenced placements", async () => {
@@ -439,6 +573,390 @@ test("active section building ensure loads only referenced placements", async ()
     assert.equal(map._prototypeBuildingState.loadedBuildingsById.has("building:active-house"), true);
     assert.equal(map._prototypeBuildingState.loadedBuildingsById.has("building:inactive-house"), false);
     assert.equal(map.getPrototypeBuildingCutawayBuildings().length, 1);
+});
+
+test("active section shell loading follows section refs and migrates old placements", async () => {
+    const map = {};
+    const sectionA = createSectionAsset("0,0", []);
+    const sectionB = createSectionAsset("1,0", []);
+    installSectionAssets(map, [sectionA, sectionB]);
+    buildings.installSectionWorldBuildingApis(map);
+    map.initializePrototypeBuildingState([
+        {
+            ...createPlacement("building:ref-house"),
+            buildingSaveName: "ref house",
+            overlappedSectionKeys: ["1,0"],
+            loadState: "unloaded"
+        }
+    ]);
+    sectionA.buildingRefs = [{ id: "building:ref-house", shell: true }];
+    sectionB.buildingRefs = [];
+
+    const loaded = [];
+    map.loadPrototypeBuildingEditorSaveData = async (saveName) => {
+        loaded.push(saveName);
+        return createBuildingSaveWithDoorAndColumn();
+    };
+
+    await map.ensurePrototypeBuildingShellsForSectionKeys(new Set(["0,0"]));
+
+    const placement = map.getPrototypeBuildingPlacements()[0];
+    const instances = map.exportPrototypeBuildingInstances();
+    assert.deepEqual(loaded, ["ref house"]);
+    assert.equal(placement.loadState, "shell");
+    assert.equal(instances.length, 1);
+    assert.equal(instances[0].schema, "survivor-building-v1");
+    assert.equal(instances[0].id, "building:ref-house");
+    assert.equal(instances[0].loadState, "shell");
+    assert.equal(map._prototypeBuildingState.loadedBuildingsById.has("building:ref-house"), true);
+});
+
+test("interior promotion survives later shell loads", async () => {
+    const map = {};
+    const sectionA = createSectionAsset("0,0", []);
+    installSectionAssets(map, [sectionA]);
+    buildings.installSectionWorldBuildingApis(map);
+    const placement = map.addPrototypeBuildingPlacement({
+        id: "building:interior-house",
+        buildingSaveName: "interior house",
+        transform: { x: 0, y: 0, rotation: 0 }
+    }, { buildingData: createBuildingSaveWithDoorAndColumn() });
+
+    await map.promotePrototypeBuildingInterior("building:interior-house");
+    await map.ensurePrototypeBuildingShellsForSectionKeys(new Set(["0,0"]));
+
+    const instances = map.exportPrototypeBuildingInstances();
+    assert.equal(placement.loadState, "interior");
+    assert.equal(instances[0].loadState, "interior");
+});
+
+test("building interior bitmap object exclusions are floor scoped and retain stale cached bakes", () => {
+    let dirtyCount = 0;
+    const map = {
+        markBuildingRenderCacheDirty() {
+            dirtyCount += 1;
+        }
+    };
+    buildings.installSectionWorldBuildingApis(map);
+    map.initializePrototypeBuildingState([createPlacement("building:bake-house")]);
+
+    const state = map._prototypeBuildingState;
+    let destroyedTextures = 0;
+    const cachedEntry = {
+        status: "ready",
+        texture: { destroy() { destroyedTextures += 1; } },
+        depthMetricTexture: { destroy() { destroyedTextures += 1; } }
+    };
+    state.interiorBitmapsByKey.set("building:bake-house|floor-1", cachedEntry);
+
+    const object = {
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:bake-house",
+        _prototypeRecordId: 101,
+        fragmentId: "building:bake-house:floor:floor-1",
+        surfaceId: "building:bake-house:surface:floor-1"
+    };
+
+    const removed = map.removePrototypeBuildingObjectFromInteriorBitmap(object);
+    assert.deepEqual(removed, {
+        placementId: "building:bake-house",
+        floorId: "floor-1",
+        recordId: 101,
+        changed: true
+    });
+    assert.equal(object._prototypeInteriorBitmapExcluded, true);
+    assert.deepEqual(object._prototypeInteriorBitmapExclusion, {
+        placementId: "building:bake-house",
+        floorId: "floor-1",
+        recordId: 101
+    });
+    assert.equal(destroyedTextures, 0);
+    assert.equal(dirtyCount, 0);
+    assert.equal(state.interiorBitmapsByKey.get("building:bake-house|floor-1"), cachedEntry);
+    assert.equal(cachedEntry.stale, true);
+    assert.equal(cachedEntry.staleReason, "object-bake-membership");
+    assert.equal(state.interiorBitmapObjectExclusionsByKey.get("building:bake-house|floor-1").has(101), true);
+
+    const repeated = map.removePrototypeBuildingObjectFromInteriorBitmap(object);
+    assert.equal(repeated.changed, false);
+    assert.equal(dirtyCount, 0);
+
+    const restored = map.restorePrototypeBuildingObjectToInteriorBitmap(object);
+    assert.deepEqual(restored, {
+        placementId: "building:bake-house",
+        floorId: "floor-1",
+        recordId: 101,
+        changed: true
+    });
+    assert.equal(object._prototypeInteriorBitmapExcluded, false);
+    assert.equal(object._prototypeInteriorBitmapExclusion, null);
+    assert.equal(destroyedTextures, 0);
+    assert.equal(dirtyCount, 0);
+    assert.equal(state.interiorBitmapsByKey.get("building:bake-house|floor-1"), cachedEntry);
+    assert.equal(cachedEntry.stale, true);
+    assert.equal(state.interiorBitmapObjectExclusionsByKey.has("building:bake-house|floor-1"), false);
+
+    const surfaceOnlyObject = {
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:bake-house",
+        _prototypeRecordId: 102,
+        surfaceId: "building:bake-house:surface:floor-2"
+    };
+    const surfaceOnlyRemoved = map.removePrototypeBuildingObjectFromInteriorBitmap(surfaceOnlyObject);
+    assert.equal(surfaceOnlyRemoved.floorId, "floor-2");
+    assert.equal(state.interiorBitmapObjectExclusionsByKey.get("building:bake-house|floor-2").has(102), true);
+});
+
+test("building interior bitmap invalidation is floor scoped and blocks obsolete loading commits", () => {
+    let dirtyCount = 0;
+    const map = {
+        markBuildingRenderCacheDirty() {
+            dirtyCount += 1;
+        }
+    };
+    buildings.installSectionWorldBuildingApis(map);
+    map.initializePrototypeBuildingState([createPlacement("building:bake-house")]);
+    const state = map._prototypeBuildingState;
+    const readyEntry = {
+        status: "ready",
+        texture: { destroy() {} }
+    };
+    const loadingEntry = {
+        status: "loading",
+        settingsSignature: "old"
+    };
+    const stalePromise = Promise.resolve();
+    state.interiorBitmapsByKey.set("building:bake-house|floor-1", readyEntry);
+    state.interiorBitmapsByKey.set("building:bake-house|floor-2", loadingEntry);
+    state.pendingInteriorBitmapLoadsByKey.set("building:bake-house|floor-2", {
+        settingsSignature: "old",
+        promise: stalePromise
+    });
+
+    const readyInvalidated = map.invalidatePrototypeBuildingInteriorBitmap({
+        placementId: "building:bake-house",
+        floorId: "floor-1"
+    });
+    const loadingInvalidated = map.invalidatePrototypeBuildingInteriorBitmap({
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:bake-house",
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:bake-house",
+            floorId: "floor-2",
+            level: 1
+        }
+    });
+
+    assert.deepEqual(readyInvalidated, {
+        placementId: "building:bake-house",
+        floorId: "floor-1",
+        changed: true
+    });
+    assert.deepEqual(loadingInvalidated, {
+        placementId: "building:bake-house",
+        floorId: "floor-2",
+        changed: true
+    });
+    assert.equal(readyEntry.stale, true);
+    assert.equal(loadingEntry.stale, true);
+    assert.equal(state.pendingInteriorBitmapLoadsByKey.has("building:bake-house|floor-2"), false);
+    assert.equal(dirtyCount, 0);
+});
+
+test("building interior bitmap object exclusions require building ownership and floor identity", () => {
+    const map = {};
+    buildings.installSectionWorldBuildingApis(map);
+
+    assert.throws(
+        () => map.removePrototypeBuildingObjectFromInteriorBitmap({
+            _prototypeOwnerType: "section",
+            _prototypeOwnerId: "section:0,0",
+            _prototypeRecordId: 5,
+            fragmentId: "section:0,0:floor:floor-1"
+        }),
+        /not owned by a building/
+    );
+
+    assert.throws(
+        () => map.removePrototypeBuildingObjectFromInteriorBitmap({
+            _prototypeOwnerType: "building",
+            _prototypeOwnerId: "building:bake-house",
+            _prototypeRecordId: 5
+        }),
+        /requires a floor id/
+    );
+
+    assert.throws(
+        () => map.removePrototypeBuildingObjectFromInteriorBitmap({
+            _prototypeOwnerType: "building",
+            _prototypeOwnerId: "building:bake-house",
+            fragmentId: "building:bake-house:floor:floor-1"
+        }),
+        /requires an object record id/
+    );
+});
+
+test("wizard building support switches world scope and suspends outdoor bubble shifting", async () => {
+    const previousWizard = globalThis.wizard;
+    try {
+        const map = createPrototypeNodeMap();
+        buildings.installSectionWorldBuildingApis(map);
+        const wizard = { type: "wizard" };
+        globalThis.wizard = wizard;
+        map.addPrototypeBuildingPlacement({
+            id: "building:scope-house",
+            buildingSaveName: "scope house",
+            transform: { x: 0, y: 0, rotation: 0 }
+        }, { buildingData: createBuildingSaveWithTreadPathStair() });
+
+        const buildingSupport = {
+            type: "floor",
+            layer: 0,
+            baseZ: 0,
+            fragmentId: "building:scope-house:floor:floor-0",
+            surfaceId: "building:scope-house:surface:floor-0",
+            ownerType: "building",
+            ownerId: "building:scope-house",
+            sectionKey: "building:scope-house"
+        };
+        const buildingScope = map.updatePrototypeWorldScopeForMovementSupport(wizard, buildingSupport);
+        await Promise.resolve();
+
+        assert.deepEqual(buildingScope, { type: "building", id: "building:scope-house" });
+        assert.deepEqual(map.getPrototypeWorldScope(), { type: "building", id: "building:scope-house" });
+        assert.equal(map.getPrototypeBuildingPlacements()[0].loadState, "interior");
+        assert.equal(map.isPrototypeOutdoorBubbleSuspendedForActor(wizard), true);
+        assert.equal(map.isPrototypeOutdoorBubbleSuspendedForActor(wizard, { force: true }), false);
+
+        const sectionSupport = {
+            type: "floor",
+            layer: 0,
+            baseZ: 0,
+            fragmentId: "section:0,0:ground",
+            surfaceId: "section:0,0:ground",
+            ownerType: "section",
+            ownerId: "0,0",
+            sectionKey: "0,0"
+        };
+        const sectionScope = map.updatePrototypeWorldScopeForMovementSupport(wizard, sectionSupport);
+
+        assert.deepEqual(sectionScope, { type: "sectionWorld" });
+        assert.deepEqual(map.getPrototypeWorldScope(), { type: "sectionWorld" });
+        assert.equal(map.isPrototypeOutdoorBubbleSuspendedForActor(wizard), false);
+    } finally {
+        if (previousWizard === undefined) {
+            delete globalThis.wizard;
+        } else {
+            globalThis.wizard = previousWizard;
+        }
+    }
+});
+
+test("loaded wizard inside a building cannot walk through ground-floor walls when outdoor selection misses that building", () => {
+    const previousPolygonHitbox = globalThis.PolygonHitbox;
+    const previousWizard = globalThis.wizard;
+    globalThis.PolygonHitbox = TestPolygonHitbox;
+    try {
+        const map = createPrototypeNodeMap();
+        buildings.installSectionWorldBuildingApis(map);
+        const wizard = { type: "wizard" };
+        globalThis.wizard = wizard;
+        map.addPrototypeBuildingPlacement({
+            id: "building:loaded-inside-house",
+            buildingSaveName: "loaded inside house",
+            transform: { x: 0, y: 0, rotation: 0 }
+        }, { buildingData: createBuildingSaveWithDoorAndColumn() });
+
+        const loadedInsideSupport = {
+            type: "floor",
+            layer: 0,
+            baseZ: 0,
+            fragmentId: "building:loaded-inside-house:floor:floor-0",
+            surfaceId: "building:loaded-inside-house:surface:floor-0",
+            ownerType: "building",
+            ownerId: "building:loaded-inside-house",
+            sectionKey: "building:loaded-inside-house"
+        };
+        map.updatePrototypeWorldScopeForMovementSupport(wizard, loadedInsideSupport, { promoteInterior: false });
+
+        map.setPrototypeBuildingDesiredPlacementIds(new Set());
+
+        const blockers = map.collectPrototypeBuildingMovementBlockersInBounds({
+            minX: -0.5,
+            minY: -0.5,
+            maxX: 0.75,
+            maxY: 4.5
+        }, 0);
+        const canWalkThroughWall = blockers.length === 0;
+
+        assert.equal(canWalkThroughWall, false, "loaded-inside ground-floor wall blockers should still be active");
+    } finally {
+        if (previousPolygonHitbox === undefined) {
+            delete globalThis.PolygonHitbox;
+        } else {
+            globalThis.PolygonHitbox = previousPolygonHitbox;
+        }
+        if (previousWizard === undefined) {
+            delete globalThis.wizard;
+        } else {
+            globalThis.wizard = previousWizard;
+        }
+    }
+});
+
+test("repeated building support updates do not re-promote an already active interior", async () => {
+    const previousWizard = globalThis.wizard;
+    try {
+        const map = createPrototypeNodeMap();
+        buildings.installSectionWorldBuildingApis(map);
+        const wizard = { type: "wizard" };
+        globalThis.wizard = wizard;
+        map.addPrototypeBuildingPlacement({
+            id: "building:scope-house",
+            buildingSaveName: "scope house",
+            transform: { x: 0, y: 0, rotation: 0 }
+        }, { buildingData: createBuildingSaveWithTreadPathStair() });
+
+        const originalRegisterFloorFragment = map.registerFloorFragment.bind(map);
+        let floorRegistrations = 0;
+        map.registerFloorFragment = function registerFloorFragmentWithCount(fragment) {
+            floorRegistrations += 1;
+            return originalRegisterFloorFragment(fragment);
+        };
+
+        const buildingSupport = {
+            type: "floor",
+            layer: 0,
+            baseZ: 0,
+            fragmentId: "building:scope-house:floor:floor-0",
+            surfaceId: "building:scope-house:surface:floor-0",
+            ownerType: "building",
+            ownerId: "building:scope-house",
+            sectionKey: "building:scope-house"
+        };
+
+        map.updatePrototypeWorldScopeForMovementSupport(wizard, buildingSupport);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        assert.equal(map.getPrototypeBuildingPlacements()[0].loadState, "interior");
+        assert.ok(floorRegistrations > 0);
+        const registrationsAfterPromotion = floorRegistrations;
+
+        map.updatePrototypeWorldScopeForMovementSupport(wizard, buildingSupport);
+        map.updatePrototypeWorldScopeForMovementSupport(wizard, buildingSupport);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        assert.equal(floorRegistrations, registrationsAfterPromotion);
+    } finally {
+        if (previousWizard === undefined) {
+            delete globalThis.wizard;
+        } else {
+            globalThis.wizard = previousWizard;
+        }
+    }
 });
 
 test("building placements block walls and columns, not the whole base floor", () => {
@@ -694,6 +1212,108 @@ test("building placements register imported floor polygons and tread-path stairs
         assert.deepEqual(stairEntry.item.stair.lowerPoint, stair.lowerPoint);
         assert.deepEqual(stairEntry.item.stair.higherPoint, stair.higherPoint);
         assert.equal(stairEntry.item.stair.stepCount, stair.stepCount);
+    } finally {
+        if (previousPolygonHitbox === undefined) {
+            delete globalThis.PolygonHitbox;
+        } else {
+            globalThis.PolygonHitbox = previousPolygonHitbox;
+        }
+    }
+});
+
+test("building geometry sync materializes upper-floor nodes and rehomes stale floor objects", () => {
+    const previousPolygonHitbox = globalThis.PolygonHitbox;
+    globalThis.PolygonHitbox = TestPolygonHitbox;
+    try {
+        const map = createPrototypeNodeMap(6, 6, { materializeFloorNodes: false });
+        installBuildingFloorMaterializationTestApis(map);
+        buildings.installSectionWorldBuildingApis(map);
+        const placement = {
+            ...createPlacement("building:node-house"),
+            transform: { x: -130, y: 200, rotation: 0 },
+            touchedSectionKeys: ["far-section"]
+        };
+        map.initializePrototypeBuildingState([placement]);
+        map._prototypeBuildingState.buildingDataBySaveName.set(
+            placement.buildingSaveName,
+            createBuildingSaveWithUpperFloorBlockers()
+        );
+
+        const fragmentId = "building:node-house:floor:floor-1";
+        const surfaceId = "building:node-house:surface:floor-1";
+        const staleNode = {
+            xindex: 5,
+            yindex: 2,
+            x: -125.67,
+            y: 202,
+            traversalLayer: 1,
+            level: 1,
+            surfaceId,
+            fragmentId,
+            id: `5,2,${surfaceId},${fragmentId}`,
+            objects: [],
+            removeObject(obj) {
+                const index = this.objects.indexOf(obj);
+                if (index >= 0) this.objects.splice(index, 1);
+            }
+        };
+        const object = {
+            type: "furniture",
+            scriptingName: "upper-chair",
+            x: -126.1,
+            y: 202.4,
+            groundRadius: 0.7,
+            traversalLayer: 1,
+            level: 1,
+            fragmentId,
+            surfaceId,
+            _floorMembership: {
+                ownerType: "building",
+                ownerId: "building:node-house",
+                floorId: "floor-1",
+                level: 1
+            },
+            _indexedNodes: [staleNode],
+            node: staleNode,
+            setIndexedNodes(nodes, primaryNode) {
+                for (const previous of this._indexedNodes) {
+                    if (previous && typeof previous.removeObject === "function") previous.removeObject(this);
+                }
+                this._indexedNodes = nodes;
+                this.node = primaryNode;
+                for (const next of nodes) {
+                    if (next && typeof next.addObject === "function") next.addObject(this);
+                }
+            },
+            refreshIndexedNodesFromHitbox(options = {}) {
+                const baseNode = map.worldToNode(this.x, this.y);
+                const floorNode = map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, options.traversalLayer, {
+                    fragmentId: this.fragmentId,
+                    surfaceId: this.surfaceId
+                });
+                const indexedNode = floorNode || options.fallbackNode || null;
+                this.setIndexedNodes(indexedNode ? [indexedNode] : [], indexedNode);
+            }
+        };
+        staleNode.objects.push(object);
+        map.floorNodesById.set(fragmentId, [staleNode]);
+        map.floorNodeIndex.set(staleNode.id, staleNode);
+        map._prototypeObjectState = {
+            activeRuntimeObjectsByRecordId: new Map([[10, object]])
+        };
+        map._prototypeBuildingState.runtimeFloorFragmentIdsByPlacementId.set("building:node-house", [fragmentId]);
+
+        const stats = map.syncPrototypeBuildingGeometryRuntime();
+        const canonicalNode = object.node;
+
+        assert.ok(stats.floorNodes > 1);
+        assert.equal(stats.floorObjectsRehomed, 1);
+        assert.ok(canonicalNode);
+        assert.equal(canonicalNode.fragmentId, fragmentId);
+        assert.equal(map.floorNodeIndex.get(canonicalNode.id), canonicalNode);
+        assert.equal(canonicalNode.objects.includes(object), true);
+        assert.equal(staleNode.objects.includes(object), false);
+        assert.equal(canonicalNode.neighbors.some(Boolean), true);
     } finally {
         if (previousPolygonHitbox === undefined) {
             delete globalThis.PolygonHitbox;

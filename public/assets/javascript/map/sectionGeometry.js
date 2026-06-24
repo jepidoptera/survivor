@@ -96,17 +96,105 @@
         };
     }
 
+    function getSectionCenterWorldForCoord(state, sectionCoord) {
+        if (!state || !sectionCoord) return { x: 0, y: 0 };
+        const key = makeSectionKey(sectionCoord);
+        const existingSection = state.sectionsByKey instanceof Map ? state.sectionsByKey.get(key) : null;
+        if (existingSection && existingSection.centerWorld && typeof existingSection.centerWorld === "object") {
+            return {
+                x: Number(existingSection.centerWorld.x) || 0,
+                y: Number(existingSection.centerWorld.y) || 0
+            };
+        }
+        const basis = state.basis || getSectionBasisVectors(state.radius);
+        const anchorCenter = state.anchorCenter || { q: 0, r: 0 };
+        const centerAxial = computeSectionCenterAxial(sectionCoord, basis, anchorCenter);
+        return offsetToWorld(axialToEvenQOffset(centerAxial));
+    }
+
+    function addNearestSectionCandidate(candidates, state, coord, required) {
+        if (!coord) return;
+        const key = makeSectionKey(coord);
+        if (candidates.has(key)) {
+            if (required === true) candidates.get(key).required = true;
+            return;
+        }
+        candidates.set(key, {
+            key,
+            coord: {
+                q: Number(coord.q) || 0,
+                r: Number(coord.r) || 0
+            },
+            centerWorld: getSectionCenterWorldForCoord(state, coord),
+            required: required === true
+        });
+    }
+
+    function getNearestSectionKeysForWorldPosition(state, worldX, worldY, limit = 3, requiredKeys = null) {
+        if (!state) return new Set();
+        const maxKeys = Math.max(1, Math.floor(Number(limit) || 3));
+        const requiredKeySet = requiredKeys instanceof Set
+            ? requiredKeys
+            : new Set(Array.isArray(requiredKeys) ? requiredKeys.filter(key => typeof key === "string" && key.length > 0) : []);
+        const candidates = new Map();
+
+        if (state.sectionsByKey instanceof Map) {
+            state.sectionsByKey.forEach((section, key) => {
+                const coord = (section && section.coord && typeof section.coord === "object")
+                    ? section.coord
+                    : parseSectionKey(key);
+                addNearestSectionCandidate(candidates, state, coord, requiredKeySet.has(key));
+            });
+        }
+
+        requiredKeySet.forEach((key) => {
+            const coord = parseSectionKey(key);
+            addNearestSectionCandidate(candidates, state, coord, true);
+            for (let i = 0; i < SECTION_DIRECTIONS.length; i++) {
+                addNearestSectionCandidate(candidates, state, addSectionCoords(coord, SECTION_DIRECTIONS[i]), false);
+            }
+        });
+
+        if (candidates.size === 0) return new Set();
+        const x = Number(worldX) || 0;
+        const y = Number(worldY) || 0;
+        const ordered = Array.from(candidates.values()).sort((a, b) => {
+            const ar = a.required === true ? 0 : 1;
+            const br = b.required === true ? 0 : 1;
+            if (ar !== br) return ar - br;
+            const ad = Math.hypot(x - Number(a.centerWorld.x || 0), y - Number(a.centerWorld.y || 0));
+            const bd = Math.hypot(x - Number(b.centerWorld.x || 0), y - Number(b.centerWorld.y || 0));
+            if (ad !== bd) return ad - bd;
+            return String(a.key).localeCompare(String(b.key));
+        });
+
+        const keys = new Set();
+        for (let i = 0; i < ordered.length && keys.size < maxKeys; i++) {
+            keys.add(ordered[i].key);
+        }
+        return keys;
+    }
+
     function getBubbleKeysForCenter(state, centerKey) {
         if (!state || !(state.sectionsByKey instanceof Map) || !state.sectionsByKey.has(centerKey)) {
             return new Set();
         }
         const centerSection = state.sectionsByKey.get(centerKey);
-        const keys = new Set([centerKey]);
-        for (let i = 0; i < SECTION_DIRECTIONS.length; i++) {
-            const neighborCoord = addSectionCoords(centerSection.coord, SECTION_DIRECTIONS[i]);
-            keys.add(makeSectionKey(neighborCoord));
+        const limit = Math.max(1, Math.floor(Number(state.activeSectionLimit) || 3));
+        if (limit >= 7) {
+            const keys = new Set([centerKey]);
+            for (let i = 0; i < SECTION_DIRECTIONS.length; i++) {
+                const neighborCoord = addSectionCoords(centerSection.coord, SECTION_DIRECTIONS[i]);
+                keys.add(makeSectionKey(neighborCoord));
+            }
+            return keys;
         }
-        return keys;
+        const focus = Number.isFinite(state.bubbleFocusWorldX) && Number.isFinite(state.bubbleFocusWorldY)
+            ? { x: Number(state.bubbleFocusWorldX), y: Number(state.bubbleFocusWorldY) }
+            : (centerSection.centerWorld && typeof centerSection.centerWorld === "object"
+                ? centerSection.centerWorld
+                : getSectionCenterWorldForCoord(state, centerSection.coord));
+        return getNearestSectionKeysForWorldPosition(state, focus.x, focus.y, limit, [centerKey]);
     }
 
     function resolvePrototypeSectionCoordForWorldPosition(state, worldX, worldY) {
@@ -200,11 +288,13 @@
         getSectionStride,
         getSectionBasisVectors,
         computeSectionCenterAxial,
+        getSectionCenterWorldForCoord,
         estimateOffsetCoordFromWorld,
         resolvePrototypeSectionCoordForWorldPosition,
         makeSectionKey,
         parseSectionKey,
         addSectionCoords,
+        getNearestSectionKeysForWorldPosition,
         getBubbleKeysForCenter,
         getSectionHexagonCorners
     };

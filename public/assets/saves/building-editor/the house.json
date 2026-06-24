@@ -22,8 +22,6 @@
       "surfaceId": "floor-fragment-16",
       "ownerSectionKey": "",
       "name": "floor",
-      "level": 0,
-      "nodeBaseZOffset": 0,
       "nodeBaseZ": 0,
       "outerPolygon": [
         {
@@ -140,7 +138,6 @@
             2.8238124719587026
           ],
           "bottomZ": 0,
-          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/brick.jpg"
         },
         {
@@ -166,7 +163,6 @@
             2.885300018148837
           ],
           "bottomZ": 0,
-          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/brick.jpg"
         }
       ],
@@ -218,7 +214,7 @@
         {
           "type": "stairs",
           "id": 5,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-16",
           "startPoint": {
             "x": -0.6866669879826753,
@@ -362,8 +358,6 @@
       "surfaceId": "floor-fragment-26",
       "ownerSectionKey": "",
       "name": "floor",
-      "level": 1,
-      "nodeBaseZOffset": 1,
       "nodeBaseZ": 4,
       "outerPolygon": [
         {
@@ -471,7 +465,6 @@
       "thickness": 0.25,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -557,7 +550,6 @@
       "thickness": 0.25,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -643,7 +635,6 @@
       "thickness": 0.25,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -729,7 +720,6 @@
       "thickness": 0.25,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -815,26 +805,6 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
-        "generatedBy": {
-          "type": "roof",
-          "mode": "gabled",
-          "roofId": "roof-38",
-          "floorId": "floor-fragment-26",
-          "plane": {
-            "kind": "shedPlane",
-            "mode": "gabled",
-            "direction": {
-              "x": 0,
-              "y": -1
-            },
-            "minProjection": -8,
-            "maxProjection": 5.091907427798054,
-            "baseZ": 5.029,
-            "peakHeight": 5,
-            "clearance": 0.001
-          },
-          "originalHeight": 4
-        },
         "stations": [
           {
             "t": 0,
@@ -861,10 +831,29 @@
             "leftHeight": 1.888309467473996,
             "rightHeight": 1.888309467473996
           }
-        ]
+        ],
+        "generatedBy": {
+          "type": "roof",
+          "mode": "gabled",
+          "roofId": "roof-38",
+          "floorId": "floor-fragment-26",
+          "plane": {
+            "kind": "shedPlane",
+            "mode": "gabled",
+            "direction": {
+              "x": 0,
+              "y": -1
+            },
+            "minProjection": -8,
+            "maxProjection": 5.091907427798054,
+            "baseZ": 5.029,
+            "peakHeight": 5,
+            "clearance": 0.001
+          },
+          "originalHeight": 4
+        }
       },
       "bottomZ": 4,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -995,6 +984,18 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 1.7928306377546637,
+            "rightHeight": 1.9837882971933292
+          },
+          {
+            "t": 1,
+            "leftHeight": 1.7928306377546637,
+            "rightHeight": 1.9837882971933292
+          }
+        ],
         "generatedBy": {
           "type": "roof",
           "mode": "gabled",
@@ -1014,22 +1015,9 @@
             "clearance": 0.001
           },
           "originalHeight": 4
-        },
-        "stations": [
-          {
-            "t": 0,
-            "leftHeight": 1.7928306377546637,
-            "rightHeight": 1.9837882971933292
-          },
-          {
-            "t": 1,
-            "leftHeight": 1.7928306377546637,
-            "rightHeight": 1.9837882971933292
-          }
-        ]
+        }
       },
       "bottomZ": 4,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -1121,26 +1109,6 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
-        "generatedBy": {
-          "type": "roof",
-          "mode": "gabled",
-          "roofId": "roof-38",
-          "floorId": "floor-fragment-26",
-          "plane": {
-            "kind": "shedPlane",
-            "mode": "gabled",
-            "direction": {
-              "x": 0,
-              "y": -1
-            },
-            "minProjection": -8,
-            "maxProjection": 5.091907427798054,
-            "baseZ": 5.029,
-            "peakHeight": 5,
-            "clearance": 0.001
-          },
-          "originalHeight": 4
-        },
         "stations": [
           {
             "t": 0,
@@ -1167,10 +1135,29 @@
             "leftHeight": 1.9585111766633743,
             "rightHeight": 1.9585111766633743
           }
-        ]
+        ],
+        "generatedBy": {
+          "type": "roof",
+          "mode": "gabled",
+          "roofId": "roof-38",
+          "floorId": "floor-fragment-26",
+          "plane": {
+            "kind": "shedPlane",
+            "mode": "gabled",
+            "direction": {
+              "x": 0,
+              "y": -1
+            },
+            "minProjection": -8,
+            "maxProjection": 5.091907427798054,
+            "baseZ": 5.029,
+            "peakHeight": 5,
+            "clearance": 0.001
+          },
+          "originalHeight": 4
+        }
       },
       "bottomZ": 4,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -1301,6 +1288,18 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 1.863032346944041,
+            "rightHeight": 2.0539900063827066
+          },
+          {
+            "t": 1,
+            "leftHeight": 1.863032346944041,
+            "rightHeight": 2.0539900063827066
+          }
+        ],
         "generatedBy": {
           "type": "roof",
           "mode": "gabled",
@@ -1320,22 +1319,9 @@
             "clearance": 0.001
           },
           "originalHeight": 4
-        },
-        "stations": [
-          {
-            "t": 0,
-            "leftHeight": 1.863032346944041,
-            "rightHeight": 2.0539900063827066
-          },
-          {
-            "t": 1,
-            "leftHeight": 1.863032346944041,
-            "rightHeight": 2.0539900063827066
-          }
-        ]
+        }
       },
       "bottomZ": 4,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {

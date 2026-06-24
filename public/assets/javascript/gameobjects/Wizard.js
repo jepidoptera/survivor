@@ -250,7 +250,7 @@ class Wizard extends Character {
         super('human', location, 1, map, { useExternalScheduler: true });
         this.useExternalScheduler = true;
         this.useAStarPathfinding = true;
-        this.speed = 3;
+        this.speed = 3.75;
         this.roadSpeedMultiplier = 1.3;
         this.backwardSpeedMultiplier = 0.667; // Configurable backward movement speed
         this.frameRate = 60;
@@ -306,6 +306,9 @@ class Wizard extends Character {
         // Road placement state
         this.roadLayoutMode = false;
         this.roadStartPoint = null;
+        this.roadPathDraft = null;
+        this.selectedRoadPath = null;
+        this.roadPathEditDrag = null;
         this.phantomRoad = null;
         
         // Firewall placement state
@@ -345,6 +348,7 @@ class Wizard extends Character {
         this.jumpPolyC = 0;
         this.jumpHeight = 0;
         this._doorTraversalStateById = new Map();
+        this._pendingSavedFloorMovementSupport = null;
         this.jumpLockedMovingBackward = false;
         this.isMovingBackward = false;
         const initialTraversalLayer = Number.isFinite(this.traversalLayer)
@@ -361,9 +365,16 @@ class Wizard extends Character {
             },
             set: (value) => {
                 const normalized = Number.isFinite(value) ? Math.round(Number(value)) : 0;
+                const previousLayer = Number.isFinite(this.currentLayer)
+                    ? Math.round(Number(this.currentLayer))
+                    : (Number.isFinite(this.traversalLayer) ? Math.round(Number(this.traversalLayer)) : null);
+                const previousBaseZ = Number.isFinite(this.currentLayerBaseZ) ? Number(this.currentLayerBaseZ) : null;
                 this.currentLayer = normalized;
                 this.traversalLayer = normalized;
-                let layerBaseZ = normalized * 3;
+                let layerBaseZ = normalized === 0 ? 0 : null;
+                if (previousLayer === normalized && Number.isFinite(previousBaseZ)) {
+                    layerBaseZ = previousBaseZ;
+                }
                 const nodeLayer = Number.isFinite(this.node && this.node.traversalLayer)
                     ? Math.round(Number(this.node.traversalLayer))
                     : (Number.isFinite(this.node && this.node.level) ? Math.round(Number(this.node.level)) : null);
@@ -372,6 +383,9 @@ class Wizard extends Character {
                     if (Number.isFinite(nodeZ)) {
                         layerBaseZ = Number(nodeZ);
                     }
+                }
+                if (!Number.isFinite(layerBaseZ)) {
+                    throw new Error(`wizard selectedFloorEditLevel ${normalized} requires a node standing Z`);
                 }
                 this.currentLayerBaseZ = layerBaseZ;
             }
@@ -545,11 +559,17 @@ class Wizard extends Character {
     }
 
     updateJump(dtSec) {
-        const supportZ = (
-            this._stairSupport &&
-            typeof this._stairSupport === "object" &&
-            Number.isFinite(this._stairSupport.localZ)
-        ) ? Number(this._stairSupport.localZ) : 0;
+        this._jumpEndedThisFrame = false;
+        const support = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        const supportZ = support && support.type === "stair"
+            ? (
+                Number.isFinite(Number(support.continuousLocalZ))
+                    ? Number(support.continuousLocalZ)
+                    : (Number.isFinite(Number(support.localZ)) ? Number(support.localZ) : 0)
+            )
+            : 0;
         if (typeof this.isFrozen === "function" && this.isFrozen()) {
             this.z = supportZ + (Number.isFinite(this.jumpHeight) ? this.jumpHeight : Math.max(0, Number(this.z) || 0));
             return;
@@ -579,6 +599,7 @@ class Wizard extends Character {
             this.jumpMode = "single";
             this.jumpLockedMovingBackward = false;
             this.z = supportZ;
+            this._jumpEndedThisFrame = true;
         }
     }
     startTripleJump() {
@@ -810,12 +831,88 @@ class Wizard extends Character {
     }
 
     isOnRoad() {
-        const node = this.map.worldToNode(this.x, this.y);
-        if (!node || !node.objects) return false;
-        if (node.objects.some(obj => obj.type === "road")) {
-            return true;
-        }
+        if (!this.map || typeof this.map.worldToNode !== "function") return false;
+        const movementLayer = typeof this.getCurrentMovementLayer === "function"
+            ? this.getCurrentMovementLayer()
+            : (Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0);
+        const wizardRadius = Number.isFinite(this.groundRadius) ? Math.max(0, Number(this.groundRadius)) : 0;
+        const wizardRoadHitbox = {
+            type: "circle",
+            x: Number(this.x) || 0,
+            y: Number(this.y) || 0,
+            radius: wizardRadius
+        };
+        const getNodeLayer = (node) => Number.isFinite(node && node.traversalLayer)
+            ? Math.round(Number(node.traversalLayer))
+            : (Number.isFinite(node && node.level) ? Math.round(Number(node.level)) : 0);
+        const objectMatchesLayer = (obj, node) => {
+            const objLayer = Number.isFinite(obj && obj.traversalLayer)
+                ? Math.round(Number(obj.traversalLayer))
+                : (Number.isFinite(obj && obj.level) ? Math.round(Number(obj.level)) : getNodeLayer(node));
+            return objLayer === movementLayer;
+        };
+        const roadHitboxTouchesWizard = (hitbox) => {
+            if (!hitbox) return false;
+            if (typeof hitbox.containsPoint === "function" && hitbox.containsPoint(this.x, this.y)) return true;
+            if (typeof hitbox.intersects === "function") return !!hitbox.intersects(wizardRoadHitbox);
+            return false;
+        };
+        const isRoadObjectUnderWizard = (obj, node) => {
+            if (!obj || obj.gone || obj.vanishing) return false;
+            if (!objectMatchesLayer(obj, node)) return false;
+            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || null;
+            if (obj.type === "road") return roadHitboxTouchesWizard(hitbox);
+            if (obj.type === "roadPath") return roadHitboxTouchesWizard(hitbox);
+            return false;
+        };
+        const seenObjects = new Set();
+        const testNode = (rawNode) => {
+            const node = movementLayer !== 0 && typeof this.resolveNodeForMovementLayer === "function"
+                ? this.resolveNodeForMovementLayer(rawNode)
+                : rawNode;
+            if (!node || !Array.isArray(node.objects)) return false;
+            if (getNodeLayer(node) !== movementLayer) return false;
+            for (let i = 0; i < node.objects.length; i++) {
+                const obj = node.objects[i];
+                if (seenObjects.has(obj)) continue;
+                seenObjects.add(obj);
+                if (isRoadObjectUnderWizard(obj, node)) return true;
+            }
+            return false;
+        };
 
+        const padding = Math.max(1.5, wizardRadius + 0.75);
+        const searchNodes = typeof this.getVectorMovementSearchNodes === "function"
+            ? this.getVectorMovementSearchNodes(this.x, this.y, padding)
+            : [this.map.worldToNode(this.x, this.y)];
+        if (searchNodes.length > 0) {
+            const xIndices = searchNodes.map(node => Number(node && node.xindex)).filter(Number.isFinite);
+            const yIndices = searchNodes.map(node => Number(node && node.yindex)).filter(Number.isFinite);
+            if (
+                xIndices.length > 0 &&
+                yIndices.length > 0 &&
+                typeof this.map.getNodesInIndexWindow === "function"
+            ) {
+                const nearbyNodes = this.map.getNodesInIndexWindow(
+                    Math.min(...xIndices) - 1,
+                    Math.max(...xIndices) + 1,
+                    Math.min(...yIndices) - 1,
+                    Math.max(...yIndices) + 1
+                );
+                for (let i = 0; i < nearbyNodes.length; i++) {
+                    if (testNode(nearbyNodes[i])) return true;
+                }
+                if (nearbyNodes.length > 0) return false;
+            }
+            for (let i = 0; i < searchNodes.length; i++) {
+                const node = searchNodes[i];
+                if (testNode(node)) return true;
+                const neighbors = Array.isArray(node && node.neighbors) ? node.neighbors : [];
+                for (let n = 0; n < neighbors.length; n++) {
+                    if (testNode(neighbors[n])) return true;
+                }
+            }
+        }
         return false;
     }
 
@@ -902,6 +999,19 @@ class Wizard extends Character {
         const applied = Math.max(0, prevHp - this.hp);
         if (typeof this.updateStatusBars === "function") {
             this.updateStatusBars();
+        }
+        if (applied > 0 && this.hp <= 0 && !this.dead) {
+            if (
+                typeof this.isAdventureMode === "function" &&
+                this.isAdventureMode() &&
+                typeof this.updateAdventureDeathState === "function"
+            ) {
+                this.updateAdventureDeathState();
+            } else if (typeof this.die === "function") {
+                this.die();
+            } else {
+                this.dead = true;
+            }
         }
         return applied;
     }
@@ -1116,16 +1226,23 @@ class Wizard extends Character {
         if (!obj || obj === this || obj.gone || !obj.groundPlaneHitbox) return false;
         if (!doesObjectBlockWizardMovement(obj)) return false;
 
-        const wizardLayerBaseZ = Number.isFinite(this.currentLayerBaseZ)
-            ? Number(this.currentLayerBaseZ)
-            : ((Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0) * 3);
+        if (!Number.isFinite(this.currentLayerBaseZ)) {
+            throw new Error("wizard vector movement requires currentLayerBaseZ");
+        }
+        const wizardLayerBaseZ = Number(this.currentLayerBaseZ);
         const wizardWorldZ = wizardLayerBaseZ + (Number.isFinite(this.z) ? Number(this.z) : 0);
         if (wizardWorldZ > 0) {
+            const objLayerBaseZ = Number.isFinite(obj.currentLayerBaseZ)
+                ? Number(obj.currentLayerBaseZ)
+                : (Number.isFinite(obj._renderLayerBaseZ)
+                    ? Number(obj._renderLayerBaseZ)
+                    : (Number.isFinite(obj._floorBaseZ) ? Number(obj._floorBaseZ) : null));
             const objBottomZ = Number.isFinite(obj.bottomZ)
                 ? Number(obj.bottomZ)
-                : ((Number.isFinite(obj.traversalLayer)
-                    ? Math.round(Number(obj.traversalLayer))
-                    : (Number.isFinite(obj.level) ? Math.round(Number(obj.level)) : 0)) * 3);
+                : (Number.isFinite(objLayerBaseZ) ? objLayerBaseZ + (Number.isFinite(obj.z) ? Number(obj.z) : 0) : null);
+            if (!Number.isFinite(objBottomZ)) {
+                throw new Error(`wizard vector movement object ${obj.id || obj.name || obj.type || "(unknown)"} requires bottomZ or currentLayerBaseZ`);
+            }
             const objHeight = Number.isFinite(obj.height) ? Number(obj.height) : 0;
             const objTopZ = objBottomZ + objHeight;
             if (objTopZ > 0 && wizardWorldZ >= objTopZ) {
@@ -1137,6 +1254,17 @@ class Wizard extends Character {
     }
 
     prepareVectorMovementContext(newX, newY, radius, options = {}) {
+        const movementPerfEnabled = typeof globalThis !== "undefined" &&
+            globalThis.movementPerfBreakdownState &&
+            globalThis.movementPerfBreakdownState.enabled === true &&
+            typeof globalThis.recordMovementPerfSection === "function";
+        const movementPerfNow = () => movementPerfEnabled ? performance.now() : 0;
+        const movementPerfRecord = (name, startMs) => {
+            if (!movementPerfEnabled) return;
+            globalThis.recordMovementPerfSection(name, performance.now() - startMs);
+        };
+        const movementTotalStartMs = movementPerfNow();
+        let movementSectionStartMs = movementTotalStartMs;
         const scriptingApi = (typeof Scripting !== "undefined" && Scripting)
             ? Scripting
             : ((typeof globalThis !== "undefined" && globalThis.Scripting) ? globalThis.Scripting : null);
@@ -1182,6 +1310,7 @@ class Wizard extends Character {
                 ? Math.round(Number(node.traversalLayer))
                 : (Number.isFinite(node && node.level) ? Math.round(Number(node.level)) : 0)
         );
+        movementSectionStartMs = movementPerfNow();
         if (searchNodes.length > 0) {
             const xIndices = searchNodes.map(node => Number(node.xindex));
             const yIndices = searchNodes.map(node => Number(node.yindex));
@@ -1241,6 +1370,7 @@ class Wizard extends Character {
                 }
             }
         }
+        movementPerfRecord("wizard.prepareContext.nodeScan", movementSectionStartMs);
 
         if (this.map && typeof this.map.collectPrototypeBuildingMovementBlockersInBounds === "function") {
             const currentX = Number.isFinite(Number(this.x)) ? Number(this.x) : newX;
@@ -1251,7 +1381,10 @@ class Wizard extends Character {
                 maxX: Math.max(currentX, newX) + padding,
                 maxY: Math.max(currentY, newY) + padding
             };
+            movementSectionStartMs = movementPerfNow();
             const prototypeBlockers = this.map.collectPrototypeBuildingMovementBlockersInBounds(queryBounds, wizardLayer);
+            movementPerfRecord("wizard.prepareContext.buildingBlockerCollect", movementSectionStartMs);
+            movementSectionStartMs = movementPerfNow();
             for (let i = 0; i < prototypeBlockers.length; i++) {
                 const obj = prototypeBlockers[i];
                 if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
@@ -1259,6 +1392,7 @@ class Wizard extends Character {
                 nearbyObjectSet.add(obj);
                 nearbyObjects.push(obj);
             }
+            movementPerfRecord("wizard.prepareContext.buildingBlockerFilter", movementSectionStartMs);
         }
 
         if (this.map && typeof this.map.collectStairFootprintMovementBlockersInBounds === "function") {
@@ -1270,7 +1404,10 @@ class Wizard extends Character {
                 maxX: Math.max(currentX, newX) + padding,
                 maxY: Math.max(currentY, newY) + padding
             };
+            movementSectionStartMs = movementPerfNow();
             const stairBlockers = this.map.collectStairFootprintMovementBlockersInBounds(queryBounds, this, options);
+            movementPerfRecord("wizard.prepareContext.stairBlockerCollect", movementSectionStartMs);
+            movementSectionStartMs = movementPerfNow();
             for (let i = 0; i < stairBlockers.length; i++) {
                 const obj = stairBlockers[i];
                 if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
@@ -1278,8 +1415,10 @@ class Wizard extends Character {
                 nearbyObjectSet.add(obj);
                 nearbyObjects.push(obj);
             }
+            movementPerfRecord("wizard.prepareContext.stairBlockerFilter", movementSectionStartMs);
         }
 
+        movementPerfRecord("wizard.prepareContext.total", movementTotalStartMs);
         return {
             nearbyObjects,
             nearbyCharacters: options.includeCharacterBlockers === true
@@ -1389,9 +1528,10 @@ class Wizard extends Character {
     drawHat(interpolatedJumpHeight = null, interpolatedWorldPosition = null) {
         // Recalculate screen position from world coordinates
         const renderWorld = interpolatedWorldPosition || this.getInterpolatedPosition();
-        const layerBaseZ = Number.isFinite(this.currentLayerBaseZ)
-            ? Number(this.currentLayerBaseZ)
-            : ((Number.isFinite(this.currentLayer) ? Number(this.currentLayer) : 0) * 3);
+        if (!Number.isFinite(this.currentLayerBaseZ)) {
+            throw new Error("wizard hat rendering requires currentLayerBaseZ");
+        }
+        const layerBaseZ = Number(this.currentLayerBaseZ);
         const screenCoors = worldToScreen({ x: renderWorld.x, y: renderWorld.y, z: layerBaseZ });
         let wizardScreenX = screenCoors.x;
         const jumpHeightForRender = Number.isFinite(interpolatedJumpHeight)
@@ -1494,9 +1634,10 @@ class Wizard extends Character {
         const cameraX = Number.isFinite(viewport && viewport.x) ? Number(viewport.x) : Number(renderWorld.x) || 0;
         const cameraY = Number.isFinite(viewport && viewport.y) ? Number(viewport.y) : Number(renderWorld.y) || 0;
         const scale = Math.max(0.65, Number(this.visualRadius) || 0.5) * 0.95;
-        const layerBaseZ = Number.isFinite(this.currentLayerBaseZ)
-            ? Number(this.currentLayerBaseZ)
-            : ((Number.isFinite(this.currentLayer) ? Number(this.currentLayer) : 0) * 3);
+        if (!Number.isFinite(this.currentLayerBaseZ)) {
+            throw new Error("wizard shield rendering requires currentLayerBaseZ");
+        }
+        const layerBaseZ = Number(this.currentLayerBaseZ);
         const jumpZ = Number.isFinite(interpolatedJumpHeight) ? interpolatedJumpHeight : (Number(renderWorld.z) || 0);
         const centerZ = layerBaseZ + 0.45 + (jumpZ * 0.55);
         const edgeThicknessPx = Math.max(1.25, (Number(viewscale) || 1) * 0.016);
@@ -1715,6 +1856,45 @@ class Wizard extends Character {
         $("#magicBar").css('width', (magicRatio * 100) + '%');
         this.updateModeToggleUi();
     }
+
+    isGeneratedOutdoorGroundFloorFragmentId(fragmentId) {
+        return typeof fragmentId === "string" &&
+            fragmentId.startsWith("section:") &&
+            fragmentId.endsWith(":ground");
+    }
+
+    isGeneratedOutdoorGroundFloorFragment(fragment) {
+        if (!fragment || typeof fragment !== "object") return false;
+        const layer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+        if (layer !== 0) return false;
+        if (fragment.ownerType === "building") return false;
+        const fragmentId = typeof fragment.fragmentId === "string" ? fragment.fragmentId : "";
+        return fragment._prototypeGroundFloor === true ||
+            this.isGeneratedOutdoorGroundFloorFragmentId(fragmentId);
+    }
+
+    resolveMovementSupportFragment(support) {
+        if (!support || typeof support !== "object") return null;
+        if (support.fragment && typeof support.fragment === "object") return support.fragment;
+        const fragmentId = typeof support.fragmentId === "string" ? support.fragmentId : "";
+        if (!fragmentId || !this.map || !(this.map.floorsById instanceof Map)) return null;
+        return this.map.floorsById.get(fragmentId) || null;
+    }
+
+    shouldPersistFloorMovementFragment(fragment, fragmentId, layer) {
+        const targetLayer = Number.isFinite(layer) ? Math.round(Number(layer)) : 0;
+        if (targetLayer !== 0) return true;
+        if (this.isGeneratedOutdoorGroundFloorFragment(fragment)) return false;
+        if (!fragment && this.isGeneratedOutdoorGroundFloorFragmentId(fragmentId)) return false;
+        return true;
+    }
+
+    validateSavedFloorMovementFragment(fragment, fragmentId) {
+        if (!fragment || !this.map || typeof this.map.isPointSupportedByFloorFragment !== "function") return;
+        if (!this.map.isPointSupportedByFloorFragment(fragment, this.x, this.y)) {
+            throw new Error(`wizard save point is outside active floor fragment ${fragmentId || "(unknown)"}`);
+        }
+    }
     
     getSavedMovementLayerState() {
         const out = {};
@@ -1722,8 +1902,39 @@ class Wizard extends Character {
         if (Number.isFinite(this.currentLayer)) out.currentLayer = Math.round(Number(this.currentLayer));
         if (Number.isFinite(this.traversalLayer)) out.traversalLayer = Math.round(Number(this.traversalLayer));
         if (Number.isFinite(this.currentLayerBaseZ)) out.currentLayerBaseZ = Number(this.currentLayerBaseZ);
-        if (typeof this.surfaceId === "string" && this.surfaceId.length > 0) out.surfaceId = this.surfaceId;
-        if (typeof this.fragmentId === "string" && this.fragmentId.length > 0) out.fragmentId = this.fragmentId;
+        const support = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        if (support && support.type === "ground") return out;
+        if (support && support.type === "stair") return out;
+        const layer = Number.isFinite(out.currentLayer) ? out.currentLayer : 0;
+        const supportFragment = support && support.type === "floor"
+            ? this.resolveMovementSupportFragment(support)
+            : null;
+        const supportFragmentId = support && support.type === "floor" && typeof support.fragmentId === "string"
+            ? support.fragmentId
+            : "";
+        if (support && support.type === "floor") {
+            const fragmentId = supportFragmentId ||
+                (supportFragment && typeof supportFragment.fragmentId === "string" ? supportFragment.fragmentId : "");
+            if (!this.shouldPersistFloorMovementFragment(supportFragment, fragmentId, layer)) return out;
+            this.validateSavedFloorMovementFragment(supportFragment, fragmentId);
+            const surfaceId = typeof support.surfaceId === "string" && support.surfaceId.length > 0
+                ? support.surfaceId
+                : (supportFragment && typeof supportFragment.surfaceId === "string" ? supportFragment.surfaceId : "");
+            if (surfaceId) out.surfaceId = surfaceId;
+            if (fragmentId) out.fragmentId = fragmentId;
+            return out;
+        }
+        const rawFragmentId = typeof this.fragmentId === "string" && this.fragmentId.length > 0 ? this.fragmentId : "";
+        const rawSurfaceId = typeof this.surfaceId === "string" && this.surfaceId.length > 0 ? this.surfaceId : "";
+        const rawFragment = rawFragmentId && this.map && this.map.floorsById instanceof Map
+            ? this.map.floorsById.get(rawFragmentId) || null
+            : null;
+        if (!this.shouldPersistFloorMovementFragment(rawFragment, rawFragmentId, layer)) return out;
+        this.validateSavedFloorMovementFragment(rawFragment, rawFragmentId);
+        if (rawSurfaceId) out.surfaceId = rawSurfaceId;
+        if (rawFragmentId) out.fragmentId = rawFragmentId;
         return out;
     }
 
@@ -1760,15 +1971,203 @@ class Wizard extends Character {
     }
 
     getSavedStairSupportState() {
-        if (!this._stairSupport) return null;
-        return this.normalizeSavedStairSupportRecord(this._stairSupport, "wizard active stair support");
+        const support = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        if (support && support.type === "stair") {
+            return this.normalizeSavedStairSupportRecord(support, "wizard active stair support");
+        }
+        const stairSupport = this._stairSupport && typeof this._stairSupport === "object"
+            ? this._stairSupport
+            : null;
+        if (!stairSupport) return null;
+        return this.normalizeSavedStairSupportRecord(stairSupport, "wizard active stair support");
+    }
+
+    normalizeSavedFloorMovementSupportRecord(record, label = "wizard floor support") {
+        if (!record || typeof record !== "object" || Array.isArray(record)) {
+            throw new Error(`${label} must be an object`);
+        }
+        const x = Number(record.x);
+        const y = Number(record.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error(`${label} is missing finite x/y`);
+        }
+        const currentLayer = Number.isFinite(record.currentLayer)
+            ? Math.round(Number(record.currentLayer))
+            : (Number.isFinite(record.traversalLayer) ? Math.round(Number(record.traversalLayer)) : 0);
+        if (!Number.isFinite(record.currentLayerBaseZ)) {
+            throw new Error(`${label} is missing finite currentLayerBaseZ`);
+        }
+        const baseZ = Number(record.currentLayerBaseZ);
+        const out = {
+            x,
+            y,
+            z: Number.isFinite(record.z) ? Number(record.z) : 0,
+            currentLayer,
+            traversalLayer: Number.isFinite(record.traversalLayer) ? Math.round(Number(record.traversalLayer)) : currentLayer,
+            currentLayerBaseZ: baseZ,
+            surfaceId: typeof record.surfaceId === "string" ? record.surfaceId : "",
+            fragmentId: typeof record.fragmentId === "string" ? record.fragmentId : ""
+        };
+        return out;
     }
 
     hasPendingSavedMovementSupport() {
-        return !!(this._pendingSavedStairSupport && typeof this._pendingSavedStairSupport === "object");
+        return !!(
+            (this._pendingSavedStairSupport && typeof this._pendingSavedStairSupport === "object") ||
+            (this._pendingSavedFloorMovementSupport && typeof this._pendingSavedFloorMovementSupport === "object")
+        );
+    }
+
+    resolveSavedFloorMovementSupport(record, options = {}) {
+        const deferIfMissing = options && options.deferIfMissing === true;
+        if (!this.map || typeof this.map.setActorCurrentMovementSupport !== "function") {
+            if (deferIfMissing) return null;
+            throw new Error("wizard save references floor support before movement support APIs are available");
+        }
+        const targetLayer = Number.isFinite(record.currentLayer) ? Math.round(Number(record.currentLayer)) : 0;
+        const x = Number(record.x);
+        const y = Number(record.y);
+        const savedFragmentId = typeof record.fragmentId === "string" ? record.fragmentId : "";
+        const savedSurfaceId = typeof record.surfaceId === "string" ? record.surfaceId : "";
+        const savedGeneratedGroundId = targetLayer === 0 && this.isGeneratedOutdoorGroundFloorFragmentId(savedFragmentId);
+        const createGroundSupport = () => ({
+            type: "ground",
+            layer: 0,
+            baseZ: 0,
+            node: typeof this.map.worldToNode === "function" ? this.map.worldToNode(x, y) : null
+        });
+        const warnGeneratedGroundRecovery = (reason) => {
+            if (typeof console !== "undefined" && typeof console.warn === "function") {
+                console.warn("[Wizard] saved generated outdoor ground fragment restored as ground support", {
+                    fragmentId: savedFragmentId,
+                    reason,
+                    x,
+                    y
+                });
+            }
+        };
+        let support = null;
+        if (typeof this.map.getFloorSupportAtWorldPosition === "function") {
+            support = this.map.getFloorSupportAtWorldPosition(x, y, targetLayer) || null;
+        }
+        const supportFragmentId = support && typeof support.fragmentId === "string" ? support.fragmentId : "";
+        if (support && savedGeneratedGroundId) {
+            const supportFragment = this.resolveMovementSupportFragment(support);
+            if (this.isGeneratedOutdoorGroundFloorFragment(supportFragment) ||
+                (!supportFragment && this.isGeneratedOutdoorGroundFloorFragmentId(supportFragmentId))) {
+                support = createGroundSupport();
+            }
+        } else if (support && savedFragmentId && supportFragmentId !== savedFragmentId) {
+            support = null;
+        }
+        if (!support && savedFragmentId) {
+            const fragment = this.map.floorsById instanceof Map
+                ? this.map.floorsById.get(savedFragmentId) || null
+                : null;
+            if (!fragment) {
+                if (savedGeneratedGroundId) {
+                    warnGeneratedGroundRecovery("missing generated ground fragment");
+                    support = createGroundSupport();
+                }
+            }
+            if (!support && !fragment) {
+                if (deferIfMissing) return null;
+                throw new Error(`wizard save references missing floor fragment ${savedFragmentId}`);
+            }
+            if (!support && fragment) {
+                const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+                if (fragmentLayer !== targetLayer) {
+                    throw new Error(`wizard save floor fragment ${savedFragmentId} is on layer ${fragmentLayer}, not saved layer ${targetLayer}`);
+                }
+                if (savedGeneratedGroundId && this.isGeneratedOutdoorGroundFloorFragment(fragment)) {
+                    if (typeof this.map.isPointSupportedByFloorFragment === "function" &&
+                        !this.map.isPointSupportedByFloorFragment(fragment, x, y)) {
+                        warnGeneratedGroundRecovery("saved point outside generated ground fragment");
+                    }
+                    support = createGroundSupport();
+                }
+                if (!support && typeof this.map.isPointSupportedByFloorFragment === "function" &&
+                    !this.map.isPointSupportedByFloorFragment(fragment, x, y)) {
+                    throw new Error(`wizard save point is outside saved floor fragment ${savedFragmentId}`);
+                }
+                if (!support) {
+                    const baseNode = typeof this.map.worldToNode === "function" ? this.map.worldToNode(x, y) : null;
+                    let node = baseNode;
+                    if (baseNode && typeof this.map.getFloorNodeAtLayer === "function") {
+                        node = this.map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, targetLayer, {
+                            fragmentId: savedFragmentId,
+                            surfaceId: savedSurfaceId || (typeof fragment.surfaceId === "string" ? fragment.surfaceId : ""),
+                            sectionKey: typeof fragment.ownerSectionKey === "string" ? fragment.ownerSectionKey : "",
+                            worldX: x,
+                            worldY: y,
+                            allowScan: true
+                        }) || baseNode;
+                    }
+                    support = {
+                        type: "floor",
+                        layer: targetLayer,
+                        baseZ: Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : Number(record.currentLayerBaseZ),
+                        fragment,
+                        fragmentId: savedFragmentId,
+                        surfaceId: savedSurfaceId || (typeof fragment.surfaceId === "string" ? fragment.surfaceId : ""),
+                        node
+                    };
+                }
+            }
+        }
+        if (!support && targetLayer === 0 && !savedFragmentId) {
+            support = createGroundSupport();
+        }
+        if (!support) {
+            if (deferIfMissing) return null;
+            throw new Error(`wizard save could not resolve floor support for layer ${targetLayer}`);
+        }
+        if (targetLayer !== 0 && support.type !== "floor") {
+            throw new Error(`wizard save resolved layer ${targetLayer} to non-floor support`);
+        }
+        if (savedFragmentId && !savedGeneratedGroundId && support.type === "floor") {
+            const resolvedFragmentId = typeof support.fragmentId === "string" ? support.fragmentId : "";
+            if (resolvedFragmentId !== savedFragmentId) {
+                throw new Error(`wizard save restored floor ${savedFragmentId} to ${resolvedFragmentId || "no floor fragment"}`);
+            }
+        }
+        return support;
+    }
+
+    restoreSavedFloorMovementSupport(options = {}) {
+        const pending = this._pendingSavedFloorMovementSupport && typeof this._pendingSavedFloorMovementSupport === "object"
+            ? this._pendingSavedFloorMovementSupport
+            : null;
+        if (!pending) return null;
+        const support = this.resolveSavedFloorMovementSupport(pending, options);
+        if (!support) return null;
+        let resolvedX = Number(pending.x);
+        let resolvedY = Number(pending.y);
+        if (this.map && typeof this.map.wrapWorldX === "function") resolvedX = this.map.wrapWorldX(resolvedX);
+        if (this.map && typeof this.map.wrapWorldY === "function") resolvedY = this.map.wrapWorldY(resolvedY);
+        this.x = resolvedX;
+        this.y = resolvedY;
+        const savedLocalZ = Number.isFinite(pending.z) ? Number(pending.z) : 0;
+        const applied = this.map.setActorCurrentMovementSupport(this, support, { suppressLayerTransition: true });
+        if (!applied || applied.type !== support.type) {
+            throw new Error("wizard save restored to invalid movement support");
+        }
+        this.z = savedLocalZ;
+        this._pendingSavedFloorMovementSupport = null;
+        this.prevX = this.x;
+        this.prevY = this.y;
+        this.prevZ = this.z;
+        if (typeof this.updateHitboxes === "function") this.updateHitboxes();
+        return applied;
     }
 
     restoreSavedMovementSupport(options = {}) {
+        if (this._pendingSavedFloorMovementSupport && typeof this._pendingSavedFloorMovementSupport === "object") {
+            const floorSupport = this.restoreSavedFloorMovementSupport(options);
+            if (floorSupport) return floorSupport;
+        }
         const pending = this._pendingSavedStairSupport && typeof this._pendingSavedStairSupport === "object"
             ? this._pendingSavedStairSupport
             : null;
@@ -1783,6 +2182,7 @@ class Wizard extends Character {
             throw new Error(`wizard save references missing stair ${pending.stairId}`);
         }
 
+        this.currentMovementSupport = { type: "stair", ...pending };
         this._stairSupport = { ...pending };
         const support = this.map.getActorStairSupportFromState(this);
         if (!support || support.type !== "stair") {
@@ -1924,14 +2324,39 @@ class Wizard extends Character {
         if (Number.isFinite(data.currentLayer)) this.currentLayer = Math.round(Number(data.currentLayer));
         if (Number.isFinite(data.traversalLayer)) this.traversalLayer = Math.round(Number(data.traversalLayer));
         if (Number.isFinite(data.currentLayerBaseZ)) this.currentLayerBaseZ = Number(data.currentLayerBaseZ);
-        if (typeof data.surfaceId === "string") this.surfaceId = data.surfaceId;
-        if (typeof data.fragmentId === "string") this.fragmentId = data.fragmentId;
+        const loadedLayer = Number.isFinite(this.currentLayer)
+            ? Math.round(Number(this.currentLayer))
+            : (Number.isFinite(this.traversalLayer) ? Math.round(Number(this.traversalLayer)) : 0);
+        const loadedSurfaceId = typeof data.surfaceId === "string" ? data.surfaceId : "";
+        const loadedFragmentId = typeof data.fragmentId === "string" ? data.fragmentId : "";
+        if (loadedLayer === 0 && this.isGeneratedOutdoorGroundFloorFragmentId(loadedFragmentId)) {
+            this.surfaceId = "";
+            this.fragmentId = "";
+        } else {
+            this.surfaceId = loadedSurfaceId;
+            this.fragmentId = loadedFragmentId;
+        }
         this._stairSupport = null;
         this._pendingSavedStairSupport = null;
+        this._pendingSavedFloorMovementSupport = null;
         if (Object.prototype.hasOwnProperty.call(data, "stairSupport") && data.stairSupport !== null) {
             const stairSupport = this.normalizeSavedStairSupportRecord(data.stairSupport, "saved wizard stair support");
+            this.currentMovementSupport = { type: "stair", ...stairSupport };
             this._stairSupport = { ...stairSupport };
             this._pendingSavedStairSupport = { ...stairSupport };
+        } else {
+            this._pendingSavedFloorMovementSupport = this.normalizeSavedFloorMovementSupportRecord({
+                ...data,
+                x: this.x,
+                y: this.y,
+                z: this.z,
+                currentLayer: this.currentLayer,
+                traversalLayer: this.traversalLayer,
+                currentLayerBaseZ: this.currentLayerBaseZ,
+                surfaceId: this.surfaceId,
+                fragmentId: this.fragmentId
+            }, "saved wizard floor support");
+            this.restoreSavedFloorMovementSupport({ deferIfMissing: true });
         }
         if (data.hp !== undefined) this.hp = data.hp;
         if (data.maxHp !== undefined) this.maxHp = data.maxHp;
@@ -2062,13 +2487,29 @@ class Wizard extends Character {
         this.node = this.map.worldToNode(this.x, this.y) || this.node;
         this.updateHitboxes();
 
+        if (
+            typeof viewport === "undefined" ||
+            !viewport ||
+            typeof viewport !== "object" ||
+            !Number.isFinite(Number(viewport.width)) ||
+            Number(viewport.width) <= 0 ||
+            !Number.isFinite(Number(viewport.height)) ||
+            Number(viewport.height) <= 0
+        ) {
+            throw new Error("wizard load requires finite viewport dimensions before camera restore");
+        }
+
         if (data.viewport && Number.isFinite(data.viewport.x) && Number.isFinite(data.viewport.y)) {
             viewport.x = data.viewport.x;
             viewport.y = data.viewport.y;
             viewport.prevX = viewport.x;
             viewport.prevY = viewport.y;
         } else {
-            centerViewport(this, 0, 0);
+            viewport.x = this.x - viewport.width * 0.5;
+            viewport.y = this.y - viewport.height * 0.5;
+            if (!Number.isFinite(viewport.x) || !Number.isFinite(viewport.y)) {
+                throw new Error("wizard load could not center missing saved viewport");
+            }
             viewport.prevX = viewport.x;
             viewport.prevY = viewport.y;
         }
@@ -2093,6 +2534,14 @@ class Wizard extends Character {
             const centerY = viewport.y + viewport.height * 0.5;
             const nearestCenterX = this.x + this.map.shortestDeltaX(this.x, centerX);
             const nearestCenterY = this.y + this.map.shortestDeltaY(this.y, centerY);
+            if (
+                !Number.isFinite(centerX) ||
+                !Number.isFinite(centerY) ||
+                !Number.isFinite(nearestCenterX) ||
+                !Number.isFinite(nearestCenterY)
+            ) {
+                throw new Error("wizard load camera restore produced non-finite wrapped viewport center");
+            }
             viewport.x += (nearestCenterX - centerX);
             viewport.y += (nearestCenterY - centerY);
         }

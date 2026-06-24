@@ -137,7 +137,17 @@ class SpawnAnimal extends globalThis.Spell {
         const wrappedX = typeof mapRef.wrapWorldX === "function" ? mapRef.wrapWorldX(placementX) : placementX;
         const wrappedY = typeof mapRef.wrapWorldY === "function" ? mapRef.wrapWorldY(placementY) : placementY;
         const targetNode = (typeof globalThis.resolveEditorNodeOnLayer === "function")
-            ? globalThis.resolveEditorNodeOnLayer(mapRef, wrappedX, wrappedY, targetLayer)
+            ? globalThis.resolveEditorNodeOnLayer(mapRef, wrappedX, wrappedY, targetLayer, {
+                sectionKey: typeof layerPoint?.sectionKey === "string"
+                    ? layerPoint.sectionKey
+                    : (typeof layerPoint?.floorTarget?.fragment?.ownerSectionKey === "string" ? layerPoint.floorTarget.fragment.ownerSectionKey : ""),
+                fragmentId: typeof layerPoint?.fragmentId === "string"
+                    ? layerPoint.fragmentId
+                    : (typeof layerPoint?.floorTarget?.fragment?.fragmentId === "string" ? layerPoint.floorTarget.fragment.fragmentId : ""),
+                surfaceId: typeof layerPoint?.surfaceId === "string"
+                    ? layerPoint.surfaceId
+                    : (typeof layerPoint?.floorTarget?.fragment?.surfaceId === "string" ? layerPoint.floorTarget.fragment.surfaceId : "")
+            })
             : mapRef.worldToNode(wrappedX, wrappedY);
 
         if (!targetNode) {
@@ -166,9 +176,13 @@ class SpawnAnimal extends globalThis.Spell {
         } else {
             animal.traversalLayer = targetLayer;
             animal.currentLayer = targetLayer;
-            animal.currentLayerBaseZ = Number.isFinite(targetNode.baseZ)
+            const targetBaseZ = Number.isFinite(targetNode.baseZ)
                 ? Number(targetNode.baseZ)
-                : (Number.isFinite(layerPoint && layerPoint.baseZ) ? Number(layerPoint.baseZ) : targetLayer * 3);
+                : (Number.isFinite(layerPoint && layerPoint.baseZ) ? Number(layerPoint.baseZ) : null);
+            if (!Number.isFinite(targetBaseZ)) {
+                throw new Error(`spawn animal requires target node baseZ for layer ${targetLayer}`);
+            }
+            animal.currentLayerBaseZ = targetBaseZ;
         }
         const naturalSize = SpawnAnimal.getPendingPlacementNaturalSize(wizard);
         SpawnAnimal.clearPendingPlacementState(wizard);
@@ -208,6 +222,9 @@ class SpawnAnimal extends globalThis.Spell {
             ? animal.getNodeStandingZ(targetNode)
             : (Number.isFinite(targetNode.baseZ) ? Number(targetNode.baseZ) : 0);
         animal.node = targetNode;
+        if (typeof globalThis.applyEditorPlacementSupport === "function") {
+            globalThis.applyEditorPlacementSupport(animal, mapRef, layerPoint, targetNode);
+        }
         if (typeof animal.updateHitboxes === "function") {
             animal.updateHitboxes();
         }

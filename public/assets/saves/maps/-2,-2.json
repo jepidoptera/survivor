@@ -22637,6 +22637,8 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9208
     },
     {
@@ -22669,6 +22671,8 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9209
     },
     {
@@ -22701,6 +22705,8 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9210
     },
     {
@@ -22733,6 +22739,8 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9211
     },
     {
@@ -22765,6 +22773,8 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9212
     },
     {
@@ -22797,6 +22807,8 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9213
     },
     {
@@ -22829,6 +22841,8 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9214
     },
     {
@@ -22861,6 +22875,8 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
+      "currentLayerBaseZ": 0,
       "id": 9215
     },
     {
@@ -22893,6 +22909,7 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
       "id": 9216
     },
     {
@@ -22925,6 +22942,7 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
       "id": 9217
     },
     {
@@ -22957,6 +22975,7 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
       "id": 9218
     },
     {
@@ -22989,6 +23008,7 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
       "id": 9219
     },
     {
@@ -23021,6 +23041,7 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
       "id": 9220
     },
     {
@@ -23053,6 +23074,7 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
       "id": 9221
     },
     {
@@ -23085,6 +23107,7 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
       "id": 9222
     },
     {
@@ -23117,116 +23140,15 @@
         0.5
       ],
       "castsLosShadows": false,
+      "zMode": "local",
       "id": 9223
     }
   ],
   "animals": [
     {
-      "type": "squirrel",
-      "x": -56.982800000000005,
-      "y": 37.599999999999994,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.47966111873751516,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel39",
-      "id": 1
-    },
-    {
-      "type": "squirrel",
-      "x": -107.21079999999999,
-      "y": 31.599999999999998,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.5173306524452105,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel143",
-      "id": 7
-    },
-    {
-      "type": "squirrel",
-      "x": -65.29639999999998,
-      "y": 39.800000000000004,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.569876575915181,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel29",
-      "id": 61
-    },
-    {
-      "type": "squirrel",
-      "x": -105.99840000000002,
-      "y": 77.69999999999999,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.4385857821674512,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel4",
-      "id": 20
-    },
-    {
-      "type": "squirrel",
-      "x": -41.9676923076923,
-      "y": 69.5,
-      "hp": 1,
-      "maxHp": 1,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 0.5151428649729541,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "squirrel51",
-      "id": 70
-    },
-    {
       "type": "deer",
-      "x": -116.81007692307692,
-      "y": 68,
-      "hp": 12.495161220337181,
-      "maxHp": 12.495161220337181,
-      "mp": 12.495161220337181,
-      "maxMp": 12.495161220337181,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 1.1233706699602244,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "deer2",
-      "id": 12
-    },
-    {
-      "type": "deer",
-      "x": -89.02480000000001,
-      "y": 96.10000000000002,
+      "x": -111.8150333333333,
+      "y": 93.94166666666662,
       "hp": 12.394587980833354,
       "maxHp": 12.394587980833354,
       "mp": 12.394587980833354,
@@ -23242,8 +23164,8 @@
     },
     {
       "type": "squirrel",
-      "x": -94.32738461538462,
-      "y": 65.88461538461547,
+      "x": -127.30199999999999,
+      "y": 93,
       "hp": 1,
       "maxHp": 1,
       "mp": 1,
@@ -23256,6 +23178,108 @@
       "chaseRadius": -1,
       "scriptingName": "squirrel123",
       "id": 23
+    },
+    {
+      "type": "squirrel",
+      "x": -108.53866666666654,
+      "y": 99.16666666666669,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5151428649729541,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel51",
+      "id": 70
+    },
+    {
+      "type": "squirrel",
+      "x": -101.92153846153846,
+      "y": 18.03846153846154,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.47966111873751516,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel39",
+      "id": 1
+    },
+    {
+      "type": "squirrel",
+      "x": -101.322,
+      "y": 52.20000000000002,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.5173306524452105,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel143",
+      "id": 7
+    },
+    {
+      "type": "squirrel",
+      "x": -115.178,
+      "y": 52.199999999999996,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.569876575915181,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel29",
+      "id": 61
+    },
+    {
+      "type": "squirrel",
+      "x": -49.22876923076924,
+      "y": 36.5,
+      "hp": 1,
+      "maxHp": 1,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 0.4385857821674512,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "squirrel4",
+      "id": 20
+    },
+    {
+      "type": "deer",
+      "x": -71.012,
+      "y": 58.3,
+      "hp": 12.495161220337181,
+      "maxHp": 12.495161220337181,
+      "mp": 12.495161220337181,
+      "maxMp": 12.495161220337181,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 1.1233706699602244,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": -1,
+      "scriptingName": "deer2",
+      "id": 12
     }
   ],
   "powerups": [],

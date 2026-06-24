@@ -6,6 +6,33 @@ let debugMode = false; // Toggle all debug graphics (hitboxes, grid, animal mark
 if (typeof globalThis !== "undefined") {
     globalThis.debugMode = debugMode;
 }
+const debugFreezePrototypeInteriorInvalidationFrame = false;
+if (typeof globalThis !== "undefined") {
+    globalThis.debugFreezePrototypeInteriorInvalidationFrame = debugFreezePrototypeInteriorInvalidationFrame;
+    globalThis.__prototypeInteriorInvalidationFrameCapture = null;
+    globalThis.__prototypeInteriorInvalidationFrameCaptureLast = null;
+    globalThis.requestPrototypeInteriorInvalidationFrameCapture = function requestPrototypeInteriorInvalidationFrameCapture(event = {}) {
+        if (globalThis.debugFreezePrototypeInteriorInvalidationFrame !== true) return null;
+        const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        const current = globalThis.__prototypeInteriorInvalidationFrameCapture;
+        if (current && current.status === "pending") {
+            if (!Array.isArray(current.events)) current.events = [];
+            current.events.push({ ...event, atMs: nowMs });
+            return current;
+        }
+        const capture = {
+            id: `prototype-interior-invalidation-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+            status: "pending",
+            requestedAtMs: nowMs,
+            events: [{ ...event, atMs: nowMs }]
+        };
+        globalThis.__prototypeInteriorInvalidationFrameCapture = capture;
+        console.warn("[prototype interior invalidation capture] armed", capture);
+        return capture;
+    };
+}
 let showHexGrid = false; // Toggle hex grid only (Ctrl+G)
 let showAnimalClearance = false; // Toggle animal clearance hex overlay
 let showTileClearance = false; // Toggle per-tile clearance number overlay (requires hex grid on)
@@ -261,6 +288,82 @@ const PERF_ACCUM_EXTRA_FIELDS = [
 function toFinitePerfNumber(value, fallback = 0) {
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
+}
+
+function createMovementPerfBreakdownState() {
+    return {
+        enabled: false,
+        startedAtMs: (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : 0,
+        sections: new Map()
+    };
+}
+
+let movementPerfBreakdownState = createMovementPerfBreakdownState();
+
+function resetMovementPerfBreakdown() {
+    const wasEnabled = !!(movementPerfBreakdownState && movementPerfBreakdownState.enabled);
+    movementPerfBreakdownState = createMovementPerfBreakdownState();
+    movementPerfBreakdownState.enabled = wasEnabled;
+    if (typeof globalThis !== "undefined") globalThis.movementPerfBreakdownState = movementPerfBreakdownState;
+    return movementPerfBreakdownState;
+}
+
+function setMovementPerfBreakdownEnabled(enabled = true) {
+    movementPerfBreakdownState.enabled = enabled === true;
+    return movementPerfBreakdownState.enabled;
+}
+
+function recordMovementPerfSection(name, elapsedMs) {
+    if (!movementPerfBreakdownState || movementPerfBreakdownState.enabled !== true) return;
+    if (typeof name !== "string" || name.length === 0) return;
+    const ms = Number(elapsedMs);
+    if (!Number.isFinite(ms) || ms < 0) return;
+    let section = movementPerfBreakdownState.sections.get(name);
+    if (!section) {
+        section = { calls: 0, totalMs: 0, maxMs: 0 };
+        movementPerfBreakdownState.sections.set(name, section);
+    }
+    section.calls += 1;
+    section.totalMs += ms;
+    section.maxMs = Math.max(section.maxMs, ms);
+}
+
+function getMovementPerfBreakdownRows() {
+    const rows = [];
+    const sections = movementPerfBreakdownState && movementPerfBreakdownState.sections instanceof Map
+        ? movementPerfBreakdownState.sections
+        : new Map();
+    for (const [name, section] of sections.entries()) {
+        const calls = Number(section.calls) || 0;
+        const totalMs = Number(section.totalMs) || 0;
+        rows.push({
+            section: name,
+            calls,
+            totalMs: Number(totalMs.toFixed(3)),
+            avgMs: Number((calls > 0 ? totalMs / calls : 0).toFixed(4)),
+            maxMs: Number((Number(section.maxMs) || 0).toFixed(3))
+        });
+    }
+    rows.sort((a, b) => b.totalMs - a.totalMs);
+    return rows;
+}
+
+function printMovementPerfBreakdown(options = {}) {
+    const rows = getMovementPerfBreakdownRows();
+    console.table(rows);
+    if (options && options.resetAfter === true) resetMovementPerfBreakdown();
+    return rows;
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.movementPerfBreakdownState = movementPerfBreakdownState;
+    globalThis.setMovementPerfBreakdownEnabled = setMovementPerfBreakdownEnabled;
+    globalThis.resetMovementPerfBreakdown = resetMovementPerfBreakdown;
+    globalThis.recordMovementPerfSection = recordMovementPerfSection;
+    globalThis.getMovementPerfBreakdownRows = getMovementPerfBreakdownRows;
+    globalThis.printMovementPerfBreakdown = printMovementPerfBreakdown;
 }
 
 function getPerfInstrumentationHelpText() {
@@ -1343,7 +1446,17 @@ function isDebugWizardObject(obj) {
 
 function getDebugTraversalLayer(obj, fallback = 0) {
     if (!obj) return Number(fallback) || 0;
-    if (Number.isFinite(obj._renderTraversalLayer)) return Math.round(Number(obj._renderTraversalLayer));
+    const membership = (obj._floorMembership && typeof obj._floorMembership === "object")
+        ? obj._floorMembership
+        : (obj.floorMembership && typeof obj.floorMembership === "object" ? obj.floorMembership : null);
+    if (membership && membership.ownerType === "building") {
+        const floorSupportApi = typeof globalThis !== "undefined" ? globalThis.FloorSupport : null;
+        const mapRef = typeof globalThis !== "undefined" ? globalThis.map : null;
+        if (floorSupportApi && typeof floorSupportApi.resolvePrototypeBuildingFloorFragment === "function") {
+            const fragment = floorSupportApi.resolvePrototypeBuildingFloorFragment(mapRef, membership, { required: false });
+            if (fragment && Number.isFinite(Number(fragment.level))) return Math.round(Number(fragment.level));
+        }
+    }
     if (Number.isFinite(obj.traversalLayer)) return Math.round(Number(obj.traversalLayer));
     if (Number.isFinite(obj.currentLayer)) return Math.round(Number(obj.currentLayer));
     if (Number.isFinite(obj.level)) return Math.round(Number(obj.level));
@@ -1374,6 +1487,20 @@ function resolveDebugHitboxWorldZ(owner) {
                     : 3
             );
         return layerBaseZ + localZ;
+    }
+    if (isDebugCharacterObject(owner)) {
+        const support = owner.currentMovementSupport && typeof owner.currentMovementSupport === "object"
+            ? owner.currentMovementSupport
+            : null;
+        if (
+            support &&
+            support.type === "floor" &&
+            Number.isFinite(Number(support.baseZ)) &&
+            Math.abs(localZ) <= 0.0001
+        ) {
+            return Number(support.baseZ);
+        }
+        return localZ;
     }
     return localZ + getDebugLayerBaseZForObject(owner, 0);
 }

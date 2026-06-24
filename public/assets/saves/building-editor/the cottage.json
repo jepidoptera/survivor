@@ -22,8 +22,6 @@
       "surfaceId": "floor-fragment-28",
       "ownerSectionKey": "",
       "name": "floor",
-      "level": 0,
-      "nodeBaseZOffset": 0,
       "nodeBaseZ": 0,
       "outerPolygon": [
         {
@@ -74,7 +72,6 @@
           "height": 2,
           "topHeights": null,
           "bottomZ": 0,
-          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/brick.jpg"
         }
       ],
@@ -85,43 +82,41 @@
           "stairKind": "treadPath",
           "floorId": "floor-fragment-28",
           "startPoint": {
-            "x": -3.9323211739054633,
-            "y": 0.8187596295681907
+            "x": -3.9549210912262436,
+            "y": 0.8021290761198314
           },
           "endPoint": {
-            "x": 2.275504486763041,
-            "y": 0.8187596295681907
+            "x": 2.252904569442261,
+            "y": 0.8021290761198314
           },
           "treads": [
             {
               "left": {
-                "x": -3.9323211739054633,
-                "y": 0.01875962956819066
+                "x": -3.9549210912262436,
+                "y": 0.0021290761198313746
               },
               "right": {
-                "x": -3.9323211739054633,
-                "y": 1.6187596295681907
+                "x": -3.9549210912262436,
+                "y": 1.6021290761198315
               },
               "center": {
-                "x": -3.9323211739054633,
-                "y": 0.8187596295681907
-              },
-              "angle": 1.5707963267948966
+                "x": -3.9549210912262436,
+                "y": 0.8021290761198314
+              }
             },
             {
               "left": {
-                "x": 2.275504486763041,
-                "y": 1.6187596295681907
+                "x": 2.252904569442261,
+                "y": 1.6021290761198315
               },
               "right": {
-                "x": 2.275504486763041,
-                "y": 0.01875962956819066
+                "x": 2.252904569442261,
+                "y": 0.0021290761198313746
               },
               "center": {
-                "x": 2.275504486763041,
-                "y": 0.8187596295681907
-              },
-              "angle": -1.5707963267948966
+                "x": 2.252904569442261,
+                "y": 0.8021290761198314
+              }
             }
           ],
           "ladder": false,
@@ -136,20 +131,20 @@
           "riserTexturePath": "/assets/images/flooring/black.png",
           "footprint": [
             {
-              "x": -3.9323211739054633,
-              "y": 0.01875962956819066
+              "x": -3.9549210912262436,
+              "y": 0.0021290761198313746
             },
             {
-              "x": 2.275504486763041,
-              "y": 1.6187596295681907
+              "x": 2.252904569442261,
+              "y": 1.6021290761198315
             },
             {
-              "x": 2.275504486763041,
-              "y": 0.01875962956819066
+              "x": 2.252904569442261,
+              "y": 0.0021290761198313746
             },
             {
-              "x": -3.9323211739054633,
-              "y": 1.6187596295681907
+              "x": -3.9549210912262436,
+              "y": 1.6021290761198315
             }
           ]
         }
@@ -161,8 +156,6 @@
       "surfaceId": "floor-fragment-34",
       "ownerSectionKey": "",
       "name": "floor copy",
-      "level": 1,
-      "nodeBaseZOffset": 0,
       "nodeBaseZ": 3,
       "outerPolygon": [
         {
@@ -271,7 +264,6 @@
       "thickness": 0.25,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -363,7 +355,6 @@
       "thickness": 0.25,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -455,7 +446,6 @@
       "thickness": 0.25,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -547,7 +537,6 @@
       "thickness": 0.25,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -639,6 +628,18 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 3.2455127020785213,
+            "rightHeight": 3.029
+          },
+          {
+            "t": 1,
+            "leftHeight": 3.2455127020785213,
+            "rightHeight": 3.029
+          }
+        ],
         "generatedBy": {
           "type": "roof",
           "mode": "gabled",
@@ -658,22 +659,9 @@
             "clearance": 0.001
           },
           "originalHeight": 3
-        },
-        "stations": [
-          {
-            "t": 0,
-            "leftHeight": 3.2455127020785213,
-            "rightHeight": 3.029
-          },
-          {
-            "t": 1,
-            "leftHeight": 3.2455127020785213,
-            "rightHeight": 3.029
-          }
-        ]
+        }
       },
       "bottomZ": 3,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -765,6 +753,23 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 3.1372563510392615,
+            "rightHeight": 3.1372563510392615
+          },
+          {
+            "t": 0.5,
+            "leftHeight": 9.028999999999998,
+            "rightHeight": 9.028999999999998
+          },
+          {
+            "t": 1,
+            "leftHeight": 3.1372563510392624,
+            "rightHeight": 3.1372563510392624
+          }
+        ],
         "generatedBy": {
           "type": "roof",
           "mode": "gabled",
@@ -784,27 +789,9 @@
             "clearance": 0.001
           },
           "originalHeight": 3
-        },
-        "stations": [
-          {
-            "t": 0,
-            "leftHeight": 3.1372563510392615,
-            "rightHeight": 3.1372563510392615
-          },
-          {
-            "t": 0.5,
-            "leftHeight": 9.028999999999998,
-            "rightHeight": 9.028999999999998
-          },
-          {
-            "t": 1,
-            "leftHeight": 3.1372563510392624,
-            "rightHeight": 3.1372563510392624
-          }
-        ]
+        }
       },
       "bottomZ": 3,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -909,6 +896,18 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 3.245512702078523,
+            "rightHeight": 3.0290000000000017
+          },
+          {
+            "t": 1,
+            "leftHeight": 3.2455127020785213,
+            "rightHeight": 3.029
+          }
+        ],
         "generatedBy": {
           "type": "roof",
           "mode": "gabled",
@@ -928,22 +927,9 @@
             "clearance": 0.001
           },
           "originalHeight": 3
-        },
-        "stations": [
-          {
-            "t": 0,
-            "leftHeight": 3.245512702078523,
-            "rightHeight": 3.0290000000000017
-          },
-          {
-            "t": 1,
-            "leftHeight": 3.2455127020785213,
-            "rightHeight": 3.029
-          }
-        ]
+        }
       },
       "bottomZ": 3,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -1035,6 +1021,23 @@
       "thickness": 0.25,
       "topProfile": {
         "kind": "stations",
+        "stations": [
+          {
+            "t": 0,
+            "leftHeight": 3.1372563510392606,
+            "rightHeight": 3.1372563510392606
+          },
+          {
+            "t": 0.5,
+            "leftHeight": 9.029,
+            "rightHeight": 9.029
+          },
+          {
+            "t": 1,
+            "leftHeight": 3.1372563510392615,
+            "rightHeight": 3.1372563510392615
+          }
+        ],
         "generatedBy": {
           "type": "roof",
           "mode": "gabled",
@@ -1054,27 +1057,9 @@
             "clearance": 0.001
           },
           "originalHeight": 3
-        },
-        "stations": [
-          {
-            "t": 0,
-            "leftHeight": 3.1372563510392606,
-            "rightHeight": 3.1372563510392606
-          },
-          {
-            "t": 0.5,
-            "leftHeight": 9.029,
-            "rightHeight": 9.029
-          },
-          {
-            "t": 1,
-            "leftHeight": 3.1372563510392615,
-            "rightHeight": 3.1372563510392615
-          }
-        ]
+        }
       },
       "bottomZ": 3,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -1169,7 +1154,6 @@
       "thickness": 0.125,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/brick.jpg",
       "role": "interior",
       "attachment": null,
@@ -1245,7 +1229,6 @@
       "thickness": 0.125,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/brick.jpg",
       "role": "interior",
       "attachment": null,
@@ -1321,7 +1304,6 @@
       "thickness": 0.125,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/brick.jpg",
       "role": "interior",
       "attachment": null,
@@ -1397,7 +1379,6 @@
       "thickness": 0.125,
       "topProfile": null,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/brick.jpg",
       "role": "interior",
       "attachment": null,
@@ -1766,8 +1747,7 @@
           "x": 1.2223422077414163,
           "y": -0.25
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -1814,8 +1794,7 @@
           "x": -3.7252941558949475,
           "y": -0.25
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -1862,8 +1841,7 @@
           "x": -8.672930519531311,
           "y": -0.25
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -1910,8 +1888,7 @@
           "x": 3.897000000000001,
           "y": 11.085955844105055
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -1958,8 +1935,7 @@
           "x": 3.8970000000000002,
           "y": 0.8814558441050524
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2006,8 +1982,7 @@
           "x": -7.4389558441050525,
           "y": 13.606000000000003
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2148,8 +2123,7 @@
           "x": 2.7655441558949487,
           "y": 13.606000000000002
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2196,8 +2170,7 @@
           "x": -9.959,
           "y": 7.3722941558949495
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2338,8 +2311,7 @@
           "x": 1.2223422077414163,
           "y": -0.25
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2386,8 +2358,7 @@
           "x": -2.488385064985856,
           "y": -0.25
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2434,8 +2405,7 @@
           "x": -6.199112337713129,
           "y": -0.25
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2482,8 +2452,7 @@
           "x": -9.834,
           "y": -0.25
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2530,8 +2499,7 @@
           "x": 3.8970000000000007,
           "y": 7.684455844105052
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2578,8 +2546,7 @@
           "x": 3.8970000000000007,
           "y": 4.282955844105053
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2673,8 +2640,7 @@
           "x": 3.897000000000001,
           "y": 11.085955844105055
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2721,8 +2687,7 @@
           "x": 3.8970000000000002,
           "y": 0.9276195015420077
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2769,8 +2734,7 @@
           "x": -7.4389558441050525,
           "y": 13.606000000000003
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2817,8 +2781,7 @@
           "x": -4.037455844105051,
           "y": 13.606000000000003
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2865,8 +2828,7 @@
           "x": -0.6359558441050517,
           "y": 13.606000000000002
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2913,8 +2875,7 @@
           "x": 2.7655441558949487,
           "y": 13.606000000000002
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",
@@ -2961,8 +2922,7 @@
           "x": 3.8970000000000007,
           "y": 5.983705844105053
         }
-      ],
-      "mountKind": "wall"
+      ]
     },
     {
       "type": "placedObject",

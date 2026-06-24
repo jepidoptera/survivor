@@ -5411,6 +5411,105 @@ test("renderer triangulates stair riser depth from tread-only to floor-clipped s
     }
 });
 
+test("renderer clips stair bitmap triangulation when an export clip floor is provided", async () => {
+    const previousEarcut = globalThis.earcut;
+    const previousClipper = globalThis.polygonClipping;
+    try {
+        globalThis.earcut = require("earcut").default;
+        globalThis.polygonClipping = require("polygon-clipping");
+        const { BuildingRenderer } = await loadRenderer();
+        const renderer = Object.create(BuildingRenderer.prototype);
+        renderer.activePlaneZ = () => 0;
+        const floor = {
+            fragmentId: "floor-clip",
+            outerPolygon: [
+                { x: 0, y: 0 },
+                { x: 2, y: 0 },
+                { x: 2, y: 2 },
+                { x: 0, y: 2 }
+            ],
+            holes: []
+        };
+        const baseStair = {
+            id: "clip-stair",
+            bottomZ: 3,
+            height: 3,
+            stepCount: 6,
+            riserDepth: 1,
+            treads: [
+                { left: { x: 1, y: 0.5 }, right: { x: 1, y: 1.5 } },
+                { left: { x: 4, y: 0.5 }, right: { x: 4, y: 1.5 } }
+            ]
+        };
+        renderer.stairOpeningClipGeometryForFloor = () => [[
+            [
+                [0, 0],
+                [1.5, 0],
+                [1.5, 2],
+                [0, 2],
+                [0, 0]
+            ]
+        ]];
+
+        const clippedDown = renderer.triangulateStairSteps({
+            ...baseStair,
+            direction: "down"
+        }, { clipToFloor: floor, cutoutReliefLightFactor: 0.62 });
+        const clippedUp = renderer.triangulateStairSteps({
+            ...baseStair,
+            direction: "up"
+        }, { clipToFloor: floor });
+        const unclippedUp = renderer.triangulateStairSteps({
+            ...baseStair,
+            direction: "up"
+        });
+        const clippedOpening = renderer.triangulateStairSteps({
+            ...baseStair,
+            direction: "up"
+        }, { clipToFloor: floor, clipToFloorOpening: true });
+
+        assert.ok(clippedDown.points.length > 0);
+        assert.equal(clippedDown.points.every((point) => Number(point.x) <= 2 + 0.000001), true);
+        assert.equal(clippedDown.points.every((point) => Number(point.x) >= -0.000001), true);
+        assert.equal(clippedDown.points.every((point) => Number(point.y) <= 2 + 0.000001), true);
+        assert.equal(clippedDown.points.every((point) => Number(point.y) >= -0.000001), true);
+        assert.equal(clippedDown.points.some((point) => Number(point.surfaceLightFactor) < 0.999), true);
+        assert.equal(clippedUp.points.every((point) => Number(point.x) <= 2 + 0.000001), true);
+        assert.equal(clippedUp.points.every((point) => Number(point.x) >= -0.000001), true);
+        assert.equal(clippedOpening.points.every((point) => Number(point.x) <= 1.5 + 0.000001), true);
+        assert.equal(unclippedUp.points.some((point) => Number(point.x) > 2 + 0.000001), true);
+    } finally {
+        if (typeof previousEarcut === "undefined") {
+            delete globalThis.earcut;
+        } else {
+            globalThis.earcut = previousEarcut;
+        }
+        if (typeof previousClipper === "undefined") {
+            delete globalThis.polygonClipping;
+        } else {
+            globalThis.polygonClipping = previousClipper;
+        }
+    }
+});
+
+test("renderer targets through-floor clipping for lower-owned stairs visible through the current floor", async () => {
+    const { BuildingRenderer } = await loadRenderer();
+    const renderer = Object.create(BuildingRenderer.prototype);
+    const lowerFloor = { fragmentId: "lower-floor" };
+    const upperFloor = { fragmentId: "upper-floor" };
+    const stair = { id: "down-through", direction: "down" };
+    renderer.playtestFloorRenderOverride = {
+        clipDownStairFloorIds: new Set(["upper-floor"])
+    };
+    renderer.stairOpeningIntersectsFloor = (candidateStair, candidateFloor) => (
+        candidateStair && candidateStair.id === stair.id && candidateFloor === upperFloor
+    );
+
+    assert.equal(renderer.downStairClipTargetFloor(lowerFloor, stair, [upperFloor]), upperFloor);
+    assert.equal(renderer.downStairClipTargetFloor(lowerFloor, { ...stair, direction: "up" }, [upperFloor]), upperFloor);
+    assert.equal(renderer.downStairClipTargetFloor(lowerFloor, stair, [lowerFloor]), null);
+});
+
 test("stair tool starts a draft before target floor height is available", async () => {
     const { BuildingEditorState } = await loadState();
     const { StairTool } = await import("../public/building-editor/tools/StairTool.js");

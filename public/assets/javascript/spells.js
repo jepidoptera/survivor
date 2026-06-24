@@ -23,6 +23,117 @@ let editorKeyBindings = {
 };
 
 const MAGIC_ITEMS_CATEGORY = "magic";
+const MOVE_OBJECT_PERF_MAX_EVENTS = 800;
+
+function isMoveObjectPerfEnabled() {
+    return !!(typeof globalThis !== "undefined" && globalThis.__moveObjectPerf);
+}
+
+function ensureMoveObjectPerfReport() {
+    if (typeof globalThis === "undefined") return null;
+    if (!globalThis.__moveObjectPerfReport || typeof globalThis.__moveObjectPerfReport !== "object") {
+        const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        globalThis.__moveObjectPerfReport = {
+            startedAtMs: nowMs,
+            events: [],
+            counters: Object.create(null),
+            totalsMs: Object.create(null),
+            maxMs: Object.create(null),
+            last: Object.create(null)
+        };
+    }
+    return globalThis.__moveObjectPerfReport;
+}
+
+function recordMoveObjectPerf(name, data = null, elapsedMs = null) {
+    if (!isMoveObjectPerfEnabled()) return null;
+    const report = ensureMoveObjectPerfReport();
+    if (!report || !name) return null;
+    const eventName = String(name);
+    report.counters[eventName] = (Number(report.counters[eventName]) || 0) + 1;
+    const event = {
+        t: (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now(),
+        name: eventName
+    };
+    if (Number.isFinite(elapsedMs)) {
+        const ms = Number(elapsedMs);
+        event.ms = ms;
+        report.totalsMs[eventName] = (Number(report.totalsMs[eventName]) || 0) + ms;
+        report.maxMs[eventName] = Math.max(Number(report.maxMs[eventName]) || 0, ms);
+    }
+    if (data && typeof data === "object") {
+        Object.assign(event, data);
+    }
+    report.last[eventName] = event;
+    if (!Array.isArray(report.events)) report.events = [];
+    report.events.push(event);
+    if (report.events.length > MOVE_OBJECT_PERF_MAX_EVENTS) {
+        report.events.splice(0, report.events.length - MOVE_OBJECT_PERF_MAX_EVENTS);
+    }
+    return event;
+}
+
+function resetMoveObjectPerfReport() {
+    if (typeof globalThis === "undefined") return null;
+    globalThis.__moveObjectPerfReport = null;
+    return ensureMoveObjectPerfReport();
+}
+
+function summarizeMoveObjectPerfReport(report = null) {
+    const source = report || ensureMoveObjectPerfReport();
+    if (!source) return null;
+    const counters = source.counters || {};
+    const totalsMs = source.totalsMs || {};
+    const maxMs = source.maxMs || {};
+    const eventNames = Array.from(new Set([
+        ...Object.keys(counters),
+        ...Object.keys(totalsMs),
+        ...Object.keys(maxMs)
+    ])).sort();
+    const byEvent = eventNames.map(name => {
+        const count = Number(counters[name]) || 0;
+        const totalMs = Number(totalsMs[name]) || 0;
+        const max = Number(maxMs[name]) || 0;
+        return {
+            name,
+            count,
+            totalMs,
+            avgMs: count > 0 && totalMs > 0 ? totalMs / count : 0,
+            maxMs: max
+        };
+    });
+    const slowFrames = Array.isArray(source.events)
+        ? source.events
+            .filter(event => event && event.name === "rendering.frame" && Number(event.ms) >= 25)
+            .slice(-20)
+        : [];
+    return {
+        startedAtMs: source.startedAtMs,
+        eventCount: Array.isArray(source.events) ? source.events.length : 0,
+        byTotalMs: byEvent.slice().sort((a, b) => b.totalMs - a.totalMs),
+        byMaxMs: byEvent.slice().sort((a, b) => b.maxMs - a.maxMs),
+        byCount: byEvent.slice().sort((a, b) => b.count - a.count),
+        slowFrames,
+        last: source.last || {}
+    };
+}
+
+if (typeof globalThis !== "undefined") {
+    if (typeof globalThis.__recordMoveObjectPerf !== "function") {
+        globalThis.__recordMoveObjectPerf = recordMoveObjectPerf;
+    }
+    globalThis.__resetMoveObjectPerf = resetMoveObjectPerfReport;
+    globalThis.__getMoveObjectPerfReport = function getMoveObjectPerfReport() {
+        return ensureMoveObjectPerfReport();
+    };
+    globalThis.__summarizeMoveObjectPerf = function summarizeMoveObjectPerf(report = null) {
+        return summarizeMoveObjectPerfReport(report);
+    };
+}
 
 function resolveAnimatedSheetConfig(metaEntry, fallbackX = 1, fallbackY = 1, fallbackFps = 0) {
     const meta = (metaEntry && typeof metaEntry === "object") ? metaEntry : {};
@@ -258,6 +369,13 @@ const SpellSystem = (() => {
     const EDITOR_MENU_ICON = "/assets/images/thumbnails/edit.png";
     const BUILDING_EDITOR_ICON = "/assets/images/thumbnails/layers.png";
     const ROOF_EDITOR_ICON = "/assets/images/thumbnails/roof.png";
+    const TERRAIN_EDITOR_ICON = "/assets/images/land tiles/desert0.png";
+    const DEFAULT_TERRAIN_TYPE = "grass";
+    const TERRAIN_TOOL_DEFS = [
+        { name: "grass", label: "Grass", icon: "/assets/images/land tiles/forest0.png" },
+        { name: "desert", label: "Desert", icon: "/assets/images/land tiles/desert0.png" },
+        { name: "water", label: "Water", icon: "/assets/images/land tiles/water1.png" }
+    ];
     const DEFAULT_ROOF_TEXTURE = "/assets/images/roofs/smallshingles.png";
     const DEFAULT_PLACEABLE_CATEGORY = "doors";
     const DEFAULT_PLACEABLE_BY_CATEGORY = {
@@ -288,6 +406,7 @@ const SpellSystem = (() => {
     const EDITOR_TOOL_DEFS = [
         { name: "wall", icon: "/assets/images/thumbnails/wall.png" },
         { name: "buildroad", icon: "/assets/images/thumbnails/road.png" },
+        { name: "terrainedit", icon: TERRAIN_EDITOR_ICON, title: "Terrain" },
         { name: "flooredit", icon: "/assets/images/thumbnails/layers.png" },
         { name: "moveobject", icon: "/assets/images/thumbnails/move.png" },
         { name: "editorvanish", icon: "/assets/images/thumbnails/vanish.png" },
@@ -487,8 +606,15 @@ const SpellSystem = (() => {
     function setSelectedFloorEditLevel(wizardRef, level, options = {}) {
         const normalized = normalizeFloorEditLevel(level);
         const shouldMoveWizard = !!(options && options.moveWizard === true);
-        const targetBaseZ = normalized * 3;
         const wizardTarget = wizardRef || ((typeof globalThis !== "undefined") ? globalThis.wizard : null);
+        const targetBaseZ = Number.isFinite(options && options.baseZ)
+            ? Number(options.baseZ)
+            : (wizardTarget && Number.isFinite(wizardTarget.currentLayerBaseZ)
+                ? Number(wizardTarget.currentLayerBaseZ)
+                : null);
+        if (shouldMoveWizard && !Number.isFinite(targetBaseZ)) {
+            throw new Error(`selected floor edit level ${normalized} requires baseZ when moving wizard`);
+        }
         const previousLayer = wizardTarget && Number.isFinite(wizardTarget.currentLayer)
             ? Number(wizardTarget.currentLayer)
             : null;
@@ -1828,7 +1954,7 @@ const SpellSystem = (() => {
     }
 
     function isEditorToolName(spellName) {
-        return spellName === "wall" || spellName === "buildroad" || spellName === "flooredit" || isFloorEditorToolName(spellName) || spellName === "moveobject" || spellName === "editorvanish" || spellName === "placeobject" || spellName === "placebuilding" || spellName === "blackdiamond" || spellName === "nodeinspector";
+        return spellName === "wall" || spellName === "buildroad" || spellName === "terrainedit" || spellName === "flooredit" || isFloorEditorToolName(spellName) || spellName === "moveobject" || spellName === "editorvanish" || spellName === "placeobject" || spellName === "placebuilding" || spellName === "blackdiamond" || spellName === "nodeinspector";
     }
 
     function isFloorEditorToolName(spellName) {
@@ -1910,6 +2036,27 @@ const SpellSystem = (() => {
         return normalized;
     }
 
+    function getSelectedTerrainType(wizardRef) {
+        const raw = (wizardRef && typeof wizardRef.selectedTerrainType === "string")
+            ? wizardRef.selectedTerrainType.trim().toLowerCase()
+            : "";
+        return TERRAIN_TOOL_DEFS.some(def => def.name === raw) ? raw : DEFAULT_TERRAIN_TYPE;
+    }
+
+    function setSelectedTerrainType(wizardRef, terrainType) {
+        if (!wizardRef) return DEFAULT_TERRAIN_TYPE;
+        const raw = (typeof terrainType === "string") ? terrainType.trim().toLowerCase() : "";
+        const next = TERRAIN_TOOL_DEFS.some(def => def.name === raw) ? raw : DEFAULT_TERRAIN_TYPE;
+        wizardRef.selectedTerrainType = next;
+        return next;
+    }
+
+    function getSelectedTerrainIcon(wizardRef) {
+        const selected = getSelectedTerrainType(wizardRef);
+        const def = TERRAIN_TOOL_DEFS.find(entry => entry.name === selected);
+        return def ? def.icon : TERRAIN_EDITOR_ICON;
+    }
+
     function getSelectedEditorIcon(wizardRef) {
         // If current spell is an editor tool (wall/road/vanish), show that tool's icon
         if (wizardRef && wizardRef.currentSpell === "wall") {
@@ -1917,6 +2064,9 @@ const SpellSystem = (() => {
         }
         if (wizardRef && wizardRef.currentSpell === "buildroad") {
             return getRoadSpellIcon(wizardRef);
+        }
+        if (wizardRef && wizardRef.currentSpell === "terrainedit") {
+            return getSelectedTerrainIcon(wizardRef);
         }
         if (wizardRef && wizardRef.currentSpell === "flooredit") {
             return "/assets/images/thumbnails/layers.png";
@@ -2052,7 +2202,10 @@ const SpellSystem = (() => {
     function buildBuildingPlacementTransform(wizardRef, worldX, worldY, options = {}) {
         const mapRef = wizardRef && wizardRef.map ? wizardRef.map : (typeof map !== "undefined" ? map : null);
         const layerPoint = typeof resolveEditorWorldPointOnLayer === "function"
-            ? resolveEditorWorldPointOnLayer(wizardRef, worldX, worldY, options)
+            ? resolveEditorWorldPointOnLayer(wizardRef, worldX, worldY, {
+                ...options,
+                useVisibleFloorTarget: false
+            })
             : { x: worldX, y: worldY };
         const xRaw = Number.isFinite(layerPoint && layerPoint.x) ? Number(layerPoint.x) : Number(worldX);
         const yRaw = Number.isFinite(layerPoint && layerPoint.y) ? Number(layerPoint.y) : Number(worldY);
@@ -2537,7 +2690,11 @@ const SpellSystem = (() => {
     function isDragSpellActive(wizardRef, spellName) {
         if (!wizardRef) return false;
         if (spellName === "wall") return !!wizardRef.wallLayoutMode && !!wizardRef.wallStartPoint;
-        if (spellName === "buildroad") return !!wizardRef.roadLayoutMode && !!wizardRef.roadStartPoint;
+        if (spellName === "buildroad") return !!(
+            wizardRef.roadPathEditDrag &&
+            wizardRef.roadPathEditDrag.roadPath &&
+            !wizardRef.roadPathEditDrag.roadPath.gone
+        ) || (!!wizardRef.roadLayoutMode && getRoadPathDraftPoints(wizardRef).length > 0);
         if (spellName === "firewall") return !!wizardRef.firewallLayoutMode && !!wizardRef.firewallStartPoint;
         if (isMoveObjectToolName(spellName)) return !!(wizardRef.moveObjectDragState && wizardRef.moveObjectDragState.target);
         if (isVanishToolName(spellName)) return !!wizardRef.vanishDragMode;
@@ -2560,6 +2717,8 @@ const SpellSystem = (() => {
         if (spellName === "buildroad") {
             wizardRef.roadLayoutMode = false;
             wizardRef.roadStartPoint = null;
+            wizardRef.roadPathDraft = null;
+            wizardRef.roadPathEditDrag = null;
             clearDragPreview(wizardRef, "buildroad");
             return;
         }
@@ -2570,7 +2729,22 @@ const SpellSystem = (() => {
             return;
         }
         if (isMoveObjectToolName(spellName)) {
+            const dragState = wizardRef.moveObjectDragState || null;
+            finalizeMoveObjectDragSupport(dragState);
+            finalizeMovedPrototypeObjectPersistence(dragState);
+            restorePrototypeBuildingMoveObjectBakeExclusion(wizardRef.moveObjectDragState);
             wizardRef.moveObjectDragState = null;
+            if (dragState) {
+                const target = dragState.target || null;
+                recordMoveObjectPerf("moveObject.drag.end", {
+                    targetType: target && target.type || "",
+                    ownerId: target && target._prototypeOwnerId || "",
+                    recordId: Number.isInteger(Number(target && target._prototypeRecordId))
+                        ? Number(target._prototypeRecordId)
+                        : null,
+                    hadBakeExclusion: !!dragState.prototypeBuildingInteriorBitmapExclusion
+                });
+            }
             return;
         }
         if (isVanishToolName(spellName)) {
@@ -2672,7 +2846,7 @@ const SpellSystem = (() => {
         ) {
             return Number(wizardRef.currentLayerBaseZ);
         }
-        return normalizedLayer * 3;
+        throw new Error(`layer ${normalizedLayer} requires currentLayerBaseZ`);
     }
 
     function getWallLikeTraversalLayer(target, fallback = 0) {
@@ -2816,6 +2990,341 @@ const SpellSystem = (() => {
             ? mapRef.shortestDeltaY(ay, by)
             : (by - ay);
         return Math.abs(dx) <= epsilon && Math.abs(dy) <= epsilon;
+    }
+
+    function getRoadPathPlacementPoint(wizardRef, worldX, worldY, snapTarget = null) {
+        if (!wizardRef || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        const mapRef = wizardRef.map || null;
+        if (snapTarget && snapTarget.point && Number.isFinite(snapTarget.point.x) && Number.isFinite(snapTarget.point.y)) {
+            return wrapWorldPointForMap(mapRef, Number(snapTarget.point.x), Number(snapTarget.point.y));
+        }
+        if (snapTarget && snapTarget.node && Number.isFinite(snapTarget.node.x) && Number.isFinite(snapTarget.node.y)) {
+            return wrapWorldPointForMap(mapRef, Number(snapTarget.node.x), Number(snapTarget.node.y));
+        }
+        const node = mapRef && typeof mapRef.worldToNode === "function"
+            ? mapRef.worldToNode(worldX, worldY)
+            : null;
+        if (node && Number.isFinite(node.x) && Number.isFinite(node.y)) {
+            return wrapWorldPointForMap(mapRef, Number(node.x), Number(node.y));
+        }
+        return wrapWorldPointForMap(mapRef, worldX, worldY);
+    }
+
+    function getRoadPathEditPoint(wizardRef, worldX, worldY) {
+        if (!wizardRef || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        return wrapWorldPointForMap(wizardRef.map || null, worldX, worldY);
+    }
+
+    function getRoadPathDraftPoints(wizardRef) {
+        const draft = wizardRef && wizardRef.roadPathDraft;
+        return draft && Array.isArray(draft.points) ? draft.points : [];
+    }
+
+    function clearSelectedRoadPath(wizardRef) {
+        if (!wizardRef) return;
+        wizardRef.selectedRoadPath = null;
+        wizardRef.roadPathEditDrag = null;
+    }
+
+    function getSelectedEditableRoadPath(wizardRef) {
+        const roadPath = wizardRef && wizardRef.selectedRoadPath;
+        if (!roadPath || roadPath.gone || roadPath.vanishing || roadPath.type !== "roadPath") return null;
+        return roadPath;
+    }
+
+    function pickRoadPathAt(wizardRef, worldX, worldY) {
+        if (!wizardRef || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        const canTargetRoadPath = (obj) => !!(
+            obj &&
+            !obj.gone &&
+            !obj.vanishing &&
+            obj.type === "roadPath"
+        );
+        const pickResult = pickObjectViaRenderingColorId((obj) => canTargetRoadPath(obj));
+        if (pickResult && pickResult.attempted) {
+            const picked = pickResult.picked;
+            return canTargetRoadPath(picked) ? picked : null;
+        }
+        return null;
+    }
+
+    function getRoadPathEditHandleHit(wizardRef, worldX, worldY) {
+        const roadPath = getSelectedEditableRoadPath(wizardRef);
+        if (!roadPath || !Array.isArray(roadPath.pathPoints)) return null;
+        const worldToScreenFn = (typeof worldToScreen === "function") ? worldToScreen : null;
+        const mouseScreen = (
+            typeof mousePos !== "undefined" &&
+            mousePos &&
+            Number.isFinite(mousePos.screenX) &&
+            Number.isFinite(mousePos.screenY)
+        ) ? { x: Number(mousePos.screenX), y: Number(mousePos.screenY) } : (
+            worldToScreenFn ? worldToScreenFn({ x: worldX, y: worldY }) : null
+        );
+        if (!mouseScreen || !Number.isFinite(mouseScreen.x) || !Number.isFinite(mouseScreen.y)) return null;
+        const handleRadiusPx = 11;
+        let best = null;
+        for (let i = 0; i < roadPath.pathPoints.length; i++) {
+            const point = roadPath.pathPoints[i];
+            if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+            const screen = worldToScreenFn ? worldToScreenFn({ x: Number(point.x), y: Number(point.y) }) : null;
+            if (!screen || !Number.isFinite(screen.x) || !Number.isFinite(screen.y)) continue;
+            const distPx = Math.hypot(mouseScreen.x - screen.x, mouseScreen.y - screen.y);
+            if (distPx > handleRadiusPx) continue;
+            if (!best || distPx < best.distancePx) {
+                best = { roadPath, pointIndex: i, distancePx: distPx };
+            }
+        }
+        return best;
+    }
+
+    function markEditedRoadPathDirty(roadPath, mapRef) {
+        if (!roadPath || roadPath._prototypeRuntimeRecord !== true) return;
+        roadPath._prototypeDirty = true;
+        const objectState = mapRef && mapRef._prototypeObjectState;
+        if (!objectState) {
+            throw new Error("Cannot persist edited road path without prototype object state.");
+        }
+        if (!(objectState.dirtyRuntimeObjects instanceof Set)) {
+            objectState.dirtyRuntimeObjects = new Set();
+        }
+        objectState.dirtyRuntimeObjects.add(roadPath);
+        objectState.captureScanNeeded = true;
+    }
+
+    function persistEditedRoadPath(roadPath, mapRef) {
+        if (!roadPath || roadPath._prototypeRuntimeRecord !== true) return;
+        if (!mapRef || typeof mapRef.capturePendingPrototypeObjects !== "function") {
+            throw new Error("Cannot persist edited road path without map.capturePendingPrototypeObjects.");
+        }
+        markEditedRoadPathDirty(roadPath, mapRef);
+        if (mapRef.capturePendingPrototypeObjects() !== true) {
+            throw new Error("Edited road path persistence did not update a prototype object record.");
+        }
+    }
+
+    function beginRoadPathEditDrag(wizardRef, worldX, worldY) {
+        const hit = getRoadPathEditHandleHit(wizardRef, worldX, worldY);
+        if (!hit || !hit.roadPath) return false;
+        if (typeof RoadPath !== "function") {
+            throw new Error("Cannot edit road path because RoadPath is unavailable.");
+        }
+        const mapRef = hit.roadPath.map || wizardRef.map || null;
+        if (!mapRef) return false;
+        const points = Array.isArray(hit.roadPath.pathPoints)
+            ? hit.roadPath.pathPoints.map((point, index) => RoadPath.normalizePoint(point, `road path edit point ${index}`))
+            : [];
+        if (points.length < 2) return false;
+        wizardRef.roadPathEditDrag = {
+            roadPath: hit.roadPath,
+            pointIndex: hit.pointIndex,
+            originalPoints: points,
+            lastValidPoints: points.map(point => ({ x: point.x, y: point.y })),
+            map: mapRef,
+            changed: false
+        };
+        return true;
+    }
+
+    function updateRoadPathEditDrag(wizardRef, worldX, worldY) {
+        const drag = wizardRef && wizardRef.roadPathEditDrag;
+        const roadPath = drag && drag.roadPath;
+        if (!drag || !roadPath || roadPath.gone || roadPath.vanishing) {
+            if (wizardRef) wizardRef.roadPathEditDrag = null;
+            return false;
+        }
+        const mapRef = roadPath.map || drag.map || wizardRef.map || null;
+        const pointIndex = Number(drag.pointIndex);
+        if (!mapRef || !Number.isInteger(pointIndex) || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return false;
+        if (typeof RoadPath !== "function") {
+            throw new Error("Cannot edit road path because RoadPath is unavailable.");
+        }
+        const points = Array.isArray(roadPath.pathPoints)
+            ? roadPath.pathPoints.map((point, index) => RoadPath.normalizePoint(point, `road path edit current point ${index}`))
+            : [];
+        if (points.length < 2 || pointIndex < 0 || pointIndex >= points.length) return false;
+        const nextPoint = getRoadPathEditPoint(wizardRef, worldX, worldY);
+        if (!nextPoint) return false;
+        const nextPoints = points.map(point => ({ x: point.x, y: point.y }));
+        nextPoints[pointIndex] = nextPoint;
+        try {
+            roadPath.setPathPoints(nextPoints, {
+                markSurfaceDirty: false,
+                updateIndexedNodes: false
+            });
+            drag.lastValidPoints = nextPoints.map(point => ({ x: point.x, y: point.y }));
+            drag.changed = true;
+        } catch (error) {
+            const errorMessage = error && error.message ? error.message : "Road point is not valid.";
+            message(errorMessage);
+            return true;
+        }
+        return true;
+    }
+
+    function finishRoadPathEditDrag(wizardRef) {
+        const drag = wizardRef && wizardRef.roadPathEditDrag;
+        if (!drag) return false;
+        wizardRef.roadPathEditDrag = null;
+        const roadPath = drag.roadPath;
+        if (!roadPath || roadPath.gone || roadPath.vanishing) return true;
+        if (drag.changed) {
+            const finalPoints = Array.isArray(drag.lastValidPoints)
+                ? drag.lastValidPoints
+                : roadPath.pathPoints;
+            roadPath.setPathPoints(finalPoints, { markSurfaceDirty: false });
+            persistEditedRoadPath(roadPath, roadPath.map || drag.map || wizardRef.map || null);
+        }
+        return true;
+    }
+
+    function getNearestRoadPathSegmentInsertion(roadPath, worldX, worldY) {
+        if (!roadPath || !Array.isArray(roadPath.pathPoints) || roadPath.pathPoints.length < 2) return null;
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        const mapRef = roadPath.map || map || null;
+        let best = null;
+        for (let i = 0; i < roadPath.pathPoints.length - 1; i++) {
+            const start = roadPath.pathPoints[i];
+            const end = roadPath.pathPoints[i + 1];
+            const sx = Number(start && start.x);
+            const sy = Number(start && start.y);
+            const ex = Number(end && end.x);
+            const ey = Number(end && end.y);
+            if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) {
+                throw new Error(`Cannot insert road path point because segment ${i} has non-finite endpoints.`);
+            }
+            const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(sx, ex)
+                : (ex - sx);
+            const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(sy, ey)
+                : (ey - sy);
+            const lenSq = dx * dx + dy * dy;
+            if (!(lenSq > 1e-10)) continue;
+            const clickDx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(sx, worldX)
+                : (worldX - sx);
+            const clickDy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(sy, worldY)
+                : (worldY - sy);
+            const t = Math.max(0, Math.min(1, (clickDx * dx + clickDy * dy) / lenSq));
+            const projected = wrapWorldPointForMap(mapRef, sx + dx * t, sy + dy * t);
+            const pxDx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(worldX, projected.x)
+                : (projected.x - worldX);
+            const pxDy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(worldY, projected.y)
+                : (projected.y - worldY);
+            const distanceSq = pxDx * pxDx + pxDy * pxDy;
+            if (!best || distanceSq < best.distanceSq) {
+                best = {
+                    segmentIndex: i,
+                    insertIndex: i + 1,
+                    point: projected,
+                    t,
+                    distanceSq
+                };
+            }
+        }
+        return best;
+    }
+
+    function insertRoadPathPointAt(wizardRef, worldX, worldY) {
+        if (!wizardRef || wizardRef.currentSpell !== "buildroad") return false;
+        if (typeof RoadPath !== "function") {
+            throw new Error("Cannot insert road path point because RoadPath is unavailable.");
+        }
+        const roadPath = pickRoadPathAt(wizardRef, worldX, worldY);
+        if (!roadPath) return false;
+        const insertion = getNearestRoadPathSegmentInsertion(roadPath, worldX, worldY);
+        if (!insertion || !insertion.point || !Number.isInteger(insertion.insertIndex)) return false;
+        const minT = 1e-4;
+        if (insertion.t <= minT || insertion.t >= 1 - minT) {
+            message("Click farther from an existing road point to insert a new point.");
+            wizardRef.selectedRoadPath = roadPath;
+            return true;
+        }
+        const points = roadPath.pathPoints.map((point, index) =>
+            RoadPath.normalizePoint(point, `road path insert source point ${index}`)
+        );
+        points.splice(insertion.insertIndex, 0, RoadPath.normalizePoint(insertion.point, "road path inserted point"));
+        try {
+            roadPath.setPathPoints(points, { markSurfaceDirty: false });
+        } catch (error) {
+            const errorMessage = error && error.message ? error.message : "Road point is not valid.";
+            message(errorMessage);
+            return true;
+        }
+        wizardRef.selectedRoadPath = roadPath;
+        wizardRef.roadPathEditDrag = null;
+        persistEditedRoadPath(roadPath, roadPath.map || wizardRef.map || null);
+        return true;
+    }
+
+    function placeRoadPathPieces(wizardRef, points, width, fillTexturePath) {
+        if (!wizardRef || !wizardRef.map) {
+            throw new Error("Cannot place path road without a map.");
+        }
+        if (typeof RoadPath !== "function") {
+            throw new Error("Cannot place path road because RoadPath is unavailable.");
+        }
+        const mapRef = wizardRef.map;
+        const baseRecord = {
+            type: "roadPath",
+            points: points.map((point, index) => RoadPath.normalizePoint(point, `road path placement point ${index}`)),
+            width: RoadPath.normalizeWidth(width),
+            fillTexturePath: RoadPath.normalizeFillTexturePath(fillTexturePath)
+        };
+        baseRecord.x = baseRecord.points[0].x;
+        baseRecord.y = baseRecord.points[0].y;
+
+        let pieces = [{ sectionKey: "", record: baseRecord }];
+        const shouldSplitForSectionWorld = !!(
+            mapRef._prototypeSectionState &&
+            typeof mapRef.getPrototypeSectionAsset === "function"
+        );
+        if (shouldSplitForSectionWorld) {
+            if (typeof globalThis === "undefined" || typeof globalThis.splitRoadPathSaveRecordBySection !== "function") {
+                throw new Error("Cannot place section road path because road path section splitting is unavailable.");
+            }
+            if (typeof mapRef.getPrototypeSectionKeyForWorldPoint !== "function") {
+                throw new Error("Cannot place section road path because section lookup is unavailable.");
+            }
+            if (typeof mapRef.ensurePrototypeObjectRuntimeRecord !== "function") {
+                throw new Error("Cannot place section road path because prototype object registration is unavailable.");
+            }
+            const ownerSectionKey = mapRef.getPrototypeSectionKeyForWorldPoint(baseRecord.x, baseRecord.y);
+            if (typeof ownerSectionKey !== "string" || ownerSectionKey.length === 0) {
+                throw new Error("Cannot place section road path because the starting section is unavailable.");
+            }
+            pieces = globalThis.splitRoadPathSaveRecordBySection(mapRef, baseRecord, ownerSectionKey);
+        }
+
+        const created = [];
+        for (let i = 0; i < pieces.length; i++) {
+            const piece = pieces[i];
+            const record = piece && piece.record;
+            if (!record || record.type !== "roadPath") {
+                throw new Error("Cannot place section road path from an invalid split record.");
+            }
+            const roadPath = RoadPath.loadJson(record, mapRef, { suppressAutoScriptingName: true });
+            if (!roadPath) {
+                throw new Error("Cannot place section road path because a split runtime object could not be created.");
+            }
+            if (typeof piece.sectionKey === "string" && piece.sectionKey.length > 0) {
+                roadPath._prototypeOwnerSectionKey = piece.sectionKey;
+                roadPath._prototypeOwnerType = "section";
+                roadPath._prototypeOwnerId = piece.sectionKey;
+                roadPath._prototypeOwnerSignature = `section:${piece.sectionKey}`;
+            }
+            if (typeof mapRef.ensurePrototypeObjectRuntimeRecord === "function") {
+                mapRef.ensurePrototypeObjectRuntimeRecord(roadPath);
+            }
+            if (typeof roadPath.markLevel0RoadSurfaceDirty === "function") {
+                roadPath.markLevel0RoadSurfaceDirty({ immediate: true });
+            }
+            created.push(roadPath);
+        }
+        return created;
     }
 
     function getSpellTargetHistorySet(wizardRef, spellName) {
@@ -3642,11 +4151,11 @@ const SpellSystem = (() => {
         if (!item) {
             return { band: 1, depth: 0, y: 0, x: 0 };
         }
-        const band = (item.type === "road") ? 0 : 1;
+        const band = (item.type === "road" || item.type === "roadPath") ? 0 : 1;
         let depth = 0;
         if (Number.isFinite(item.renderZ)) {
             depth = Number(item.renderZ);
-        } else if (item.type === "road") {
+        } else if (item.type === "road" || item.type === "roadPath") {
             depth = 0;
         } else {
             const baseDepth = Number.isFinite(item.y) ? item.y : 0;
@@ -3710,7 +4219,7 @@ const SpellSystem = (() => {
         const canTargetObject = (obj) => !!(
             obj &&
             !obj.gone &&
-            obj.type === objectType &&
+            (spellName === "buildroad" ? (obj.type === "road" || obj.type === "roadPath") : obj.type === objectType) &&
             (spellName !== "wall" || isWallTargetOnActivePlacementLayer(wizardRef, obj)) &&
             !hasSpellAlreadyTargetedObject(wizardRef, spellName, obj)
         );
@@ -3799,6 +4308,31 @@ const SpellSystem = (() => {
             return da <= db
                 ? { x: obj.startPoint.x, y: obj.startPoint.y }
                 : { x: obj.endPoint.x, y: obj.endPoint.y };
+        }
+        if (obj.type === "roadPath" && Array.isArray(obj.pathPoints) && obj.pathPoints.length > 0) {
+            if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) {
+                const firstPoint = obj.pathPoints[0];
+                return firstPoint && Number.isFinite(firstPoint.x) && Number.isFinite(firstPoint.y)
+                    ? { x: firstPoint.x, y: firstPoint.y }
+                    : null;
+            }
+            const mapRef = obj.map || map || null;
+            let nearest = null;
+            for (let i = 0; i < obj.pathPoints.length; i++) {
+                const point = obj.pathPoints[i];
+                if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+                const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                    ? mapRef.shortestDeltaX(worldX, point.x)
+                    : (point.x - worldX);
+                const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                    ? mapRef.shortestDeltaY(worldY, point.y)
+                    : (point.y - worldY);
+                const distSq = dx * dx + dy * dy;
+                if (!nearest || distSq < nearest.distSq) {
+                    nearest = { point, distSq };
+                }
+            }
+            return nearest ? { x: nearest.point.x, y: nearest.point.y } : null;
         }
         if (Number.isFinite(obj.x) && Number.isFinite(obj.y)) {
             return { x: obj.x, y: obj.y };
@@ -3970,10 +4504,282 @@ const SpellSystem = (() => {
         target.mountedWallSectionUnitId = null;
     }
 
+    function isMoveObjectPlacedObject(target) {
+        return !!(
+            target &&
+            (
+                target.type === "placedObject" ||
+                target.objectType === "placedObject" ||
+                target.isPlacedObject === true
+            )
+        );
+    }
+
+    function markMovedPrototypeObjectDirty(target, mapRef) {
+        if (!target || target._prototypeRuntimeRecord !== true) return;
+        target._prototypeDirty = true;
+        const objectState = mapRef && mapRef._prototypeObjectState;
+        if (!objectState) return;
+        if (!(objectState.dirtyRuntimeObjects instanceof Set)) {
+            objectState.dirtyRuntimeObjects = new Set();
+        }
+        objectState.dirtyRuntimeObjects.add(target);
+        objectState.captureScanNeeded = true;
+    }
+
+    function captureMovedPrototypeObjectImmediately(target, mapRef) {
+        if (!target || target._prototypeRuntimeRecord !== true) return;
+        if (!mapRef || typeof mapRef.capturePendingPrototypeObjects !== "function") {
+            throw new Error("moved prototype object support change requires map.capturePendingPrototypeObjects");
+        }
+        if (mapRef.capturePendingPrototypeObjects() !== true) {
+            throw new Error("moved prototype object support change failed to persist before restoring baked texture");
+        }
+    }
+
+    function getMoveObjectPersistenceSnapshot(target) {
+        if (!target || typeof target !== "object") return null;
+        return {
+            x: Number.isFinite(target.x) ? Number(target.x) : null,
+            y: Number.isFinite(target.y) ? Number(target.y) : null,
+            z: Number.isFinite(target.z) ? Number(target.z) : null,
+            rotation: Number.isFinite(target.rotation) ? Number(target.rotation) : null,
+            placementRotation: Number.isFinite(target.placementRotation) ? Number(target.placementRotation) : null,
+            mountedWallLineGroupId: Number.isInteger(Number(target.mountedWallLineGroupId)) ? Number(target.mountedWallLineGroupId) : null,
+            mountedSectionId: Number.isInteger(Number(target.mountedSectionId)) ? Number(target.mountedSectionId) : null,
+            mountedWallSectionUnitId: Number.isInteger(Number(target.mountedWallSectionUnitId)) ? Number(target.mountedWallSectionUnitId) : null,
+            mountedWallFacingSign: Number.isFinite(target.mountedWallFacingSign) ? Number(target.mountedWallFacingSign) : null,
+            fragmentId: typeof target.fragmentId === "string" ? target.fragmentId : "",
+            surfaceId: typeof target.surfaceId === "string" ? target.surfaceId : "",
+            ownerType: typeof target._prototypeOwnerType === "string" ? target._prototypeOwnerType : "",
+            ownerId: typeof target._prototypeOwnerId === "string" ? target._prototypeOwnerId : "",
+            ownerSectionKey: typeof target._prototypeOwnerSectionKey === "string" ? target._prototypeOwnerSectionKey : ""
+        };
+    }
+
+    function moveObjectPersistenceSnapshotChanged(previous, current, mapRef = null) {
+        if (!previous || !current) return false;
+        const numberChanged = (key) => {
+            const before = previous[key];
+            const after = current[key];
+            if (before === null || after === null) return before !== after;
+            if (key === "x" && mapRef && typeof mapRef.shortestDeltaX === "function") {
+                return Math.abs(mapRef.shortestDeltaX(before, after)) > 0.0001;
+            }
+            if (key === "y" && mapRef && typeof mapRef.shortestDeltaY === "function") {
+                return Math.abs(mapRef.shortestDeltaY(before, after)) > 0.0001;
+            }
+            return Math.abs(Number(after) - Number(before)) > 0.0001;
+        };
+        for (const key of ["x", "y", "z", "rotation", "placementRotation", "mountedWallFacingSign"]) {
+            if (numberChanged(key)) return true;
+        }
+        for (const key of ["mountedWallLineGroupId", "mountedSectionId", "mountedWallSectionUnitId"]) {
+            if (previous[key] !== current[key]) return true;
+        }
+        for (const key of ["fragmentId", "surfaceId", "ownerType", "ownerId", "ownerSectionKey"]) {
+            if (previous[key] !== current[key]) return true;
+        }
+        return false;
+    }
+
+    function finalizeMovedPrototypeObjectPersistence(dragState) {
+        if (!dragState || dragState.prototypePersistenceCaptured === true) return;
+        const target = dragState.target || null;
+        if (!target || target.gone || target.vanishing || target._prototypeRuntimeRecord !== true) return;
+        const mapRef = target.map || dragState.map || null;
+        const startSnapshot = dragState.prototypePersistenceStartSnapshot || null;
+        const currentSnapshot = getMoveObjectPersistenceSnapshot(target);
+        if (!moveObjectPersistenceSnapshotChanged(startSnapshot, currentSnapshot, mapRef)) return;
+        markMovedPrototypeObjectDirty(target, mapRef);
+    }
+
+    function syncMovedPrototypeOwnerFromSupport(target) {
+        if (!target || typeof target !== "object") return;
+        const support = target.currentMovementSupport && typeof target.currentMovementSupport === "object"
+            ? target.currentMovementSupport
+            : null;
+        if (!support) return;
+        const ownerType = typeof support.ownerType === "string" ? support.ownerType : "";
+        const ownerId = typeof support.ownerId === "string" ? support.ownerId : "";
+        const sectionKey = typeof support.sectionKey === "string" ? support.sectionKey : "";
+        target._prototypeOwnerType = ownerType;
+        target._prototypeOwnerId = ownerId;
+        target._prototypeOwnerSectionKey = ownerType === "section" ? (ownerId || sectionKey) : "";
+        target._prototypeOwnerSignature = ownerType && ownerId ? `${ownerType}:${ownerId}` : "";
+    }
+
+    function getMoveObjectSupportLayer(support, fallback = 0) {
+        if (support && Number.isFinite(support.layer)) return Math.round(Number(support.layer));
+        return Math.round(Number.isFinite(fallback) ? Number(fallback) : 0);
+    }
+
+    function getMoveObjectSupportBaseZ(support, fallbackLayer = 0) {
+        if (support && Number.isFinite(support.baseZ)) return Number(support.baseZ);
+        throw new Error(`moved object support layer ${getMoveObjectSupportLayer(support, fallbackLayer)} requires baseZ`);
+    }
+
+    function beginMovedPlacedObjectFloorFall(target, mapRef, result, previousWorldZ) {
+        if (!target || !result || !result.nextSupport) return false;
+        const nextSupport = result.nextSupport;
+        const nextLayer = getMoveObjectSupportLayer(nextSupport, Number(target.currentLayer) || 0);
+        const nextBaseZ = getMoveObjectSupportBaseZ(nextSupport, nextLayer);
+        const startWorldZ = Number(previousWorldZ);
+        const startLocalZ = startWorldZ - nextBaseZ;
+        if (!(startLocalZ > 0.0001)) return false;
+
+        target.z = startLocalZ;
+        target.prevZ = startLocalZ;
+        target.falling = true;
+        target._floorFallState = {
+            active: true,
+            velocityZ: 0,
+            gravity: -9,
+            fromLayer: getMoveObjectSupportLayer(result.previousSupport, Number(target.currentLayer) || 0),
+            fromBaseZ: getMoveObjectSupportBaseZ(result.previousSupport, Number(target.currentLayerBaseZ) || 0),
+            targetLayer: nextLayer,
+            landingSupport: nextSupport,
+            landingBaseZ: nextBaseZ,
+            landZ: 0,
+            bakeExclusion: null
+        };
+
+        if (isPrototypeBuildingMoveObjectTarget(target)) {
+            if (!mapRef || typeof mapRef.removePrototypeBuildingObjectFromInteriorBitmap !== "function") {
+                throw new Error("placed object floor fall requires map.removePrototypeBuildingObjectFromInteriorBitmap");
+            }
+            target._floorFallState.bakeExclusion = mapRef.removePrototypeBuildingObjectFromInteriorBitmap(target);
+        }
+        if (typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set) {
+            globalThis.activeSimObjects.add(target);
+        }
+        return true;
+    }
+
+    function validateMovedPlacedObjectSupport(target, mapRef, dragState = null) {
+        if (!isMoveObjectPlacedObject(target)) return;
+        if (!mapRef || typeof mapRef.validateActorMovementSupport !== "function") return;
+        const previousSupport = target.currentMovementSupport && typeof target.currentMovementSupport === "object"
+            ? target.currentMovementSupport
+            : null;
+        if (!previousSupport || previousSupport.type !== "floor") return;
+        const previousLayer = getMoveObjectSupportLayer(
+            previousSupport,
+            Number.isFinite(target.currentLayer) ? Number(target.currentLayer) : 0
+        );
+        const previousBaseZ = getMoveObjectSupportBaseZ(previousSupport, previousLayer);
+        const previousWorldZ = previousBaseZ + (Number.isFinite(target.z) ? Number(target.z) : 0);
+        const result = mapRef.validateActorMovementSupport(target, {
+            suppressLayerTransition: true,
+            markLost: true
+        });
+        if (!result || result.changed !== true) return;
+        syncMovedPrototypeOwnerFromSupport(target);
+        const startedFall = beginMovedPlacedObjectFloorFall(target, mapRef, result, previousWorldZ);
+        if (typeof target.refreshIndexedNodesFromHitbox === "function") {
+            target.refreshIndexedNodesFromHitbox({});
+        } else {
+            syncMovedObjectNodeState(target, mapRef, dragState);
+        }
+        markMovedPrototypeObjectDirty(target, mapRef);
+        captureMovedPrototypeObjectImmediately(target, mapRef);
+        if (dragState) {
+            dragState.prototypePersistenceCaptured = true;
+        }
+        if (dragState && result.nextSupport) {
+            dragState.lastMovementSupportChange = {
+                previousFragmentId: previousSupport.fragmentId || "",
+                nextFragmentId: result.nextSupport.fragmentId || "",
+                previousOwner: result.previousOwner || "",
+                nextOwner: result.nextOwner || "",
+                falling: startedFall
+            };
+        }
+    }
+
+    function finalizeMoveObjectDragSupport(dragState) {
+        if (!dragState || dragState.supportFinalized === true) return;
+        dragState.supportFinalized = true;
+        const target = dragState.target || null;
+        const mapRef = target && (target.map || dragState.map) || null;
+        validateMovedPlacedObjectSupport(target, mapRef, dragState);
+    }
+
     function isWallMountedMoveSnapCandidate(target) {
         if (!target || target.type !== "placedObject") return false;
         const category = (typeof target.category === "string") ? target.category.trim().toLowerCase() : "";
         return (category === "windows" || category === "doors") && target.rotationAxis === "spatial";
+    }
+
+    function isPrototypeBuildingMoveObjectTarget(target) {
+        if (!isMoveObjectPlacedObject(target)) return false;
+        if (target._prototypeOwnerType === "building") return true;
+        const support = target.currentMovementSupport && typeof target.currentMovementSupport === "object"
+            ? target.currentMovementSupport
+            : null;
+        if (support && support.ownerType === "building") return true;
+        const fragmentId = typeof target.fragmentId === "string" ? target.fragmentId : "";
+        const surfaceId = typeof target.surfaceId === "string" ? target.surfaceId : "";
+        return fragmentId.startsWith("building:") || surfaceId.startsWith("building:");
+    }
+
+    function beginPrototypeBuildingMoveObjectBakeExclusion(target, mapRef, dragState) {
+        if (!isPrototypeBuildingMoveObjectTarget(target)) return;
+        if (!mapRef || typeof mapRef.removePrototypeBuildingObjectFromInteriorBitmap !== "function") {
+            throw new Error("Cannot move prototype building placed object without map.removePrototypeBuildingObjectFromInteriorBitmap");
+        }
+        if (!Number.isInteger(Number(target._prototypeRecordId))) {
+            if (typeof mapRef.ensurePrototypeObjectRuntimeRecord !== "function") {
+                throw new Error("Cannot move fresh prototype building placed object without map.ensurePrototypeObjectRuntimeRecord");
+            }
+            mapRef.ensurePrototypeObjectRuntimeRecord(target);
+        }
+        const startMs = isMoveObjectPerfEnabled() ? performance.now() : 0;
+        const result = mapRef.removePrototypeBuildingObjectFromInteriorBitmap(target);
+        dragState.prototypeBuildingInteriorBitmapExclusionActive = result && result.changed === true;
+        dragState.prototypeBuildingInteriorBitmapExclusion = result || null;
+        dragState.hadSuppressBuildingRenderCacheDirty = Object.prototype.hasOwnProperty.call(target, "_suppressBuildingRenderCacheDirty");
+        dragState.previousSuppressBuildingRenderCacheDirty = target._suppressBuildingRenderCacheDirty;
+        target._suppressBuildingRenderCacheDirty = true;
+        if (isMoveObjectPerfEnabled()) {
+            recordMoveObjectPerf("moveObject.bakeExclusion.begin", {
+                targetType: target.type || "",
+                ownerId: target._prototypeOwnerId || "",
+                recordId: Number.isInteger(Number(target._prototypeRecordId)) ? Number(target._prototypeRecordId) : null,
+                changed: !!(result && result.changed)
+            }, performance.now() - startMs);
+        }
+    }
+
+    function restorePrototypeBuildingMoveObjectBakeExclusion(dragState) {
+        if (!dragState || !dragState.target) return;
+        const target = dragState.target;
+        const mapRef = target.map || dragState.map || null;
+        if (Object.prototype.hasOwnProperty.call(dragState, "hadSuppressBuildingRenderCacheDirty")) {
+            if (dragState.hadSuppressBuildingRenderCacheDirty) {
+                target._suppressBuildingRenderCacheDirty = dragState.previousSuppressBuildingRenderCacheDirty;
+            } else {
+                delete target._suppressBuildingRenderCacheDirty;
+            }
+        }
+        if (!dragState.prototypeBuildingInteriorBitmapExclusionActive) return;
+        if (target.gone || target.vanishing) return;
+        if (!mapRef || typeof mapRef.restorePrototypeBuildingObjectToInteriorBitmap !== "function") {
+            throw new Error("Cannot finish moving prototype building placed object without map.restorePrototypeBuildingObjectToInteriorBitmap");
+        }
+        const startMs = isMoveObjectPerfEnabled() ? performance.now() : 0;
+        const exclusionRef = dragState.prototypeBuildingInteriorBitmapExclusion || target;
+        mapRef.restorePrototypeBuildingObjectToInteriorBitmap(exclusionRef);
+        target._prototypeInteriorBitmapExcluded = false;
+        target._prototypeInteriorBitmapExclusion = null;
+        dragState.prototypeBuildingInteriorBitmapExclusionActive = false;
+        if (isMoveObjectPerfEnabled()) {
+            recordMoveObjectPerf("moveObject.bakeExclusion.restore", {
+                targetType: target.type || "",
+                ownerId: target._prototypeOwnerId || "",
+                recordId: Number.isInteger(Number(target._prototypeRecordId)) ? Number(target._prototypeRecordId) : null
+            }, performance.now() - startMs);
+        }
     }
 
     function closestPointOnSegment2DForMove(px, py, ax, ay, bx, by) {
@@ -4188,6 +4994,23 @@ const SpellSystem = (() => {
     }
 
     function syncMovedObjectNodeState(target, mapRef, dragState = null) {
+        if (!isMoveObjectPerfEnabled()) {
+            return syncMovedObjectNodeStateImpl(target, mapRef, dragState);
+        }
+        const startMs = performance.now();
+        const beforeNode = dragState && dragState.currentOccupancyNode || null;
+        try {
+            return syncMovedObjectNodeStateImpl(target, mapRef, dragState);
+        } finally {
+            recordMoveObjectPerf("moveObject.syncNodeState", {
+                targetType: target && target.type || "",
+                occupiesNodeObjects: !!(dragState && dragState.occupiesNodeObjects),
+                nodeChanged: !!(dragState && dragState.currentOccupancyNode !== beforeNode)
+            }, performance.now() - startMs);
+        }
+    }
+
+    function syncMovedObjectNodeStateImpl(target, mapRef, dragState = null) {
         if (!target || !mapRef || typeof mapRef.worldToNode !== "function") return;
         if (typeof target.refreshIndexedNodesFromHitbox === "function") {
             target.refreshIndexedNodesFromHitbox(
@@ -4214,7 +5037,415 @@ const SpellSystem = (() => {
         }
     }
 
+    function getMoveObjectDragNumber(target, wizardRef, dragState, key, defaultValue, minValue = 0) {
+        const candidates = [
+            target && target[key],
+            wizardRef && wizardRef[key],
+            dragState && dragState[key],
+            (typeof globalThis !== "undefined") ? globalThis[key] : undefined
+        ];
+        for (let i = 0; i < candidates.length; i++) {
+            const value = Number(candidates[i]);
+            if (Number.isFinite(value)) return Math.max(minValue, value);
+        }
+        return defaultValue;
+    }
+
+    function shouldUseForceMoveObjectDrag(target) {
+        if (!target || target.gone || target.vanishing) return false;
+        if (target.type === "triggerArea" || target.isTriggerArea === true) return false;
+        if (target.type === "prototypeBuildingPlacement") return false;
+        if (isWallMountedMoveSnapCandidate(target)) return false;
+        return true;
+    }
+
+    function shouldUseGodModeMoveObjectDrag(wizardRef) {
+        return !!(
+            wizardRef &&
+            typeof wizardRef.isGodMode === "function" &&
+            wizardRef.isGodMode()
+        );
+    }
+
+    function cloneMoveObjectGroundHitboxAt(target, anchor, candidateX, candidateY, mapRef) {
+        const hitbox = target && (target.groundPlaneHitbox || target.visualHitbox || target.hitbox) || null;
+        if (!hitbox || !anchor) return null;
+        const dx = (typeof mapRef.shortestDeltaX === "function")
+            ? mapRef.shortestDeltaX(anchor.x, candidateX)
+            : (candidateX - anchor.x);
+        const dy = (typeof mapRef.shortestDeltaY === "function")
+            ? mapRef.shortestDeltaY(anchor.y, candidateY)
+            : (candidateY - anchor.y);
+        if (hitbox.type === "circle") {
+            const center = wrapWorldPointForMap(mapRef, Number(hitbox.x) + dx, Number(hitbox.y) + dy);
+            return { type: "circle", x: center.x, y: center.y, radius: Math.max(0, Number(hitbox.radius) || 0) };
+        }
+        if (Array.isArray(hitbox.points) && hitbox.points.length >= 3) {
+            return {
+                type: "polygon",
+                points: translatePointArray(hitbox.points, dx, dy, mapRef)
+            };
+        }
+        return null;
+    }
+
+    function getMoveObjectHitboxBounds(hitbox) {
+        if (!hitbox) return null;
+        if (typeof hitbox.getBounds === "function") return hitbox.getBounds();
+        if (hitbox.type === "circle") {
+            const radius = Math.max(0, Number(hitbox.radius) || 0);
+            return { x: Number(hitbox.x) - radius, y: Number(hitbox.y) - radius, width: radius * 2, height: radius * 2 };
+        }
+        if (Array.isArray(hitbox.points) && hitbox.points.length >= 3) {
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            for (let i = 0; i < hitbox.points.length; i++) {
+                const x = Number(hitbox.points[i] && hitbox.points[i].x);
+                const y = Number(hitbox.points[i] && hitbox.points[i].y);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                minX = Math.min(minX, x);
+                minY = Math.min(minY, y);
+                maxX = Math.max(maxX, x);
+                maxY = Math.max(maxY, y);
+            }
+            if (Number.isFinite(minX) && Number.isFinite(minY) && Number.isFinite(maxX) && Number.isFinite(maxY)) {
+                return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+            }
+        }
+        return null;
+    }
+
+    function moveObjectBoundsOverlap(a, b, padding = 0) {
+        if (!a || !b) return true;
+        return !(
+            a.x + a.width + padding < b.x ||
+            b.x + b.width + padding < a.x ||
+            a.y + a.height + padding < b.y ||
+            b.y + b.height + padding < a.y
+        );
+    }
+
+    function getMoveObjectLayer(target) {
+        if (Number.isFinite(target && target.traversalLayer)) return Math.round(Number(target.traversalLayer));
+        if (Number.isFinite(target && target.currentLayer)) return Math.round(Number(target.currentLayer));
+        if (Number.isFinite(target && target.level)) return Math.round(Number(target.level));
+        if (Number.isFinite(target && target.node && target.node.traversalLayer)) return Math.round(Number(target.node.traversalLayer));
+        if (Number.isFinite(target && target.node && target.node.level)) return Math.round(Number(target.node.level));
+        return 0;
+    }
+
+    function doesMoveObjectBlockerApplyToLayer(blocker, targetLayer) {
+        if (!blocker) return false;
+        const blockerLayer = getMoveObjectLayer(blocker);
+        return blockerLayer === targetLayer;
+    }
+
+    function doesObjectBlockMoveObjectDrag(obj) {
+        if (!obj || obj.gone || obj.vanishing) return false;
+        if (!(obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox)) return false;
+        if (typeof globalThis !== "undefined" && typeof globalThis.doesObjectBlockPassage === "function") {
+            return !!globalThis.doesObjectBlockPassage(obj);
+        }
+        if (obj.type === "wallSection") return true;
+        return obj.isPassable === false || obj.blocksTile === true;
+    }
+
+    function collectMoveObjectCollisionBlockers(target, mapRef, fromAnchor, toAnchor) {
+        const blockers = [];
+        const seen = new Set();
+        if (!target || !mapRef || !fromAnchor || !toAnchor) return blockers;
+        const targetLayer = getMoveObjectLayer(target);
+        const currentHitbox = cloneMoveObjectGroundHitboxAt(target, fromAnchor, fromAnchor.x, fromAnchor.y, mapRef);
+        const targetHitbox = cloneMoveObjectGroundHitboxAt(target, fromAnchor, toAnchor.x, toAnchor.y, mapRef);
+        const currentBounds = getMoveObjectHitboxBounds(currentHitbox);
+        const targetBounds = getMoveObjectHitboxBounds(targetHitbox);
+        const minX = Math.min(
+            Number(currentBounds && currentBounds.x) || fromAnchor.x,
+            Number(targetBounds && targetBounds.x) || toAnchor.x,
+            fromAnchor.x,
+            toAnchor.x
+        ) - 1.5;
+        const minY = Math.min(
+            Number(currentBounds && currentBounds.y) || fromAnchor.y,
+            Number(targetBounds && targetBounds.y) || toAnchor.y,
+            fromAnchor.y,
+            toAnchor.y
+        ) - 1.5;
+        const maxX = Math.max(
+            Number(currentBounds && (currentBounds.x + currentBounds.width)) || fromAnchor.x,
+            Number(targetBounds && (targetBounds.x + targetBounds.width)) || toAnchor.x,
+            fromAnchor.x,
+            toAnchor.x
+        ) + 1.5;
+        const maxY = Math.max(
+            Number(currentBounds && (currentBounds.y + currentBounds.height)) || fromAnchor.y,
+            Number(targetBounds && (targetBounds.y + targetBounds.height)) || toAnchor.y,
+            fromAnchor.y,
+            toAnchor.y
+        ) + 1.5;
+        const queryBounds = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+        const blockerQueryBounds = { minX, minY, maxX, maxY };
+
+        const addBlocker = (obj) => {
+            if (!obj || obj === target || seen.has(obj)) return;
+            if (!doesObjectBlockMoveObjectDrag(obj)) return;
+            if (!doesMoveObjectBlockerApplyToLayer(obj, targetLayer)) return;
+            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+            if (!hitbox) return;
+            const bounds = getMoveObjectHitboxBounds(hitbox);
+            if (!moveObjectBoundsOverlap(queryBounds, bounds, 0.5)) return;
+            seen.add(obj);
+            blockers.push(obj);
+        };
+
+        const addNodeObjects = (node) => {
+            if (!node || !Array.isArray(node.objects)) return;
+            for (let i = 0; i < node.objects.length; i++) addBlocker(node.objects[i]);
+        };
+
+        if (typeof mapRef.worldToNode === "function" && typeof mapRef.getNodesInIndexWindow === "function") {
+            const cornerNodes = [
+                mapRef.worldToNode(minX, minY),
+                mapRef.worldToNode(maxX, minY),
+                mapRef.worldToNode(minX, maxY),
+                mapRef.worldToNode(maxX, maxY)
+            ].filter(Boolean);
+            if (cornerNodes.length > 0) {
+                const xIndices = cornerNodes.map(node => Number(node.xindex)).filter(Number.isFinite);
+                const yIndices = cornerNodes.map(node => Number(node.yindex)).filter(Number.isFinite);
+                if (xIndices.length && yIndices.length) {
+                    const nodes = mapRef.getNodesInIndexWindow(
+                        Math.min(...xIndices) - 1,
+                        Math.max(...xIndices) + 1,
+                        Math.min(...yIndices) - 1,
+                        Math.max(...yIndices) + 1
+                    );
+                    for (let i = 0; i < nodes.length; i++) addNodeObjects(nodes[i]);
+                }
+            }
+        }
+
+        if (target.node) {
+            addNodeObjects(target.node);
+            if (Array.isArray(target.node.neighbors)) {
+                for (let i = 0; i < target.node.neighbors.length; i++) addNodeObjects(target.node.neighbors[i]);
+            }
+        }
+
+        const WallCtor = (typeof globalThis !== "undefined") ? globalThis.WallSectionUnit : null;
+        if (WallCtor && WallCtor._allSections instanceof Map) {
+            for (const wall of WallCtor._allSections.values()) addBlocker(wall);
+        }
+
+        if (typeof mapRef.collectPrototypeBuildingMovementBlockersInBounds === "function") {
+            const buildingBlockers = mapRef.collectPrototypeBuildingMovementBlockersInBounds(
+                blockerQueryBounds,
+                targetLayer
+            );
+            if (!Array.isArray(buildingBlockers)) {
+                throw new Error("move object collision expected collectPrototypeBuildingMovementBlockersInBounds to return an array");
+            }
+            for (let i = 0; i < buildingBlockers.length; i++) addBlocker(buildingBlockers[i]);
+        }
+
+        return blockers;
+    }
+
+    function resolveMoveObjectCollisionAt(target, anchor, candidateX, candidateY, mapRef, blockers) {
+        const probe = cloneMoveObjectGroundHitboxAt(target, anchor, candidateX, candidateY, mapRef);
+        if (!probe) return null;
+        let totalPushX = 0;
+        let totalPushY = 0;
+        let maxPushLen = 0;
+        for (let i = 0; i < blockers.length; i++) {
+            const blocker = blockers[i];
+            const hitbox = blocker && (blocker.groundPlaneHitbox || blocker.visualHitbox || blocker.hitbox) || null;
+            if (!hitbox) continue;
+            let collision = null;
+            if (typeof hitbox.intersects === "function") collision = hitbox.intersects(probe);
+            if (!collision && typeof probe.intersects === "function") collision = probe.intersects(hitbox);
+            if (!collision || collision.pushX === undefined) continue;
+            let pushX = Number(collision.pushX) || 0;
+            let pushY = Number(collision.pushY) || 0;
+            if (Math.hypot(pushX, pushY) <= 1e-9) {
+                const bounds = getMoveObjectHitboxBounds(hitbox);
+                const centerX = bounds ? bounds.x + bounds.width * 0.5 : Number(blocker.x);
+                const centerY = bounds ? bounds.y + bounds.height * 0.5 : Number(blocker.y);
+                const dx = candidateX - centerX;
+                const dy = candidateY - centerY;
+                const len = Math.hypot(dx, dy) || 1;
+                pushX = dx / len * 0.05;
+                pushY = dy / len * 0.05;
+            }
+            totalPushX += pushX;
+            totalPushY += pushY;
+            maxPushLen = Math.max(maxPushLen, Math.hypot(pushX, pushY));
+        }
+        const pushLen = Math.hypot(totalPushX, totalPushY);
+        if (!(pushLen > 0)) return null;
+        if (pushLen > maxPushLen && maxPushLen > 0) {
+            const scale = maxPushLen / pushLen;
+            totalPushX *= scale;
+            totalPushY *= scale;
+        }
+        const resolvedPushLen = Math.hypot(totalPushX, totalPushY);
+        if (!(resolvedPushLen > 0)) return null;
+        return {
+            pushX: totalPushX,
+            pushY: totalPushY,
+            normalX: totalPushX / resolvedPushLen,
+            normalY: totalPushY / resolvedPushLen,
+            overlap: resolvedPushLen
+        };
+    }
+
+    function resolveMoveObjectForceStep(target, fromAnchor, candidateAnchor, mapRef, dragState) {
+        const blockers = collectMoveObjectCollisionBlockers(target, mapRef, fromAnchor, candidateAnchor);
+        if (!blockers.length) return { x: candidateAnchor.x, y: candidateAnchor.y, collided: false };
+        const dx = (typeof mapRef.shortestDeltaX === "function")
+            ? mapRef.shortestDeltaX(fromAnchor.x, candidateAnchor.x)
+            : (candidateAnchor.x - fromAnchor.x);
+        const dy = (typeof mapRef.shortestDeltaY === "function")
+            ? mapRef.shortestDeltaY(fromAnchor.y, candidateAnchor.y)
+            : (candidateAnchor.y - fromAnchor.y);
+        const distance = Math.hypot(dx, dy);
+        if (!(distance > 1e-8)) {
+            const collision = resolveMoveObjectCollisionAt(target, fromAnchor, fromAnchor.x, fromAnchor.y, mapRef, blockers);
+            if (!collision) return { x: candidateAnchor.x, y: candidateAnchor.y, collided: false };
+            return {
+                x: fromAnchor.x + collision.normalX * Math.min(0.08, collision.overlap + 0.005),
+                y: fromAnchor.y + collision.normalY * Math.min(0.08, collision.overlap + 0.005),
+                collided: true,
+                normalX: collision.normalX,
+                normalY: collision.normalY
+            };
+        }
+        const stepSize = Math.max(0.04, Math.min(0.18, Number(target.groundRadius) > 0 ? Number(target.groundRadius) * 0.35 : 0.08));
+        const steps = Math.min(48, Math.max(1, Math.ceil(distance / stepSize)));
+        let lastClearX = fromAnchor.x;
+        let lastClearY = fromAnchor.y;
+        for (let i = 1; i <= steps; i++) {
+            const t = i / steps;
+            const sample = wrapWorldPointForMap(mapRef, fromAnchor.x + dx * t, fromAnchor.y + dy * t);
+            const collision = resolveMoveObjectCollisionAt(target, fromAnchor, sample.x, sample.y, mapRef, blockers);
+            if (!collision) {
+                lastClearX = sample.x;
+                lastClearY = sample.y;
+                continue;
+            }
+            const backoff = Math.max(0.005, Math.min(0.03, collision.overlap + 0.005));
+            const resolved = wrapWorldPointForMap(
+                mapRef,
+                lastClearX + collision.normalX * backoff,
+                lastClearY + collision.normalY * backoff
+            );
+            const velocityX = Number(dragState && dragState.velocityX) || 0;
+            const velocityY = Number(dragState && dragState.velocityY) || 0;
+            const intoWall = velocityX * collision.normalX + velocityY * collision.normalY;
+            if (dragState && intoWall < 0) {
+                dragState.velocityX = velocityX - collision.normalX * intoWall;
+                dragState.velocityY = velocityY - collision.normalY * intoWall;
+            }
+            return {
+                x: resolved.x,
+                y: resolved.y,
+                collided: true,
+                normalX: collision.normalX,
+                normalY: collision.normalY
+            };
+        }
+        return { x: candidateAnchor.x, y: candidateAnchor.y, collided: false };
+    }
+
+    function applyMoveObjectForceDragStep(target, desiredX, desiredY, wizardRef, dragState) {
+        const mapRef = target && (target.map || wizardRef.map) || null;
+        const anchor = getMoveObjectAnchorPoint(target);
+        if (!target || !mapRef || !anchor || !Number.isFinite(desiredX) || !Number.isFinite(desiredY)) return false;
+        const wrappedDesired = wrapWorldPointForMap(mapRef, desiredX, desiredY);
+        const dx = (typeof mapRef.shortestDeltaX === "function")
+            ? mapRef.shortestDeltaX(anchor.x, wrappedDesired.x)
+            : (wrappedDesired.x - anchor.x);
+        const dy = (typeof mapRef.shortestDeltaY === "function")
+            ? mapRef.shortestDeltaY(anchor.y, wrappedDesired.y)
+            : (wrappedDesired.y - anchor.y);
+        const distance = Math.hypot(dx, dy);
+        const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : null;
+        const globalFrameRate = (typeof frameRate !== "undefined")
+            ? frameRate
+            : ((typeof globalThis !== "undefined") ? globalThis.frameRate : 60);
+        const fallbackDt = 1 / Math.max(1, Number(globalFrameRate) || 60);
+        const previousMs = Number(dragState && dragState.lastForceUpdateMs);
+        let dt = Number.isFinite(nowMs) && Number.isFinite(previousMs)
+            ? Math.max(0, (nowMs - previousMs) / 1000)
+            : fallbackDt;
+        // Keep long stalls from becoming one giant impulse that can overwhelm the sweep.
+        dt = Math.min(1 / 20, dt);
+        if (dragState) dragState.lastForceUpdateMs = Number.isFinite(nowMs) ? nowMs : previousMs;
+
+        let velocityX = Number(dragState && dragState.velocityX) || 0;
+        let velocityY = Number(dragState && dragState.velocityY) || 0;
+        if (distance > 1e-6) {
+            const strength = getMoveObjectDragNumber(target, wizardRef, dragState, "moveObjectForceStrength", 90, 0);
+            const falloffDistance = getMoveObjectDragNumber(target, wizardRef, dragState, "moveObjectForceFalloffDistance", 3, 0.001);
+            const forceScale = Math.min(1, distance / falloffDistance);
+            velocityX += (dx / distance) * strength * forceScale * dt;
+            velocityY += (dy / distance) * strength * forceScale * dt;
+        }
+        const damping = getMoveObjectDragNumber(target, wizardRef, dragState, "moveObjectForceDamping", 5.5, 0);
+        const dampingFactor = Math.exp(-damping * dt);
+        velocityX *= dampingFactor;
+        velocityY *= dampingFactor;
+        const maxSpeed = getMoveObjectDragNumber(target, wizardRef, dragState, "moveObjectMaxSpeed", 10, 0.01);
+        const speed = Math.hypot(velocityX, velocityY);
+        if (speed > maxSpeed) {
+            const scale = maxSpeed / speed;
+            velocityX *= scale;
+            velocityY *= scale;
+        }
+
+        if (dragState) {
+            dragState.velocityX = velocityX;
+            dragState.velocityY = velocityY;
+        }
+        if (Math.hypot(velocityX, velocityY) < 0.001 && distance < 0.01) return true;
+
+        const candidateAnchor = wrapWorldPointForMap(mapRef, anchor.x + velocityX * dt, anchor.y + velocityY * dt);
+        const resolved = resolveMoveObjectForceStep(target, anchor, candidateAnchor, mapRef, dragState);
+        if (resolved && resolved.collided && dragState) {
+            dragState.lastCollisionNormalX = resolved.normalX;
+            dragState.lastCollisionNormalY = resolved.normalY;
+        }
+        return applyMoveObjectTargetPosition(
+            target,
+            resolved ? resolved.x : candidateAnchor.x,
+            resolved ? resolved.y : candidateAnchor.y,
+            dragState
+        );
+    }
+
     function applyMoveObjectTargetPosition(target, targetX, targetY, dragState = null) {
+        if (!isMoveObjectPerfEnabled()) {
+            return applyMoveObjectTargetPositionImpl(target, targetX, targetY, dragState);
+        }
+        const startMs = performance.now();
+        try {
+            return applyMoveObjectTargetPositionImpl(target, targetX, targetY, dragState);
+        } finally {
+            recordMoveObjectPerf("moveObject.applyTargetPosition", {
+                targetType: target && target.type || "",
+                x: Number.isFinite(target && target.x) ? Number(target.x) : null,
+                y: Number.isFinite(target && target.y) ? Number(target.y) : null,
+                desiredX: Number.isFinite(targetX) ? Number(targetX) : null,
+                desiredY: Number.isFinite(targetY) ? Number(targetY) : null
+            }, performance.now() - startMs);
+        }
+    }
+
+    function applyMoveObjectTargetPositionImpl(target, targetX, targetY, dragState = null) {
         if (!target || target.gone || target.vanishing) return false;
         const mapRef = target.map || map || null;
         const anchor = getMoveObjectAnchorPoint(target);
@@ -4318,8 +5549,9 @@ const SpellSystem = (() => {
         const anchor = getMoveObjectAnchorPoint(target);
         if (!mapRef || !anchor) return false;
 
-        wizardRef.moveObjectDragState = {
+        const dragState = {
             target,
+            map: mapRef,
             offsetX: (typeof mapRef.shortestDeltaX === "function")
                 ? mapRef.shortestDeltaX(worldX, anchor.x)
                 : (anchor.x - worldX),
@@ -4331,12 +5563,50 @@ const SpellSystem = (() => {
                 Array.isArray(target.node.objects) &&
                 target.node.objects.includes(target)
             ),
-            currentOccupancyNode: target.node || null
+            currentOccupancyNode: target.node || null,
+            velocityX: 0,
+            velocityY: 0,
+            prototypePersistenceStartSnapshot: getMoveObjectPersistenceSnapshot(target),
+            prototypePersistenceCaptured: false,
+            lastForceUpdateMs: (
+                typeof performance !== "undefined" &&
+                performance &&
+                typeof performance.now === "function"
+            ) ? performance.now() : null
         };
+        beginPrototypeBuildingMoveObjectBakeExclusion(target, mapRef, dragState);
+        wizardRef.moveObjectDragState = dragState;
+        recordMoveObjectPerf("moveObject.drag.begin", {
+            targetType: target.type || "",
+            ownerId: target._prototypeOwnerId || "",
+            recordId: Number.isInteger(Number(target._prototypeRecordId)) ? Number(target._prototypeRecordId) : null,
+            x: Number.isFinite(target.x) ? Number(target.x) : null,
+            y: Number.isFinite(target.y) ? Number(target.y) : null,
+            nodeObjects: !!dragState.occupiesNodeObjects
+        });
         return true;
     }
 
     function updateMoveObjectDrag(wizardRef, worldX, worldY) {
+        if (!isMoveObjectPerfEnabled()) {
+            return updateMoveObjectDragImpl(wizardRef, worldX, worldY);
+        }
+        const startMs = performance.now();
+        try {
+            return updateMoveObjectDragImpl(wizardRef, worldX, worldY);
+        } finally {
+            const target = wizardRef && wizardRef.moveObjectDragState && wizardRef.moveObjectDragState.target;
+            recordMoveObjectPerf("moveObject.drag.update", {
+                targetType: target && target.type || "",
+                worldX: Number.isFinite(worldX) ? Number(worldX) : null,
+                worldY: Number.isFinite(worldY) ? Number(worldY) : null,
+                targetX: Number.isFinite(target && target.x) ? Number(target.x) : null,
+                targetY: Number.isFinite(target && target.y) ? Number(target.y) : null
+            }, performance.now() - startMs);
+        }
+    }
+
+    function updateMoveObjectDragImpl(wizardRef, worldX, worldY) {
         const dragState = wizardRef && wizardRef.moveObjectDragState;
         if (!dragState || !dragState.target) return false;
         const target = dragState.target;
@@ -4350,6 +5620,14 @@ const SpellSystem = (() => {
             Number(worldX) + Number(dragState.offsetX || 0),
             Number(worldY) + Number(dragState.offsetY || 0)
         );
+        if (shouldUseGodModeMoveObjectDrag(wizardRef)) {
+            dragState.velocityX = 0;
+            dragState.velocityY = 0;
+            return applyMoveObjectTargetPosition(target, desired.x, desired.y, dragState);
+        }
+        if (shouldUseForceMoveObjectDrag(target)) {
+            return applyMoveObjectForceDragStep(target, desired.x, desired.y, wizardRef, dragState);
+        }
         return applyMoveObjectTargetPosition(target, desired.x, desired.y, dragState);
     }
 
@@ -4426,7 +5704,11 @@ const SpellSystem = (() => {
         if (spell === "wall" || spell === "buildroad" || spell === "firewall") {
             const objectType = getDragSpellObjectType(spell);
             if (!objectType) return false;
-            if (candidate.type !== objectType) return false;
+            if (spell === "buildroad") {
+                if (candidate.type !== "road" && candidate.type !== "roadPath") return false;
+            } else if (candidate.type !== objectType) {
+                return false;
+            }
             return !hasSpellAlreadyTargetedObject(wizardRef, spell, candidate);
         }
         if (spell === "placeobject") {
@@ -4504,7 +5786,6 @@ const SpellSystem = (() => {
 
     function beginDragSpell(wizardRef, spellName, worldX, worldY) {
         if (!wizardRef || wizardRef.castDelay) return false;
-        if (!keysPressed[" "]) return false;
         const snapTarget = getDragStartSnapTargetAt(wizardRef, spellName, worldX, worldY);
 
         if (spellName === "wall") {
@@ -4550,17 +5831,43 @@ const SpellSystem = (() => {
         }
 
         if (spellName === "buildroad") {
-            const roadNode = (snapTarget && snapTarget.node)
-                ? snapTarget.node
-                : wizardRef.map.worldToNode(worldX, worldY);
-            if (!roadNode) return false;
+            if (beginRoadPathEditDrag(wizardRef, worldX, worldY)) {
+                wizardRef.roadLayoutMode = false;
+                wizardRef.roadStartPoint = null;
+                wizardRef.roadPathDraft = null;
+                clearDragPreview(wizardRef, "buildroad");
+                return true;
+            }
+            if (isDragSpellActive(wizardRef, "buildroad")) {
+                ensureDragPreview(wizardRef, "buildroad");
+                return true;
+            }
+            const existingRoadPath = pickRoadPathAt(wizardRef, worldX, worldY);
+            if (existingRoadPath) {
+                wizardRef.selectedRoadPath = existingRoadPath;
+                wizardRef.roadPathEditDrag = null;
+                wizardRef.roadLayoutMode = false;
+                wizardRef.roadStartPoint = null;
+                wizardRef.roadPathDraft = null;
+                clearDragPreview(wizardRef, "buildroad");
+                return true;
+            }
+            clearSelectedRoadPath(wizardRef);
+            const startPoint = getRoadPathPlacementPoint(wizardRef, worldX, worldY, snapTarget);
+            if (!startPoint) return false;
             wizardRef.roadLayoutMode = true;
-            wizardRef.roadStartPoint = roadNode;
+            wizardRef.roadStartPoint = startPoint;
+            wizardRef.roadPathDraft = {
+                points: [startPoint],
+                width: getSelectedRoadWidth(wizardRef),
+                fillTexturePath: getSelectedFlooringTexture(wizardRef)
+            };
             ensureDragPreview(wizardRef, "buildroad");
             return true;
         }
 
         if (spellName === "firewall") {
+            if (!keysPressed[" "]) return false;
             wizardRef.firewallLayoutMode = true;
             wizardRef.firewallStartPoint = (snapTarget && snapTarget.point)
                 ? { x: snapTarget.point.x, y: snapTarget.point.y }
@@ -4570,10 +5877,12 @@ const SpellSystem = (() => {
         }
 
         if (isMoveObjectToolName(spellName)) {
+            if (!keysPressed[" "]) return false;
             return beginMoveObjectDrag(wizardRef, worldX, worldY);
         }
 
         if (isVanishToolName(spellName)) {
+            if (!keysPressed[" "]) return false;
             wizardRef.vanishDragMode = true;
             ensureVanishDragTargetingState(wizardRef);
             queueVanishDragTargetAtPoint(wizardRef, worldX, worldY);
@@ -4587,18 +5896,20 @@ const SpellSystem = (() => {
         if (!wizardRef || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return false;
         if (!keysPressed[" "]) {
             if (wizardRef.currentSpell === "wall") cancelDragSpell(wizardRef, "wall");
-            if (wizardRef.currentSpell === "buildroad") cancelDragSpell(wizardRef, "buildroad");
             if (wizardRef.currentSpell === "firewall") cancelDragSpell(wizardRef, "firewall");
             if (isMoveObjectToolName(wizardRef.currentSpell)) cancelDragSpell(wizardRef, wizardRef.currentSpell);
             if (isVanishToolName(wizardRef.currentSpell)) cancelDragSpell(wizardRef, wizardRef.currentSpell);
-            return false;
+            if (wizardRef.currentSpell !== "buildroad") return false;
         }
         if (wizardRef.currentSpell === "wall" && wizardRef.wallLayoutMode && wizardRef.wallStartPoint) {
             const adjustedPoint = getAdjustedWallDragWorldPoint(wizardRef, worldX, worldY);
             if (!adjustedPoint) return false;
             return true;
         }
-        if (wizardRef.currentSpell === "buildroad" && wizardRef.roadLayoutMode && wizardRef.roadStartPoint) {
+        if (wizardRef.currentSpell === "buildroad" && wizardRef.roadPathEditDrag) {
+            return updateRoadPathEditDrag(wizardRef, worldX, worldY);
+        }
+        if (wizardRef.currentSpell === "buildroad" && isDragSpellActive(wizardRef, "buildroad")) {
             return true;
         }
         if (wizardRef.currentSpell === "firewall" && wizardRef.firewallLayoutMode && wizardRef.firewallStartPoint) {
@@ -4791,33 +6102,53 @@ const SpellSystem = (() => {
         }
 
         if (spellName === "buildroad") {
+            if (wizardRef.roadPathEditDrag) {
+                return finishRoadPathEditDrag(wizardRef);
+            }
             if (!isDragSpellActive(wizardRef, "buildroad")) return false;
-            const roadNode = wizardRef.map.worldToNode(worldX, worldY);
-            if (!roadNode) {
+            const mapRef = wizardRef.map || null;
+            const snapTarget = getDragStartSnapTargetAt(wizardRef, "buildroad", worldX, worldY);
+            const nextPoint = getRoadPathPlacementPoint(wizardRef, worldX, worldY, snapTarget);
+            const draft = wizardRef.roadPathDraft;
+            const points = getRoadPathDraftPoints(wizardRef);
+            if (
+                !draft ||
+                !nextPoint ||
+                points.length < 1 ||
+                !Number.isFinite(nextPoint.x) ||
+                !Number.isFinite(nextPoint.y)
+            ) {
                 cancelDragSpell(wizardRef, "buildroad");
                 return true;
             }
-            const nodeA = wizardRef.roadStartPoint;
-            const nodeB = roadNode;
-            const width = (nodeA === nodeB) ? 1 : getSelectedRoadWidth(wizardRef);
-            const roadNodes = wizardRef.map.getHexLine(nodeA, nodeB, width);
-            const selectedFlooring = getSelectedFlooringTexture(wizardRef);
-            roadNodes.forEach(node => {
-                const hasRoad = (typeof Road !== "undefined" && typeof Road.hasMatchingRoadAtNode === "function")
-                    ? Road.hasMatchingRoadAtNode(node, selectedFlooring)
-                    : (node.objects && node.objects.some(obj => obj.type === "road"));
-                if (!hasRoad) {
-                    new Road({x: node.x, y: node.y}, [], wizardRef.map, {
-                        fillTexturePath: selectedFlooring
-                    });
-                    markLevel0SurfaceRoadDirtyForNode(wizardRef.map, node);
+            const lastPoint = points[points.length - 1];
+            const width = Number.isFinite(draft.width) ? Number(draft.width) : getSelectedRoadWidth(wizardRef);
+            const selectedFlooring = draft.fillTexturePath || getSelectedFlooringTexture(wizardRef);
+            if (pointsMatchWorld(mapRef, lastPoint, nextPoint, 1e-5)) {
+                if (points.length >= 2) {
+                    placeRoadPathPieces(wizardRef, points, width, selectedFlooring);
+                    if (!editorMode) {
+                        wizardRef.magic -= 5;
+                    }
+                    cancelDragSpell(wizardRef, "buildroad");
+                    cooldown(wizardRef, wizardRef.cooldownTime);
                 }
-            });
-            if (!editorMode) {
-                wizardRef.magic -= 5;
+                return true;
             }
-            cancelDragSpell(wizardRef, "buildroad");
-            cooldown(wizardRef, wizardRef.cooldownTime);
+            if (typeof RoadPath !== "function") {
+                throw new Error("Cannot place path road because RoadPath is unavailable.");
+            }
+            const proposedPoints = points.concat(nextPoint);
+            try {
+                RoadPath.computeGeometry(proposedPoints, width);
+            } catch (error) {
+                const errorMessage = error && error.message ? error.message : "Road path point is not valid.";
+                message(`${errorMessage}. Add another point to make the turn gentler.`);
+                return true;
+            }
+            draft.points = proposedPoints;
+            wizardRef.roadStartPoint = proposedPoints[0];
+            ensureDragPreview(wizardRef, "buildroad");
             return true;
         }
 
@@ -5677,7 +7008,7 @@ const SpellSystem = (() => {
         let bestDistanceSq = TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX * TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX;
         for (let i = 0; i < fragments.length; i++) {
             const fragment = fragments[i];
-            const baseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : (getSelectedFloorEditLevel(wizardRef) * 3);
+            const baseZ = getFloorEditorBaseZ(wizardRef, fragment, "floor editor vertex selection");
             const rings = getFloorEditorRingsForFragment(fragment);
             for (let r = 0; r < rings.length; r++) {
                 const ring = rings[r];
@@ -5799,7 +7130,7 @@ const SpellSystem = (() => {
         let bestDistanceSq = TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX * TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX;
         for (let i = 0; i < fragments.length; i++) {
             const fragment = fragments[i];
-            const baseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : (getSelectedFloorEditLevel(wizardRef) * 3);
+            const baseZ = getFloorEditorBaseZ(wizardRef, fragment, "floor editor snap selection");
             const rings = getFloorEditorRingsForFragment(fragment);
             for (let r = 0; r < rings.length; r++) {
                 const ring = rings[r];
@@ -5885,7 +7216,7 @@ const SpellSystem = (() => {
         let bestDistanceSq = TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX * TRIGGER_AREA_VERTEX_SELECT_DISTANCE_PX;
         for (let i = 0; i < fragments.length; i++) {
             const fragment = fragments[i];
-            const baseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : (getSelectedFloorEditLevel(wizardRef) * 3);
+            const baseZ = getFloorEditorBaseZ(wizardRef, fragment, "floor editor edge selection");
             const rings = getFloorEditorRingsForFragment(fragment);
             for (let r = 0; r < rings.length; r++) {
                 const ring = rings[r];
@@ -5956,6 +7287,24 @@ const SpellSystem = (() => {
             return normalizeFloorEditLevel(wizardRef.currentLayer);
         }
         return getSelectedFloorEditLevel(wizardRef);
+    }
+
+    function getFloorEditorBaseZ(wizardRef, fragment = null, label = "floor editor") {
+        if (fragment && Number.isFinite(fragment.nodeBaseZ)) return Number(fragment.nodeBaseZ);
+        const targetLevel = fragment && Number.isFinite(fragment.level)
+            ? normalizeFloorEditLevel(fragment.level)
+            : getSelectedFloorEditLevel(wizardRef);
+        const wizardLayer = wizardRef && Number.isFinite(wizardRef.currentLayer)
+            ? normalizeFloorEditLevel(wizardRef.currentLayer)
+            : null;
+        if (
+            wizardLayer === targetLevel &&
+            wizardRef &&
+            Number.isFinite(wizardRef.currentLayerBaseZ)
+        ) {
+            return Number(wizardRef.currentLayerBaseZ);
+        }
+        throw new Error(`${label} level ${targetLevel} requires fragment nodeBaseZ or matching wizard currentLayerBaseZ`);
     }
 
     function getFloorEditorPolygonArea(points) {
@@ -6085,7 +7434,7 @@ const SpellSystem = (() => {
             if (fragment._prototypeGroundFloor === true && !(includeGround && level === 0)) continue;
             if (fragment._floorEditEmpty === true) continue;
             if (!Array.isArray(fragment.outerPolygon) || fragment.outerPolygon.length < 3) continue;
-            const baseZ = Number.isFinite(fragment.nodeBaseZ) ? Number(fragment.nodeBaseZ) : (level * 3);
+            const baseZ = getFloorEditorBaseZ(wizardRef, fragment, "visible floor polygon selection");
             let point = resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenX, screenY, baseZ);
             let pointInside = !!(point && isPointInsideFloorEditorFragment(point.x, point.y, fragment));
             if (
@@ -6130,13 +7479,56 @@ const SpellSystem = (() => {
         return { screenX, screenY };
     }
 
-    function isTeleportInteriorViewActive(wizardRef, mapRef) {
+    function markGroundTerrainSectionDirty(mapRef, node) {
+        const sectionKey = node && typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0
+            ? node._prototypeSectionKey
+            : (node && typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
+        if (!sectionKey || !mapRef || typeof mapRef.getPrototypeSectionAsset !== "function") return;
+        const asset = mapRef.getPrototypeSectionAsset(sectionKey);
+        if (!asset) return;
+        const coordKey = `${node.xindex},${node.yindex}`;
+        if (!asset.groundTiles || typeof asset.groundTiles !== "object") {
+            asset.groundTiles = {};
+        }
+        asset.groundTiles[coordKey] = Number.isFinite(node.groundTextureId) ? Number(node.groundTextureId) : 0;
+        asset._level0GroundSurfaceVersion = (Number(asset._level0GroundSurfaceVersion) || 0) + 1;
+    }
+
+    function paintTerrainAtWorldPoint(wizardRef, worldX, worldY) {
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
+        if (!mapRef || typeof mapRef.worldToNode !== "function") {
+            throw new Error("terrain editor requires map.worldToNode");
+        }
+        if (typeof mapRef.setGroundTerrainType !== "function") {
+            throw new Error("terrain editor requires map.setGroundTerrainType");
+        }
+        const node = mapRef.worldToNode(worldX, worldY);
+        if (!node) {
+            message("No terrain tile here.");
+            return false;
+        }
+        const terrainType = getSelectedTerrainType(wizardRef);
+        const changed = mapRef.setGroundTerrainType(node.xindex, node.yindex, terrainType);
+        if (!changed) return false;
+        markGroundTerrainSectionDirty(mapRef, node);
+        if (typeof globalThis !== "undefined") {
+            if (typeof globalThis.invalidateMinimap === "function") {
+                globalThis.invalidateMinimap();
+            }
+            if (typeof globalThis.presentGameFrame === "function") {
+                globalThis.presentGameFrame();
+            }
+        }
+        return true;
+    }
+
+    function isVisibleFloorInteriorViewActive(wizardRef, mapRef) {
         const renderingApi = (typeof globalThis !== "undefined") ? globalThis.Rendering : null;
         if (!renderingApi || typeof renderingApi.isBuildingInteriorPresentationActive !== "function") return false;
         return !!renderingApi.isBuildingInteriorPresentationActive({ wizard: wizardRef || null, map: mapRef || null });
     }
 
-    function getTeleportInteriorVisibleFragmentIds(wizardRef, mapRef) {
+    function getVisibleFloorInteriorFragmentIds(wizardRef, mapRef) {
         const renderingApi = (typeof globalThis !== "undefined") ? globalThis.Rendering : null;
         if (!renderingApi || typeof renderingApi.getBuildingInteriorVisibleFloorFragmentIds !== "function") return null;
         const ids = renderingApi.getBuildingInteriorVisibleFloorFragmentIds({ wizard: wizardRef || null, map: mapRef || null });
@@ -6144,7 +7536,7 @@ const SpellSystem = (() => {
         return ids;
     }
 
-    function resolveTeleportNodeOnLayer(mapRef, worldX, worldY, layer, floorTarget = null) {
+    function resolveVisibleFloorNodeOnLayer(mapRef, worldX, worldY, layer, floorTarget = null) {
         if (!mapRef || typeof mapRef.worldToNode !== "function") return null;
         const baseNode = mapRef.worldToNode(worldX, worldY);
         if (!baseNode) return null;
@@ -6170,7 +7562,7 @@ const SpellSystem = (() => {
         });
     }
 
-    function resolveTeleportVisualTarget(wizardRef, worldX, worldY, options = {}) {
+    function resolveVisibleFloorTarget(wizardRef, worldX, worldY, options = {}) {
         const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
         const screenPoint = getSpellCastScreenPoint(options);
         let targetPoint = null;
@@ -6182,15 +7574,15 @@ const SpellSystem = (() => {
             : (Number.isFinite(wizardRef && wizardRef.traversalLayer)
                 ? Math.round(Number(wizardRef.traversalLayer))
                 : 0);
-        const isUndergroundTeleport = currentLayer < 0;
+        const isUndergroundTarget = currentLayer < 0;
 
         if (Number.isFinite(screenPoint.screenX) && Number.isFinite(screenPoint.screenY)) {
             const visibleFloorOptions = { includeGround: true };
-            if (isUndergroundTeleport) {
+            if (isUndergroundTarget) {
                 visibleFloorOptions.includeGround = false;
                 visibleFloorOptions.exactLevel = currentLayer;
-            } else if (isTeleportInteriorViewActive(wizardRef, mapRef)) {
-                const interiorVisibleFragmentIds = getTeleportInteriorVisibleFragmentIds(wizardRef, mapRef);
+            } else if (isVisibleFloorInteriorViewActive(wizardRef, mapRef)) {
+                const interiorVisibleFragmentIds = getVisibleFloorInteriorFragmentIds(wizardRef, mapRef);
                 if (interiorVisibleFragmentIds) {
                     visibleFloorOptions.visibleFragmentIds = interiorVisibleFragmentIds;
                 } else {
@@ -6206,15 +7598,23 @@ const SpellSystem = (() => {
             if (floorTarget && floorTarget.point) {
                 targetPoint = floorTarget.point;
                 targetLayer = Number.isFinite(floorTarget.level) ? Math.round(Number(floorTarget.level)) : 0;
-                targetBaseZ = Number.isFinite(floorTarget.baseZ) ? Number(floorTarget.baseZ) : targetLayer * 3;
+                targetBaseZ = Number.isFinite(Number(floorTarget.fragment && floorTarget.fragment.nodeBaseZ))
+                    ? Number(floorTarget.fragment.nodeBaseZ)
+                    : (Number.isFinite(floorTarget.baseZ) ? Number(floorTarget.baseZ) : null);
+                if (!Number.isFinite(targetBaseZ)) {
+                    throw new Error(`floor target layer ${targetLayer} requires baseZ`);
+                }
             } else {
-                targetLayer = isUndergroundTeleport ? currentLayer : 0;
-                targetBaseZ = isUndergroundTeleport
+                targetLayer = isUndergroundTarget ? currentLayer : 0;
+                targetBaseZ = isUndergroundTarget
                     ? (Number.isFinite(wizardRef && wizardRef.currentLayerBaseZ)
                         ? Number(wizardRef.currentLayerBaseZ)
-                        : targetLayer * 3)
+                        : null)
                     : 0;
-                targetPoint = isUndergroundTeleport
+                if (isUndergroundTarget && !Number.isFinite(targetBaseZ)) {
+                    throw new Error(`underground target layer ${targetLayer} requires wizard currentLayerBaseZ`);
+                }
+                targetPoint = isUndergroundTarget
                     ? resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenPoint.screenX, screenPoint.screenY, targetBaseZ)
                     : resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenPoint.screenX, screenPoint.screenY, 0);
             }
@@ -6228,9 +7628,18 @@ const SpellSystem = (() => {
         const wrappedY = mapRef && typeof mapRef.wrapWorldY === "function" && Number.isFinite(resolvedY)
             ? mapRef.wrapWorldY(resolvedY)
             : resolvedY;
-        const destinationNode = (isUndergroundTeleport && !floorTarget)
+        const destinationNode = (isUndergroundTarget && !floorTarget)
             ? null
-            : resolveTeleportNodeOnLayer(mapRef, wrappedX, wrappedY, targetLayer, floorTarget);
+            : resolveVisibleFloorNodeOnLayer(mapRef, wrappedX, wrappedY, targetLayer, floorTarget);
+        if (destinationNode && Number.isFinite(Number(destinationNode.baseZ))) {
+            targetBaseZ = Number(destinationNode.baseZ);
+        } else if (
+            floorTarget &&
+            floorTarget.fragment &&
+            Number.isFinite(Number(floorTarget.fragment.nodeBaseZ))
+        ) {
+            targetBaseZ = Number(floorTarget.fragment.nodeBaseZ);
+        }
 
         return {
             x: wrappedX,
@@ -6244,10 +7653,18 @@ const SpellSystem = (() => {
         };
     }
 
+    function resolveTeleportVisualTarget(wizardRef, worldX, worldY, options = {}) {
+        return resolveVisibleFloorTarget(wizardRef, worldX, worldY, options);
+    }
+
+    function resolveEditorPlacementTarget(wizardRef, worldX, worldY, options = {}) {
+        return resolveVisibleFloorTarget(wizardRef, worldX, worldY, options);
+    }
+
     function resolveFloorEditorPaintWorldPoint(wizardRef, worldX, worldY, options = {}) {
         const screenX = Number(options && options.screenX);
         const screenY = Number(options && options.screenY);
-        const baseZ = getFloorEditorPointLevel(wizardRef) * 3;
+        const baseZ = getFloorEditorBaseZ(wizardRef, null, "floor editor paint point");
         const screenPoint = resolveWorldPointOnFloorPlaneFromScreen(wizardRef, screenX, screenY, baseZ);
         if (screenPoint) {
             return screenPoint;
@@ -6534,9 +7951,7 @@ const SpellSystem = (() => {
     function resolveFloorEditorSelectedInsertionPoint(wizardRef, selection, screenX, screenY, worldX, worldY) {
         const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
         const fragment = selection && selection.fragment ? selection.fragment : null;
-        const baseZ = Number.isFinite(fragment && fragment.nodeBaseZ)
-            ? Number(fragment.nodeBaseZ)
-            : (getSelectedFloorEditLevel(wizardRef) * 3);
+        const baseZ = getFloorEditorBaseZ(wizardRef, fragment, "floor editor insertion point");
         const screenPoint = resolveWorldPointOnFloorPlaneFromScreen(wizardRef, Number(screenX), Number(screenY), baseZ);
         let x = screenPoint && Number.isFinite(screenPoint.x) ? Number(screenPoint.x) : Number(worldX);
         let y = screenPoint && Number.isFinite(screenPoint.y) ? Number(screenPoint.y) : Number(worldY);
@@ -7571,13 +8986,19 @@ const SpellSystem = (() => {
                 const existing = existingAtLevel[i] || null;
                 const surfaceId = (existing && existing.surfaceId) ? existing.surfaceId : fallbackSurfaceId;
                 const fragmentId = (existing && existing.fragmentId) ? existing.fragmentId : `${fallbackSurfaceId}:${i}`;
+                const nodeBaseZ = Number.isFinite(existing && existing.nodeBaseZ)
+                    ? Number(existing.nodeBaseZ)
+                    : (Number.isFinite(options && options.nodeBaseZ) ? Number(options.nodeBaseZ) : null);
+                if (!Number.isFinite(nodeBaseZ)) {
+                    throw new Error(`floor edit asset ${asset.key || "(unknown)"} level ${normalizedLevel} requires nodeBaseZ`);
+                }
                 const record = {
                     fragmentId,
                     surfaceId,
                     ownerSectionKey: asset.key,
                     level: normalizedLevel,
                     nodeBaseZOffset: 0,
-                    nodeBaseZ: normalizedLevel * 3,
+                    nodeBaseZ,
                     outerPolygon: outer,
                     holes,
                     tileCoordKeys
@@ -8356,6 +9777,11 @@ const SpellSystem = (() => {
             return;
         }
 
+        if (wizardRef.currentSpell === "terrainedit") {
+            paintTerrainAtWorldPoint(wizardRef, worldX, worldY);
+            return;
+        }
+
         if (wizardRef.currentSpell === "wall") {
             if (isDragSpellActive(wizardRef, "wall")) {
                 completeDragSpell(wizardRef, "wall", worldX, worldY);
@@ -8386,7 +9812,7 @@ const SpellSystem = (() => {
         if (wizardRef.currentSpell === "teleport") {
             const projectile = new globalThis.Teleport();
             const delayTime = projectile.delayTime || wizardRef.cooldownTime;
-            const teleportTarget = resolveTeleportVisualTarget(wizardRef, worldX, worldY, castOptions);
+            const teleportTarget = resolveVisibleFloorTarget(wizardRef, worldX, worldY, castOptions);
             if (typeof console !== "undefined" && typeof console.log === "function") {
                 const floorFragment = teleportTarget && teleportTarget.floorTarget && teleportTarget.floorTarget.fragment
                     ? teleportTarget.floorTarget.fragment
@@ -8466,18 +9892,30 @@ const SpellSystem = (() => {
 
         if (wizardRef.currentSpell === "blackdiamond") {
             const mapRef = wizardRef.map || (typeof map !== "undefined" ? map : null);
-            const placeBaseZ = Number.isFinite(wizardRef.currentLayerBaseZ)
-                ? Number(wizardRef.currentLayerBaseZ)
+            const placementTarget = typeof resolveEditorPlacementTarget === "function"
+                ? resolveEditorPlacementTarget(wizardRef, worldX, worldY, castOptions)
+                : {
+                    x: worldX,
+                    y: worldY,
+                    layer: Number.isFinite(wizardRef.currentLayer) ? Math.round(Number(wizardRef.currentLayer)) : 0,
+                    baseZ: Number.isFinite(wizardRef.currentLayerBaseZ) ? Number(wizardRef.currentLayerBaseZ) : 0,
+                    node: null,
+                    floorTarget: null
+                };
+            const placeBaseZ = Number.isFinite(placementTarget && placementTarget.baseZ)
+                ? Number(placementTarget.baseZ)
                 : 0;
-            const placeLayer = Number.isFinite(wizardRef.currentLayer)
-                ? Math.round(Number(wizardRef.currentLayer))
+            const placeLayer = Number.isFinite(placementTarget && placementTarget.layer)
+                ? Math.round(Number(placementTarget.layer))
                 : 0;
+            const targetX = Number.isFinite(placementTarget && placementTarget.x) ? Number(placementTarget.x) : worldX;
+            const targetY = Number.isFinite(placementTarget && placementTarget.y) ? Number(placementTarget.y) : worldY;
             const rawX = mapRef && typeof mapRef.wrapWorldX === "function"
-                ? mapRef.wrapWorldX(worldX)
-                : worldX;
+                ? mapRef.wrapWorldX(targetX)
+                : targetX;
             const rawY = mapRef && typeof mapRef.wrapWorldY === "function"
-                ? mapRef.wrapWorldY(worldY)
-                : worldY;
+                ? mapRef.wrapWorldY(targetY)
+                : targetY;
             const placeX = rawX;
             const placeY = rawY;
             const powerupPlacement = getPowerupPlacementPreviewConfig(wizardRef);
@@ -8485,7 +9923,7 @@ const SpellSystem = (() => {
                 const placed = addPowerup(powerupPlacement.fileName, {
                     x: placeX,
                     y: placeY,
-                    z: placeBaseZ,
+                    z: 0,
                     map: mapRef,
                     size: powerupPlacement.scale,
                     imagePath: powerupPlacement.imagePath,
@@ -8494,8 +9932,34 @@ const SpellSystem = (() => {
                     radius: powerupPlacement.radius
                 });
                 if (placed) {
+                    if (typeof globalThis.applyEditorPlacementSupport === "function") {
+                        globalThis.applyEditorPlacementSupport(
+                            placed,
+                            mapRef,
+                            {
+                                ...placementTarget,
+                                x: placeX,
+                                y: placeY,
+                                layer: placeLayer,
+                                baseZ: placeBaseZ
+                            },
+                            placementTarget && placementTarget.node ? placementTarget.node : null,
+                            { useLocalZ: true, localZ: 0 }
+                        );
+                    }
                     placed.traversalLayer = placeLayer;
+                    placed.currentLayer = placeLayer;
+                    placed.currentLayerBaseZ = placeBaseZ;
                     placed._floorBaseZ = placeBaseZ;
+                    if (placementTarget && placementTarget.node) {
+                        placed.node = placementTarget.node;
+                    }
+                    if (typeof placementTarget?.node?.surfaceId === "string") {
+                        placed.surfaceId = placementTarget.node.surfaceId;
+                    }
+                    if (typeof placementTarget?.node?.fragmentId === "string") {
+                        placed.fragmentId = placementTarget.node.fragmentId;
+                    }
                 }
             }
             const delayTime = Math.max(0.05, Number(wizardRef.cooldownTime) || 0.1);
@@ -8881,6 +10345,9 @@ const SpellSystem = (() => {
             if (tool.name === "buildroad") {
                 return {...tool, key, icon: getRoadSpellIcon(wizardRef)};
             }
+            if (tool.name === "terrainedit") {
+                return {...tool, key, icon: getSelectedTerrainIcon(wizardRef)};
+            }
             return {...tool, key};
         });
     }
@@ -9073,6 +10540,65 @@ const SpellSystem = (() => {
                 renderFlooringSelector(wizardRef);
             }
         });
+    }
+
+    function renderTerrainSelector(wizardRef) {
+        const $grid = $("#spellGrid");
+        $grid.empty();
+        $grid.css({
+            display: "",
+            "flex-direction": "",
+            gap: ""
+        });
+        const backButton = $("<div>")
+            .addClass("spellIcon")
+            .css({
+                "display": "flex",
+                "align-items": "center",
+                "justify-content": "center",
+                "font-size": "13px",
+                "font-weight": "bold",
+                "color": "#ffffff",
+                "background": "rgba(20,20,20,0.9)"
+            })
+            .text("Back")
+            .click(() => {
+                spellMenuMode = "main";
+                refreshSpellSelector(wizardRef);
+            });
+        $grid.append(backButton);
+
+        const selected = getSelectedTerrainType(wizardRef);
+        TERRAIN_TOOL_DEFS.forEach(terrain => {
+            const icon = $("<div>")
+                .addClass("spellIcon")
+                .css({
+                    "background-image": `url('${terrain.icon}')`,
+                    "background-size": "cover",
+                    "background-position": "center center"
+                })
+                .attr("title", terrain.label)
+                .click(() => {
+                    setSelectedTerrainType(wizardRef, terrain.name);
+                    setCurrentSpell(wizardRef, "terrainedit");
+                    refreshSpellSelector(wizardRef);
+                    $("#spellMenu").addClass("hidden");
+                });
+            if (terrain.name === selected) {
+                icon.addClass("selected");
+            }
+            $grid.append(icon);
+        });
+    }
+
+    function openTerrainSelector(wizardRef) {
+        if (wizardRef && wizardRef.currentSpell !== "terrainedit") {
+            setCurrentSpell(wizardRef, "terrainedit");
+        }
+        setSelectedTerrainType(wizardRef, getSelectedTerrainType(wizardRef));
+        spellMenuMode = "terrain";
+        $("#spellMenu").removeClass("hidden");
+        renderTerrainSelector(wizardRef);
     }
 
     function renderTreeSelector(wizardRef) {
@@ -9281,6 +10807,10 @@ const SpellSystem = (() => {
                 .attr("data-spell", tool.name)
                 .attr("title", tool.name)
                 .click(() => {
+                    if (tool.name === "terrainedit") {
+                        openTerrainSelector(wizardRef);
+                        return;
+                    }
                     if (tool.name === "flooredit") {
                         openFloorEditingSelector(wizardRef);
                         return;
@@ -9289,7 +10819,7 @@ const SpellSystem = (() => {
                     refreshEditorSelector(wizardRef);
                     $("#spellMenu").addClass("hidden");
                 });
-            if (tool.name === "flooredit") {
+            if (tool.name === "terrainedit" || tool.name === "flooredit") {
                 icon.attr("data-opens-submenu", "true");
             }
             if (tool.name === "buildroad") {
@@ -9297,6 +10827,12 @@ const SpellSystem = (() => {
                     event.preventDefault();
                     event.stopPropagation();
                     openFlooringSelector(wizardRef);
+                });
+            } else if (tool.name === "terrainedit") {
+                icon.on("contextmenu", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openTerrainSelector(wizardRef);
                 });
             } else if (tool.name === "wall") {
                 icon.on("contextmenu", event => {
@@ -10272,6 +11808,10 @@ const SpellSystem = (() => {
             renderFlooringSelector(wizardRef);
             return;
         }
+        if (spellMenuMode === "terrain") {
+            renderTerrainSelector(wizardRef);
+            return;
+        }
         if (spellMenuMode === "tree") {
             renderTreeSelector(wizardRef);
             return;
@@ -10404,6 +11944,10 @@ const SpellSystem = (() => {
                     .attr("data-spell", tool.name)
                     .attr("title", tool.name)
                     .click(() => {
+                        if (tool.name === "terrainedit") {
+                            openTerrainSelector(wizardRef);
+                            return;
+                        }
                         if (tool.name === "flooredit") {
                             openFloorEditingSelector(wizardRef);
                             return;
@@ -10412,7 +11956,7 @@ const SpellSystem = (() => {
                         refreshSpellSelector(wizardRef);
                         $("#spellMenu").addClass("hidden");
                     });
-                if (tool.name === "flooredit") {
+                if (tool.name === "terrainedit" || tool.name === "flooredit") {
                     toolIcon.attr("data-opens-submenu", "true");
                 }
                 if (tool.name === "buildroad") {
@@ -10420,6 +11964,12 @@ const SpellSystem = (() => {
                         event.preventDefault();
                         event.stopPropagation();
                         openFlooringSelector(wizardRef);
+                    });
+                } else if (tool.name === "terrainedit") {
+                    toolIcon.on("contextmenu", event => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        openTerrainSelector(wizardRef);
                     });
                 } else if (tool.name === "wall") {
                     toolIcon.on("contextmenu", event => {
@@ -10690,6 +12240,12 @@ const SpellSystem = (() => {
         openFlooringSelector(wizardRef);
     }
 
+    function showTerrainMenu(wizardRef) {
+        if (!wizardRef) return;
+        setCurrentSpell(wizardRef, "terrainedit");
+        openTerrainSelector(wizardRef);
+    }
+
     function showTreeMenu(wizardRef) {
         if (!wizardRef) return;
         setCurrentSpell(wizardRef, "treegrow");
@@ -10855,6 +12411,7 @@ const SpellSystem = (() => {
         isEditorToolName,
         showMainSpellMenu,
         showFlooringMenu,
+        showTerrainMenu,
         showTreeMenu,
         showWallMenu,
         showFloorEditingMenu,
@@ -10892,6 +12449,7 @@ const SpellSystem = (() => {
         updateDragPreview,
         completeDragSpell,
         cancelDragSpell,
+        insertRoadPathPointAt,
         cancelTriggerAreaPlacement,
         cancelFloorShapePlacement,
         cancelFloorHolePlacement,
@@ -10934,6 +12492,8 @@ const SpellSystem = (() => {
         getFloorStairPlacementPreview,
         paintFloorPolygonAtWorldPoint,
         getVisibleFloorPolygonTargetAtScreenPoint,
+        resolveVisibleFloorTarget,
+        resolveEditorPlacementTarget,
         resolveTeleportVisualTarget,
         getDragStartSnapTargetForSpell,
         getPlaceObjectPlacementCandidate,
@@ -10950,4 +12510,6 @@ const SpellSystem = (() => {
 
 if (typeof globalThis !== "undefined") {
     globalThis.SpellSystem = SpellSystem;
+    globalThis.resolveVisibleFloorTarget = SpellSystem.resolveVisibleFloorTarget;
+    globalThis.resolveEditorPlacementTarget = SpellSystem.resolveEditorPlacementTarget;
 }

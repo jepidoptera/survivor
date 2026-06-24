@@ -265,14 +265,92 @@ class Character {
         this.traversalLayer = layer;
         this.currentLayer = layer;
         const baseZ = this.getNodeStandingZ(node);
-        this.currentLayerBaseZ = Number.isFinite(baseZ) ? Number(baseZ) : layer * 3;
+        if (!Number.isFinite(baseZ)) {
+            throw new Error(`character ${this.id || this.name || this.type || "(unknown)"} traversal layer sync requires node standing Z`);
+        }
+        this.currentLayerBaseZ = Number(baseZ);
         if (node && typeof node.surfaceId === "string") {
             this.surfaceId = node.surfaceId;
         }
         if (node && typeof node.fragmentId === "string") {
             this.fragmentId = node.fragmentId;
         }
+        if (this.map && typeof this.map.setActorCurrentMovementSupport === "function") {
+            if (layer === 0 && !(node && typeof node.fragmentId === "string" && node.fragmentId.length > 0)) {
+                this.map.setActorCurrentMovementSupport(this, { type: "ground", layer: 0, baseZ: 0, node }, {
+                    suppressLayerTransition: true
+                });
+            } else {
+                const fragment = node && typeof node.fragmentId === "string" && this.map.floorsById instanceof Map
+                    ? this.map.floorsById.get(node.fragmentId) || null
+                    : null;
+                if (fragment) {
+                    this.map.setActorCurrentMovementSupport(this, {
+                        type: "floor",
+                        layer,
+                        baseZ: this.currentLayerBaseZ,
+                        fragment,
+                        fragmentId: node.fragmentId,
+                        surfaceId: typeof node.surfaceId === "string" ? node.surfaceId : "",
+                        node
+                    }, {
+                        suppressLayerTransition: true
+                    });
+                }
+            }
+        }
         return layer;
+    }
+
+    getFloorNodeResolutionOptions(options = {}) {
+        const opts = (options && typeof options === "object") ? options : {};
+        const currentSupport = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        const currentMembership = this._floorMembership && typeof this._floorMembership === "object"
+            ? this._floorMembership
+            : (this.floorMembership && typeof this.floorMembership === "object" ? this.floorMembership : null);
+        const currentNode = this.node && typeof this.node === "object" ? this.node : null;
+        const fragmentId = (typeof opts.fragmentId === "string" && opts.fragmentId.length > 0)
+            ? opts.fragmentId
+            : (currentSupport && typeof currentSupport.fragmentId === "string" && currentSupport.fragmentId.length > 0)
+                ? currentSupport.fragmentId
+                : (typeof this.fragmentId === "string" && this.fragmentId.length > 0)
+                    ? this.fragmentId
+                    : (currentNode && typeof currentNode.fragmentId === "string" ? currentNode.fragmentId : "");
+        const surfaceId = (typeof opts.surfaceId === "string" && opts.surfaceId.length > 0)
+            ? opts.surfaceId
+            : (currentSupport && typeof currentSupport.surfaceId === "string" && currentSupport.surfaceId.length > 0)
+                ? currentSupport.surfaceId
+                : (typeof this.surfaceId === "string" && this.surfaceId.length > 0)
+                    ? this.surfaceId
+                    : (currentNode && typeof currentNode.surfaceId === "string" ? currentNode.surfaceId : "");
+        const sectionKey = (typeof opts.sectionKey === "string" && opts.sectionKey.length > 0)
+            ? opts.sectionKey
+            : (currentSupport && typeof currentSupport.sectionKey === "string" && currentSupport.sectionKey.length > 0)
+                ? currentSupport.sectionKey
+                : (currentSupport && currentSupport.ownerType === "building" && typeof currentSupport.ownerId === "string")
+                    ? currentSupport.ownerId
+                    : (currentNode && typeof currentNode.ownerSectionKey === "string" && currentNode.ownerSectionKey.length > 0)
+                        ? currentNode.ownerSectionKey
+                        : (currentNode && typeof currentNode._prototypeSectionKey === "string" ? currentNode._prototypeSectionKey : "");
+        const ownerType = (typeof opts.ownerType === "string" && opts.ownerType.length > 0)
+            ? opts.ownerType
+            : (currentSupport && typeof currentSupport.ownerType === "string" && currentSupport.ownerType.length > 0)
+                ? currentSupport.ownerType
+                : (currentMembership && typeof currentMembership.ownerType === "string" ? currentMembership.ownerType : "");
+        const ownerId = (typeof opts.ownerId === "string" && opts.ownerId.length > 0)
+            ? opts.ownerId
+            : (currentSupport && typeof currentSupport.ownerId === "string" && currentSupport.ownerId.length > 0)
+                ? currentSupport.ownerId
+                : (currentMembership && typeof currentMembership.ownerId === "string" ? currentMembership.ownerId : "");
+        return {
+            sectionKey,
+            surfaceId,
+            fragmentId,
+            ownerType,
+            ownerId
+        };
     }
 
     resolveNodeForTraversalLayer(x, y, options = {}) {
@@ -284,8 +362,9 @@ class Character {
             : this.getNodeTraversalLayer();
         if (layer === 0) return baseNode;
         if (typeof this.map.getFloorNodeAtLayer !== "function") return null;
-        const sectionKey = (typeof (options && options.sectionKey) === "string" && options.sectionKey.length > 0)
-            ? options.sectionKey
+        const floorOptions = this.getFloorNodeResolutionOptions(options);
+        const sectionKey = (typeof floorOptions.sectionKey === "string" && floorOptions.sectionKey.length > 0)
+            ? floorOptions.sectionKey
             : (typeof baseNode._prototypeSectionKey === "string"
                 ? baseNode._prototypeSectionKey
                 : ((typeof this.map.getPrototypeSectionKeyForWorldPoint === "function")
@@ -293,6 +372,12 @@ class Character {
                     : ""));
         return this.map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
             sectionKey,
+            surfaceId: floorOptions.surfaceId,
+            fragmentId: floorOptions.fragmentId,
+            ownerType: floorOptions.ownerType,
+            ownerId: floorOptions.ownerId,
+            worldX: x,
+            worldY: y,
             allowScan: !(options && options.allowScan === false)
         });
     }
@@ -566,6 +651,212 @@ class Character {
         this.travelX = 0;
         this.travelY = 0;
         this.travelZ = 0;
+    }
+
+    _describeMovementNode(node) {
+        if (!node || typeof node !== "object") return null;
+        let active = null;
+        if (this.map && typeof this.map.isPrototypeNodeActive === "function") {
+            try {
+                active = this.map.isPrototypeNodeActive(node);
+            } catch (_err) {
+                active = "error";
+            }
+        }
+        return {
+            id: typeof node.id === "string" ? node.id : "",
+            xindex: Number.isFinite(node.xindex) ? Number(node.xindex) : null,
+            yindex: Number.isFinite(node.yindex) ? Number(node.yindex) : null,
+            x: Number.isFinite(node.x) ? Number(node.x) : null,
+            y: Number.isFinite(node.y) ? Number(node.y) : null,
+            traversalLayer: Number.isFinite(node.traversalLayer) ? Math.round(Number(node.traversalLayer)) : null,
+            level: Number.isFinite(node.level) ? Math.round(Number(node.level)) : null,
+            baseZ: Number.isFinite(node.baseZ) ? Number(node.baseZ) : null,
+            fragmentId: typeof node.fragmentId === "string" ? node.fragmentId : "",
+            surfaceId: typeof node.surfaceId === "string" ? node.surfaceId : "",
+            ownerSectionKey: typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "",
+            sectionKey: this.map && typeof this.map.getNodeSectionKey === "function"
+                ? this.map.getNodeSectionKey(node)
+                : (typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : ""),
+            active,
+            blocked: !!node.blocked,
+            blockedByObjects: Number.isFinite(node.blockedByObjects) ? Number(node.blockedByObjects) : null,
+            objects: Array.isArray(node.objects) ? node.objects.length : null,
+            neighbors: Array.isArray(node.neighbors) ? node.neighbors.filter(Boolean).length : null
+        };
+    }
+
+    _describeMovementSupport(support = null) {
+        const value = support || (this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null);
+        if (!value || typeof value !== "object") return null;
+        return {
+            type: typeof value.type === "string" ? value.type : "",
+            layer: Number.isFinite(value.layer) ? Math.round(Number(value.layer)) : null,
+            baseZ: Number.isFinite(value.baseZ) ? Number(value.baseZ) : null,
+            fragmentId: typeof value.fragmentId === "string" ? value.fragmentId : "",
+            surfaceId: typeof value.surfaceId === "string" ? value.surfaceId : "",
+            ownerType: typeof value.ownerType === "string" ? value.ownerType : "",
+            ownerId: typeof value.ownerId === "string" ? value.ownerId : "",
+            sectionKey: typeof value.sectionKey === "string" ? value.sectionKey : "",
+            stairId: typeof value.stairId === "string" ? value.stairId : "",
+            localZ: Number.isFinite(value.localZ) ? Number(value.localZ) : null,
+            continuousLocalZ: Number.isFinite(value.continuousLocalZ) ? Number(value.continuousLocalZ) : null
+        };
+    }
+
+    _describeMovementPathItem(pathItem) {
+        if (!pathItem) return null;
+        const toNode = this.getPathItemDestinationNode(pathItem);
+        return {
+            type: typeof pathItem.type === "string" ? pathItem.type : (pathItem.toNode ? "step" : "node"),
+            directionIndex: Number.isInteger(pathItem.directionIndex) ? Number(pathItem.directionIndex) : null,
+            toNode: this._describeMovementNode(toNode)
+        };
+    }
+
+    _getMovementDiagnosticSnapshot(extra = {}) {
+        const nodeLayer = this.getNodeTraversalLayer(this.node);
+        const support = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        return {
+            type: this.type || (this.constructor && this.constructor.name) || "character",
+            name: typeof this.scriptingName === "string" ? this.scriptingName : (typeof this.name === "string" ? this.name : ""),
+            x: Number.isFinite(this.x) ? Number(this.x) : null,
+            y: Number.isFinite(this.y) ? Number(this.y) : null,
+            z: Number.isFinite(this.z) ? Number(this.z) : null,
+            prevX: Number.isFinite(this.prevX) ? Number(this.prevX) : null,
+            prevY: Number.isFinite(this.prevY) ? Number(this.prevY) : null,
+            prevZ: Number.isFinite(this.prevZ) ? Number(this.prevZ) : null,
+            currentLayer: Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : null,
+            traversalLayer: Number.isFinite(this.traversalLayer) ? Math.round(Number(this.traversalLayer)) : null,
+            nodeTraversalLayer: Number.isFinite(nodeLayer) ? Math.round(Number(nodeLayer)) : null,
+            currentLayerBaseZ: Number.isFinite(this.currentLayerBaseZ) ? Number(this.currentLayerBaseZ) : null,
+            moving: !!this.moving,
+            destination: this._describeMovementNode(this.destination),
+            pathLength: Array.isArray(this.path) ? this.path.length : null,
+            nextNode: this._describeMovementNode(this.nextNode),
+            currentPathStep: this._describeMovementPathItem(this.currentPathStep),
+            travelFrames: Number.isFinite(this.travelFrames) ? Number(this.travelFrames) : null,
+            travelX: Number.isFinite(this.travelX) ? Number(this.travelX) : null,
+            travelY: Number.isFinite(this.travelY) ? Number(this.travelY) : null,
+            travelZ: Number.isFinite(this.travelZ) ? Number(this.travelZ) : null,
+            speed: Number.isFinite(this.speed) ? Number(this.speed) : null,
+            node: this._describeMovementNode(this.node),
+            support: this._describeMovementSupport(support),
+            floorMembership: this._floorMembership && typeof this._floorMembership === "object"
+                ? { ...this._floorMembership }
+                : (this.floorMembership && typeof this.floorMembership === "object" ? { ...this.floorMembership } : null),
+            ...extra
+        };
+    }
+
+    _recordMovementDiagnostic(event, details = {}, options = {}) {
+        if (typeof event !== "string" || event.length === 0) return null;
+        const capture = typeof globalThis !== "undefined" ? globalThis.animalMovementDiagnosticCapture : null;
+        const captureMatches = !!(
+            capture &&
+            capture.active === true &&
+            capture.animal === this &&
+            (!capture.eventSet || capture.eventSet.has(event))
+        );
+        const passiveEnabled = !!(
+            typeof globalThis !== "undefined" &&
+            globalThis.animalMovementDiagnosticsPassive === true
+        );
+        if (!captureMatches && !passiveEnabled && options.force !== true) {
+            return null;
+        }
+        if (!Array.isArray(this.movementDiagnosticLog)) {
+            this.movementDiagnosticLog = [];
+        }
+        const now = Date.now();
+        const dedupeKey = typeof options.dedupeKey === "string" ? options.dedupeKey : "";
+        if (dedupeKey) {
+            const last = this._lastMovementDiagnosticByKey && this._lastMovementDiagnosticByKey[dedupeKey];
+            const minIntervalMs = Number.isFinite(options.minIntervalMs)
+                ? Math.max(0, Number(options.minIntervalMs))
+                : 500;
+            if (last && last.event === event && (now - last.time) < minIntervalMs) {
+                return last.entry || null;
+            }
+            if (!this._lastMovementDiagnosticByKey || typeof this._lastMovementDiagnosticByKey !== "object") {
+                this._lastMovementDiagnosticByKey = {};
+            }
+        }
+        const entry = {
+            time: now,
+            event,
+            ...this._getMovementDiagnosticSnapshot(details)
+        };
+        this.movementDiagnosticLog.push(entry);
+        const limit = Number.isFinite(this.movementDiagnosticLogLimit)
+            ? Math.max(1, Math.floor(this.movementDiagnosticLogLimit))
+            : 300;
+        if (this.movementDiagnosticLog.length > limit) {
+            this.movementDiagnosticLog.splice(0, this.movementDiagnosticLog.length - limit);
+        }
+        if (dedupeKey) {
+            this._lastMovementDiagnosticByKey[dedupeKey] = { event, time: now, entry };
+        }
+        if (captureMatches) {
+            if (!Array.isArray(capture.entries)) {
+                capture.entries = [];
+            }
+            const captureLimit = Number.isFinite(capture.limit) ? Math.max(1, Math.floor(capture.limit)) : 100;
+            if (capture.entries.length < captureLimit) {
+                capture.entries.push(entry);
+            } else {
+                capture.truncated = (Number.isFinite(capture.truncated) ? capture.truncated : 0) + 1;
+            }
+        }
+        return entry;
+    }
+
+    _checkMovementLayerDiagnostics(context = "movement") {
+        const nodeLayer = this.getNodeTraversalLayer(this.node);
+        const currentLayer = Number.isFinite(this.currentLayer)
+            ? Math.round(Number(this.currentLayer))
+            : (Number.isFinite(this.traversalLayer) ? Math.round(Number(this.traversalLayer)) : null);
+        if (Number.isFinite(nodeLayer) && Number.isFinite(currentLayer) && nodeLayer !== currentLayer) {
+            this._recordMovementDiagnostic("layer-node-mismatch", {
+                context,
+                expectedLayer: currentLayer,
+                nodeLayer
+            }, {
+                dedupeKey: `layer-node-mismatch:${currentLayer}:${nodeLayer}`,
+                minIntervalMs: 1000
+            });
+        }
+        const support = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        const supportLayer = Number.isFinite(support && support.layer) ? Math.round(Number(support.layer)) : null;
+        if (Number.isFinite(supportLayer) && Number.isFinite(currentLayer) && supportLayer !== currentLayer) {
+            this._recordMovementDiagnostic("support-layer-mismatch", {
+                context,
+                expectedLayer: currentLayer,
+                supportLayer
+            }, {
+                dedupeKey: `support-layer-mismatch:${currentLayer}:${supportLayer}`,
+                minIntervalMs: 1000
+            });
+        }
+    }
+
+    getMovementDiagnostics() {
+        return Array.isArray(this.movementDiagnosticLog)
+            ? this.movementDiagnosticLog.map(entry => ({ ...entry }))
+            : [];
+    }
+
+    clearMovementDiagnostics(reason = "reset") {
+        this.movementDiagnosticLog = [];
+        this._lastMovementDiagnosticByKey = {};
+        this._recordMovementDiagnostic("diagnostics-cleared", { reason }, { force: true });
+        return this.getMovementDiagnostics();
     }
 
     getNodeStandingZ(node) {
@@ -872,19 +1163,11 @@ class Character {
             ? Math.round(Number(node.traversalLayer))
             : (Number.isFinite(node.level) ? Math.round(Number(node.level)) : 0);
         if (nodeLayer === layer) return node;
-        const sourceNode = (node.sourceNode && typeof node.sourceNode === "object") ? node.sourceNode : node;
-        const xindex = Number(sourceNode.xindex);
-        const yindex = Number(sourceNode.yindex);
+        const xindex = Number(node.xindex);
+        const yindex = Number(node.yindex);
         if (!Number.isFinite(xindex) || !Number.isFinite(yindex)) return null;
-        const sectionKey = typeof sourceNode._prototypeSectionKey === "string"
-            ? sourceNode._prototypeSectionKey
-            : (typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
-        if (typeof this.map.getFloorNodeAtLayer === "function") {
-            const floorNode = this.map.getFloorNodeAtLayer(xindex, yindex, layer, { sectionKey, allowScan: false });
-            if (floorNode) return floorNode;
-        }
-        if (layer === 0 && typeof this.map.getNode === "function") {
-            return this.map.getNode(xindex, yindex, layer) || null;
+        if (typeof this.map.resolveNodeAtLayer === "function") {
+            return this.map.resolveNodeAtLayer(node, layer, { allowScan: false });
         }
         return null;
     }
@@ -1101,60 +1384,72 @@ class Character {
     }
 
     _getFloorFragmentBoundaryPush(cx, cy, radius) {
-        if (this.getCurrentMovementLayer() === 0) return null;
-        if (!this.shouldConstrainHitboxMovementToFloorSupport()) return null;
-        if (!this.map || !(this.map.floorsById instanceof Map)) return null;
-        const resolvedRadius = Math.max(0, Number(radius) || 0);
-        if (!(resolvedRadius > 0)) return null;
-        const layer = this.getCurrentMovementLayer();
-        for (const fragment of this.map.floorsById.values()) {
-            const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
-            if (fragmentLayer !== layer) continue;
-            const poly = Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : null;
-            if (!poly || poly.length < 3) continue;
-            let nearestDistSq = Infinity;
-            let nearestCloseX = cx;
-            let nearestCloseY = cy;
-            for (let i = 0; i < poly.length; i++) {
-                const a = poly[i];
-                const b = poly[(i + 1) % poly.length];
-                const ax = Number(a.x), ay = Number(a.y), bx = Number(b.x), by = Number(b.y);
-                if (!Number.isFinite(ax + ay + bx + by)) continue;
-                const abx = bx - ax, aby = by - ay;
-                const lenSq = abx * abx + aby * aby;
-                const t = lenSq > 1e-12 ? Math.max(0, Math.min(1, ((cx - ax) * abx + (cy - ay) * aby) / lenSq)) : 0;
-                const closeX = ax + abx * t;
-                const closeY = ay + aby * t;
-                const dSq = (cx - closeX) * (cx - closeX) + (cy - closeY) * (cy - closeY);
-                if (dSq < nearestDistSq) {
-                    nearestDistSq = dSq;
-                    nearestCloseX = closeX;
-                    nearestCloseY = closeY;
+        const movementPerfEnabled = typeof globalThis !== "undefined" &&
+            globalThis.movementPerfBreakdownState &&
+            globalThis.movementPerfBreakdownState.enabled === true &&
+            typeof globalThis.recordMovementPerfSection === "function";
+        const movementPerfStartMs = movementPerfEnabled ? performance.now() : 0;
+        try {
+            if (this.getCurrentMovementLayer() === 0) return null;
+            if (!this.shouldConstrainHitboxMovementToFloorSupport()) return null;
+            if (!this.map || !(this.map.floorsById instanceof Map)) return null;
+            const resolvedRadius = Math.max(0, Number(radius) || 0);
+            if (!(resolvedRadius > 0)) return null;
+            const layer = this.getCurrentMovementLayer();
+            const fragments = typeof this.map.getFloorFragmentsForLayer === "function"
+                ? this.map.getFloorFragmentsForLayer(layer)
+                : Array.from(this.map.floorsById.values());
+            for (const fragment of fragments) {
+                const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+                if (fragmentLayer !== layer) continue;
+                const poly = Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : null;
+                if (!poly || poly.length < 3) continue;
+                let nearestDistSq = Infinity;
+                let nearestCloseX = cx;
+                let nearestCloseY = cy;
+                for (let i = 0; i < poly.length; i++) {
+                    const a = poly[i];
+                    const b = poly[(i + 1) % poly.length];
+                    const ax = Number(a.x), ay = Number(a.y), bx = Number(b.x), by = Number(b.y);
+                    if (!Number.isFinite(ax + ay + bx + by)) continue;
+                    const abx = bx - ax, aby = by - ay;
+                    const lenSq = abx * abx + aby * aby;
+                    const t = lenSq > 1e-12 ? Math.max(0, Math.min(1, ((cx - ax) * abx + (cy - ay) * aby) / lenSq)) : 0;
+                    const closeX = ax + abx * t;
+                    const closeY = ay + aby * t;
+                    const dSq = (cx - closeX) * (cx - closeX) + (cy - closeY) * (cy - closeY);
+                    if (dSq < nearestDistSq) {
+                        nearestDistSq = dSq;
+                        nearestCloseX = closeX;
+                        nearestCloseY = closeY;
+                    }
+                }
+                const dist = Math.sqrt(nearestDistSq);
+                if (!(dist > 1e-6)) continue;
+                const isInside = typeof this.map.isPointSupportedByFloorFragment === "function"
+                    ? this.map.isPointSupportedByFloorFragment(fragment, cx, cy)
+                    : true;
+                if (isInside) {
+                    // Normal: circle overlaps boundary from inside — push center away from edge.
+                    const overlap = resolvedRadius - dist;
+                    if (!(overlap > 1e-6)) continue;
+                    return {
+                        pushX: (cx - nearestCloseX) / dist * overlap,
+                        pushY: (cy - nearestCloseY) / dist * overlap
+                    };
+                } else {
+                    // Recovery: center overshot past the boundary — pull it back inside by resolvedRadius.
+                    const pullMagnitude = dist + resolvedRadius;
+                    return {
+                        pushX: (nearestCloseX - cx) / dist * pullMagnitude,
+                        pushY: (nearestCloseY - cy) / dist * pullMagnitude
+                    };
                 }
             }
-            const dist = Math.sqrt(nearestDistSq);
-            if (!(dist > 1e-6)) continue;
-            const isInside = typeof this.map.isPointSupportedByFloorFragment === "function"
-                ? this.map.isPointSupportedByFloorFragment(fragment, cx, cy)
-                : true;
-            if (isInside) {
-                // Normal: circle overlaps boundary from inside — push center away from edge.
-                const overlap = resolvedRadius - dist;
-                if (!(overlap > 1e-6)) continue;
-                return {
-                    pushX: (cx - nearestCloseX) / dist * overlap,
-                    pushY: (cy - nearestCloseY) / dist * overlap
-                };
-            } else {
-                // Recovery: center overshot past the boundary — pull it back inside by resolvedRadius.
-                const pullMagnitude = dist + resolvedRadius;
-                return {
-                    pushX: (nearestCloseX - cx) / dist * pullMagnitude,
-                    pushY: (nearestCloseY - cy) / dist * pullMagnitude
-                };
-            }
+            return null;
+        } finally {
+            if (movementPerfEnabled) globalThis.recordMovementPerfSection("character.floorBoundaryPush", performance.now() - movementPerfStartMs);
         }
-        return null;
     }
 
     _resolveStaticVectorMovementCandidate(candidateX, candidateY, movementRadius, movementContext = {}, options = {}) {
@@ -1536,6 +1831,18 @@ class Character {
         }
         if (typeof this.map.resolveActorStairMovementOccupancy === "function") {
             const stairOccupancy = this.map.resolveActorStairMovementOccupancy(targetX, targetY, this, options);
+            const movementSupportCache = options &&
+                options._movementSupportCache &&
+                options._movementSupportCache.actor === this
+                ? options._movementSupportCache
+                : null;
+            if (movementSupportCache) {
+                movementSupportCache.lastCheckedOccupancy = {
+                    x: Number(targetX),
+                    y: Number(targetY),
+                    result: stairOccupancy || null
+                };
+            }
             if (stairOccupancy && stairOccupancy.handled === true) {
                 if (stairOccupancy.allowed === true) {
                     this._pendingVectorMovementSupport = stairOccupancy.support || null;
@@ -1603,12 +1910,58 @@ class Character {
         return true;
     }
 
+    _projectMovementVectorAlongCollisionNormal(collision) {
+        if (
+            !this.movementVector ||
+            typeof this.movementVector !== "object" ||
+            !collision ||
+            collision.hasNormal !== true
+        ) {
+            return false;
+        }
+        const normalX = Number(collision.normalX);
+        const normalY = Number(collision.normalY);
+        const normalLen = Math.hypot(normalX, normalY);
+        if (!(normalLen > 1e-9)) return false;
+        const nx = normalX / normalLen;
+        const ny = normalY / normalLen;
+        const vectorX = Number(this.movementVector.x) || 0;
+        const vectorY = Number(this.movementVector.y) || 0;
+        const intoWallComponent = vectorX * nx + vectorY * ny;
+        if (!(intoWallComponent < -1e-6)) return false;
+        this.movementVector.x = vectorX - nx * intoWallComponent;
+        this.movementVector.y = vectorY - ny * intoWallComponent;
+        return true;
+    }
+
     moveDirection(vector, options = {}) {
+        const movementPerfEnabled = typeof globalThis !== "undefined" &&
+            globalThis.movementPerfBreakdownState &&
+            globalThis.movementPerfBreakdownState.enabled === true &&
+            typeof globalThis.recordMovementPerfSection === "function";
+        const movementPerfNow = () => (
+            movementPerfEnabled &&
+            typeof performance !== "undefined" &&
+            performance &&
+            typeof performance.now === "function"
+        ) ? performance.now() : 0;
+        const movementPerfRecord = (name, startMs) => {
+            if (!movementPerfEnabled) return;
+            globalThis.recordMovementPerfSection(name, performance.now() - startMs);
+        };
+        const movementTotalStartMs = movementPerfNow();
+        let movementSectionStartMs = movementTotalStartMs;
         if (this.isFrozen()) {
             this.applyFrozenState({ clearMoveTimeout: false });
+            movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
             return false;
         }
         const lockMovementVector = !!options.lockMovementVector;
+        options._movementSupportCache = {
+            actor: this,
+            floorSupportByKey: new Map(),
+            stairOccupancyByKey: new Map()
+        };
         const maxSpeed = this.getVectorMovementMaxSpeed(options);
         this.currentMaxSpeed = maxSpeed;
         this.isMovingBackward = !!options.animateBackward;
@@ -1673,54 +2026,123 @@ class Character {
 
         if (Math.hypot(this.movementVector.x, this.movementVector.y) < 0.001) {
             this.moving = false;
+            movementPerfRecord("character.moveDirection.steering", movementSectionStartMs);
+            movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
             return false;
         }
+        movementPerfRecord("character.moveDirection.steering", movementSectionStartMs);
 
         this.moving = true;
         this.prevX = this.x;
         this.prevY = this.y;
         this.prevZ = this.z;
 
-        const newX = this.x + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
-        const newY = this.y + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
+        let newX = this.x + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
+        let newY = this.y + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
         const movementRadius = this.getVectorMovementCollisionRadius(options);
 
+        if (
+            options._movementSupportCache &&
+            options._movementSupportCache.actor === this &&
+            this.map &&
+            typeof this.map.getActorFloorSupportForStairEntry === "function"
+        ) {
+            const layer = this.getCurrentMovementLayer(options);
+            const knownSupport = typeof this.map.getActorKnownFloorSupport === "function"
+                ? this.map.getActorKnownFloorSupport(this, layer, options)
+                : null;
+            options._movementSupportCache.currentFloorSupport = knownSupport || this.map.getActorFloorSupportForStairEntry(
+                    this,
+                    newX,
+                    newY,
+                    layer,
+                    options
+                );
+            options._movementSupportCache.currentFloorSupportLayer = layer;
+        }
+
         if (this.map && typeof this.map.resolveActorStairMovementOccupancy === "function") {
-            const stairOccupancy = this.map.resolveActorStairMovementOccupancy(newX, newY, this, options);
-            if (stairOccupancy && stairOccupancy.handled === true) {
-                if (stairOccupancy.allowed === true) {
-                    this._pendingVectorMovementSupport = stairOccupancy.support || null;
-                    const supportPoint = stairOccupancy.support &&
-                        stairOccupancy.support.point &&
-                        Number.isFinite(Number(stairOccupancy.support.point.x)) &&
-                        Number.isFinite(Number(stairOccupancy.support.point.y))
-                        ? stairOccupancy.support.point
-                        : null;
-                    return this._applyVectorMovementPosition(
-                        supportPoint ? Number(supportPoint.x) : newX,
-                        supportPoint ? Number(supportPoint.y) : newY,
-                        options
-                    );
-                }
-                if (stairOccupancy.slideAlongStairFootprint !== true) {
-                    if (this.movementVector && typeof this.movementVector === "object") {
-                        this.movementVector.x = 0;
-                        this.movementVector.y = 0;
+            let stairSlideRetryCount = 0;
+            while (stairSlideRetryCount < 2) {
+                movementSectionStartMs = movementPerfNow();
+                const stairOccupancy = this.map.resolveActorStairMovementOccupancy(newX, newY, this, options);
+                movementPerfRecord("character.moveDirection.stairOccupancy", movementSectionStartMs);
+                if (stairOccupancy && stairOccupancy.handled === true) {
+                    if (stairOccupancy.allowed === true) {
+                        this._pendingVectorMovementSupport = stairOccupancy.support || null;
+                        if (stairOccupancy.slidByBuildingMovement === true) {
+                            this._projectMovementVectorAlongCollisionNormal(stairOccupancy.buildingBlockerCollision);
+                        }
+                        const supportPoint = stairOccupancy.support &&
+                            stairOccupancy.support.point &&
+                            Number.isFinite(Number(stairOccupancy.support.point.x)) &&
+                            Number.isFinite(Number(stairOccupancy.support.point.y))
+                            ? stairOccupancy.support.point
+                            : null;
+                        movementSectionStartMs = movementPerfNow();
+                        const applied = this._applyVectorMovementPosition(
+                            supportPoint ? Number(supportPoint.x) : newX,
+                            supportPoint ? Number(supportPoint.y) : newY,
+                            options
+                        );
+                        movementPerfRecord("character.moveDirection.applyPosition", movementSectionStartMs);
+                        movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+                        return applied;
                     }
-                    this.moving = false;
-                    return false;
+                    if (
+                        stairOccupancy.blockedByBuildingMovement === true &&
+                        stairSlideRetryCount === 0 &&
+                        stairOccupancy.buildingBlockerCollision &&
+                        stairOccupancy.buildingBlockerCollision.hasNormal === true
+                    ) {
+                        if (this._projectMovementVectorAlongCollisionNormal(stairOccupancy.buildingBlockerCollision)) {
+                            if (Math.hypot(this.movementVector.x, this.movementVector.y) >= 0.001) {
+                                newX = this.x + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
+                                newY = this.y + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
+                                stairSlideRetryCount++;
+                                continue;
+                            }
+                        }
+                    }
+                    const canResolveAsSlide = stairOccupancy.slideAlongStairFootprint === true ||
+                        stairOccupancy.blockedByBuildingMovement === true;
+                    if (!canResolveAsSlide) {
+                        if (this.movementVector && typeof this.movementVector === "object") {
+                            this.movementVector.x = 0;
+                            this.movementVector.y = 0;
+                        }
+                        this.moving = false;
+                        movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+                        return false;
+                    }
                 }
+                break;
             }
         }
 
+        movementSectionStartMs = movementPerfNow();
         const movementContext = this.prepareVectorMovementContext(newX, newY, movementRadius, options) || {};
+        movementPerfRecord("character.moveDirection.prepareContext", movementSectionStartMs);
 
+        movementSectionStartMs = movementPerfNow();
         if (this.canBypassVectorMovementCollisions(this.x, this.y, newX, newY, movementRadius, movementContext, options)) {
-            return this._applyVectorMovementPosition(newX, newY, options, movementContext);
+            movementPerfRecord("character.moveDirection.bypassCollision", movementSectionStartMs);
+            movementSectionStartMs = movementPerfNow();
+            const applied = this._applyVectorMovementPosition(newX, newY, options, movementContext);
+            movementPerfRecord("character.moveDirection.applyPosition", movementSectionStartMs);
+            movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+            return applied;
         }
+        movementPerfRecord("character.moveDirection.bypassCollision", movementSectionStartMs);
 
+        movementSectionStartMs = movementPerfNow();
         const resolved = this._resolveHitboxMovementConstraints(newX, newY, movementRadius, movementContext, options);
-        return this._applyVectorMovementPosition(resolved.x, resolved.y, options, movementContext);
+        movementPerfRecord("character.moveDirection.resolveHitbox", movementSectionStartMs);
+        movementSectionStartMs = movementPerfNow();
+        const applied = this._applyVectorMovementPosition(resolved.x, resolved.y, options, movementContext);
+        movementPerfRecord("character.moveDirection.applyPosition", movementSectionStartMs);
+        movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+        return applied;
     }
 
     getTargetMovementVelocity(target) {
@@ -2830,8 +3252,25 @@ class Character {
     }
     goto(destinationNode) {
         if (!destinationNode) return;
-        
-        this.node = this.resolveNodeForTraversalLayer(this.x, this.y) || this.map.worldToNode(this.x, this.y);
+        const startLayer = this.getNodeTraversalLayer();
+        const resolvedStartNode = this.resolveNodeForTraversalLayer(this.x, this.y, this.getFloorNodeResolutionOptions());
+        this.node = resolvedStartNode || (startLayer === 0 ? this.map.worldToNode(this.x, this.y) : null);
+        this._checkMovementLayerDiagnostics("goto");
+        if (!this.node) {
+            this._recordMovementDiagnostic("goto-no-start-node", {
+                requestedDestination: this._describeMovementNode(destinationNode),
+                startLayer,
+                resolvedStartNode: this._describeMovementNode(resolvedStartNode)
+            });
+            this.destination = null;
+            this.path = [];
+            this.travelFrames = 0;
+            this.travelZ = 0;
+            this.nextNode = null;
+            this.currentPathStep = null;
+            this.moving = false;
+            return;
+        }
         this.destination = destinationNode;
         const pathOptions = {};
         if (this.pathfindingClearance > 0) {
@@ -2844,6 +3283,17 @@ class Character {
         if (!Array.isArray(this.path)) {
             this.path = [];
         }
+        this._recordMovementDiagnostic("goto-path", {
+            startNode: this._describeMovementNode(this.node),
+            requestedDestination: this._describeMovementNode(destinationNode),
+            pathLength: this.path.length,
+            pathBlockedCount: Array.isArray(this.path.blockers) ? this.path.blockers.length : 0,
+            pathOptions: {
+                clearance: Number.isFinite(pathOptions.clearance) ? Number(pathOptions.clearance) : 0,
+                returnPathSteps: pathOptions.returnPathSteps === true,
+                aStar: !!(this.useAStarPathfinding && typeof this.map.findPathAStar === "function")
+            }
+        });
         this.travelFrames = 0;
         this.travelZ = 0;
         this.nextNode = null;
@@ -2881,6 +3331,7 @@ class Character {
             this.updateCloseCombat();
             return;
         }
+        this._checkMovementLayerDiagnostics("move");
 
         // Check if we have a destination to move toward
         if (!this.destination) {
@@ -2896,11 +3347,30 @@ class Character {
             ? this.map.isPrototypeNodeActive(this.node)
             : !!this.node;
         if (!currentNodeIsActive) {
-            this.node = (this.map && typeof this.map.worldToNode === "function")
-                ? (this.resolveNodeForTraversalLayer(this.x, this.y) || this.map.worldToNode(this.x, this.y))
-                : this.node;
+            this._recordMovementDiagnostic("current-node-inactive", {
+                beforeResolveNode: this._describeMovementNode(this.node)
+            }, {
+                dedupeKey: "current-node-inactive",
+                minIntervalMs: 1000
+            });
+            if (this.map && typeof this.map.worldToNode === "function") {
+                const layer = this.getNodeTraversalLayer();
+                const resolvedNode = this.resolveNodeForTraversalLayer(this.x, this.y, this.getFloorNodeResolutionOptions());
+                this.node = resolvedNode || (layer === 0 ? this.map.worldToNode(this.x, this.y) : null);
+                this._recordMovementDiagnostic("current-node-resolved", {
+                    layer,
+                    resolvedNode: this._describeMovementNode(resolvedNode),
+                    nextNode: this._describeMovementNode(this.node)
+                }, {
+                    dedupeKey: "current-node-resolved",
+                    minIntervalMs: 1000
+                });
+            }
         }
         if (!this.node) {
+            this._recordMovementDiagnostic("movement-suspended-no-node", {
+                destinationBeforeClear: this._describeMovementNode(this.destination)
+            });
             this._movementSuspendedByStreaming = true;
             this.destination = null;
             this.path = [];
@@ -2934,9 +3404,18 @@ class Character {
             
             // Get next step from path
             const nextPathItem = this.path.shift();
+            if (!nextPathItem) {
+                this._recordMovementDiagnostic("path-empty-before-step", {
+                    destinationBeforeClear: this._describeMovementNode(this.destination)
+                });
+            }
             this.currentPathStep = this.resolvePathStep(nextPathItem, this.node);
             this.nextNode = this.getPathItemDestinationNode(this.currentPathStep);
             if (!this.nextNode) {
+                this._recordMovementDiagnostic("path-step-missing-next-node", {
+                    nextPathItem: this._describeMovementPathItem(nextPathItem),
+                    destinationBeforeClear: this._describeMovementNode(this.destination)
+                });
                 // Reached destination
                 this.destination = null;
                 this.moving = false;
@@ -2947,6 +3426,10 @@ class Character {
                 typeof this.map.isPrototypeNodeActive === "function" &&
                 !this.map.isPrototypeNodeActive(this.nextNode)
             ) {
+                this._recordMovementDiagnostic("next-node-inactive", {
+                    rejectedNextNode: this._describeMovementNode(this.nextNode),
+                    destinationBeforeClear: this._describeMovementNode(this.destination)
+                });
                 this._movementSuspendedByStreaming = true;
                 this.destination = null;
                 this.path = [];
@@ -2985,6 +3468,16 @@ class Character {
             this.travelY = ydist / this.travelFrames;
             this.travelZ = zdist / this.travelFrames;
             this.direction = {x: xdist, y: ydist};
+            this._recordMovementDiagnostic("movement-step-start", {
+                targetPosition,
+                xdist,
+                ydist,
+                zdist,
+                directionDistance: direction_distance,
+                effectiveSpeed,
+                frameRate: Number(this.frameRate) || null,
+                stepFrames: this.travelFrames
+            });
         }
         
         this.travelFrames--;
@@ -3248,6 +3741,33 @@ function resolveHitboxDebugTarget(target = 0) {
     return collection[0] || null;
 }
 
+function summarizeAnimalMovementDiagnosticsLog(log, startedAt = null) {
+    return (Array.isArray(log) ? log : []).map(entry => ({
+        elapsedMs: Number.isFinite(startedAt) && Number.isFinite(entry.time) ? entry.time - startedAt : null,
+        time: entry.time,
+        event: entry.event,
+        type: entry.type,
+        name: entry.name,
+        layer: entry.currentLayer,
+        traversalLayer: entry.traversalLayer,
+        nodeLayer: entry.nodeTraversalLayer,
+        supportLayer: entry.support && Number.isFinite(entry.support.layer) ? entry.support.layer : null,
+        moving: entry.moving,
+        pathLength: entry.pathLength,
+        pathBlockedCount: Number.isFinite(entry.pathBlockedCount) ? entry.pathBlockedCount : null,
+        startActive: entry.startNode ? entry.startNode.active : null,
+        destActive: entry.requestedDestination ? entry.requestedDestination.active : null,
+        destLayer: entry.requestedDestination && Number.isFinite(entry.requestedDestination.traversalLayer)
+            ? entry.requestedDestination.traversalLayer
+            : null,
+        nextNodeLayer: entry.nextNode && Number.isFinite(entry.nextNode.traversalLayer) ? entry.nextNode.traversalLayer : null,
+        reason: entry.reason || "",
+        context: entry.context || "",
+        source: entry.source || entry.routeSource || "",
+        routePathLength: Number.isFinite(entry.routePathLength) ? entry.routePathLength : null
+    }));
+}
+
 if (typeof globalThis !== "undefined") {
     globalThis.dumpAnimalMoveLog = function(target = 0) {
         const animal = resolveAnimalMoveLogTarget(target);
@@ -3267,6 +3787,130 @@ if (typeof globalThis !== "undefined") {
             return [];
         }
         return animal.clearNodeVisitLog();
+    };
+
+    globalThis.dumpAnimalMovementDiagnostics = function(target = 0) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal.getMovementDiagnostics !== "function") {
+            console.warn("No animal movement diagnostics target found.");
+            return [];
+        }
+        const log = animal.getMovementDiagnostics();
+        console.table(summarizeAnimalMovementDiagnosticsLog(log));
+        return log;
+    };
+
+    globalThis.clearAnimalMovementDiagnostics = function(target = 0) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal.clearMovementDiagnostics !== "function") {
+            console.warn("No animal movement diagnostics target found.");
+            return [];
+        }
+        return animal.clearMovementDiagnostics("console");
+    };
+
+    globalThis.diagnoseAnimalMovement = function(target = 0) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal._getMovementDiagnosticSnapshot !== "function") {
+            console.warn("No animal movement diagnostics target found.");
+            return null;
+        }
+        const snapshot = animal._getMovementDiagnosticSnapshot({
+            target: typeof target === "string" || typeof target === "number" ? target : "",
+            activeSimObject: typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set
+                ? globalThis.activeSimObjects.has(animal)
+                : null,
+            onScreen: typeof animal._onScreen === "boolean" ? animal._onScreen : null
+        });
+        console.log("Animal movement diagnostic snapshot:", snapshot);
+        return snapshot;
+    };
+
+    globalThis.stopAnimalMovementDiagnostics = function() {
+        const capture = globalThis.animalMovementDiagnosticCapture;
+        if (!capture || capture.active !== true) {
+            console.warn("No animal movement diagnostic capture is active.");
+            return [];
+        }
+        capture.active = false;
+        if (capture.timerId) {
+            clearTimeout(capture.timerId);
+            capture.timerId = null;
+        }
+        const entries = Array.isArray(capture.entries) ? capture.entries.slice() : [];
+        const label = capture.animal && (capture.animal.scriptingName || capture.animal.name || capture.animal.type) || "animal";
+        console.log(
+            `Animal movement capture for ${label}: ${entries.length} event(s)` +
+            `${capture.truncated ? `, ${capture.truncated} truncated` : ""}.`
+        );
+        console.table(summarizeAnimalMovementDiagnosticsLog(entries, capture.startedAt));
+        globalThis.animalMovementDiagnosticCapture = null;
+        return entries;
+    };
+
+    globalThis.captureAnimalMovementDiagnostics = function(target = 0, durationMs = 1000, options = {}) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal.getMovementDiagnostics !== "function") {
+            console.warn("No animal movement diagnostics target found.");
+            return null;
+        }
+        const normalizedOptions = options && typeof options === "object" ? options : {};
+        const duration = Number.isFinite(durationMs)
+            ? Math.max(1, Math.min(10000, Math.floor(durationMs)))
+            : 1000;
+        const limit = Number.isFinite(normalizedOptions.limit)
+            ? Math.max(1, Math.min(1000, Math.floor(normalizedOptions.limit)))
+            : 150;
+        const eventSet = Array.isArray(normalizedOptions.events) && normalizedOptions.events.length > 0
+            ? new Set(normalizedOptions.events.filter(eventName => typeof eventName === "string" && eventName.length > 0))
+            : null;
+
+        const previousCapture = globalThis.animalMovementDiagnosticCapture;
+        if (previousCapture && previousCapture.timerId) {
+            clearTimeout(previousCapture.timerId);
+        }
+        if (normalizedOptions.clear !== false && typeof animal.clearMovementDiagnostics === "function") {
+            animal.clearMovementDiagnostics("capture-start");
+        }
+
+        const capture = {
+            active: true,
+            animal,
+            entries: [],
+            startedAt: Date.now(),
+            durationMs: duration,
+            limit,
+            eventSet,
+            truncated: 0,
+            timerId: null
+        };
+        globalThis.animalMovementDiagnosticCapture = capture;
+        capture.timerId = setTimeout(() => {
+            if (globalThis.animalMovementDiagnosticCapture === capture) {
+                globalThis.stopAnimalMovementDiagnostics();
+            }
+        }, duration);
+
+        const label = animal.scriptingName || animal.name || animal.type || "animal";
+        console.log(`Capturing animal movement diagnostics for ${label} for ${duration} ms.`);
+        return {
+            animal,
+            durationMs: duration,
+            limit,
+            events: eventSet ? Array.from(eventSet) : null
+        };
+    };
+
+    globalThis.setAnimalMovementDiagnosticsLive = function(enabled = true, target = 0, durationMs = 1000) {
+        if (enabled !== true) {
+            const capture = globalThis.animalMovementDiagnosticCapture;
+            if (capture && capture.active === true) {
+                return globalThis.stopAnimalMovementDiagnostics();
+            }
+            return [];
+        }
+        console.warn("Broad live animal movement logging has been removed. Starting a bounded one-animal capture instead.");
+        return globalThis.captureAnimalMovementDiagnostics(target, durationMs);
     };
 
     globalThis.dumpHitboxCollisionDebug = function(target = 0) {

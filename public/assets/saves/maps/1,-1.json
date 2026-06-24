@@ -159586,21 +159586,6 @@
     },
     {
       "type": "tree",
-      "x": 187.922,
-      "y": 154,
-      "tint": 3289650,
-      "hp": 0,
-      "maxHP": 40.89375000074506,
-      "isOnFire": false,
-      "burned": true,
-      "falling": true,
-      "rotation": -90,
-      "textureIndex": 1,
-      "size": 1.6357500000298024,
-      "id": 4885
-    },
-    {
-      "type": "tree",
       "x": 194.85,
       "y": 161,
       "tint": 16777215,
@@ -159656,6 +159641,111 @@
         }
       ],
       "id": 4795
+    },
+    {
+      "type": "placedObject",
+      "x": 228.20824041495746,
+      "y": 95.28713277201132,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "script": {
+        "playerTouches": "mazeMode=false;\n   camera.zoom(target=0.75, seconds = 2);\n   camera.pan(x = -15, seconds = 2);",
+        "playerLeaves": "mazeMode=true;\n   camera.reset();"
+      },
+      "scriptingName": "furniture8",
+      "texturePath": "/assets/images/furniture/crystal%20ball.png",
+      "category": "furniture",
+      "width": 1.414,
+      "height": 1.414,
+      "renderDepthOffset": 3.3,
+      "rotationAxis": "visual",
+      "placementRotation": 5,
+      "isPassable": false,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "castsLosShadows": false,
+      "id": 4797
+    },
+    {
+      "type": "placedObject",
+      "x": 255.26621770571398,
+      "y": 118.61411738513777,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "script": {
+        "playerTouches": "mazeMode=false;\n    camera.zoom(target=0.75, seconds=2)\n    camera.pan(x=-10,y=-15, seconds=2)",
+        "playerUntouches": "mazeMode=true;\n    camera.reset();"
+      },
+      "scriptingName": "furniture9",
+      "texturePath": "/assets/images/furniture/crystal%20ball.png",
+      "category": "furniture",
+      "width": 1.414,
+      "height": 1.414,
+      "renderDepthOffset": 3.3,
+      "rotationAxis": "visual",
+      "placementRotation": 5,
+      "isPassable": false,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "castsLosShadows": false,
+      "id": 4800
+    },
+    {
+      "type": "placedObject",
+      "x": 255.61851757629358,
+      "y": 120.91425082200135,
+      "hp": 100,
+      "burned": false,
+      "_wasOnFire": false,
+      "script": {
+        "playerExits": "mazeMode=true;"
+      },
+      "scriptingName": "door18",
+      "texturePath": "/assets/images/doors/door2.png",
+      "category": "doors",
+      "width": 1.243,
+      "height": 1.243,
+      "renderDepthOffset": 0.8,
+      "rotationAxis": "spatial",
+      "placementRotation": 149.99927221917244,
+      "isPassable": true,
+      "blocksTile": false,
+      "doorFallAngle": 0,
+      "doorFallNormalSign": 1,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 1,
+      "castsLosShadows": true,
+      "mountedWallLineGroupId": 3777,
+      "mountedSectionId": 3777,
+      "mountedWallSectionUnitId": 3777,
+      "mountedWallFacingSign": -1,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 256.0536211486773,
+          "y": 120.42487755567117
+        },
+        {
+          "x": 254.97715946625988,
+          "y": 121.04639122912238
+        },
+        {
+          "x": 255.18341400390955,
+          "y": 121.40362408833175
+        },
+        {
+          "x": 256.25987568632706,
+          "y": 120.78211041488055
+        }
+      ],
+      "id": 4801
     },
     {
       "type": "placedObject",
@@ -159805,118 +159895,30 @@
         }
       ],
       "id": 4799
-    },
-    {
-      "type": "placedObject",
-      "x": 228.20824041495746,
-      "y": 95.28713277201132,
-      "hp": 100,
-      "burned": false,
-      "_wasOnFire": false,
-      "script": {
-        "playerTouches": "mazeMode=false;\n   camera.zoom(target=0.75, seconds = 2);\n   camera.pan(x = -15, seconds = 2);",
-        "playerLeaves": "mazeMode=true;\n   camera.reset();"
-      },
-      "scriptingName": "furniture8",
-      "texturePath": "/assets/images/furniture/crystal%20ball.png",
-      "category": "furniture",
-      "width": 1.414,
-      "height": 1.414,
-      "renderDepthOffset": 3.3,
-      "rotationAxis": "visual",
-      "placementRotation": 5,
-      "isPassable": false,
-      "blocksTile": false,
-      "doorFallAngle": 0,
-      "doorFallNormalSign": 1,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "castsLosShadows": false,
-      "id": 4797
-    },
-    {
-      "type": "placedObject",
-      "x": 255.26621770571398,
-      "y": 118.61411738513777,
-      "hp": 100,
-      "burned": false,
-      "_wasOnFire": false,
-      "script": {
-        "playerTouches": "mazeMode=false;\n    camera.zoom(target=0.75, seconds=2)\n    camera.pan(x=-10,y=-15, seconds=2)",
-        "playerUntouches": "mazeMode=true;\n    camera.reset();"
-      },
-      "scriptingName": "furniture9",
-      "texturePath": "/assets/images/furniture/crystal%20ball.png",
-      "category": "furniture",
-      "width": 1.414,
-      "height": 1.414,
-      "renderDepthOffset": 3.3,
-      "rotationAxis": "visual",
-      "placementRotation": 5,
-      "isPassable": false,
-      "blocksTile": false,
-      "doorFallAngle": 0,
-      "doorFallNormalSign": 1,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "castsLosShadows": false,
-      "id": 4800
-    },
-    {
-      "type": "placedObject",
-      "x": 255.61851757629358,
-      "y": 120.91425082200135,
-      "hp": 100,
-      "burned": false,
-      "_wasOnFire": false,
-      "script": {
-        "playerExits": "mazeMode=true;"
-      },
-      "scriptingName": "door18",
-      "texturePath": "/assets/images/doors/door2.png",
-      "category": "doors",
-      "width": 1.243,
-      "height": 1.243,
-      "renderDepthOffset": 0.8,
-      "rotationAxis": "spatial",
-      "placementRotation": 149.99927221917244,
-      "isPassable": true,
-      "blocksTile": false,
-      "doorFallAngle": 0,
-      "doorFallNormalSign": 1,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 1,
-      "castsLosShadows": true,
-      "mountedWallLineGroupId": 3777,
-      "mountedSectionId": 3777,
-      "mountedWallSectionUnitId": 3777,
-      "mountedWallFacingSign": -1,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": 256.0536211486773,
-          "y": 120.42487755567117
-        },
-        {
-          "x": 254.97715946625988,
-          "y": 121.04639122912238
-        },
-        {
-          "x": 255.18341400390955,
-          "y": 121.40362408833175
-        },
-        {
-          "x": 256.25987568632706,
-          "y": 120.78211041488055
-        }
-      ],
-      "id": 4801
     }
   ],
   "animals": [
     {
+      "type": "yeti",
+      "x": 199.99603846153707,
+      "y": 100.5,
+      "hp": 73.5840850853861,
+      "maxHp": 73.5840850853861,
+      "mp": 1,
+      "maxMp": 1,
+      "temperature": 0,
+      "baselineTemperature": 0,
+      "size": 1.8396021271346528,
+      "inventory": {},
+      "tint": 16777215,
+      "chaseRadius": 12.206873977309131,
+      "scriptingName": "yeti5",
+      "id": 201
+    },
+    {
       "type": "bear",
-      "x": 225.5064000000002,
-      "y": 141.30000000000018,
+      "x": 221.6094,
+      "y": 141.45000000000002,
       "hp": 500,
       "maxHp": 500,
       "mp": 300,
@@ -159936,8 +159938,8 @@
     },
     {
       "type": "yeti",
-      "x": 198.314,
-      "y": 105,
+      "x": 194.50360000000003,
+      "y": 105.80000000000007,
       "hp": 69.88849780634264,
       "maxHp": 69.88849780634264,
       "mp": 69.88849780634264,
@@ -159953,8 +159955,8 @@
     },
     {
       "type": "yeti",
-      "x": 196.06239999999946,
-      "y": 102.70000000000005,
+      "x": 195.716,
+      "y": 104.5,
       "hp": 71.97199749212274,
       "maxHp": 71.97199749212274,
       "mp": 71.97199749212274,
@@ -159970,8 +159972,8 @@
     },
     {
       "type": "yeti",
-      "x": 199.6995999999997,
-      "y": 102.20000000000005,
+      "x": 196.9284,
+      "y": 101.79999999999995,
       "hp": 69.32802006989694,
       "maxHp": 69.32802006989694,
       "mp": 69.32802006989694,
@@ -159987,8 +159989,8 @@
     },
     {
       "type": "yeti",
-      "x": 239.88199999999995,
-      "y": 132.5999999999999,
+      "x": 237.284,
+      "y": 125.5,
       "hp": 67.25829322708988,
       "maxHp": 67.25829322708988,
       "mp": 1,
@@ -160004,8 +160006,8 @@
     },
     {
       "type": "yeti",
-      "x": 194.8000384615384,
-      "y": 106.91346153846155,
+      "x": 199.18,
+      "y": 102.5,
       "hp": 68.45586109384664,
       "maxHp": 68.45586109384664,
       "mp": 1,
@@ -160020,26 +160022,9 @@
       "id": 200
     },
     {
-      "type": "yeti",
-      "x": 199.99603846153707,
-      "y": 100.5,
-      "hp": 73.5840850853861,
-      "maxHp": 73.5840850853861,
-      "mp": 1,
-      "maxMp": 1,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 1.8396021271346528,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": 12.206873977309131,
-      "scriptingName": "yeti5",
-      "id": 201
-    },
-    {
       "type": "eagleman",
-      "x": 246.81,
-      "y": 125,
+      "x": 247.57607692307687,
+      "y": 119.67307692307693,
       "hp": 115.46208479717363,
       "maxHp": 115.46208479717363,
       "mp": 230.92416959434726,
@@ -160061,7 +160046,10 @@
       "x": 194.3109419182705,
       "y": 90.01686499456275,
       "z": 0,
+      "zMode": "local",
       "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
       "gravity": 10,
       "size": 1,
       "imagePath": "/assets/images/powerups/black%20diamond.png",
@@ -160077,7 +160065,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup13",
-      "id": 28
+      "id": 34
     },
     {
       "type": "powerup",
@@ -160085,7 +160073,10 @@
       "x": 194.66757908641227,
       "y": 92.46926510183005,
       "z": 0,
+      "zMode": "local",
       "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
       "gravity": 10,
       "size": 1,
       "imagePath": "/assets/images/powerups/black%20diamond.png",
@@ -160101,7 +160092,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup21",
-      "id": 29
+      "id": 35
     },
     {
       "type": "powerup",
@@ -160109,7 +160100,10 @@
       "x": 193.40563218375735,
       "y": 92.09517017021301,
       "z": 0,
+      "zMode": "local",
       "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
       "gravity": 10,
       "size": 1,
       "imagePath": "/assets/images/powerups/black%20diamond.png",
@@ -160125,7 +160119,7 @@
       "gravitateRadius": 2,
       "gravitateSpeed": 5,
       "scriptingName": "powerup22",
-      "id": 30
+      "id": 36
     },
     {
       "type": "powerup",
@@ -160133,7 +160127,10 @@
       "x": 195.8723089184224,
       "y": 102.08845074092244,
       "z": 0,
+      "zMode": "local",
       "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
       "gravity": 10,
       "size": 1,
       "imagePath": "/assets/images/powerups/wingboots.png",
@@ -160153,7 +160150,7 @@
         "playerTouches": "player.speed += 2;",
         "__init": "this.forceVisible = true"
       },
-      "id": 31
+      "id": 37
     },
     {
       "type": "powerup",
@@ -160161,7 +160158,10 @@
       "x": 213.5003103614008,
       "y": 100.54315173323147,
       "z": 0,
+      "zMode": "local",
       "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
       "gravity": 10,
       "size": 0.5,
       "imagePath": "/assets/images/powerups/apple.png",
@@ -160180,7 +160180,7 @@
       "script": {
         "playerTouches": "healPlayer(this.size * 10)"
       },
-      "id": 32
+      "id": 38
     },
     {
       "type": "powerup",
@@ -160188,7 +160188,10 @@
       "x": 216.13151403482084,
       "y": 101.95403510737049,
       "z": 0,
+      "zMode": "local",
       "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
       "gravity": 10,
       "size": 0.5,
       "imagePath": "/assets/images/powerups/apple.png",
@@ -160207,7 +160210,7 @@
       "script": {
         "playerTouches": "healPlayer(this.size * 10)"
       },
-      "id": 33
+      "id": 39
     },
     {
       "type": "powerup",
@@ -160215,7 +160218,10 @@
       "x": 216.15689454742426,
       "y": 101.96023239534424,
       "z": 0,
+      "zMode": "local",
       "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
       "gravity": 10,
       "size": 0.5,
       "imagePath": "/assets/images/powerups/apple.png",
@@ -160234,7 +160240,7 @@
       "script": {
         "playerTouches": "healPlayer(this.size * 10)"
       },
-      "id": 34
+      "id": 40
     },
     {
       "type": "powerup",
@@ -160242,7 +160248,10 @@
       "x": 217.2199567518834,
       "y": 99.18407360562321,
       "z": 0,
+      "zMode": "local",
       "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
       "gravity": 10,
       "size": 0.5,
       "imagePath": "/assets/images/powerups/apple.png",
@@ -160261,7 +160270,7 @@
       "script": {
         "playerTouches": "healPlayer(this.size * 10)"
       },
-      "id": 35
+      "id": 41
     },
     {
       "type": "powerup",
@@ -160269,7 +160278,10 @@
       "x": 217.1829704465356,
       "y": 99.16450332491655,
       "z": 0,
+      "zMode": "local",
       "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
       "gravity": 10,
       "size": 0.5,
       "imagePath": "/assets/images/powerups/apple.png",
@@ -160288,7 +160300,7 @@
       "script": {
         "playerTouches": "healPlayer(this.size * 10)"
       },
-      "id": 36
+      "id": 42
     },
     {
       "type": "powerup",
@@ -160296,7 +160308,10 @@
       "x": 217.8003689941637,
       "y": 99.75230990442708,
       "z": 0,
+      "zMode": "local",
       "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
       "gravity": 10,
       "size": 0.5,
       "imagePath": "/assets/images/powerups/apple.png",
@@ -160315,7 +160330,7 @@
       "script": {
         "playerTouches": "healPlayer(this.size * 10)"
       },
-      "id": 37
+      "id": 43
     },
     {
       "type": "powerup",
@@ -160323,7 +160338,10 @@
       "x": 215.2118453969066,
       "y": 99.73145740617116,
       "z": 0,
+      "zMode": "local",
       "vz": 0,
+      "currentLayer": 0,
+      "currentLayerBaseZ": 0,
       "gravity": 10,
       "size": 0.5,
       "imagePath": "/assets/images/powerups/apple.png",
@@ -160342,7 +160360,7 @@
       "script": {
         "playerTouches": "healPlayer(this.size * 10)"
       },
-      "id": 38
+      "id": 44
     }
   ],
   "buildingRefs": []

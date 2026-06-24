@@ -83,6 +83,25 @@
                 if (!Number.isFinite(quantity)) return false;
                 return wizardRef.getInventory().remove(itemName, quantity);
             }
+        }),
+        Object.freeze({
+            name: "thoughtBubble",
+            syntax: "wizard.thoughtBubble(\"I should go north\", 3)",
+            description: "show a thought bubble above the wizard for a duration in seconds",
+            handler(args, context, namedArgs = {}) {
+                const wizardRef = (context && context.wizard) || global.wizard || null;
+                const safeNamedArgs = (namedArgs && typeof namedArgs === "object") ? namedArgs : {};
+                const textValue = Object.prototype.hasOwnProperty.call(safeNamedArgs, "text")
+                    ? safeNamedArgs.text
+                    : args[0];
+                const durationValue = Object.prototype.hasOwnProperty.call(safeNamedArgs, "duration")
+                    ? safeNamedArgs.duration
+                    : args[1];
+                if (!global.Rendering || typeof global.Rendering.thoughtBubble !== "function") {
+                    throw new Error("wizard.thoughtBubble requires the Rendering API");
+                }
+                return !!global.Rendering.thoughtBubble(wizardRef, textValue, durationValue);
+            }
         })
     ]);
     const PLAYER_COMMAND_API_ENTRIES = Object.freeze(
@@ -125,11 +144,12 @@
         Object.freeze({ name: "trade", syntax: "trade(title=\"merchant\", currency=\"gold\", entries=[{\"type\":\"inventoryItem\",\"id\":\"grenades\",\"buy\":5,\"sell\":3}])", description: "open a trade modal and wait for the player to close it" }),
         Object.freeze({ name: "spawnCreature", syntax: "spawnCreature(type=\"bear\", size=1, x=2, y=-1)", description: "spawn a creature relative to the scripted object" }),
         Object.freeze({ name: "drop", syntax: "drop(type=\"gold_coin\", size=1, distance=3, height=0, x=0, y=0, count=1)", description: "drop a powerup relative to the scripted object or player; distance sets the drop radius in map units and height sets spawn z" }),
+        Object.freeze({ name: "screenColor", syntax: "screenColor(color=\"#000000\", opacity=0.5, duration=1, fade=1)", description: "show a solid screen overlay, then fade it out" }),
         Object.freeze({ name: "camera.zoom", syntax: "camera.zoom(target=1.5, seconds=1)", description: "zoom the camera to a target level over time" }),
         Object.freeze({ name: "camera.pan", syntax: "camera.pan(x=4, y=-2, target=tree1, seconds=1)", description: "pan the camera relative to the player or a named object" }),
         Object.freeze({ name: "camera.reset", syntax: "camera.reset(seconds=1)", description: "return the camera to its normal framing" }),
         Object.freeze({ name: "pause", syntax: "pause(seconds)", description: "wait before running the next script statement" }),
-        Object.freeze({ name: "scrollMessage", syntax: "scrollMessage(text, title=\"chapter 1\")", description: "show a scroll popup with an optional title and ok button" }),
+        Object.freeze({ name: "scrollMessage", syntax: "choice = scrollMessage(text=\"Hello\", title=\"chapter 1\", options=[\"yes\", \"no\"])", description: "show a scroll popup; with options, waits for and returns the chosen value" }),
         Object.freeze({ name: "savegame", syntax: "savegame(name)", description: "save the game to localStorage" }),
         Object.freeze({ name: "time.stop", syntax: "time.stop()", description: "stop non-wizard simulation time" }),
         Object.freeze({ name: "time.restore", syntax: "time.restore()", description: "restore non-wizard simulation time to normal speed" })
@@ -1338,6 +1358,18 @@
             : undefined;
     }
 
+    function setScriptLocalValue(context, name, value) {
+        const normalized = String(name || "").trim();
+        if (!isValidScriptingName(normalized)) return false;
+        if (normalized === "this" || normalized === "player" || normalized === "wizard") return false;
+        if (!context || typeof context !== "object") return false;
+        if (!context.locals || typeof context.locals !== "object") {
+            context.locals = {};
+        }
+        context.locals[normalized] = value;
+        return true;
+    }
+
     function resolveScriptExpressionPath(path, context = null) {
         const normalized = String(path || "").trim();
         if (!normalized.length) {
@@ -1446,12 +1478,28 @@
         if (!bodySection) return null;
         index = bodySection.endIndex + 1;
         while (index < text.length && /\s/.test(text[index])) index += 1;
+
+        let elseBody = "";
+        if (text.startsWith("else", index)) {
+            const elseNextChar = text[index + 4];
+            if (elseNextChar && /[A-Za-z0-9_$]/.test(elseNextChar)) return null;
+            index += 4;
+            while (index < text.length && /\s/.test(text[index])) index += 1;
+            if (text[index] !== "{") return null;
+            const elseSection = readDelimitedScriptSection(text, index, "{", "}");
+            if (!elseSection) return null;
+            elseBody = elseSection.content.trim();
+            index = elseSection.endIndex + 1;
+            while (index < text.length && /\s/.test(text[index])) index += 1;
+        }
+
         if (index !== text.length) return null;
 
         return {
             type: "if",
             condition: conditionSection.content.trim(),
-            body: bodySection.content.trim()
+            body: bodySection.content.trim(),
+            elseBody
         };
     }
 
@@ -1618,7 +1666,111 @@
         };
     }
 
-    function callScriptExpressionFunction(name, args, context = null) {
+    function normalizeScrollMessageButtons(rawOptions = undefined) {
+        if (rawOptions === undefined || rawOptions === null) {
+            return [{
+                text: "ok",
+                type: "submit",
+                value: true
+            }];
+        }
+        if (!Array.isArray(rawOptions)) {
+            throw new Error("scrollMessage options must be an array.");
+        }
+        if (rawOptions.length === 0) {
+            throw new Error("scrollMessage options must include at least one entry.");
+        }
+        return rawOptions.map((option, index) => {
+            if (option && typeof option === "object" && !Array.isArray(option)) {
+                const hasValue = Object.prototype.hasOwnProperty.call(option, "value");
+                const rawText = Object.prototype.hasOwnProperty.call(option, "text")
+                    ? option.text
+                    : (Object.prototype.hasOwnProperty.call(option, "label") ? option.label : option.value);
+                const text = String(rawText === undefined || rawText === null ? "" : rawText).trim();
+                if (!text.length) {
+                    throw new Error(`scrollMessage option ${index + 1} is missing text.`);
+                }
+                return {
+                    text,
+                    type: option.type || "button",
+                    value: hasValue ? option.value : text,
+                    className: option.className,
+                    close: option.close,
+                    unpause: option.unpause
+                };
+            }
+
+            const text = String(option === undefined || option === null ? "" : option).trim();
+            if (!text.length) {
+                throw new Error(`scrollMessage option ${index + 1} is blank.`);
+            }
+            return {
+                text,
+                type: "button",
+                value: option
+            };
+        });
+    }
+
+    function runScriptScrollMessage(args, context = null, namedArgs = {}) {
+        const safeNamedArgs = (namedArgs && typeof namedArgs === "object") ? namedArgs : {};
+        const hasNamedText = Object.prototype.hasOwnProperty.call(safeNamedArgs, "text");
+        const hasNamedTitle = Object.prototype.hasOwnProperty.call(safeNamedArgs, "title");
+        const hasNamedOptions = Object.prototype.hasOwnProperty.call(safeNamedArgs, "options");
+        let content = hasNamedText ? safeNamedArgs.text : args[0];
+        let titleValue = hasNamedTitle ? safeNamedArgs.title : "";
+
+        if (!hasNamedText && args.length > 1) {
+            if (!hasNamedTitle && args.length === 2 && typeof args[1] === "string") {
+                titleValue = args[1];
+            } else if (args.length === 2 && typeof args[1] !== "string") {
+                content = [args[0], args[1]];
+            } else if (args.length > 2) {
+                content = hasNamedTitle ? args.slice() : args.slice(0, args.length - 1);
+                if (!hasNamedTitle && typeof args[args.length - 1] === "string") {
+                    titleValue = args[args.length - 1];
+                } else if (!hasNamedTitle) {
+                    content = args.slice();
+                }
+            }
+        }
+
+        const buttons = normalizeScrollMessageButtons(hasNamedOptions ? safeNamedArgs.options : undefined);
+        if (context && context.validation === true) {
+            return buttons[0] ? buttons[0].value : true;
+        }
+
+        const title = String(titleValue === undefined || titleValue === null ? "" : titleValue);
+        if (typeof global.showScrollDialog === "function") {
+            return global.showScrollDialog({
+                title,
+                bodyClass: "scrollMessageText",
+                content,
+                buttons
+            });
+        }
+        if (
+            typeof global.showScrollMessage === "function" &&
+            !hasNamedOptions &&
+            (typeof content === "string" || typeof content === "number" || typeof content === "boolean")
+        ) {
+            return global.showScrollMessage(String(content), "ok", title);
+        }
+        if (typeof global.msgBox === "function") {
+            const fallbackText = Array.isArray(content)
+                ? content.map(entry => (typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean") ? String(entry) : "").join(" ")
+                : String(content === undefined || content === null ? "" : content);
+            return new Promise(resolve => {
+                global.msgBox(title, fallbackText, buttons.map(button => ({
+                    text: button.text,
+                    function: () => resolve(button.value)
+                })));
+            });
+        }
+        return false;
+    }
+
+    function callScriptExpressionFunction(name, args, context = null, namedArgs = {}) {
         const normalizedName = String(name || "").trim();
         if (!normalizedName.length) {
             throw new Error("Missing function name.");
@@ -1649,6 +1801,10 @@
             const imagePath = args[0];
             const options = (args[1] && typeof args[1] === "object" && !Array.isArray(args[1])) ? args[1] : {};
             return createScriptImageContent(imagePath, options);
+        }
+
+        if (normalizedName === "scrollMessage" || normalizedName === "scrollmessage") {
+            return runScriptScrollMessage(args, context, namedArgs);
         }
 
         const resolved = resolveScriptExpressionPath(normalizedName, context);
@@ -1695,14 +1851,35 @@
             return source.slice(start, index);
         };
 
+        const readIdentifierName = () => {
+            if (!isIdentStart(source[index])) return "";
+            const start = index;
+            index += 1;
+            while (index < source.length && isIdentPart(source[index])) index += 1;
+            return source.slice(start, index);
+        };
+
         const parseCallArguments = () => {
             const args = [];
+            const namedArgs = {};
             skipWhitespace();
             if (source[index] === ")") {
-                return args;
+                return { args, namedArgs };
             }
             while (index < source.length) {
-                args.push(parseLogicalOr());
+                const argStart = index;
+                let namedArg = "";
+                if (isIdentStart(source[index])) {
+                    namedArg = readIdentifierName();
+                    skipWhitespace();
+                }
+                if (namedArg && source[index] === "=" && source[index + 1] !== "=") {
+                    index += 1;
+                    namedArgs[namedArg] = parseLogicalOr();
+                } else {
+                    index = argStart;
+                    args.push(parseLogicalOr());
+                }
                 skipWhitespace();
                 if (source[index] === ",") {
                     index += 1;
@@ -1711,7 +1888,7 @@
                 }
                 break;
             }
-            return args;
+            return { args, namedArgs };
         };
 
         const toNumericValue = (value, operator) => {
@@ -1806,13 +1983,13 @@
                 skipWhitespace();
                 if (source[index] === "(") {
                     index += 1;
-                    const args = parseCallArguments();
+                    const callArgs = parseCallArguments();
                     skipWhitespace();
                     if (source[index] !== ")") {
                         throw new Error("Missing closing ')' after function call.");
                     }
                     index += 1;
-                    return callScriptExpressionFunction(identifierPath, args, context);
+                    return callScriptExpressionFunction(identifierPath, callArgs.args, context, callArgs.namedArgs);
                 }
                 const resolved = resolveScriptExpressionPath(identifierPath, context);
                 if (!resolved.ok) {
@@ -2229,8 +2406,7 @@
         return cursor;
     }
 
-    function resolveAssignmentValue(path, operator, rhsRaw, context = null) {
-        const rhs = parseScriptValue(rhsRaw, context);
+    function resolveAssignmentValueFromParsed(path, operator, rhs, context = null) {
         if (operator !== "+=") return { ok: true, value: rhs };
 
         const wizardRef = context && context.wizard ? context.wizard : null;
@@ -2244,6 +2420,23 @@
             return { ok: false, value: rhs };
         }
         return { ok: true, value: baseValue + deltaValue };
+    }
+
+    function resolveAssignmentValue(path, operator, rhsRaw, context = null) {
+        const rhs = parseScriptValue(rhsRaw, context);
+        if (isPromiseLike(rhs)) {
+            return {
+                ok: true,
+                value: Promise.resolve(rhs).then(resolvedRhs => {
+                    const resolved = resolveAssignmentValueFromParsed(path, operator, resolvedRhs, context);
+                    if (!resolved.ok) {
+                        throw new Error(`Cannot apply '${operator}' to resolved assignment value.`);
+                    }
+                    return resolved.value;
+                })
+            };
+        }
+        return resolveAssignmentValueFromParsed(path, operator, rhs, context);
     }
 
     function buildDirectAssignmentContext(path, context = null) {
@@ -2278,74 +2471,95 @@
             return false;
         }
         if (!resolvedValue.ok) return false;
-        const rhs = resolvedValue.value;
-        const wizardRef = context && context.wizard ? context.wizard : null;
-        const directAssignmentHandler = assignmentHandlersByPath.get(path) || null;
-        if (directAssignmentHandler) {
-            try {
-                const changedByHandler = directAssignmentHandler(rhs, buildDirectAssignmentContext(path, context));
-                if (changedByHandler) {
-                    markPrototypeScriptTargetDirty(context && context.target ? context.target : null);
-                    emit("script:assignmentApplied", {
-                        path,
-                        value: rhs,
-                        rawValue: rhsRaw,
-                        wizard: wizardRef
-                    });
-                }
-                return !!changedByHandler;
-            } catch (error) {
-                console.error(`Scripting assignment handler failed for '${path}':`, error);
-                return false;
-            }
-        }
 
-        const objectAssignment = resolveScriptAssignmentTarget(path, context);
-        const objectAssignmentHandler = objectAssignment
-            ? (assignmentHandlersByPath.get(objectAssignment.assignmentHandlerPath) || null)
-            : null;
-        if (objectAssignmentHandler) {
-            try {
-                const changedByHandler = objectAssignmentHandler(rhs, {
-                    ...(context && typeof context === "object" ? context : {}),
-                    target: objectAssignment.target
+        const applyAssignmentValue = (rhs) => {
+            const wizardRef = context && context.wizard ? context.wizard : null;
+            const directAssignmentHandler = assignmentHandlersByPath.get(path) || null;
+            if (directAssignmentHandler) {
+                try {
+                    const changedByHandler = directAssignmentHandler(rhs, buildDirectAssignmentContext(path, context));
+                    if (changedByHandler) {
+                        markPrototypeScriptTargetDirty(context && context.target ? context.target : null);
+                        emit("script:assignmentApplied", {
+                            path,
+                            value: rhs,
+                            rawValue: rhsRaw,
+                            wizard: wizardRef
+                        });
+                    }
+                    return !!changedByHandler;
+                } catch (error) {
+                    console.error(`Scripting assignment handler failed for '${path}':`, error);
+                    return false;
+                }
+            }
+
+            const objectAssignment = resolveScriptAssignmentTarget(path, context);
+            const objectAssignmentHandler = objectAssignment
+                ? (assignmentHandlersByPath.get(objectAssignment.assignmentHandlerPath) || null)
+                : null;
+            if (objectAssignmentHandler) {
+                try {
+                    const changedByHandler = objectAssignmentHandler(rhs, {
+                        ...(context && typeof context === "object" ? context : {}),
+                        target: objectAssignment.target
+                    });
+                    if (changedByHandler) {
+                        markPrototypeScriptTargetDirty(objectAssignment.target);
+                        emit("script:assignmentApplied", {
+                            path,
+                            value: rhs,
+                            rawValue: rhsRaw,
+                            wizard: wizardRef
+                        });
+                    }
+                    return !!changedByHandler;
+                } catch (error) {
+                    console.error(`Scripting assignment handler failed for '${path}':`, error);
+                    return false;
+                }
+            }
+
+            if (objectAssignment && setObjectPathValue(objectAssignment.target, objectAssignment.pathSegments, rhs)) {
+                markPrototypeScriptTargetDirty(objectAssignment.target);
+                emit("script:assignmentApplied", {
+                    path,
+                    value: rhs,
+                    rawValue: rhsRaw,
+                    wizard: wizardRef
                 });
-                if (changedByHandler) {
-                    markPrototypeScriptTargetDirty(objectAssignment.target);
-                    emit("script:assignmentApplied", {
-                        path,
-                        value: rhs,
-                        rawValue: rhsRaw,
-                        wizard: wizardRef
-                    });
-                }
-                return !!changedByHandler;
-            } catch (error) {
-                console.error(`Scripting assignment handler failed for '${path}':`, error);
-                return false;
+                return true;
             }
-        }
+            if (!path.includes(".") && setScriptLocalValue(context, path, rhs)) {
+                emit("script:assignmentApplied", {
+                    path,
+                    value: rhs,
+                    rawValue: rhsRaw,
+                    wizard: wizardRef
+                });
+                return true;
+            }
+            if (setScriptPathValue(path, rhs, wizardRef)) {
+                emit("script:assignmentApplied", {
+                    path,
+                    value: rhs,
+                    rawValue: rhsRaw,
+                    wizard: wizardRef
+                });
+                return true;
+            }
+            return false;
+        };
 
-        if (objectAssignment && setObjectPathValue(objectAssignment.target, objectAssignment.pathSegments, rhs)) {
-            markPrototypeScriptTargetDirty(objectAssignment.target);
-            emit("script:assignmentApplied", {
-                path,
-                value: rhs,
-                rawValue: rhsRaw,
-                wizard: wizardRef
-            });
-            return true;
+        if (isPromiseLike(resolvedValue.value)) {
+            return Promise.resolve(resolvedValue.value)
+                .then(applyAssignmentValue)
+                .catch(error => {
+                    console.error(`Scripting assignment '${path}' failed to resolve value:`, error);
+                    return false;
+                });
         }
-        if (setScriptPathValue(path, rhs, wizardRef)) {
-            emit("script:assignmentApplied", {
-                path,
-                value: rhs,
-                rawValue: rhsRaw,
-                wizard: wizardRef
-            });
-            return true;
-        }
-        return false;
+        return applyAssignmentValue(resolvedValue.value);
     }
 
     function resolveScriptCommand(commandName, context = null) {
@@ -2644,15 +2858,20 @@
             const ifStatement = parseIfStatement(statement);
             if (ifStatement) {
                 const runIfStatement = () => {
+                    let shouldRunBody = false;
                     try {
-                        if (!evaluateScriptCondition(ifStatement.condition, context)) {
-                            return createScriptRunResult(false);
-                        }
+                        shouldRunBody = !!evaluateScriptCondition(ifStatement.condition, context);
                     } catch (error) {
                         console.error(`Scripting if-condition failed:`, error);
                         return createScriptRunResult(false);
                     }
-                    return runScript(ifStatement.body, context);
+                    if (shouldRunBody) {
+                        return runScript(ifStatement.body, context);
+                    }
+                    if (ifStatement.elseBody) {
+                        return runScript(ifStatement.elseBody, context);
+                    }
+                    return createScriptRunResult(false);
                 };
 
                 if (pending) {
@@ -2701,11 +2920,23 @@
                     pending = pending.then(() => {
                         if (control) return;
                         const didAssign = executeAssignmentStatement(assignmentMatch[1], assignmentMatch[3], context, assignmentMatch[2]);
+                        if (isPromiseLike(didAssign)) {
+                            return Promise.resolve(didAssign).then(result => {
+                                changed = !!result || changed;
+                            });
+                        }
                         changed = didAssign || changed;
                     });
                 } else {
                     const didAssign = executeAssignmentStatement(assignmentMatch[1], assignmentMatch[3], context, assignmentMatch[2]);
-                    changed = didAssign || changed;
+                    if (isPromiseLike(didAssign)) {
+                        changed = true;
+                        pending = Promise.resolve(didAssign).then(result => {
+                            changed = !!result || changed;
+                        });
+                    } else {
+                        changed = didAssign || changed;
+                    }
                 }
                 continue;
             }
@@ -5881,7 +6112,10 @@
                 } else {
                     creature.traversalLayer = spawnLayer;
                     creature.currentLayer = spawnLayer;
-                    creature.currentLayerBaseZ = Number.isFinite(spawnNode.baseZ) ? Number(spawnNode.baseZ) : spawnLayer * 3;
+                    if (!Number.isFinite(spawnNode.baseZ)) {
+                        throw new Error(`summoned creature ${creature.id || creature.name || creature.type || "(unknown)"} requires spawn node baseZ`);
+                    }
+                    creature.currentLayerBaseZ = Number(spawnNode.baseZ);
                 }
                 creature.z = typeof creature.getNodeStandingZ === "function"
                     ? creature.getNodeStandingZ(spawnNode)
@@ -6002,54 +6236,25 @@
                 return true;
             },
             scrollMessage(args, context, namedArgs = {}) {
-                const hasNamedText = Object.prototype.hasOwnProperty.call(namedArgs, "text");
-                const hasNamedTitle = Object.prototype.hasOwnProperty.call(namedArgs, "title");
-                let content = hasNamedText ? namedArgs.text : args[0];
-                let titleValue = hasNamedTitle ? namedArgs.title : "";
-
-                if (!hasNamedText && args.length > 1) {
-                    if (!hasNamedTitle && args.length === 2 && typeof args[1] === "string") {
-                        titleValue = args[1];
-                    } else if (args.length === 2 && typeof args[1] !== "string") {
-                        content = [args[0], args[1]];
-                    } else if (args.length > 2) {
-                        content = hasNamedTitle ? args.slice() : args.slice(0, args.length - 1);
-                        if (!hasNamedTitle && typeof args[args.length - 1] === "string") {
-                            titleValue = args[args.length - 1];
-                        } else if (!hasNamedTitle) {
-                            content = args.slice();
-                        }
-                    }
+                return runScriptScrollMessage(args, context, namedArgs);
+            },
+            screenColor(args, _context, namedArgs = {}) {
+                const colorValue = Object.prototype.hasOwnProperty.call(namedArgs, "color")
+                    ? namedArgs.color
+                    : args[0];
+                const opacityValue = Object.prototype.hasOwnProperty.call(namedArgs, "opacity")
+                    ? namedArgs.opacity
+                    : args[1];
+                const durationValue = Object.prototype.hasOwnProperty.call(namedArgs, "duration")
+                    ? namedArgs.duration
+                    : args[2];
+                const fadeValue = Object.prototype.hasOwnProperty.call(namedArgs, "fade")
+                    ? namedArgs.fade
+                    : args[3];
+                if (!global.Rendering || typeof global.Rendering.screenColor !== "function") {
+                    throw new Error("screenColor requires the Rendering API");
                 }
-
-                const title = String(titleValue === undefined || titleValue === null ? "" : titleValue);
-                if (typeof global.showScrollDialog === "function") {
-                    return global.showScrollDialog({
-                        title,
-                        bodyClass: "scrollMessageText",
-                        content,
-                        buttons: [{
-                            text: "ok",
-                            type: "submit",
-                            value: true
-                        }]
-                    });
-                }
-                if (typeof global.showScrollMessage === "function" && (typeof content === "string" || typeof content === "number" || typeof content === "boolean")) {
-                    return global.showScrollMessage(String(content), "ok", title);
-                }
-                if (typeof global.msgBox === "function") {
-                    const fallbackText = Array.isArray(content)
-                        ? content.map(entry => (typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean") ? String(entry) : "").join(" ")
-                        : String(content === undefined || content === null ? "" : content);
-                    return new Promise(resolve => {
-                        global.msgBox(title, fallbackText, [{
-                            text: "ok",
-                            function: () => resolve(true)
-                        }]);
-                    });
-                }
-                return false;
+                return !!global.Rendering.screenColor(colorValue, opacityValue, durationValue, fadeValue);
             },
             "camera.zoom"(args, _context, namedArgs = {}) {
                 const rawTarget = Object.prototype.hasOwnProperty.call(namedArgs, "target")
@@ -6102,6 +6307,7 @@
                 return !!global.scriptCameraReset(seconds);
             }
         };
+        commandImplementations.scrollmessage = commandImplementations.scrollMessage;
         for (let i = 0; i < PLAYER_COMMAND_REGISTRY.length; i++) {
             const entry = PLAYER_COMMAND_REGISTRY[i];
             if (!entry || typeof entry.name !== "string" || typeof entry.handler !== "function") continue;
@@ -6150,6 +6356,7 @@
                 registerCommand(entry.name, handler);
             }
         }
+        registerCommand("scrollmessage", commandImplementations.scrollMessage);
 
         const targetCommandEntries = getUniqueScriptApiTargetMembers("method");
         for (let i = 0; i < targetCommandEntries.length; i++) {
@@ -6178,7 +6385,9 @@
             map: (scriptEditorTargetObject && scriptEditorTargetObject.map) || global.map || null,
             wizard: validationWizard,
             player: validationWizard,
-            target: scriptEditorTargetObject || null
+            target: scriptEditorTargetObject || null,
+            validation: true,
+            locals: {}
         };
         let index = 0;
         const len = text.length;
@@ -6249,6 +6458,13 @@
                 if (bodyStartInStmt >= 0) {
                     checkBody(ifStatement.body, absStart + bodyStartInStmt + 1, localContext, options);
                 }
+                if (ifStatement.elseBody) {
+                    const elseIndexInStmt = stmt.indexOf("else", bodyStartInStmt >= 0 ? bodyStartInStmt : 0);
+                    const elseBodyStartInStmt = elseIndexInStmt >= 0 ? stmt.indexOf("{", elseIndexInStmt) : -1;
+                    if (elseBodyStartInStmt >= 0) {
+                        checkBody(ifStatement.elseBody, absStart + elseBodyStartInStmt + 1, localContext, options);
+                    }
+                }
                 return;
             }
             // Assignment: path = value or path += value
@@ -6256,7 +6472,15 @@
             if (assignMatch) {
                 checkAssignmentPath(assignMatch[1], absStart);
                 try {
-                    resolveAssignmentValue(assignMatch[1], assignMatch[2], assignMatch[3], localContext);
+                    const resolvedAssignment = resolveAssignmentValue(assignMatch[1], assignMatch[2], assignMatch[3], localContext);
+                    if (
+                        resolvedAssignment &&
+                        resolvedAssignment.ok &&
+                        !isPromiseLike(resolvedAssignment.value) &&
+                        !String(assignMatch[1] || "").includes(".")
+                    ) {
+                        setScriptLocalValue(localContext, assignMatch[1], resolvedAssignment.value);
+                    }
                 } catch (error) {
                     errors.push({
                         start: absStart,

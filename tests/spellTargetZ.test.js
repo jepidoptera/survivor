@@ -39,6 +39,7 @@ function loadSpellContext() {
         animals: [],
         paused: false,
         frameRate: 60,
+        frameCount: 0,
         setInterval: () => 1,
         clearInterval() {},
         setTimeout: () => 1,
@@ -49,6 +50,8 @@ function loadSpellContext() {
     vm.createContext(context);
 
     const files = [
+        path.join(__dirname, "../public/assets/javascript/gameobjects/hitbox.js"),
+        path.join(__dirname, "../public/assets/javascript/shared/FloorSupport.js"),
         path.join(__dirname, "../public/assets/javascript/spells/FloorFragmentEdit.js"),
         path.join(__dirname, "../public/assets/javascript/spells/Spell.js"),
         path.join(__dirname, "../public/assets/javascript/spells.js")
@@ -90,6 +93,681 @@ test("building placement rotation wraps around the negative boundary", () => {
     assertNearlyEqual(wizard.selectedBuildingRotation, 35 * Math.PI / 36);
 });
 
+test("move object drag temporarily excludes prototype building objects from interior bakes", () => {
+    const context = loadSpellContext();
+    context.keysPressed = { " ": true };
+    context.MoveObject = class MoveObject extends context.Spell {
+        static supportsObjectTargeting = true;
+        static isValidObjectTarget(target, wizardRef = null) {
+            return !!(
+                target &&
+                target !== wizardRef &&
+                !target.gone &&
+                !target.vanishing &&
+                Number.isFinite(target.x) &&
+                Number.isFinite(target.y)
+            );
+        }
+    };
+
+    let removeCalls = 0;
+    let restoreCalls = 0;
+    let nodeDirtyCalls = 0;
+    const objectState = {
+        dirtyRuntimeObjects: new context.Set(),
+        captureScanNeeded: false
+    };
+    const startNode = {
+        objects: [],
+        removeObject(obj) {
+            const idx = this.objects.indexOf(obj);
+            if (idx >= 0) this.objects.splice(idx, 1);
+            if (obj._suppressBuildingRenderCacheDirty !== true) nodeDirtyCalls += 1;
+        }
+    };
+    const nextNode = {
+        objects: [],
+        addObject(obj) {
+            this.objects.push(obj);
+            if (obj._suppressBuildingRenderCacheDirty !== true) nodeDirtyCalls += 1;
+        }
+    };
+    const map = {
+        _prototypeObjectState: objectState,
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        wrapWorldX(x) { return x; },
+        wrapWorldY(y) { return y; },
+        worldToNode(x) {
+            return x >= 5 ? nextNode : startNode;
+        },
+        removePrototypeBuildingObjectFromInteriorBitmap(obj) {
+            removeCalls += 1;
+            assert.equal(obj._suppressBuildingRenderCacheDirty, undefined);
+            return {
+                placementId: "building:test-house",
+                floorId: "floor-1",
+                recordId: 77,
+                changed: true
+            };
+        },
+        restorePrototypeBuildingObjectToInteriorBitmap(obj) {
+            restoreCalls += 1;
+            assert.equal(obj._suppressBuildingRenderCacheDirty, undefined);
+            return {
+                placementId: "building:test-house",
+                floorId: "floor-1",
+                recordId: 77,
+                changed: true
+            };
+        }
+    };
+    const target = {
+        type: "placedObject",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        category: "doors",
+        rotationAxis: "spatial",
+        x: 2,
+        y: 3,
+        map,
+        node: startNode,
+        _prototypeRuntimeRecord: true,
+        _prototypeObjectManaged: true,
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:test-house",
+        _prototypeOwnerSignature: "building:building:test-house",
+        _prototypeRecordId: 77,
+        fragmentId: "building:test-house:floor:floor-1",
+        surfaceId: "building:test-house:surface:floor-1"
+    };
+    startNode.objects.push(target);
+    context.renderingScenePicker = {
+        getHoveredObject({ filter }) {
+            return filter(target) ? target : null;
+        }
+    };
+    const wizard = {
+        currentSpell: "moveobject",
+        map,
+        castDelay: false
+    };
+
+    assert.equal(context.SpellSystem.beginDragSpell(wizard, "moveobject", 2, 3), true);
+    assert.equal(removeCalls, 1);
+    assert.equal(target._suppressBuildingRenderCacheDirty, true);
+
+    assert.equal(context.SpellSystem.updateDragPreview(wizard, 7, 9), true);
+    assert.equal(removeCalls, 1);
+    assert.equal(restoreCalls, 0);
+    assert.equal(nodeDirtyCalls, 0);
+    assert.equal(target.x, 7);
+    assert.equal(target.y, 9);
+    assert.equal(startNode.objects.includes(target), false);
+    assert.equal(nextNode.objects.includes(target), true);
+
+    assert.equal(context.SpellSystem.completeDragSpell(wizard, "moveobject", 8, 10), true);
+    assert.equal(removeCalls, 1);
+    assert.equal(restoreCalls, 1);
+    assert.equal(Object.prototype.hasOwnProperty.call(target, "_suppressBuildingRenderCacheDirty"), false);
+    assert.equal(wizard.moveObjectDragState, null);
+    assert.equal(target._prototypeDirty, true);
+    assert.equal(objectState.dirtyRuntimeObjects.has(target), true);
+    assert.equal(objectState.captureScanNeeded, true);
+});
+
+test("move object drag registers fresh prototype building objects before bake exclusion", () => {
+    const context = loadSpellContext();
+    context.keysPressed = { " ": true };
+    context.activeSimObjects = new context.Set();
+    context.MoveObject = class MoveObject extends context.Spell {
+        static supportsObjectTargeting = true;
+        static isValidObjectTarget(target, wizardRef = null) {
+            return !!(target && target !== wizardRef && !target.gone && !target.vanishing);
+        }
+    };
+
+    let ensureCalls = 0;
+    let removeCalls = 0;
+    const node = {
+        objects: [],
+        removeObject(obj) {
+            const idx = this.objects.indexOf(obj);
+            if (idx >= 0) this.objects.splice(idx, 1);
+        },
+        addObject(obj) {
+            if (!this.objects.includes(obj)) this.objects.push(obj);
+        }
+    };
+    const map = {
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        wrapWorldX(x) { return x; },
+        wrapWorldY(y) { return y; },
+        worldToNode() { return node; },
+        ensurePrototypeObjectRuntimeRecord(obj) {
+            ensureCalls += 1;
+            assert.equal(obj._prototypeRecordId, undefined);
+            obj._prototypeRuntimeRecord = true;
+            obj._prototypeRecordId = 88;
+            return 88;
+        },
+        removePrototypeBuildingObjectFromInteriorBitmap(obj) {
+            removeCalls += 1;
+            assert.equal(obj._prototypeRecordId, 88);
+            return {
+                placementId: "building:test-house",
+                floorId: "floor-1",
+                recordId: 88,
+                changed: true
+            };
+        },
+        restorePrototypeBuildingObjectToInteriorBitmap() {
+            return {
+                placementId: "building:test-house",
+                floorId: "floor-1",
+                recordId: 88,
+                changed: true
+            };
+        }
+    };
+    const target = {
+        type: "placedObject",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        category: "furniture",
+        x: 2,
+        y: 3,
+        map,
+        node,
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:test-house",
+        fragmentId: "building:test-house:floor:floor-1",
+        surfaceId: "building:test-house:surface:floor-1"
+    };
+    node.objects.push(target);
+    context.renderingScenePicker = {
+        getHoveredObject({ filter }) {
+            return filter(target) ? target : null;
+        }
+    };
+    const wizard = {
+        currentSpell: "moveobject",
+        map,
+        castDelay: false
+    };
+
+    assert.equal(context.SpellSystem.beginDragSpell(wizard, "moveobject", 2, 3), true);
+    assert.equal(ensureCalls, 1);
+    assert.equal(removeCalls, 1);
+    assert.equal(target._prototypeRecordId, 88);
+
+    assert.equal(context.SpellSystem.completeDragSpell(wizard, "moveobject", 2, 3), true);
+    assert.equal(wizard.moveObjectDragState, null);
+});
+
+test("move object drag applies force toward the mouse instead of teleporting", () => {
+    const context = loadSpellContext();
+    context.keysPressed = { " ": true };
+    let now = 0;
+    context.performance.now = () => now;
+    context.MoveObject = class MoveObject extends context.Spell {
+        static supportsObjectTargeting = true;
+        static isValidObjectTarget(target, wizardRef = null) {
+            return !!(target && target !== wizardRef && !target.gone && !target.vanishing);
+        }
+    };
+
+    const node = { objects: [] };
+    const map = {
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        wrapWorldX(x) { return x; },
+        wrapWorldY(y) { return y; },
+        worldToNode() { return node; },
+        getNodesInIndexWindow() { return [node]; }
+    };
+    const target = {
+        type: "furniture",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        x: 0,
+        y: 0,
+        map,
+        node,
+        isPassable: false,
+        groundRadius: 0.25,
+        groundPlaneHitbox: new context.CircleHitbox(0, 0, 0.25),
+        visualHitbox: new context.CircleHitbox(0, 0, 0.25)
+    };
+    node.objects.push(target);
+    context.renderingScenePicker = {
+        getHoveredObject({ filter }) {
+            return filter(target) ? target : null;
+        }
+    };
+    const wizard = {
+        currentSpell: "moveobject",
+        map,
+        castDelay: false
+    };
+
+    assert.equal(context.SpellSystem.beginDragSpell(wizard, "moveobject", 0, 0), true);
+    now += 16;
+    assert.equal(context.SpellSystem.updateDragPreview(wizard, 10, 0), true);
+    assert.ok(target.x > 0, "object should begin moving toward the mouse");
+    assert.ok(target.x < 10, "object should not teleport to the mouse");
+});
+
+test("move object force drag is resisted by wall hitboxes", () => {
+    const context = loadSpellContext();
+    context.keysPressed = { " ": true };
+    let now = 0;
+    context.performance.now = () => now;
+    context.MoveObject = class MoveObject extends context.Spell {
+        static supportsObjectTargeting = true;
+        static isValidObjectTarget(target, wizardRef = null) {
+            return !!(target && target !== wizardRef && !target.gone && !target.vanishing);
+        }
+    };
+
+    const node = { objects: [] };
+    const map = {
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        wrapWorldX(x) { return x; },
+        wrapWorldY(y) { return y; },
+        worldToNode(x) {
+            return { ...node, xindex: Math.floor(x), yindex: 0 };
+        },
+        getNodesInIndexWindow() { return [node]; }
+    };
+    const target = {
+        type: "furniture",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        x: 0,
+        y: 0,
+        map,
+        node,
+        isPassable: false,
+        groundRadius: 0.25,
+        moveObjectForceStrength: 2000,
+        moveObjectMaxSpeed: 50,
+        moveObjectForceDamping: 0,
+        groundPlaneHitbox: new context.CircleHitbox(0, 0, 0.25),
+        visualHitbox: new context.CircleHitbox(0, 0, 0.25)
+    };
+    const wall = {
+        type: "wallSection",
+        isPassable: false,
+        traversalLayer: 0,
+        groundPlaneHitbox: new context.PolygonHitbox([
+            { x: 1.0, y: -2 },
+            { x: 1.2, y: -2 },
+            { x: 1.2, y: 2 },
+            { x: 1.0, y: 2 }
+        ])
+    };
+    node.objects.push(target, wall);
+    context.renderingScenePicker = {
+        getHoveredObject({ filter }) {
+            return filter(target) ? target : null;
+        }
+    };
+    const wizard = {
+        currentSpell: "moveobject",
+        map,
+        castDelay: false
+    };
+
+    assert.equal(context.SpellSystem.beginDragSpell(wizard, "moveobject", 0, 0), true);
+    now += 50;
+    assert.equal(context.SpellSystem.updateDragPreview(wizard, 5, 0), true);
+    assert.ok(target.x > 0, "object should move toward the wall");
+    assert.ok(target.x < 1.0, "object should remain on the near side of the wall");
+});
+
+test("move object force drag is resisted by prototype building movement blockers", () => {
+    const context = loadSpellContext();
+    context.keysPressed = { " ": true };
+    let now = 0;
+    context.performance.now = () => now;
+    context.MoveObject = class MoveObject extends context.Spell {
+        static supportsObjectTargeting = true;
+        static isValidObjectTarget(target, wizardRef = null) {
+            return !!(target && target !== wizardRef && !target.gone && !target.vanishing);
+        }
+    };
+
+    const node = { objects: [] };
+    const buildingBlocker = {
+        type: "prototypeBuildingMovementBlocker",
+        isPassable: false,
+        traversalLayer: 0,
+        groundPlaneHitbox: new context.PolygonHitbox([
+            { x: 1.0, y: -2 },
+            { x: 1.2, y: -2 },
+            { x: 1.2, y: 2 },
+            { x: 1.0, y: 2 }
+        ])
+    };
+    let buildingBlockerQueries = 0;
+    const map = {
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        wrapWorldX(x) { return x; },
+        wrapWorldY(y) { return y; },
+        worldToNode(x) {
+            return { ...node, xindex: Math.floor(x), yindex: 0 };
+        },
+        getNodesInIndexWindow() { return [node]; },
+        collectPrototypeBuildingMovementBlockersInBounds(bounds, layer) {
+            buildingBlockerQueries += 1;
+            assert.equal(layer, 0);
+            assert.ok(bounds.minX <= 1.0 && bounds.maxX >= 1.2);
+            return [buildingBlocker];
+        }
+    };
+    const target = {
+        type: "furniture",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        x: 0,
+        y: 0,
+        map,
+        node,
+        isPassable: false,
+        groundRadius: 0.25,
+        moveObjectForceStrength: 2000,
+        moveObjectMaxSpeed: 50,
+        moveObjectForceDamping: 0,
+        groundPlaneHitbox: new context.CircleHitbox(0, 0, 0.25),
+        visualHitbox: new context.CircleHitbox(0, 0, 0.25)
+    };
+    node.objects.push(target);
+    context.renderingScenePicker = {
+        getHoveredObject({ filter }) {
+            return filter(target) ? target : null;
+        }
+    };
+    const wizard = {
+        currentSpell: "moveobject",
+        map,
+        castDelay: false
+    };
+
+    assert.equal(context.SpellSystem.beginDragSpell(wizard, "moveobject", 0, 0), true);
+    now += 50;
+    assert.equal(context.SpellSystem.updateDragPreview(wizard, 5, 0), true);
+    assert.equal(buildingBlockerQueries, 1);
+    assert.ok(target.x > 0, "object should move toward the building wall");
+    assert.ok(target.x < 1.0, "object should remain on the near side of the building wall");
+});
+
+test("god mode move object drag preserves grab offset and ignores blockers", () => {
+    const context = loadSpellContext();
+    context.keysPressed = { " ": true };
+    let now = 0;
+    context.performance.now = () => now;
+    context.MoveObject = class MoveObject extends context.Spell {
+        static supportsObjectTargeting = true;
+        static isValidObjectTarget(target, wizardRef = null) {
+            return !!(target && target !== wizardRef && !target.gone && !target.vanishing);
+        }
+    };
+
+    const node = { objects: [] };
+    let buildingBlockerQueries = 0;
+    const map = {
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        wrapWorldX(x) { return x; },
+        wrapWorldY(y) { return y; },
+        worldToNode(x) {
+            return { ...node, xindex: Math.floor(x), yindex: 0 };
+        },
+        getNodesInIndexWindow() { return [node]; },
+        collectPrototypeBuildingMovementBlockersInBounds() {
+            buildingBlockerQueries += 1;
+            return [{
+                type: "prototypeBuildingMovementBlocker",
+                isPassable: false,
+                traversalLayer: 0,
+                groundPlaneHitbox: new context.PolygonHitbox([
+                    { x: 1.0, y: -2 },
+                    { x: 1.2, y: -2 },
+                    { x: 1.2, y: 2 },
+                    { x: 1.0, y: 2 }
+                ])
+            }];
+        }
+    };
+    const target = {
+        type: "furniture",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        x: 0,
+        y: 0,
+        map,
+        node,
+        isPassable: false,
+        groundRadius: 0.25,
+        groundPlaneHitbox: new context.CircleHitbox(0, 0, 0.25),
+        visualHitbox: new context.CircleHitbox(0, 0, 0.25)
+    };
+    node.objects.push(target);
+    context.renderingScenePicker = {
+        getHoveredObject({ filter }) {
+            return filter(target) ? target : null;
+        }
+    };
+    const wizard = {
+        currentSpell: "moveobject",
+        map,
+        castDelay: false,
+        isGodMode() { return true; }
+    };
+
+    assert.equal(context.SpellSystem.beginDragSpell(wizard, "moveobject", 0.75, 0), true);
+    now += 50;
+    assert.equal(context.SpellSystem.updateDragPreview(wizard, 5, 0), true);
+    assert.equal(target.x, 4.25);
+    assert.equal(target.y, 0);
+    assert.equal(buildingBlockerQueries, 0);
+});
+
+test("moved placed object falls to lower support after leaving its original surface", () => {
+    const context = loadSpellContext();
+    context.keysPressed = { " ": true };
+    context.activeSimObjects = new context.Set();
+    context.MoveObject = class MoveObject extends context.Spell {
+        static supportsObjectTargeting = true;
+        static isValidObjectTarget(target, wizardRef = null) {
+            return !!(target && target !== wizardRef && !target.gone && !target.vanishing);
+        }
+    };
+
+    let validateCalls = 0;
+    let captureCalls = 0;
+    let restoreRef = null;
+    const node = {
+        objects: [],
+        removeObject(obj) {
+            const idx = this.objects.indexOf(obj);
+            if (idx >= 0) this.objects.splice(idx, 1);
+        },
+        addObject(obj) {
+            if (!this.objects.includes(obj)) this.objects.push(obj);
+        }
+    };
+    const objectState = {
+        dirtyRuntimeObjects: new context.Set(),
+        captureScanNeeded: false
+    };
+    const map = {
+        _prototypeObjectState: objectState,
+        shortestDeltaX(fromX, toX) { return toX - fromX; },
+        shortestDeltaY(fromY, toY) { return toY - fromY; },
+        wrapWorldX(x) { return x; },
+        wrapWorldY(y) { return y; },
+        worldToNode() { return node; },
+        removePrototypeBuildingObjectFromInteriorBitmap(obj) {
+            return {
+                placementId: obj._prototypeOwnerId,
+                floorId: "upper",
+                recordId: obj._prototypeRecordId,
+                changed: true
+            };
+        },
+        restorePrototypeBuildingObjectToInteriorBitmap(ref) {
+            restoreRef = ref;
+            return {
+                placementId: ref.placementId,
+                floorId: ref.floorId,
+                recordId: ref.recordId,
+                changed: true
+            };
+        },
+        validateActorMovementSupport(actor) {
+            validateCalls += 1;
+            const previousSupport = actor.currentMovementSupport;
+            actor.currentMovementSupport = {
+                type: "floor",
+                layer: 0,
+                baseZ: 0,
+                fragmentId: "section:0,0:ground",
+                surfaceId: "section:0,0:ground",
+                ownerType: "section",
+                ownerId: "0,0",
+                sectionKey: "0,0"
+            };
+            actor.currentLayer = 0;
+            actor.traversalLayer = 0;
+            actor.currentLayerBaseZ = 0;
+            actor.fragmentId = actor.currentMovementSupport.fragmentId;
+            actor.surfaceId = actor.currentMovementSupport.surfaceId;
+            actor.z = 0;
+            return {
+                changed: true,
+                ownerChanged: true,
+                lost: false,
+                previousSupport,
+                nextSupport: actor.currentMovementSupport,
+                previousOwner: "building:building:test-house",
+                nextOwner: "section:0,0"
+            };
+        },
+        capturePendingPrototypeObjects() {
+            captureCalls += 1;
+            assert.equal(target._prototypeDirty, true);
+            assert.equal(objectState.dirtyRuntimeObjects.has(target), true);
+            return true;
+        }
+    };
+    const target = {
+        type: "placedObject",
+        objectType: "placedObject",
+        isPlacedObject: true,
+        category: "furniture",
+        x: 0,
+        y: 0,
+        z: 0,
+        map,
+        node,
+        _prototypeRuntimeRecord: true,
+        _prototypeObjectManaged: true,
+        _prototypeRecordId: 99,
+        _prototypeOwnerType: "building",
+        _prototypeOwnerId: "building:test-house",
+        _prototypeOwnerSignature: "building:building:test-house",
+        fragmentId: "building:test-house:floor:upper",
+        surfaceId: "building:test-house:surface:upper",
+        currentLayer: 1,
+        traversalLayer: 1,
+        currentLayerBaseZ: 3,
+        currentMovementSupport: {
+            type: "floor",
+            layer: 1,
+            baseZ: 3,
+            fragmentId: "building:test-house:floor:upper",
+            surfaceId: "building:test-house:surface:upper",
+            ownerType: "building",
+            ownerId: "building:test-house"
+        }
+    };
+    node.objects.push(target);
+    context.renderingScenePicker = {
+        getHoveredObject({ filter }) {
+            return filter(target) ? target : null;
+        }
+    };
+    const wizard = {
+        currentSpell: "moveobject",
+        map,
+        castDelay: false,
+        isGodMode() { return true; }
+    };
+
+    assert.equal(context.SpellSystem.beginDragSpell(wizard, "moveobject", 0, 0), true);
+    assert.equal(context.SpellSystem.updateDragPreview(wizard, 5, 0), true);
+    assert.equal(target.x, 5);
+    assert.equal(validateCalls, 0);
+    assert.equal(captureCalls, 0);
+    assert.equal(target.currentLayer, 1);
+    assert.equal(target.currentLayerBaseZ, 3);
+    assert.equal(target.z, 0);
+    assert.equal(target._prototypeOwnerType, "building");
+    assert.equal(target._prototypeOwnerId, "building:test-house");
+    assert.equal(target._prototypeOwnerSignature, "building:building:test-house");
+    assert.equal(objectState.dirtyRuntimeObjects.has(target), false);
+    assert.equal(objectState.captureScanNeeded, false);
+
+    assert.equal(context.SpellSystem.completeDragSpell(wizard, "moveobject", 5, 0), true);
+    assert.equal(validateCalls, 1);
+    assert.equal(target.currentLayer, 0);
+    assert.equal(target.currentLayerBaseZ, 0);
+    assert.equal(target.z, 3);
+    assert.equal(target.falling, true);
+    assert.equal(target._floorFallState.active, true);
+    assert.equal(context.activeSimObjects.has(target), true);
+    assert.equal(target._prototypeOwnerType, "section");
+    assert.equal(target._prototypeOwnerId, "0,0");
+    assert.equal(target._prototypeOwnerSignature, "section:0,0");
+    assert.equal(objectState.dirtyRuntimeObjects.has(target), true);
+    assert.equal(objectState.captureScanNeeded, true);
+    assert.equal(captureCalls, 1);
+    assert.deepEqual(restoreRef, {
+        placementId: "building:test-house",
+        floorId: "upper",
+        recordId: 99,
+        changed: true
+    });
+});
+
+test("simulation loop advances active move object drags without pointer movement", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/runaround.js"),
+        "utf8"
+    );
+    const runStep = source.slice(
+        source.indexOf("function runSimulationStep()"),
+        source.indexOf("// Calculate desired movement direction from input")
+    );
+
+    assert.match(runStep, /SpellSystem\.updateDragPreview\(wizard,\s*mousePos\.worldX,\s*mousePos\.worldY\)/);
+});
+
+test("map node building cache dirtying honors transient move suppression flag", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "../public/assets/javascript/Map.js"),
+        "utf8"
+    );
+
+    assert.match(source, /obj\._suppressBuildingRenderCacheDirty !== true/);
+    assert.match(source, /removed\._suppressBuildingRenderCacheDirty !== true/);
+});
+
 function loadVanishContext() {
     const context = {
         console,
@@ -117,6 +795,7 @@ function loadVanishContext() {
         animals: [],
         paused: false,
         frameRate: 60,
+        frameCount: 0,
         setInterval: () => 1,
         clearInterval() {},
         setTimeout: () => 1,
@@ -368,6 +1047,7 @@ function loadSpawnAnimalContext() {
     };
     vm.createContext(context);
     const files = [
+        path.join(__dirname, "../public/assets/javascript/shared/FloorSupport.js"),
         path.join(__dirname, "../public/assets/javascript/spells/Spell.js"),
         path.join(__dirname, "../public/assets/javascript/spells/PlaceObject.js"),
         path.join(__dirname, "../public/assets/javascript/spells/SpawnAnimal.js")
@@ -376,6 +1056,82 @@ function loadSpawnAnimalContext() {
         vm.runInContext(fs.readFileSync(filePath, "utf8"), context, { filename: filePath });
     }
     return { context, messages };
+}
+
+function loadPlaceObjectContext() {
+    const messages = [];
+    const createdObjects = [];
+    const context = {
+        console,
+        Math,
+        Number,
+        String,
+        Boolean,
+        Array,
+        Object,
+        Map,
+        Set,
+        WeakMap,
+        Date,
+        JSON,
+        RegExp,
+        Error,
+        Infinity,
+        NaN,
+        isFinite,
+        parseInt,
+        parseFloat,
+        performance: { now: () => 0 },
+        polygonClipping: require("polygon-clipping"),
+        document: { createElement: () => ({ src: "" }) },
+        PIXI: {},
+        animals: [],
+        paused: false,
+        frameRate: 60,
+        setInterval: () => 1,
+        clearInterval() {},
+        setTimeout: () => 1,
+        clearTimeout() {},
+        message(text) {
+            messages.push(String(text));
+        }
+    };
+    context.globalThis = context;
+    context.window = context;
+    context.PlacedObject = class {
+        constructor(location, map, options) {
+            Object.assign(this, location);
+            Object.assign(this, options);
+            this.map = map;
+            this.type = "placedObject";
+            createdObjects.push(this);
+        }
+    };
+    context.wizard = {
+        selectedPlaceableCategory: "furniture",
+        selectedPlaceableTexturePath: "/assets/images/furniture/chair.png",
+        selectedPlaceableScale: 1,
+        selectedPlaceableAnchorX: 0.5,
+        selectedPlaceableAnchorY: 1,
+        selectedPlaceableRotation: 0,
+        selectedPlaceableRotationAxis: "visual",
+        currentLayer: 0,
+        currentLayerBaseZ: 0,
+        traversalLayer: 0,
+        map: null
+    };
+    vm.createContext(context);
+    const files = [
+        path.join(__dirname, "../public/assets/javascript/shared/FloorSupport.js"),
+        path.join(__dirname, "../public/assets/javascript/spells/FloorFragmentEdit.js"),
+        path.join(__dirname, "../public/assets/javascript/spells/Spell.js"),
+        path.join(__dirname, "../public/assets/javascript/spells/PlaceObject.js"),
+        path.join(__dirname, "../public/assets/javascript/spells.js")
+    ];
+    for (const filePath of files) {
+        vm.runInContext(fs.readFileSync(filePath, "utf8"), context, { filename: filePath });
+    }
+    return { context, messages, createdObjects };
 }
 
 test("spell target aim point carries wall traversal height", () => {
@@ -434,6 +1190,93 @@ test("spawn animal resolves placement to selected nonzero floor layer", () => {
     assert.equal(context.animals[0].node, floorNode);
     assert.equal(context.animals[0].traversalLayer, 1);
     assert.equal(context.animals[0].z, 3);
+});
+
+test("spawn animal uses visible building floor support for editor placement", () => {
+    const { context } = loadSpawnAnimalContext();
+    const floorRecord = {
+        fragmentId: "building:house:floor:upper",
+        surfaceId: "building:house:surface:upper",
+        ownerType: "building",
+        ownerId: "building:house",
+        ownerSectionKey: "building:house",
+        renderedByBuildingCutaway: true,
+        level: 1,
+        nodeBaseZ: 3
+    };
+    const baseNode = { xindex: 2, yindex: 2, x: 2, y: 2 };
+    const floorNode = {
+        xindex: 2,
+        yindex: 2,
+        traversalLayer: 1,
+        level: 1,
+        baseZ: 3,
+        surfaceId: floorRecord.surfaceId,
+        fragmentId: floorRecord.fragmentId,
+        sourceNode: baseNode
+    };
+    context.resolveEditorPlacementTarget = () => ({
+        x: 2,
+        y: 2,
+        layer: 1,
+        baseZ: 3,
+        node: floorNode,
+        floorTarget: { fragment: floorRecord, point: { x: 2, y: 2 }, level: 1, baseZ: 3 }
+    });
+    context.wizard.map = {
+        floorsById: new context.Map([[floorRecord.fragmentId, floorRecord]]),
+        wrapWorldX: x => x,
+        wrapWorldY: y => y,
+        worldToNode(x, y) {
+            assert.equal(x, 2);
+            assert.equal(y, 2);
+            return baseNode;
+        },
+        getFloorNodeAtLayer(x, y, layer, options) {
+            assert.equal(x, 2);
+            assert.equal(y, 2);
+            assert.equal(layer, 1);
+            assert.equal(options.sectionKey, "building:house");
+            assert.equal(options.fragmentId, floorRecord.fragmentId);
+            assert.equal(options.surfaceId, floorRecord.surfaceId);
+            return floorNode;
+        },
+        setActorCurrentMovementSupport(actor, support) {
+            const fragment = support.fragment || floorRecord;
+            actor.currentMovementSupport = {
+                type: support.type,
+                layer: support.layer,
+                baseZ: support.baseZ,
+                fragmentId: support.fragmentId,
+                surfaceId: support.surfaceId,
+                ownerType: fragment.ownerType,
+                ownerId: fragment.ownerId,
+                sectionKey: fragment.ownerSectionKey
+            };
+            actor.currentLayer = support.layer;
+            actor.traversalLayer = support.layer;
+            actor.currentLayerBaseZ = support.baseZ;
+            actor.surfaceId = support.surfaceId || fragment.surfaceId;
+            actor.fragmentId = support.fragmentId || fragment.fragmentId;
+            actor.node = support.node;
+            actor.z = support.baseZ;
+            return actor.currentMovementSupport;
+        }
+    };
+
+    const spell = new context.SpawnAnimal();
+    spell.cast(10, 20, { screenX: 2, screenY: 2 });
+
+    assert.equal(context.animals.length, 1);
+    assert.equal(context.animals[0].x, 2);
+    assert.equal(context.animals[0].y, 2);
+    assert.equal(context.animals[0].node, floorNode);
+    assert.equal(context.animals[0].currentMovementSupport.ownerType, "building");
+    assert.equal(context.animals[0].currentMovementSupport.ownerId, "building:house");
+    assert.equal(context.animals[0]._floorMembership.ownerType, "building");
+    assert.equal(context.animals[0]._floorMembership.ownerId, "building:house");
+    assert.equal(context.animals[0]._floorMembership.floorId, "upper");
+    assert.equal(context.animals[0]._floorMembership.level, 1);
 });
 
 test("spawn animal refuses nonzero layer placement without a floor node", () => {
@@ -732,6 +1575,70 @@ test("vanish cannot target or remove the player wizard", () => {
     assert.equal(context.wizard.vanishing, undefined);
 });
 
+test("vanish invalidates prototype building interior bitmap when target starts vanishing", () => {
+    const context = loadVanishContext();
+    const vanish = new context.Vanish();
+    let invalidation = null;
+    const target = {
+        type: "furniture",
+        gone: false,
+        vanishing: false,
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:placed-1",
+            floorId: "floor-fragment-2"
+        },
+        map: {
+            invalidatePrototypeBuildingInteriorBitmap(ref) {
+                invalidation = ref;
+            }
+        }
+    };
+
+    assert.equal(vanish.beginTargetVanish(target, { x: 1, y: 2 }), true);
+
+    assert.equal(invalidation.placementId, "building:placed-1");
+    assert.equal(invalidation.floorId, "floor-fragment-2");
+    assert.equal(target.vanishing, true);
+});
+
+test("editor vanish invalidates prototype building interior bitmap before removal", () => {
+    const context = loadVanishContext();
+    const vanish = new context.EditorVanish();
+    const calls = [];
+    const target = {
+        type: "furniture",
+        gone: false,
+        vanishing: false,
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:placed-1",
+            floorId: "floor-fragment-2"
+        },
+        map: {
+            invalidatePrototypeBuildingInteriorBitmap(ref) {
+                calls.push({
+                    ref,
+                    vanishing: target.vanishing,
+                    gone: target.gone
+                });
+            }
+        },
+        removeFromGame() {
+            this.gone = true;
+        }
+    };
+
+    vanish.vanishTarget(target, { x: 1, y: 2 });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].ref.placementId, "building:placed-1");
+    assert.equal(calls[0].ref.floorId, "floor-fragment-2");
+    assert.equal(calls[0].vanishing, true);
+    assert.equal(calls[0].gone, false);
+    assert.equal(target.gone, true);
+});
+
 test("floor polygon paint applies selected texture to nonzero fragment and asset record", () => {
     const context = loadSpellContext();
     let presented = 0;
@@ -905,7 +1812,7 @@ test("floor polygon paint targets a visible upper floor even when selected floor
     assert.equal(floorRecord.texturePath, "/assets/images/flooring/woodfloor.png");
 });
 
-test("teleport visual target projects empty upper-floor clicks onto visible ground", () => {
+test("visible floor target projects empty upper-floor clicks onto visible ground", () => {
     const context = loadSpellContext();
     context.viewport = { x: 0, y: 0, z: 21 };
     context.viewscale = 1;
@@ -927,7 +1834,7 @@ test("teleport visual target projects empty upper-floor clicks onto visible grou
         }
     };
 
-    const target = context.SpellSystem.resolveTeleportVisualTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
+    const target = context.SpellSystem.resolveVisibleFloorTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
 
     assert.equal(target.x, 2);
     assert.equal(target.y, -19);
@@ -936,7 +1843,38 @@ test("teleport visual target projects empty upper-floor clicks onto visible grou
     assert.equal(target.node, groundNode);
 });
 
-test("teleport visual target selects the highest visible floor under the cursor", () => {
+test("teleport visual target remains a compatibility wrapper for visible floor targeting", () => {
+    const context = loadSpellContext();
+    context.viewport = { x: 0, y: 0, z: 0 };
+    context.viewscale = 1;
+    context.xyratio = 1;
+    const groundNode = { xindex: 2, yindex: 2, traversalLayer: 0, baseZ: 0 };
+    const wizard = {
+        x: 0,
+        y: 0,
+        currentLayer: 0,
+        map: {
+            floorsById: new context.Map(),
+            wrapWorldX: x => x,
+            wrapWorldY: y => y,
+            worldToNode() {
+                return groundNode;
+            }
+        }
+    };
+
+    const visibleTarget = context.SpellSystem.resolveVisibleFloorTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
+    const teleportTarget = context.SpellSystem.resolveTeleportVisualTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
+
+    assert.equal(context.resolveVisibleFloorTarget, context.SpellSystem.resolveVisibleFloorTarget);
+    assert.equal(visibleTarget.x, teleportTarget.x);
+    assert.equal(visibleTarget.y, teleportTarget.y);
+    assert.equal(visibleTarget.layer, teleportTarget.layer);
+    assert.equal(visibleTarget.baseZ, teleportTarget.baseZ);
+    assert.equal(visibleTarget.node, teleportTarget.node);
+});
+
+test("visible floor target selects the highest visible floor under the cursor", () => {
     const context = loadSpellContext();
     context.viewport = { x: 0, y: 0, z: 21 };
     context.viewscale = 1;
@@ -991,7 +1929,7 @@ test("teleport visual target selects the highest visible floor under the cursor"
         }
     };
 
-    const target = context.SpellSystem.resolveTeleportVisualTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
+    const target = context.SpellSystem.resolveVisibleFloorTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
 
     assert.equal(target.x, 2);
     assert.equal(target.y, -10);
@@ -1000,7 +1938,7 @@ test("teleport visual target selects the highest visible floor under the cursor"
     assert.equal(target.node, floorNode);
 });
 
-test("teleport visual target can select upper floors while wizard is on ground", () => {
+test("visible floor target can select upper floors while wizard is on ground", () => {
     const context = loadSpellContext();
     context.viewport = { x: 0, y: 0, z: 0 };
     context.viewscale = 1;
@@ -1071,7 +2009,7 @@ test("teleport visual target can select upper floors while wizard is on ground",
         }
     };
 
-    const target = context.SpellSystem.resolveTeleportVisualTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
+    const target = context.SpellSystem.resolveVisibleFloorTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
 
     assert.equal(target.x, 2);
     assert.equal(target.y, 11);
@@ -1080,7 +2018,7 @@ test("teleport visual target can select upper floors while wizard is on ground",
     assert.equal(target.node, upperNode);
 });
 
-test("teleport visual target ignores upper floors during interior view", () => {
+test("visible floor target ignores upper floors during interior view", () => {
     const context = loadSpellContext();
     context.viewport = { x: 0, y: 0, z: 3 };
     context.viewscale = 1;
@@ -1155,7 +2093,7 @@ test("teleport visual target ignores upper floors during interior view", () => {
         }
     };
 
-    const target = context.SpellSystem.resolveTeleportVisualTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
+    const target = context.SpellSystem.resolveVisibleFloorTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
 
     assert.equal(target.x, 2);
     assert.equal(target.y, 2);
@@ -1164,7 +2102,7 @@ test("teleport visual target ignores upper floors during interior view", () => {
     assert.equal(target.node, currentFloorNode);
 });
 
-test("teleport visual target uses rendered prototype interior floor fragments", () => {
+test("visible floor target uses rendered prototype interior floor fragments", () => {
     const context = loadSpellContext();
     context.viewport = { x: 0, y: 0, z: 0 };
     context.viewscale = 1;
@@ -1230,7 +2168,7 @@ test("teleport visual target uses rendered prototype interior floor fragments", 
         }
     };
 
-    const target = context.SpellSystem.resolveTeleportVisualTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
+    const target = context.SpellSystem.resolveVisibleFloorTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
 
     assert.equal(target.x, 2);
     assert.equal(target.y, 2);
@@ -1240,7 +2178,321 @@ test("teleport visual target uses rendered prototype interior floor fragments", 
     assert.equal(target.floorTarget.fragment, upperFloor);
 });
 
-test("teleport visual target keeps ground above underground fragments", () => {
+test("placed objects use rendered building floor support under the cursor", () => {
+    const { context, createdObjects } = loadPlaceObjectContext();
+    context.viewport = { x: 0, y: 0, z: 0 };
+    context.viewscale = 1;
+    context.xyratio = 1;
+    const floorRecord = {
+        fragmentId: "building:house:floor:upper",
+        surfaceId: "building:house:surface:upper",
+        ownerType: "building",
+        ownerId: "building:house",
+        ownerSectionKey: "building:house",
+        renderedByBuildingCutaway: true,
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 4, y: 0 },
+            { x: 4, y: 4 },
+            { x: 0, y: 4 }
+        ],
+        holes: []
+    };
+    const baseNode = { xindex: 2, yindex: 2, x: 2, y: 2 };
+    const floorNode = {
+        xindex: 2,
+        yindex: 2,
+        traversalLayer: 1,
+        level: 1,
+        baseZ: 3,
+        surfaceId: floorRecord.surfaceId,
+        fragmentId: floorRecord.fragmentId,
+        sourceNode: baseNode
+    };
+    let manifestObject = null;
+    context.Rendering = {
+        isBuildingInteriorPresentationActive(ctx) {
+            assert.equal(ctx.wizard.currentLayer, 0);
+            return true;
+        },
+        getBuildingInteriorVisibleFloorFragmentIds(ctx) {
+            assert.equal(ctx.wizard.currentLayer, 0);
+            return new context.Set([floorRecord.fragmentId]);
+        }
+    };
+    context.wizard.selectedPlaceableAnchorY = 0.5;
+    context.wizard.map = {
+        floorsById: new context.Map([[floorRecord.fragmentId, floorRecord]]),
+        objects: [],
+        _prototypeObjectState: { dirtyRuntimeObjects: new context.Set(), captureScanNeeded: false },
+        wrapWorldX: x => x,
+        wrapWorldY: y => y,
+        worldToNode(x, y) {
+            assert.equal(x, 2);
+            assert.equal(y, 2);
+            return baseNode;
+        },
+        getFloorNodeAtLayer(x, y, layer, options) {
+            assert.equal(x, 2);
+            assert.equal(y, 2);
+            assert.equal(layer, 1);
+            assert.equal(options.sectionKey, "building:house");
+            assert.equal(options.fragmentId, floorRecord.fragmentId);
+            assert.equal(options.surfaceId, floorRecord.surfaceId);
+            assert.equal(options.worldX, 2);
+            assert.equal(options.worldY, 2);
+            return floorNode;
+        },
+        setActorCurrentMovementSupport(actor, support) {
+            if (!Number.isFinite(actor.currentLayerBaseZ)) {
+                throw new Error("actor placedObject movement support requires currentLayerBaseZ");
+            }
+            const fragment = support.fragment || floorRecord;
+            actor.currentMovementSupport = {
+                type: support.type,
+                layer: support.layer,
+                baseZ: support.baseZ,
+                fragmentId: support.fragmentId,
+                surfaceId: support.surfaceId,
+                ownerType: fragment.ownerType,
+                ownerId: fragment.ownerId || "",
+                sectionKey: fragment.ownerSectionKey
+            };
+            actor.currentLayer = support.layer;
+            actor.traversalLayer = support.layer;
+            actor.currentLayerBaseZ = support.baseZ;
+            actor.surfaceId = support.surfaceId || fragment.surfaceId;
+            actor.fragmentId = support.fragmentId || fragment.fragmentId;
+            actor.node = support.node;
+            actor.z = support.baseZ;
+            return actor.currentMovementSupport;
+        },
+        addObjectToFloorBuildingManifest(object, placement) {
+            manifestObject = { object, placement };
+        },
+        markBuildingRenderCacheDirty() {}
+    };
+
+    const spell = new context.PlaceObject();
+    spell.cast(10, 20, { screenX: 2, screenY: 2 });
+
+    assert.equal(createdObjects.length, 1);
+    const placed = createdObjects[0];
+    assert.equal(placed.x, 2);
+    assert.equal(placed.y, 2);
+    assert.equal(placed.z, 0);
+    assert.equal(placed.traversalLayer, 1);
+    assert.equal(placed.currentLayerBaseZ, 3);
+    assert.equal(placed.node, floorNode);
+    assert.equal(placed.surfaceId, floorRecord.surfaceId);
+    assert.equal(placed.fragmentId, floorRecord.fragmentId);
+    assert.equal(placed.currentMovementSupport.ownerType, "building");
+    assert.equal(placed.currentMovementSupport.ownerId, "building:house");
+    assert.equal(context.wizard.map._prototypeObjectState.dirtyRuntimeObjects.has(placed), true);
+    assert.equal(context.wizard.map._prototypeObjectState.captureScanNeeded, true);
+    assert.equal(manifestObject, null);
+});
+
+test("placed objects keep legacy floor building manifest support for ad-hoc upper floors", () => {
+    const { context, createdObjects } = loadPlaceObjectContext();
+    context.viewport = { x: 0, y: 0, z: 0 };
+    context.viewscale = 1;
+    context.xyratio = 1;
+    const floorRecord = {
+        fragmentId: "ad-hoc-upper-floor",
+        surfaceId: "ad-hoc-upper-surface",
+        ownerType: "section",
+        ownerSectionKey: "0,0",
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 4, y: 0 },
+            { x: 4, y: 4 },
+            { x: 0, y: 4 }
+        ],
+        holes: []
+    };
+    const baseNode = { xindex: 2, yindex: 2, x: 2, y: 2 };
+    const floorNode = {
+        xindex: 2,
+        yindex: 2,
+        traversalLayer: 1,
+        level: 1,
+        baseZ: 3,
+        surfaceId: floorRecord.surfaceId,
+        fragmentId: floorRecord.fragmentId,
+        sourceNode: baseNode
+    };
+    let manifestObject = null;
+    context.Rendering = {
+        isBuildingInteriorPresentationActive() {
+            return true;
+        },
+        getBuildingInteriorVisibleFloorFragmentIds() {
+            return new context.Set([floorRecord.fragmentId]);
+        }
+    };
+    context.wizard.selectedPlaceableAnchorY = 0.5;
+    context.wizard.currentLayer = 1;
+    context.wizard.currentLayerBaseZ = 3;
+    context.wizard.traversalLayer = 1;
+    context.wizard.map = {
+        floorsById: new context.Map([[floorRecord.fragmentId, floorRecord]]),
+        objects: [],
+        _prototypeObjectState: { dirtyRuntimeObjects: new context.Set(), captureScanNeeded: false },
+        wrapWorldX: x => x,
+        wrapWorldY: y => y,
+        worldToNode() {
+            return baseNode;
+        },
+        getFloorNodeAtLayer() {
+            return floorNode;
+        },
+        setActorCurrentMovementSupport(actor, support) {
+            const fragment = support.fragment || floorRecord;
+            actor.currentMovementSupport = {
+                type: support.type,
+                layer: support.layer,
+                baseZ: support.baseZ,
+                fragmentId: support.fragmentId,
+                surfaceId: support.surfaceId,
+                ownerType: fragment.ownerType,
+                ownerId: fragment.ownerId || "",
+                sectionKey: fragment.ownerSectionKey
+            };
+            actor.currentLayer = support.layer;
+            actor.traversalLayer = support.layer;
+            actor.currentLayerBaseZ = support.baseZ;
+            actor.surfaceId = support.surfaceId || fragment.surfaceId;
+            actor.fragmentId = support.fragmentId || fragment.fragmentId;
+            actor.node = support.node;
+            actor.z = support.baseZ;
+            return actor.currentMovementSupport;
+        },
+        addObjectToFloorBuildingManifest(object, placement) {
+            manifestObject = { object, placement };
+        },
+        markBuildingRenderCacheDirty() {}
+    };
+
+    const spell = new context.PlaceObject();
+    spell.cast(10, 20, { screenX: 2, screenY: 2, useVisibleFloorTarget: false });
+
+    assert.equal(createdObjects.length, 1);
+    const placed = createdObjects[0];
+    assert.equal(manifestObject.object, placed);
+    assert.equal(manifestObject.placement.fragmentId, floorRecord.fragmentId);
+    assert.equal(manifestObject.placement.surfaceId, floorRecord.surfaceId);
+    assert.equal(manifestObject.placement.level, 1);
+});
+
+test("powerup placement uses rendered building floor support under the cursor", () => {
+    const { context } = loadPlaceObjectContext();
+    context.viewport = { x: 0, y: 0, z: 0 };
+    context.viewscale = 1;
+    context.xyratio = 1;
+    const placedPowerups = [];
+    const floorRecord = {
+        fragmentId: "building:house:floor:upper",
+        surfaceId: "building:house:surface:upper",
+        ownerType: "building",
+        ownerId: "building:house",
+        ownerSectionKey: "building:house",
+        renderedByBuildingCutaway: true,
+        level: 1,
+        nodeBaseZ: 3,
+        outerPolygon: [
+            { x: 0, y: 0 },
+            { x: 4, y: 0 },
+            { x: 4, y: 4 },
+            { x: 0, y: 4 }
+        ],
+        holes: []
+    };
+    const baseNode = { xindex: 2, yindex: 2, x: 2, y: 2 };
+    const floorNode = {
+        xindex: 2,
+        yindex: 2,
+        traversalLayer: 1,
+        level: 1,
+        baseZ: 3,
+        surfaceId: floorRecord.surfaceId,
+        fragmentId: floorRecord.fragmentId,
+        sourceNode: baseNode
+    };
+    context.Rendering = {
+        isBuildingInteriorPresentationActive() {
+            return true;
+        },
+        getBuildingInteriorVisibleFloorFragmentIds() {
+            return new context.Set([floorRecord.fragmentId]);
+        }
+    };
+    context.addPowerup = (fileName, options) => {
+        const powerup = { type: "powerup", fileName, ...options };
+        placedPowerups.push(powerup);
+        return powerup;
+    };
+    context.wizard.currentSpell = "blackdiamond";
+    context.wizard.cooldownTime = 0.1;
+    context.wizard.selectedPowerupPlacementScale = 1;
+    context.wizard.map = {
+        floorsById: new context.Map([[floorRecord.fragmentId, floorRecord]]),
+        wrapWorldX: x => x,
+        wrapWorldY: y => y,
+        worldToNode(x, y) {
+            assert.equal(x, 2);
+            assert.equal(y, 2);
+            return baseNode;
+        },
+        getFloorNodeAtLayer(x, y, layer, options) {
+            assert.equal(x, 2);
+            assert.equal(y, 2);
+            assert.equal(layer, 1);
+            assert.equal(options.fragmentId, floorRecord.fragmentId);
+            assert.equal(options.surfaceId, floorRecord.surfaceId);
+            return floorNode;
+        },
+        setActorCurrentMovementSupport(actor, support) {
+            actor.currentMovementSupport = {
+                type: support.type,
+                layer: support.layer,
+                baseZ: support.baseZ,
+                fragmentId: support.fragmentId,
+                surfaceId: support.surfaceId,
+                ownerType: support.fragment.ownerType,
+                ownerId: support.fragment.ownerId,
+                sectionKey: support.fragment.ownerSectionKey
+            };
+            actor.currentLayer = support.layer;
+            actor.traversalLayer = support.layer;
+            actor.currentLayerBaseZ = support.baseZ;
+            actor.node = support.node;
+            actor.z = support.baseZ;
+            return actor.currentMovementSupport;
+        }
+    };
+
+    context.SpellSystem.castWizardSpell(context.wizard, 10, 20, { screenX: 2, screenY: 2 });
+
+    assert.equal(placedPowerups.length, 1);
+    const placed = placedPowerups[0];
+    assert.equal(placed.x, 2);
+    assert.equal(placed.y, 2);
+    assert.equal(placed.z, 0);
+    assert.equal(placed.traversalLayer, 1);
+    assert.equal(placed.currentLayerBaseZ, 3);
+    assert.equal(placed.node, floorNode);
+    assert.equal(placed.surfaceId, floorRecord.surfaceId);
+    assert.equal(placed.fragmentId, floorRecord.fragmentId);
+    assert.equal(placed.currentMovementSupport.ownerType, "building");
+    assert.equal(placed.currentMovementSupport.ownerId, "building:house");
+});
+
+test("visible floor target keeps ground above underground fragments", () => {
     const context = loadSpellContext();
     context.viewport = { x: 0, y: 0, z: 0 };
     context.viewscale = 1;
@@ -1297,7 +2549,7 @@ test("teleport visual target keeps ground above underground fragments", () => {
         }
     };
 
-    const target = context.SpellSystem.resolveTeleportVisualTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
+    const target = context.SpellSystem.resolveVisibleFloorTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
 
     assert.equal(target.x, 2);
     assert.equal(target.y, 2);
@@ -1306,7 +2558,7 @@ test("teleport visual target keeps ground above underground fragments", () => {
     assert.equal(target.node, groundNode);
 });
 
-test("teleport visual target fails underground clicks with no floor fragment", () => {
+test("visible floor target fails underground clicks with no floor fragment", () => {
     const context = loadSpellContext();
     context.viewport = { x: 0, y: 0, z: -3 };
     context.viewscale = 1;
@@ -1341,7 +2593,7 @@ test("teleport visual target fails underground clicks with no floor fragment", (
         }
     };
 
-    const target = context.SpellSystem.resolveTeleportVisualTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
+    const target = context.SpellSystem.resolveVisibleFloorTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
 
     assert.equal(target.x, 2);
     assert.equal(target.y, 2);
@@ -1351,7 +2603,7 @@ test("teleport visual target fails underground clicks with no floor fragment", (
     assert.equal(target.floorTarget, null);
 });
 
-test("teleport visual target stays on the current underground floor", () => {
+test("visible floor target stays on the current underground floor", () => {
     const context = loadSpellContext();
     context.viewport = { x: 0, y: 0, z: -3 };
     context.viewscale = 1;
@@ -1437,7 +2689,7 @@ test("teleport visual target stays on the current underground floor", () => {
         }
     };
 
-    const target = context.SpellSystem.resolveTeleportVisualTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
+    const target = context.SpellSystem.resolveVisibleFloorTarget(wizard, 2, 2, { screenX: 2, screenY: 2 });
 
     assert.equal(target.x, 2);
     assert.equal(target.y, 2);
@@ -1463,6 +2715,53 @@ test("teleport cast synchronizes wizard to the destination node layer", () => {
     assert.equal(context.wizard.z, 0);
     assert.equal(context.wizard._floorFallState, null);
     assert.equal(context.wizard.magic, 75);
+});
+
+test("teleport cast refreshes the outdoor prototype bubble after leaving building scope", () => {
+    const { context } = loadTeleportContext();
+    const bubbleUpdates = [];
+    context.wizard.map.getPrototypeWorldScope = () => ({ type: "sectionWorld" });
+    context.wizard.map.updatePrototypeSectionBubble = (actor, options) => {
+        bubbleUpdates.push({ actor, options });
+        return true;
+    };
+    const destinationNode = { xindex: 2, yindex: 3, traversalLayer: 0, baseZ: 0 };
+    const spell = new context.Teleport();
+
+    spell.cast(2, 3, { destinationNode, destinationLayer: 0, destinationBaseZ: 0 });
+
+    assert.equal(bubbleUpdates.length, 1);
+    assert.equal(bubbleUpdates[0].actor, context.wizard);
+    assert.equal(bubbleUpdates[0].options.force, true);
+    assert.equal(bubbleUpdates[0].options.advanceImmediately, true);
+    assert.equal(bubbleUpdates[0].options.reason, "teleport");
+});
+
+test("teleport cast preserves building-scope bubble suspension after entering a building", () => {
+    const { context } = loadTeleportContext();
+    const bubbleUpdates = [];
+    context.wizard.map.getPrototypeWorldScope = () => ({ type: "building", id: "building:placed-3" });
+    context.wizard.map.updatePrototypeSectionBubble = (actor, options) => {
+        bubbleUpdates.push({ actor, options });
+        return false;
+    };
+    const destinationNode = {
+        xindex: 2,
+        yindex: 3,
+        traversalLayer: 1,
+        baseZ: 30,
+        fragmentId: "building:placed-3:floor:floor-fragment-90",
+        surfaceId: "building:placed-3:surface:floor-fragment-90"
+    };
+    const spell = new context.Teleport();
+
+    spell.cast(2, 3, { destinationNode, destinationLayer: 1, destinationBaseZ: 30 });
+
+    assert.equal(bubbleUpdates.length, 1);
+    assert.equal(bubbleUpdates[0].actor, context.wizard);
+    assert.equal(bubbleUpdates[0].options.force, undefined);
+    assert.equal(bubbleUpdates[0].options.advanceImmediately, undefined);
+    assert.equal(bubbleUpdates[0].options.reason, "teleport");
 });
 
 test("teleport cast accepts a floor fragment destination without a node", () => {

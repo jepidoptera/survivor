@@ -21,8 +21,6 @@
       "surfaceId": "floor-fragment-10",
       "ownerSectionKey": "",
       "name": "ground floor",
-      "level": 0,
-      "nodeBaseZOffset": 0,
       "nodeBaseZ": 0,
       "outerPolygon": [
         {
@@ -160,7 +158,7 @@
         {
           "type": "stairs",
           "id": 2,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-10",
           "startPoint": {
             "x": -10.745942831401749,
@@ -238,8 +236,6 @@
       "surfaceId": "floor-fragment-41",
       "ownerSectionKey": "",
       "name": "first floor",
-      "level": 1,
-      "nodeBaseZOffset": 2,
       "nodeBaseZ": 5,
       "outerPolygon": [
         {
@@ -419,7 +415,7 @@
         {
           "type": "stairs",
           "id": 8,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-41",
           "startPoint": {
             "x": 2.2754588003127334,
@@ -497,8 +493,6 @@
       "surfaceId": "floor-fragment-49",
       "ownerSectionKey": "",
       "name": "second floor",
-      "level": 2,
-      "nodeBaseZOffset": 2,
       "nodeBaseZ": 8,
       "outerPolygon": [
         {
@@ -637,7 +631,7 @@
         {
           "type": "stairs",
           "id": 9,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-49",
           "startPoint": {
             "x": 12.534977826640443,
@@ -715,8 +709,6 @@
       "surfaceId": "floor-fragment-59",
       "ownerSectionKey": "",
       "name": "third floor",
-      "level": 4,
-      "nodeBaseZOffset": 0,
       "nodeBaseZ": 12,
       "outerPolygon": [
         {
@@ -855,7 +847,7 @@
         {
           "type": "stairs",
           "id": 10,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-59",
           "startPoint": {
             "x": 2.4203199612729684,
@@ -933,8 +925,6 @@
       "surfaceId": "floor-fragment-66",
       "ownerSectionKey": "",
       "name": "fourth floor",
-      "level": 5,
-      "nodeBaseZOffset": 0,
       "nodeBaseZ": 15,
       "outerPolygon": [
         {
@@ -1073,7 +1063,7 @@
         {
           "type": "stairs",
           "id": 11,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-66",
           "startPoint": {
             "x": -8.379835852996287,
@@ -1151,8 +1141,6 @@
       "surfaceId": "floor-fragment-61",
       "ownerSectionKey": "",
       "name": "fifth floor",
-      "level": 6,
-      "nodeBaseZOffset": 1,
       "nodeBaseZ": 19,
       "outerPolygon": [
         {
@@ -1291,7 +1279,7 @@
         {
           "type": "stairs",
           "id": 13,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-61",
           "startPoint": {
             "x": -6.332901419631701,
@@ -1369,8 +1357,6 @@
       "surfaceId": "floor-fragment-68",
       "ownerSectionKey": "",
       "name": "sixth floor",
-      "level": 7,
-      "nodeBaseZOffset": 1,
       "nodeBaseZ": 22,
       "outerPolygon": [
         {
@@ -1664,7 +1650,7 @@
           "height": 4,
           "topHeights": null,
           "bottomZ": 22,
-          "traversalLayer": 7,
+          "traversalLayer": 0,
           "texturePath": "/assets/images/walls/beads.jpg"
         }
       ],
@@ -1672,7 +1658,7 @@
         {
           "type": "stairs",
           "id": 16,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-68",
           "startPoint": {
             "x": -1.0190099376011954,
@@ -1750,8 +1736,6 @@
       "surfaceId": "floor-fragment-30",
       "ownerSectionKey": "",
       "name": "seventh floor",
-      "level": 8,
-      "nodeBaseZOffset": 2,
       "nodeBaseZ": 26,
       "outerPolygon": [
         {
@@ -1866,34 +1850,12 @@
         "gables": []
       },
       "roofs": [],
-      "columns": [
-        {
-          "type": "column",
-          "id": 1,
-          "floorId": "floor-fragment-30",
-          "wallId": null,
-          "heightMode": "fixed",
-          "position": {
-            "x": 0.9317403315109125,
-            "y": -10.959024208027582
-          },
-          "sideCount": 12,
-          "size": 1,
-          "width": 2,
-          "depth": 2,
-          "rotation": 0,
-          "height": 4,
-          "topHeights": null,
-          "bottomZ": 26,
-          "traversalLayer": 8,
-          "texturePath": "/assets/images/walls/stonewall.png"
-        }
-      ],
+      "columns": [],
       "stairs": [
         {
           "type": "stairs",
           "id": 17,
-          "stairKind": "straight",
+          "stairKind": "treadPath",
           "floorId": "floor-fragment-30",
           "startPoint": {
             "x": 0.8933691442066534,
@@ -1971,8 +1933,6 @@
       "surfaceId": "floor-fragment-71",
       "ownerSectionKey": "",
       "name": "eighth floor",
-      "level": 10,
-      "nodeBaseZOffset": 0,
       "nodeBaseZ": 30,
       "outerPolygon": [
         {
@@ -2120,7 +2080,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -2212,7 +2171,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -2304,7 +2262,6 @@
       "height": 5,
       "thickness": 1,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -2396,7 +2353,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -2488,7 +2444,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -2580,7 +2535,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -2672,7 +2626,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -2764,7 +2717,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -2856,7 +2808,6 @@
       "height": 5,
       "thickness": 1,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -2948,7 +2899,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -3040,7 +2990,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -3132,7 +3081,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -3224,7 +3172,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -3316,7 +3263,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -3408,7 +3354,6 @@
       "height": 5,
       "thickness": 1,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -3500,7 +3445,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -3592,7 +3536,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -3684,7 +3627,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -3776,7 +3718,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -3868,7 +3809,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -3960,7 +3900,6 @@
       "height": 5,
       "thickness": 1,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -4052,7 +3991,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -4138,7 +4076,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -4230,7 +4167,6 @@
       "height": 5,
       "thickness": 0.5,
       "bottomZ": 0,
-      "traversalLayer": 0,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -4322,7 +4258,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 26,
-      "traversalLayer": 8,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -4414,7 +4349,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 26,
-      "traversalLayer": 8,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -4500,7 +4434,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 26,
-      "traversalLayer": 8,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -4592,7 +4525,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 26,
-      "traversalLayer": 8,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -4684,7 +4616,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 26,
-      "traversalLayer": 8,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -4776,7 +4707,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 26,
-      "traversalLayer": 8,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -4866,7 +4796,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -4952,7 +4881,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -5044,7 +4972,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -5136,7 +5063,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -5228,7 +5154,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -5314,7 +5239,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -5398,7 +5322,6 @@
       "height": 4,
       "thickness": 1,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -5484,7 +5407,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -5570,7 +5492,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -5656,7 +5577,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -5742,7 +5662,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -5828,7 +5747,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -5914,7 +5832,6 @@
       "height": 4,
       "thickness": 1,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -6006,7 +5923,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -6092,7 +6008,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -6178,7 +6093,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -6264,7 +6178,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -6350,7 +6263,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -6434,7 +6346,6 @@
       "height": 4,
       "thickness": 1,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -6520,7 +6431,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -6606,7 +6516,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -6692,7 +6601,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -6778,7 +6686,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -6864,7 +6771,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -6950,7 +6856,6 @@
       "height": 4,
       "thickness": 1,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -7042,7 +6947,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -7128,7 +7032,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -7214,7 +7117,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 8,
-      "traversalLayer": 2,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -7300,7 +7202,6 @@
       "height": 4,
       "thickness": 0.125,
       "bottomZ": 26,
-      "traversalLayer": 8,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -7386,7 +7287,6 @@
       "height": 4,
       "thickness": 0.125,
       "bottomZ": 26,
-      "traversalLayer": 8,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -7470,7 +7370,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -7554,7 +7453,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -7638,7 +7536,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -7722,7 +7619,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -7806,7 +7702,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -7890,7 +7785,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -7974,7 +7868,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -8058,7 +7951,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -8142,7 +8034,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -8226,7 +8117,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -8310,7 +8200,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -8394,7 +8283,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -8478,7 +8366,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -8562,7 +8449,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -8646,7 +8532,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -8730,7 +8615,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -8814,7 +8698,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -8898,7 +8781,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -8982,7 +8864,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -9066,7 +8947,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 5,
-      "traversalLayer": 1,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -9150,7 +9030,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -9236,7 +9115,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -9328,7 +9206,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -9420,7 +9297,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -9510,7 +9386,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -9594,7 +9469,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -9678,7 +9552,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -9762,7 +9635,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -9846,7 +9718,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -9930,7 +9801,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -10014,7 +9884,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -10098,7 +9967,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -10182,7 +10050,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -10266,7 +10133,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -10350,7 +10216,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -10434,7 +10299,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -10518,7 +10382,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -10602,7 +10465,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -10686,7 +10548,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -10770,7 +10631,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -10854,7 +10714,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -10938,7 +10797,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -11022,7 +10880,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -11106,7 +10963,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 12,
-      "traversalLayer": 4,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -11190,7 +11046,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -11276,7 +11131,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -11368,7 +11222,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -11460,7 +11313,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -11549,7 +11401,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": {
@@ -11640,7 +11491,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -11724,7 +11574,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -11808,7 +11657,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -11892,7 +11740,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -11976,7 +11823,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -12060,7 +11906,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -12144,7 +11989,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -12228,7 +12072,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -12312,7 +12155,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -12396,7 +12238,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -12480,7 +12321,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -12564,7 +12404,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -12648,7 +12487,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -12732,7 +12570,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -12816,7 +12653,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -12900,7 +12736,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -12984,7 +12819,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -13068,7 +12902,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -13152,7 +12985,6 @@
       "height": 3,
       "thickness": 1,
       "bottomZ": 19,
-      "traversalLayer": 6,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -13238,7 +13070,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -13324,7 +13155,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -13408,7 +13238,6 @@
       "height": 4,
       "thickness": 1,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -13494,7 +13323,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -13580,7 +13408,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -13666,7 +13493,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -13752,7 +13578,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -13838,7 +13663,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -13924,7 +13748,6 @@
       "height": 4,
       "thickness": 1,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -14016,7 +13839,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -14102,7 +13924,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -14188,7 +14009,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -14274,7 +14094,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -14360,7 +14179,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -14444,7 +14262,6 @@
       "height": 4,
       "thickness": 1,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -14530,7 +14347,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -14616,7 +14432,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -14702,7 +14517,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -14788,7 +14602,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -14874,7 +14687,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -14960,7 +14772,6 @@
       "height": 4,
       "thickness": 1,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -15052,7 +14863,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -15138,7 +14948,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -15224,7 +15033,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 15,
-      "traversalLayer": 5,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -15310,7 +15118,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -15396,7 +15203,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -15480,7 +15286,6 @@
       "height": 4,
       "thickness": 1,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -15566,7 +15371,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -15652,7 +15456,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -15738,7 +15541,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -15824,7 +15626,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -15910,7 +15711,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -15996,7 +15796,6 @@
       "height": 4,
       "thickness": 1,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -16088,7 +15887,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -16174,7 +15972,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -16260,7 +16057,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -16346,7 +16142,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -16432,7 +16227,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -16516,7 +16310,6 @@
       "height": 4,
       "thickness": 1,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "interior",
       "attachment": null,
@@ -16602,7 +16395,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -16688,7 +16480,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -16774,7 +16565,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -16860,7 +16650,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -16946,7 +16735,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -17032,7 +16820,6 @@
       "height": 4,
       "thickness": 1,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/stonewall.png",
       "role": "perimeter",
       "attachment": {
@@ -17124,7 +16911,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -17210,7 +16996,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -17296,7 +17081,6 @@
       "height": 4,
       "thickness": 0.5,
       "bottomZ": 22,
-      "traversalLayer": 7,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -17382,7 +17166,6 @@
       "height": 6,
       "thickness": 0.5,
       "bottomZ": 30,
-      "traversalLayer": 10,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -17468,7 +17251,6 @@
       "height": 6,
       "thickness": 0.5,
       "bottomZ": 30,
-      "traversalLayer": 10,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -17554,7 +17336,6 @@
       "height": 6,
       "thickness": 0.5,
       "bottomZ": 30,
-      "traversalLayer": 10,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -17646,7 +17427,6 @@
       "height": 6,
       "thickness": 0.5,
       "bottomZ": 30,
-      "traversalLayer": 10,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "perimeter",
       "attachment": {
@@ -17738,7 +17518,6 @@
       "height": 6,
       "thickness": 0.5,
       "bottomZ": 30,
-      "traversalLayer": 10,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -17824,7 +17603,6 @@
       "height": 6,
       "thickness": 0.5,
       "bottomZ": 30,
-      "traversalLayer": 10,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -17910,7 +17688,6 @@
       "height": 6,
       "thickness": 0.5,
       "bottomZ": 30,
-      "traversalLayer": 10,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -17996,7 +17773,6 @@
       "height": 6,
       "thickness": 0.5,
       "bottomZ": 30,
-      "traversalLayer": 10,
       "wallTexturePath": "/assets/images/walls/concrete.jpg",
       "role": "interior",
       "attachment": null,
@@ -21786,53 +21562,6 @@
     },
     {
       "type": "placedObject",
-      "id": 389,
-      "category": "windows",
-      "texturePath": "/assets/images/windows/redbird.png",
-      "floorId": "floor-fragment-71",
-      "wallId": 932,
-      "mountedSectionId": 932,
-      "mountedWallLineGroupId": 932,
-      "mountedWallSectionUnitId": 932,
-      "mountedWallFacingSign": -1,
-      "wallT": 0.5,
-      "width": 2.2274080271211623,
-      "height": 3.3271916040108036,
-      "zOffset": 4.197264544692253,
-      "rotationAxis": "spatial",
-      "placementRotation": -162.73005132530642,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "renderDepthOffset": 0,
-      "compositeLayers": null,
-      "x": -0.6305151140230539,
-      "y": -2.6190977881578155,
-      "z": 34.19726454469225,
-      "isOpen": true,
-      "isPassable": true,
-      "blocksTile": false,
-      "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": 0.5814164133728362,
-          "y": -2.7659262687901918
-        },
-        {
-          "x": -1.5455725750774212,
-          "y": -3.4271859472034003
-        },
-        {
-          "x": -1.6940096082481828,
-          "y": -2.9497276273644197
-        },
-        {
-          "x": 0.4329793802020748,
-          "y": -2.288467948951211
-        }
-      ]
-    },
-    {
-      "type": "placedObject",
       "id": 390,
       "category": "windows",
       "texturePath": "/assets/images/windows/redbird.png",
@@ -21841,89 +21570,43 @@
       "mountedSectionId": 931,
       "mountedWallLineGroupId": 931,
       "mountedWallSectionUnitId": 931,
-      "mountedWallFacingSign": -1,
+      "mountedWallFacingSign": 1,
       "wallT": 0.5,
-      "width": 2.2274080271211623,
-      "height": 3.3271916040108036,
-      "zOffset": 4.197264544692253,
+      "width": 2.765906741576737,
+      "height": 4.863122471076091,
+      "zOffset": 3,
       "rotationAxis": "spatial",
-      "placementRotation": 145.69259840486149,
+      "placementRotation": 145.6925984048615,
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5,
       "renderDepthOffset": 0,
       "compositeLayers": null,
-      "x": 4.533111396689116,
-      "y": -3.365864379433052,
-      "z": 34.19726454469225,
+      "x": 4.283983775387708,
+      "y": -3.8011820726289667,
+      "z": 33,
       "isOpen": true,
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
       "groundPlaneHitboxOverridePoints": [
         {
-          "x": 5.171242919561022,
-          "y": -4.406597193049557
+          "x": 5.4263385112307265,
+          "y": -4.580659899941544
         },
         {
-          "x": 3.3313471123827236,
-          "y": -3.151157055881917
+          "x": 3.1416290395446897,
+          "y": -3.0217042453163883
         },
         {
-          "x": 3.6131634930999663,
-          "y": -2.7381443108492314
+          "x": 3.4234454202619324,
+          "y": -2.608691500283703
         },
         {
-          "x": 5.453059300278266,
-          "y": -3.9935844480168723
+          "x": 5.70815489194797,
+          "y": -4.16764715490886
         }
-      ]
-    },
-    {
-      "type": "placedObject",
-      "id": 391,
-      "category": "windows",
-      "texturePath": "/assets/images/windows/redbird.png",
-      "floorId": "floor-fragment-71",
-      "wallId": 930,
-      "mountedSectionId": 930,
-      "mountedWallLineGroupId": 930,
-      "mountedWallSectionUnitId": 930,
-      "mountedWallFacingSign": -1,
-      "wallT": 0.5,
-      "width": 2.2274080271211623,
-      "height": 3.3271916040108036,
-      "zOffset": 4.197264544692253,
-      "rotationAxis": "spatial",
-      "placementRotation": 17.269948674693563,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "renderDepthOffset": 0,
-      "compositeLayers": null,
-      "x": 2.3625151140230547,
-      "y": -19.380902211842184,
-      "z": 34.19726454469225,
-      "isOpen": true,
-      "isPassable": true,
-      "blocksTile": false,
-      "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": 1.1505835866271648,
-          "y": -19.234073731209808
-        },
-        {
-          "x": 3.2775725750774214,
-          "y": -18.5728140527966
-        },
-        {
-          "x": 3.426009608248183,
-          "y": -19.05027237263558
-        },
-        {
-          "x": 1.299020619797926,
-          "y": -19.71153205104879
-        }
-      ]
+      ],
+      "mountKind": "wall"
     },
     {
       "type": "placedObject",
@@ -21935,89 +21618,43 @@
       "mountedSectionId": 928,
       "mountedWallLineGroupId": 928,
       "mountedWallSectionUnitId": 928,
-      "mountedWallFacingSign": -1,
-      "wallT": 0.5,
-      "width": 2.2274080271211623,
-      "height": 3.3271916040108036,
-      "zOffset": 4.197264544692253,
-      "rotationAxis": "spatial",
-      "placementRotation": -34.30740159513849,
-      "placeableAnchorX": 0.5,
-      "placeableAnchorY": 0.5,
-      "renderDepthOffset": 0,
-      "compositeLayers": null,
-      "x": -2.801111396689115,
-      "y": -18.634135620566948,
-      "z": 34.19726454469225,
-      "isOpen": true,
-      "isPassable": true,
-      "blocksTile": false,
-      "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
-        {
-          "x": -3.4392429195610217,
-          "y": -17.59340280695044
-        },
-        {
-          "x": -1.599347112382723,
-          "y": -18.84884294411808
-        },
-        {
-          "x": -1.8811634930999657,
-          "y": -19.261855689150767
-        },
-        {
-          "x": -3.7210593002782644,
-          "y": -18.006415551983128
-        }
-      ]
-    },
-    {
-      "type": "placedObject",
-      "id": 393,
-      "category": "windows",
-      "texturePath": "/assets/images/windows/redbird.png",
-      "floorId": "floor-fragment-71",
-      "wallId": 934,
-      "mountedSectionId": 934,
-      "mountedWallLineGroupId": 934,
-      "mountedWallSectionUnitId": 934,
       "mountedWallFacingSign": 1,
       "wallT": 0.5,
-      "width": 2.2274080271211623,
-      "height": 3.3271916040108036,
-      "zOffset": 4.197264544692253,
+      "width": 2.765906741576737,
+      "height": 4.863122471076091,
+      "zOffset": 3,
       "rotationAxis": "spatial",
-      "placementRotation": -67.31170881949559,
+      "placementRotation": -34.30740159513848,
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5,
       "renderDepthOffset": 0,
       "compositeLayers": null,
-      "x": 8.429947839470758,
-      "y": -8.592583911634113,
-      "z": 34.19726454469225,
+      "x": -2.5519837753877077,
+      "y": -18.19881792737103,
+      "z": 33,
       "isOpen": true,
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
       "groundPlaneHitboxOverridePoints": [
         {
-          "x": 8.000372704120013,
-          "y": -7.565061730409136
+          "x": -3.6943385112307268,
+          "y": -17.419340100058452
         },
         {
-          "x": 8.859522974821504,
-          "y": -9.620106092859091
+          "x": -1.4096290395446889,
+          "y": -18.97829575468361
         },
         {
-          "x": 8.3982145083377,
-          "y": -9.81296484622632
+          "x": -1.6914454202619316,
+          "y": -19.3913084997163
         },
         {
-          "x": 7.539064237636209,
-          "y": -7.757920483776365
+          "x": -3.9761548919479694,
+          "y": -17.83235284509114
         }
-      ]
+      ],
+      "mountKind": "wall"
     },
     {
       "type": "placedObject",
@@ -22029,42 +21666,43 @@
       "mountedSectionId": 938,
       "mountedWallLineGroupId": 938,
       "mountedWallSectionUnitId": 938,
-      "mountedWallFacingSign": 1,
+      "mountedWallFacingSign": -1,
       "wallT": 0.5,
-      "width": 2.2274080271211623,
-      "height": 3.3271916040108036,
-      "zOffset": 4.197264544692253,
+      "width": 2.765906741576737,
+      "height": 4.863122471076091,
+      "zOffset": 3,
       "rotationAxis": "spatial",
       "placementRotation": -127.31030042118061,
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5,
       "renderDepthOffset": 0,
       "compositeLayers": null,
-      "x": 7.557952016337942,
-      "y": -15.400650828865812,
-      "z": 34.19726454469225,
+      "x": 7.160269753502825,
+      "y": -15.097585130004427,
+      "z": 33,
       "isOpen": true,
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
       "groundPlaneHitboxOverridePoints": [
         {
-          "x": 8.233002986726879,
-          "y": -14.514850164383164
+          "x": 8.396203475959316,
+          "y": -14.30069877708467
         },
         {
-          "x": 6.882901045949005,
-          "y": -16.286451493348462
+          "x": 6.719700556716568,
+          "y": -16.50060288064696
         },
         {
-          "x": 6.485218783113888,
-          "y": -15.983385794487075
+          "x": 6.3220182938814515,
+          "y": -16.19753718178557
         },
         {
-          "x": 7.835320723891761,
-          "y": -14.211784465521779
+          "x": 7.9985212131241985,
+          "y": -13.997633078223284
         }
-      ]
+      ],
+      "mountKind": "wall"
     },
     {
       "type": "placedObject",
@@ -22076,46 +21714,47 @@
       "mountedSectionId": 937,
       "mountedWallLineGroupId": 937,
       "mountedWallSectionUnitId": 937,
-      "mountedWallFacingSign": 1,
+      "mountedWallFacingSign": -1,
       "wallT": 0.5,
-      "width": 2.2274080271211623,
-      "height": 3.3271916040108036,
-      "zOffset": 4.197264544692253,
+      "width": 2.765906741576737,
+      "height": 4.863122471076091,
+      "zOffset": 3,
       "rotationAxis": "spatial",
       "placementRotation": 52.68969957881939,
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5,
       "renderDepthOffset": 0,
       "compositeLayers": null,
-      "x": -5.825952016337943,
-      "y": -6.599349171134188,
-      "z": 34.19726454469225,
+      "x": -5.428269753502826,
+      "y": -6.9024148699955745,
+      "z": 33,
       "isOpen": true,
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
       "groundPlaneHitboxOverridePoints": [
         {
-          "x": -6.5010029867268795,
-          "y": -7.485149835616836
+          "x": -6.664203475959316,
+          "y": -7.699301222915332
         },
         {
-          "x": -5.150901045949006,
-          "y": -5.71354850665154
+          "x": -4.987700556716569,
+          "y": -5.499397119353044
         },
         {
-          "x": -4.753218783113889,
-          "y": -6.016614205512926
+          "x": -4.590018293881452,
+          "y": -5.802462818214431
         },
         {
-          "x": -6.103320723891763,
-          "y": -7.788215534478223
+          "x": -6.266521213124199,
+          "y": -8.002366921776717
         }
-      ]
+      ],
+      "mountKind": "wall"
     },
     {
       "type": "placedObject",
-      "id": 396,
+      "id": 684,
       "category": "windows",
       "texturePath": "/assets/images/windows/redbird.png",
       "floorId": "floor-fragment-71",
@@ -22123,40 +21762,181 @@
       "mountedSectionId": 936,
       "mountedWallLineGroupId": 936,
       "mountedWallSectionUnitId": 936,
-      "mountedWallFacingSign": 1,
+      "mountedWallFacingSign": -1,
       "wallT": 0.5,
-      "width": 2.2274080271211623,
-      "height": 3.3271916040108036,
-      "zOffset": 4.197264544692253,
+      "width": 2.765906741576737,
+      "height": 4.863122471076091,
+      "zOffset": 3,
       "rotationAxis": "spatial",
       "placementRotation": 112.68829118050442,
       "placeableAnchorX": 0.5,
       "placeableAnchorY": 0.5,
       "renderDepthOffset": 0,
       "compositeLayers": null,
-      "x": -6.697947839470759,
-      "y": -13.407416088365885,
-      "z": 34.19726454469225,
+      "x": -6.236639372986955,
+      "y": -13.214557334998656,
+      "z": 33,
       "isOpen": true,
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
       "groundPlaneHitboxOverridePoints": [
         {
-          "x": -6.268372704120013,
-          "y": -14.434938269590862
+          "x": -6.164518513360256,
+          "y": -14.683352285759863
         },
         {
-          "x": -7.127522974821504,
-          "y": -12.379893907140907
+          "x": -7.231377165581262,
+          "y": -12.131479890971907
         },
         {
-          "x": -6.666214508337701,
-          "y": -12.187035153773678
+          "x": -6.770068699097458,
+          "y": -11.938621137604677
         },
         {
-          "x": -5.80706423763621,
-          "y": -14.242079516223633
+          "x": -5.703210046876452,
+          "y": -14.490493532392634
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 685,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/redbird.png",
+      "floorId": "floor-fragment-71",
+      "wallId": 930,
+      "mountedSectionId": 930,
+      "mountedWallLineGroupId": 930,
+      "mountedWallSectionUnitId": 930,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.5,
+      "width": 2.765906741576737,
+      "height": 4.863122471076091,
+      "zOffset": 3,
+      "rotationAxis": "spatial",
+      "placementRotation": 17.269948674693552,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": 2.252620188424308,
+      "y": -18.8914615348792,
+      "z": 33,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 0.9320150027597696,
+          "y": -19.302024525625857
+        },
+        {
+          "x": 3.573225374088847,
+          "y": -18.48089854413254
+        },
+        {
+          "x": 3.7216624072596085,
+          "y": -18.95835686397152
+        },
+        {
+          "x": 1.0804520359305307,
+          "y": -19.779482845464837
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 686,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/redbird.png",
+      "floorId": "floor-fragment-71",
+      "wallId": 934,
+      "mountedSectionId": 934,
+      "mountedWallLineGroupId": 934,
+      "mountedWallSectionUnitId": 934,
+      "mountedWallFacingSign": -1,
+      "wallT": 0.5,
+      "width": 2.765906741576737,
+      "height": 4.863122471076091,
+      "zOffset": 3,
+      "rotationAxis": "spatial",
+      "placementRotation": -67.31170881949559,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": 7.968639372986955,
+      "y": -8.785442665001343,
+      "z": 33,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 7.896518513360255,
+          "y": -7.316647714240135
+        },
+        {
+          "x": 8.96337716558126,
+          "y": -9.868520109028092
+        },
+        {
+          "x": 8.502068699097457,
+          "y": -10.06137886239532
+        },
+        {
+          "x": 7.435210046876452,
+          "y": -7.509506467607364
+        }
+      ]
+    },
+    {
+      "type": "placedObject",
+      "id": 687,
+      "category": "windows",
+      "texturePath": "/assets/images/windows/redbird.png",
+      "floorId": "floor-fragment-71",
+      "wallId": 932,
+      "mountedSectionId": 932,
+      "mountedWallLineGroupId": 932,
+      "mountedWallSectionUnitId": 932,
+      "mountedWallFacingSign": 1,
+      "wallT": 0.5,
+      "width": 2.765906741576737,
+      "height": 4.863122471076091,
+      "zOffset": 3,
+      "rotationAxis": "spatial",
+      "placementRotation": -162.73005132530642,
+      "placeableAnchorX": 0.5,
+      "placeableAnchorY": 0.5,
+      "renderDepthOffset": 0,
+      "compositeLayers": null,
+      "x": -0.5206201884243079,
+      "y": -3.1085384651208017,
+      "z": 33,
+      "isOpen": true,
+      "isPassable": true,
+      "blocksTile": false,
+      "castsLosShadows": false,
+      "groundPlaneHitboxOverridePoints": [
+        {
+          "x": 0.7999849972402303,
+          "y": -2.697975474374143
+        },
+        {
+          "x": -1.8412253740888462,
+          "y": -3.5191014558674603
+        },
+        {
+          "x": -1.9896624072596074,
+          "y": -3.0416431360284797
+        },
+        {
+          "x": 0.6515479640694689,
+          "y": -2.2205171545351625
         }
       ]
     }

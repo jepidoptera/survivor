@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 
 const STATIC_OBJECTS_MODULE_PATH = require.resolve("../public/assets/javascript/gameobjects/staticObjects.js");
+const SECTION_WORLD_ENTITY_SYNC_MODULE_PATH = require.resolve("../public/assets/javascript/prototypes/sectionWorldEntitySync.js");
 
 test("prototype building exterior shader decodes packed RGB depth metric data", () => {
     const source = fs.readFileSync(STATIC_OBJECTS_MODULE_PATH, "utf8");
@@ -381,6 +382,72 @@ test("flowers burn into falling fragments and remove themselves from the game", 
     restoreGlobals();
 });
 
+test("placed object floor fall uses wizard gravity and settles on landing", () => {
+    restoreGlobals();
+    installTestGlobals();
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    require(STATIC_OBJECTS_MODULE_PATH);
+
+    const dirtyRuntimeObjects = new Set();
+    let restoreRef = null;
+    const map = {
+        _prototypeObjectState: {
+            dirtyRuntimeObjects,
+            captureScanNeeded: false
+        },
+        restorePrototypeBuildingObjectToInteriorBitmap(ref) {
+            restoreRef = ref;
+            return { ...ref, changed: true };
+        }
+    };
+    const obj = new globalThis.StaticObject(
+        "placedObject",
+        { x: 0, y: 0 },
+        1,
+        1,
+        [new globalThis.PIXI.Texture()],
+        map
+    );
+    obj.isPlacedObject = true;
+    obj.z = 3;
+    obj.prevZ = 3;
+    obj.falling = true;
+    obj._prototypeRuntimeRecord = true;
+    obj._floorFallState = {
+        active: true,
+        velocityZ: 0,
+        gravity: -9,
+        landZ: 0,
+        bakeExclusion: {
+            placementId: "building:test-house",
+            floorId: "lower",
+            recordId: 12
+        }
+    };
+
+    globalThis.frameRate = 30;
+    obj.update();
+    assert.equal(obj._floorFallState.velocityZ, -0.3);
+    assert.ok(obj.z < 3);
+    assert.equal(obj.falling, true);
+
+    for (let i = 0; i < 60 && obj._floorFallState; i++) {
+        obj.update();
+    }
+
+    assert.equal(obj.z, 0);
+    assert.equal(obj.prevZ, 0);
+    assert.equal(obj.falling, false);
+    assert.equal(obj._floorFallState, null);
+    assert.deepEqual(restoreRef, {
+        placementId: "building:test-house",
+        floorId: "lower",
+        recordId: 12
+    });
+    assert.equal(dirtyRuntimeObjects.has(obj), true);
+    assert.equal(map._prototypeObjectState.captureScanNeeded, true);
+});
+
 test("burned trees crumble one second after finishing their fall", () => {
     restoreGlobals();
     installTestGlobals();
@@ -683,6 +750,69 @@ test("wall-mounted preview depth billboard draws only the camera-side wall plane
     restoreGlobals();
 });
 
+test("static object indexed node updates skip unchanged memberships", () => {
+    restoreGlobals();
+    installTestGlobals();
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    require(STATIC_OBJECTS_MODULE_PATH);
+
+    let addCount = 0;
+    let removeCount = 0;
+    let clearVisibilityCount = 0;
+    let refreshVisibilityCount = 0;
+    const createNode = (xindex, yindex) => ({
+        xindex,
+        yindex,
+        traversalLayer: 1,
+        surfaceId: "building:test:surface:floor-1",
+        fragmentId: "building:test:floor:floor-1",
+        addObject(obj) {
+            addCount += 1;
+            if (!this.objects) this.objects = [];
+            this.objects.push(obj);
+        },
+        removeObject(obj) {
+            removeCount += 1;
+            if (!this.objects) return;
+            const index = this.objects.indexOf(obj);
+            if (index >= 0) this.objects.splice(index, 1);
+        },
+        objects: []
+    });
+    const nodeA = createNode(1, 2);
+    const nodeB = createNode(1, 3);
+    const obj = Object.create(globalThis.StaticObject.prototype);
+    obj._indexedNodes = [];
+    obj.node = null;
+    obj.clearVisibilityRegistration = () => {
+        clearVisibilityCount += 1;
+    };
+    obj.refreshVisibilityRegistration = () => {
+        refreshVisibilityCount += 1;
+    };
+
+    obj.setIndexedNodes([nodeA, nodeB], nodeA);
+    assert.equal(addCount, 2);
+    assert.equal(removeCount, 0);
+    assert.equal(clearVisibilityCount, 1);
+    assert.equal(refreshVisibilityCount, 1);
+
+    obj.setIndexedNodes([nodeA, nodeB], nodeA);
+    assert.equal(addCount, 2);
+    assert.equal(removeCount, 0);
+    assert.equal(clearVisibilityCount, 1);
+    assert.equal(refreshVisibilityCount, 1);
+
+    obj.setIndexedNodes([nodeB, nodeA], nodeB);
+    assert.equal(addCount, 4);
+    assert.equal(removeCount, 2);
+    assert.equal(clearVisibilityCount, 2);
+    assert.equal(refreshVisibilityCount, 2);
+
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    restoreGlobals();
+});
+
 test("generated building exterior depth billboard honors vertical texture anchor", () => {
     restoreGlobals();
     installTestGlobals();
@@ -795,4 +925,91 @@ test("placed object load restores upper-floor building manifest membership", () 
 
     delete require.cache[STATIC_OBJECTS_MODULE_PATH];
     restoreGlobals();
+});
+
+test("placed object load skips legacy floor manifest for prototype building fragments", () => {
+    restoreGlobals();
+    installTestGlobals();
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    require(STATIC_OBJECTS_MODULE_PATH);
+
+    const groundNode = new TestNode();
+    groundNode.xindex = 4;
+    groundNode.yindex = 5;
+    groundNode.x = 4;
+    groundNode.y = 5;
+    const upperNode = new TestNode();
+    upperNode.xindex = 4;
+    upperNode.yindex = 5;
+    upperNode.x = 4;
+    upperNode.y = 5;
+    upperNode.traversalLayer = 1;
+    upperNode.level = 1;
+    upperNode.surfaceId = "building:placed-4:surface:floor-fragment-34";
+    upperNode.fragmentId = "building:placed-4:floor:floor-fragment-34";
+
+    const map = {
+        objects: [],
+        scenery: {},
+        floorsById: new Map([[
+            upperNode.fragmentId,
+            {
+                fragmentId: upperNode.fragmentId,
+                surfaceId: upperNode.surfaceId,
+                ownerType: "building",
+                ownerId: "building:placed-4",
+                renderedByBuildingCutaway: true,
+                level: 1
+            }
+        ]]),
+        worldToNode() {
+            return groundNode;
+        },
+        getFloorNodeAtLayer(x, y, layer, options) {
+            assert.equal(x, 4);
+            assert.equal(y, 5);
+            assert.equal(layer, 1);
+            assert.equal(options.surfaceId, upperNode.surfaceId);
+            assert.equal(options.fragmentId, upperNode.fragmentId);
+            return upperNode;
+        },
+        addObjectToFloorBuildingManifest() {
+            throw new Error("prototype building cutaway objects should not use the legacy floor manifest");
+        }
+    };
+
+    const obj = globalThis.StaticObject.loadJson({
+        type: "placedObject",
+        category: "furniture",
+        texturePath: "/assets/images/furniture/chair.png",
+        x: 4,
+        y: 5,
+        z: 0,
+        zMode: "local",
+        traversalLayer: 1,
+        level: 1,
+        surfaceId: upperNode.surfaceId,
+        fragmentId: upperNode.fragmentId
+    }, map);
+
+    assert.ok(obj);
+    assert.equal(obj.node, upperNode);
+    assert.equal(obj.surfaceId, upperNode.surfaceId);
+    assert.equal(obj.fragmentId, upperNode.fragmentId);
+    assert.equal(upperNode.objects.includes(obj), true);
+    assert.equal(groundNode.objects.includes(obj), false);
+
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    restoreGlobals();
+});
+
+test("prototype building placed object support restore preserves local z", () => {
+    const source = fs.readFileSync(SECTION_WORLD_ENTITY_SYNC_MODULE_PATH, "utf8");
+
+    assert.match(source, /entry\.record\.type === "placedObject"/);
+    assert.match(source, /entry\.record\.zMode === "local"/);
+    assert.match(source, /Math\.abs\(savedLocalZ - baseZ\) <= 0\.001/);
+    assert.match(source, /corrected placed object local z that matched floor base/);
+    assert.match(source, /runtimeObj\.z = correctedLocalZ;/);
+    assert.match(source, /runtimeObj\._renderLayerBaseZ = baseZ;/);
 });
