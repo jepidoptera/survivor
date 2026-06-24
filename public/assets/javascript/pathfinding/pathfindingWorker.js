@@ -361,6 +361,7 @@ function handleRequestPath(message) {
             const toKey = edge.toKey;
             const toNode = nodeMap.get(toKey);
             if (!toNode) continue;
+            if (edge.terrainBlocked === true) continue;
 
             // Skip hard-blocked nodes (except when it's the goal and we allow it)
             if (toNode.blocked && (toKey !== goalKey || !allowBlockedDestination)) continue;

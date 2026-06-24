@@ -111,6 +111,13 @@
     }
 
     function serializeGridNode(node, key, nodes, edges, tileObstacleIdsByNodeKey, obstacleRecords, obstacleIdsSeen, map) {
+        if (typeof map.isNodeTerrainImpassableForTraversal !== "function") {
+            throw new Error("pathfinding snapshot requires map terrain passability helpers");
+        }
+        if (typeof map.isTraversalMoveTerrainBlocked !== "function") {
+            throw new Error("pathfinding snapshot requires map terrain move-block helpers");
+        }
+        const terrainBlocked = map.isNodeTerrainImpassableForTraversal(node);
         nodes.push({
             key,
             xindex: Number(node.xindex),
@@ -118,7 +125,8 @@
             traversalLayer: Number.isFinite(node.traversalLayer) ? Number(node.traversalLayer) : 0,
             x: Number(node.x),
             y: Number(node.y),
-            blocked: !!node.blocked,
+            blocked: !!node.blocked || terrainBlocked,
+            terrainBlocked,
             clearance: Number.isFinite(node.clearance) ? Number(node.clearance) : null,
             surfaceId: (typeof node.surfaceId === "string" && node.surfaceId.length > 0) ? node.surfaceId : null,
             fragmentId: (typeof node.fragmentId === "string" && node.fragmentId.length > 0) ? node.fragmentId : null
@@ -143,6 +151,7 @@
                     directionIndex,
                     type: "planar",
                     baseCost: 1,
+                    terrainBlocked: map.isTraversalMoveTerrainBlocked(node, directionIndex, neighborNode),
                     directionalObstacleIds: collectDirectionalObstacleIds(
                         node,
                         directionIndex,

@@ -319,7 +319,9 @@ const GROUND_TERRAIN_DEFS = [
         idStart: 0,
         baseCount: FOREST_GROUND_BASE_COUNT,
         textureNames: Array.from({ length: FOREST_GROUND_TEXTURE_COUNT }, (_unused, index) => `forest${index}`),
-        icon: "/assets/images/land tiles/forest0.png"
+        icon: "/assets/images/land tiles/forest0.png",
+        polygonMaterial: "/assets/images/terrain/materials/grass.png",
+        polygonMaterialScale: 1
     },
     {
         name: "desert",
@@ -327,7 +329,9 @@ const GROUND_TERRAIN_DEFS = [
         idStart: FOREST_GROUND_TEXTURE_COUNT,
         baseCount: 1,
         textureNames: ["desert", "desert0", "desert1", "desert2"],
-        icon: "/assets/images/land tiles/desert0.png"
+        icon: "/assets/images/land tiles/desert0.png",
+        polygonMaterial: "/assets/images/terrain/materials/sand.png",
+        polygonMaterialScale: 1
     },
     {
         name: "water",
@@ -335,7 +339,9 @@ const GROUND_TERRAIN_DEFS = [
         idStart: FOREST_GROUND_TEXTURE_COUNT + 1,
         baseCount: 1,
         textureNames: ["water1", "water2", "water3"],
-        icon: "/assets/images/land tiles/water1.png"
+        icon: "/assets/images/land tiles/water1.png",
+        polygonMaterial: "/assets/images/terrain/materials/water.png",
+        polygonMaterialScale: 2
     }
 ];
 
@@ -345,7 +351,9 @@ function cloneGroundTerrainDefForUi(def) {
         label: def.label,
         idStart: def.idStart,
         baseCount: def.baseCount,
-        icon: def.icon
+        icon: def.icon,
+        polygonMaterial: def.polygonMaterial,
+        polygonMaterialScale: def.polygonMaterialScale
     };
 }
 
@@ -843,7 +851,7 @@ function anchorNeighborInDirection(anchor, dir) {
 
 // Bump this whenever the clearance BFS algorithm changes so that
 // save files with stale cached clearance are automatically recomputed.
-const CLEARANCE_VERSION = 2;
+const CLEARANCE_VERSION = 3;
 
 const _floorNodeCtorWorkMap = new WeakMap();
 function _tryMakeFloorNodeFromCtor(SourceCtor, x, y) {
@@ -877,6 +885,7 @@ class GameMap {
         this.hexWidth = 1 / 0.866;
         this.worldWidth = this.width * 0.866;
         this.worldHeight = this.height;
+        this.pathfindingSnapshotVersion = 1;
         this.groundTerrainDefs = GROUND_TERRAIN_DEFS_WITH_OFFSETS.map(cloneGroundTerrainDefForUi);
         this.groundPalette = GROUND_TERRAIN_TEXTURE_NAMES.slice();
         this.groundTextures = this.groundPalette.map(() => PIXI.Texture.WHITE);
@@ -5843,7 +5852,7 @@ class GameMap {
         for (let x = 0; x < this.width; x++) {
             for (let y = 0; y < this.height; y++) {
                 const node = this.nodes[x][y];
-                if (node.isBlocked()) {
+                if (this.isNodeBlockedForTraversalClearance(node)) {
                     node.clearance = 0;
                     queue.push([node, 0]);
                 } else {
@@ -5940,7 +5949,7 @@ class GameMap {
         // 2. Reset clearance for all nodes in region, seed blocked ones.
         const seedQueue = [];
         for (const node of region) {
-            if (node.isBlocked()) {
+            if (this.isNodeBlockedForTraversalClearance(node)) {
                 node.clearance = 0;
                 seedQueue.push([node, 0]);
             } else {
@@ -6007,6 +6016,77 @@ class GameMap {
                 }
             }
         }
+    }
+
+    markPathfindingSnapshotDirty() {
+        this.pathfindingSnapshotVersion = (Number(this.pathfindingSnapshotVersion) || 0) + 1;
+        const globalScope = typeof window !== "undefined" ? window : (typeof globalThis !== "undefined" ? globalThis : null);
+        const service = globalScope && globalScope.pathfindingService;
+        if (service && typeof service.updateMapSnapshot === "function") {
+            service.updateMapSnapshot(this);
+        }
+    }
+
+    isGroundTerrainTraversalNode(node) {
+        if (!node || typeof node !== "object") return false;
+        if (typeof node.fragmentId === "string" && node.fragmentId.length > 0) return false;
+        if (typeof node.surfaceId === "string" && node.surfaceId.length > 0) return false;
+        const layer = Number.isFinite(node.traversalLayer) ? Math.round(Number(node.traversalLayer)) : 0;
+        return layer === 0;
+    }
+
+    isGroundTerrainTypeImpassableForTraversal(typeName) {
+        return typeName === "water";
+    }
+
+    isNodeTerrainImpassableForTraversal(node, options = {}) {
+        if (!this.isGroundTerrainTraversalNode(node)) return false;
+        if (options && options.ignoreTerrainPassability === true) return false;
+        const typeName = this.getGroundTerrainTypeForNode(node);
+        const canTraverseTerrain = options && typeof options.canTraverseTerrain === "function"
+            ? options.canTraverseTerrain
+            : null;
+        if (canTraverseTerrain) {
+            const result = canTraverseTerrain(typeName, node, {
+                map: this,
+                node,
+                terrainType: typeName
+            });
+            if (result === true) return false;
+            if (result === false) return true;
+        }
+        return this.isGroundTerrainTypeImpassableForTraversal(typeName);
+    }
+
+    getFarTraversalCornerDirectionPair(directionIndex) {
+        switch (directionIndex) {
+            case 0: return [11, 1];
+            case 2: return [1, 3];
+            case 4: return [3, 5];
+            case 6: return [5, 7];
+            case 8: return [7, 9];
+            case 10: return [9, 11];
+            default: return null;
+        }
+    }
+
+    isTraversalMoveTerrainBlocked(currentNode, directionIndex, neighborNode = null, options = {}) {
+        const toNode = neighborNode || (
+            currentNode && Array.isArray(currentNode.neighbors)
+                ? currentNode.neighbors[directionIndex]
+                : null
+        );
+        if (this.isNodeTerrainImpassableForTraversal(toNode, options)) return true;
+        const cornerPair = this.getFarTraversalCornerDirectionPair(directionIndex);
+        if (!cornerPair || !currentNode || !Array.isArray(currentNode.neighbors)) return false;
+        const blockerNode1 = currentNode.neighbors[cornerPair[0]];
+        const blockerNode2 = currentNode.neighbors[cornerPair[1]];
+        return this.isNodeTerrainImpassableForTraversal(blockerNode1, options) ||
+            this.isNodeTerrainImpassableForTraversal(blockerNode2, options);
+    }
+
+    isNodeBlockedForTraversalClearance(node) {
+        return !!(node && (node.isBlocked() || this.isNodeTerrainImpassableForTraversal(node)));
     }
 
     _isObjectBlockingForTraversal(obj, canTraverseObject = null, context = null) {
@@ -6236,6 +6316,12 @@ class GameMap {
 
         let penalty = 0;
         const blockersUsed = collectBlockers ? [] : null;
+        const neighborTerrainBlocked = this.isTraversalMoveTerrainBlocked(
+            currentNode,
+            directionIndex,
+            neighborNode,
+            options
+        );
         const directionalContext = {
             currentNode,
             neighborNode,
@@ -6261,6 +6347,10 @@ class GameMap {
             currentNode.blockedNeighbors ? currentNode.blockedNeighbors.get(directionIndex) : null,
             directionalContext
         )) {
+            return { allowed: false, neighborNode, penalty: 0, blockers: [] };
+        }
+
+        if (neighborTerrainBlocked) {
             return { allowed: false, neighborNode, penalty: 0, blockers: [] };
         }
 
@@ -6389,6 +6479,9 @@ class GameMap {
         const canTraverseObject = (typeof opts.canTraverseObject === "function")
             ? opts.canTraverseObject
             : null;
+        const canTraverseTerrain = (typeof opts.canTraverseTerrain === "function")
+            ? opts.canTraverseTerrain
+            : null;
         const debugOwner = opts.debugOwner || null;
         // Clearance: number of hex rings that must be obstacle-free around
         // each tile on the path.  0 = legacy point-entity behaviour.
@@ -6405,6 +6498,7 @@ class GameMap {
             allowBlockedDestination,
             requiredClearance,
             canTraverseObject,
+            canTraverseTerrain,
             clearanceReferenceNode: destinationNode,
             collectBlockers
         };
@@ -6476,6 +6570,10 @@ class GameMap {
             })) return false;
 
             // Tile blocking — allow if this is the destination and caller opts in
+            if (this.isTraversalMoveTerrainBlocked(currentNode, n, neighborNode, opts)) {
+                return false;
+            }
+
             if (hasBlockingObjectForPath(neighborNode, { currentNode, neighborNode, directionIndex: n, destinationNode, kind: "tile" }) || neighborNode.blocked) {
                 if (allowBlockedDestination && neighborNode === destinationNode) {
                     // fall through — let canMoveDirection return true for the destination
@@ -6694,6 +6792,9 @@ class GameMap {
         const canTraverseObject = (typeof options.canTraverseObject === "function")
             ? options.canTraverseObject
             : null;
+        const canTraverseTerrain = (typeof options.canTraverseTerrain === "function")
+            ? options.canTraverseTerrain
+            : null;
         const collectBlockers = options.collectBlockers !== false;
 
         if (Number.isFinite(maxPathLength)) {
@@ -6741,6 +6842,10 @@ class GameMap {
             }
             return blockers;
         };
+        if (this.isNodeTerrainImpassableForTraversal(destinationNode, options)) {
+            return null;
+        }
+
         if (!allowBlockedDestination) {
             const destinationTileBlockers = getActiveTileBlockingObjects(destinationNode);
             if (destinationNode.blocked || destinationTileBlockers.length > 0) {
@@ -6810,6 +6915,7 @@ class GameMap {
             requiredClearance,
             knockableTraversalCost,
             canTraverseObject,
+            canTraverseTerrain,
             clearanceReferenceNode: destinationNode,
             collectBlockers
         };
@@ -6960,6 +7066,9 @@ class GameMap {
         const canTraverseObject = (typeof options.canTraverseObject === "function")
             ? options.canTraverseObject
             : null;
+        const canTraverseTerrain = (typeof options.canTraverseTerrain === "function")
+            ? options.canTraverseTerrain
+            : null;
         const collectBlockers = options.collectBlockers !== false;
         const stepDistance = (fromNode, toNode) => {
             const dx = this.shortestDeltaX(fromNode.x, toNode.x);
@@ -6982,6 +7091,7 @@ class GameMap {
             requiredClearance,
             knockableTraversalCost,
             canTraverseObject,
+            canTraverseTerrain,
             clearanceReferenceNode: startingNode,
             collectBlockers
         };
@@ -7097,6 +7207,9 @@ class GameMap {
         const canTraverseObject = (typeof options.canTraverseObject === "function")
             ? options.canTraverseObject
             : null;
+        const canTraverseTerrain = (typeof options.canTraverseTerrain === "function")
+            ? options.canTraverseTerrain
+            : null;
         const collectBlockers = options.collectBlockers !== false;
         const threatPoint = (
             Number.isFinite(options.threatX) && Number.isFinite(options.threatY)
@@ -7187,6 +7300,7 @@ class GameMap {
             requiredClearance,
             knockableTraversalCost,
             canTraverseObject,
+            canTraverseTerrain,
             clearanceReferenceNode: startingNode,
             collectBlockers
         };
@@ -7900,6 +8014,31 @@ class GameMap {
         return def.idStart;
     }
 
+    getGroundPolygonMaterialPathForType(typeName) {
+        const name = (typeof typeName === "string" && typeName.length > 0) ? typeName : "grass";
+        const def = GROUND_TERRAIN_DEFS_WITH_OFFSETS.find(entry => entry.name === name);
+        if (!def) {
+            throw new Error(`unknown ground terrain type "${name}"`);
+        }
+        if (typeof def.polygonMaterial !== "string" || def.polygonMaterial.length === 0) {
+            throw new Error(`missing polygon material for ground terrain type "${name}"`);
+        }
+        return def.polygonMaterial;
+    }
+
+    getGroundPolygonMaterialScaleForType(typeName) {
+        const name = (typeof typeName === "string" && typeName.length > 0) ? typeName : "grass";
+        const def = GROUND_TERRAIN_DEFS_WITH_OFFSETS.find(entry => entry.name === name);
+        if (!def) {
+            throw new Error(`unknown ground terrain type "${name}"`);
+        }
+        const scale = Number(def.polygonMaterialScale);
+        if (!Number.isFinite(scale) || !(scale > 0)) {
+            throw new Error(`invalid polygon material scale for ground terrain type "${name}"`);
+        }
+        return scale;
+    }
+
     getGroundTextureForNode(node) {
         const textureIndex = resolveGroundTerrainTextureIndexForNode(node);
         const texture = Array.isArray(this.groundTextures) ? this.groundTextures[textureIndex] : null;
@@ -7907,6 +8046,47 @@ class GameMap {
             throw new Error(`missing ground terrain texture at palette index ${textureIndex}`);
         }
         return texture;
+    }
+
+    getGroundTerrainTypeForNode(node) {
+        return getGroundTerrainDefForTextureId(Number.isFinite(node && node.groundTextureId) ? Math.floor(Number(node.groundTextureId)) : 0).name;
+    }
+
+    getGroundTextureForTextureId(textureId, x = 0, y = 0) {
+        const textureIndex = resolveGroundTerrainTextureIndexForNode({
+            groundTextureId: textureId,
+            xindex: x,
+            yindex: y
+        });
+        const texture = Array.isArray(this.groundTextures) ? this.groundTextures[textureIndex] : null;
+        if (!texture) {
+            throw new Error(`missing ground terrain texture at palette index ${textureIndex}`);
+        }
+        return texture;
+    }
+
+    getGroundTexturePathForTextureId(textureId, x = 0, y = 0) {
+        const textureIndex = resolveGroundTerrainTextureIndexForNode({
+            groundTextureId: textureId,
+            xindex: x,
+            yindex: y
+        });
+        const textureName = Array.isArray(this.groundPalette) ? this.groundPalette[textureIndex] : "";
+        if (typeof textureName !== "string" || textureName.length === 0) {
+            throw new Error(`missing ground terrain texture name at palette index ${textureIndex}`);
+        }
+        return `/assets/images/land tiles/${textureName}.png`;
+    }
+
+    getGroundTexturePathForNode(node) {
+        if (!node) {
+            throw new Error("ground terrain texture path resolution requires a node");
+        }
+        return this.getGroundTexturePathForTextureId(
+            Number.isFinite(node.groundTextureId) ? Math.floor(Number(node.groundTextureId)) : 0,
+            node.xindex,
+            node.yindex
+        );
     }
 
     setGroundTextureId(x, y, textureId) {
@@ -7919,7 +8099,15 @@ class GameMap {
         const nextId = Math.floor(rawId);
         getGroundTerrainDefForTextureId(nextId);
         if (node.groundTextureId === nextId) return false;
+        const wasTraversalBlocked = this.isNodeTerrainImpassableForTraversal(node);
         node.groundTextureId = nextId;
+        const isTraversalBlocked = this.isNodeTerrainImpassableForTraversal(node);
+        if (wasTraversalBlocked !== isTraversalBlocked) {
+            if (!this._suppressClearanceUpdates && typeof this.updateClearanceAround === "function") {
+                this.updateClearanceAround(node);
+            }
+            this.markPathfindingSnapshotDirty();
+        }
         return true;
     }
 
