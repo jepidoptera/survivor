@@ -18,6 +18,9 @@
     const FLOOR_LAYER_DEFAULT_HEIGHT_UNITS = 3;
     const FLOOR_LEVEL0_SURFACE_TEXTURE_PX_PER_WORLD = 128;
     const FLOOR_LEVEL0_SURFACE_TEXTURE_MAX_SIZE = 4096;
+    // Terrain polygons are rendered live through floorVisual entries. The level-0
+    // baked-surface path below still exists for legacy ground/road surface work,
+    // but it is not the source of truth for painted terrain polygon visibility.
     const FLOOR_LEVEL0_BAKED_SURFACE_ENABLED = true;
     const FLOOR_LEVEL0_FORCE_BAKED_SURFACE = true;
     const FLOOR_LEVEL0_POLYGON_MATERIAL_ENABLED = true;
@@ -13519,6 +13522,7 @@ void main(void) {
             const normalizedChunkX = Math.floor(Number(chunkX) || 0);
             const normalizedChunkY = Math.floor(Number(chunkY) || 0);
             const tileCoordSignature = this.getLevel0GroundSurfaceAssetTileCoordSignature(asset);
+            const terrainPolygonSignature = this.getLevel0TerrainPolygonsSignature(asset);
             return [
                 normalizedChunkX,
                 normalizedChunkY,
@@ -13529,6 +13533,7 @@ void main(void) {
                 Number(asset && asset._level0SurfaceTextureReadyVersion) || 0,
                 FLOOR_LEVEL0_BAKE_ROAD_PATHS ? 1 : 0,
                 FLOOR_LEVEL0_TERRAIN_BOUNDARY_MODEL_VERSION,
+                terrainPolygonSignature,
                 tileCoordSignature
             ].join(":");
         }
@@ -13765,16 +13770,21 @@ void main(void) {
             const signature = `${this.getLevel0GroundSurfaceChunkSignature(asset, chunkX, chunkY)}:animatedWater:v${FLOOR_LEVEL0_TERRAIN_BOUNDARY_MODEL_VERSION}`;
             let cached = this.level0AnimatedWaterChunkEntryCache.get(cacheKey);
             if (!cached || cached.signature !== signature || !Array.isArray(cached.templates)) {
-                const candidateNodes = this.getLevel0PatchCandidateNodes(map, sectionKey, chunkBounds, chunkBounds);
-                const groundBakeNodes = this.expandLevel0GroundBakeNodes(candidateNodes);
-                const groups = this.collectLevel0TerrainGroups(map, groundBakeNodes);
+                const assetHasTerrainPolygons = !!(asset && Array.isArray(asset.terrainPolygons));
+                const assetGroups = this.getLevel0TerrainPolygonGroupsFromAsset(map, asset);
+                const groups = assetHasTerrainPolygons
+                    ? assetGroups
+                    : this.collectLevel0TerrainGroups(
+                        map,
+                        this.expandLevel0GroundBakeNodes(this.getLevel0PatchCandidateNodes(map, sectionKey, chunkBounds, chunkBounds))
+                    );
                 const templates = [];
                 const materialPath = this.getLevel0TerrainMaterialPathForType(map, "water");
                 const textureRepeat = this.getLevel0TerrainMaterialRepeat(map, "water");
                 for (let i = 0; i < groups.length; i++) {
                     const group = groups[i];
                     if (!group || group.type !== "water") continue;
-                    const loops = this.buildLevel0TerrainRegionLoops(map, group);
+                    const loops = Array.isArray(group.loops) ? group.loops : this.buildLevel0TerrainRegionLoops(map, group);
                     if (loops.length === 0) continue;
                     const polygons = this.getLevel0TerrainRegionPolygonsFromLoops(loops);
                     for (let p = 0; p < polygons.length; p++) {
@@ -13834,6 +13844,49 @@ void main(void) {
                     isAnimatedWater: true,
                     animationNowMs: nowMs
                 });
+            }
+            return out;
+        }
+
+        collectLevel0TerrainPolygonFloorVisualEntries(ctx, fragmentId, sectionKey, asset, baseZ, alpha, activeInteriorDepthBump = 0) {
+            const map = ctx && ctx.map;
+            if (!map || !asset || !Array.isArray(asset.terrainPolygons) || asset.terrainPolygons.length === 0) return [];
+            const groups = this.getLevel0TerrainPolygonGroupsFromAsset(map, asset);
+            const nowMs = (ctx && Number.isFinite(ctx.renderNowMs)) ? Number(ctx.renderNowMs) : Date.now();
+            const out = [];
+            for (let i = 0; i < groups.length; i++) {
+                const group = groups[i];
+                if (!group || group.type === "grass") continue;
+                const loops = Array.isArray(group.loops) ? group.loops : [];
+                if (loops.length === 0) continue;
+                const polygons = this.getLevel0TerrainRegionPolygonsFromLoops(loops);
+                const texturePath = typeof group.materialPath === "string" && group.materialPath.length > 0
+                    ? group.materialPath
+                    : this.getLevel0TerrainMaterialPathForType(map, group.type);
+                const textureRepeat = this.getLevel0TerrainMaterialRepeat(map, group.type);
+                for (let p = 0; p < polygons.length; p++) {
+                    const polygon = polygons[p];
+                    if (!polygon || !Array.isArray(polygon.outer) || polygon.outer.length < 3) continue;
+                    out.push({
+                        key: `fragment:${fragmentId}:terrain:${sectionKey || ""}:${group.type}:${i}:${p}`,
+                        level: 0,
+                        baseZ,
+                        outer: polygon.outer,
+                        holes: Array.isArray(polygon.holes) ? polygon.holes : [],
+                        texture: null,
+                        textureBounds: null,
+                        textureRepeat,
+                        texturePath,
+                        tint: this.getLayerDarkenedTint(0xffffff, 0),
+                        alpha,
+                        depthBias: FLOOR_VISUAL_DEPTH_BIAS_UNITS + 0.002 + activeInteriorDepthBump,
+                        isHoleOverlay: false,
+                        isAnimatedWater: group.type === "water",
+                        isTerrainPolygon: true,
+                        terrainType: group.type,
+                        animationNowMs: nowMs
+                    });
+                }
             }
             return out;
         }
@@ -14311,9 +14364,35 @@ void main(void) {
                 Number(asset && asset._level0GroundSurfaceVersion) || 0,
                 Number(asset && asset._level0SurfaceTextureReadyVersion) || 0,
                 FLOOR_LEVEL0_BAKE_ROAD_PATHS ? 1 : 0,
+                this.getLevel0TerrainPolygonsSignature(asset),
                 tileCoordKeys.length,
                 Array.isArray(nodes) ? nodes.length : 0
             ].join(":");
+        }
+
+        getLevel0TerrainPolygonsSignature(asset) {
+            const polygons = Array.isArray(asset && asset.terrainPolygons) ? asset.terrainPolygons : [];
+            if (polygons.length === 0) return "terrain:0";
+            const parts = [`terrain:${polygons.length}`];
+            for (let i = 0; i < polygons.length; i++) {
+                const polygon = polygons[i] || {};
+                const points = Array.isArray(polygon.points) ? polygon.points : [];
+                const holes = Array.isArray(polygon.holes) ? polygon.holes : [];
+                parts.push(String(polygon.type || ""));
+                parts.push(String(points.length));
+                for (let p = 0; p < points.length; p++) {
+                    parts.push(`${Math.round(Number(points[p] && points[p].x) * 1000)},${Math.round(Number(points[p] && points[p].y) * 1000)}`);
+                }
+                parts.push(`holes:${holes.length}`);
+                for (let h = 0; h < holes.length; h++) {
+                    const hole = Array.isArray(holes[h]) ? holes[h] : [];
+                    parts.push(String(hole.length));
+                    for (let p = 0; p < hole.length; p++) {
+                        parts.push(`${Math.round(Number(hole[p] && hole[p].x) * 1000)},${Math.round(Number(hole[p] && hole[p].y) * 1000)}`);
+                    }
+                }
+            }
+            return parts.join("|");
         }
 
         getRoadSectionKey(road) {
@@ -15064,6 +15143,46 @@ void main(void) {
             };
         }
 
+        getLevel0TerrainPolygonGroupsFromAsset(map, asset) {
+            const polygons = Array.isArray(asset && asset.terrainPolygons) ? asset.terrainPolygons : [];
+            if (polygons.length === 0) return [];
+            return polygons.map((polygon, index) => {
+                const type = polygon && typeof polygon.type === "string" && polygon.type.length > 0
+                    ? polygon.type
+                    : "";
+                if (!type) {
+                    throw new Error(`terrain polygon ${index} is missing terrain type`);
+                }
+                const points = this.simplifyLevel0TerrainLoop(polygon.points);
+                if (points.length < 3) {
+                    throw new Error(`terrain polygon ${index} for ${type} has fewer than three points`);
+                }
+                const loops = [{
+                    points,
+                    isHole: false,
+                    area: this.getLevel0TerrainLoopArea(points)
+                }];
+                const holes = Array.isArray(polygon.holes) ? polygon.holes : [];
+                for (let h = 0; h < holes.length; h++) {
+                    const holePoints = this.simplifyLevel0TerrainLoop(holes[h]);
+                    if (holePoints.length < 3) {
+                        throw new Error(`terrain polygon ${index} for ${type} has a hole ${h} with fewer than three points`);
+                    }
+                    loops.push({
+                        points: holePoints,
+                        isHole: true,
+                        area: this.getLevel0TerrainLoopArea(holePoints)
+                    });
+                }
+                return {
+                    type,
+                    materialPath: this.getLevel0TerrainMaterialPathForType(map, type),
+                    materialScale: this.getLevel0TerrainMaterialScaleForType(map, type),
+                    loops
+                };
+            });
+        }
+
         getLevel0TerrainRegionPolygonsFromLoops(loops) {
             const outers = [];
             const holes = [];
@@ -15197,6 +15316,8 @@ void main(void) {
         }
 
         drawLevel0GroundTerrainToCanvas(ctx2d, map, nodes, bounds, scale, sectionKey = "", asset = null) {
+            // Legacy baked terrain helper. Current painted terrain polygons are
+            // drawn live by collectLevel0TerrainPolygonFloorVisualEntries().
             if (!ctx2d || !map || !Array.isArray(nodes) || !bounds || !Number.isFinite(scale)) {
                 return { baked: 0, pending: false };
             }
@@ -15217,7 +15338,11 @@ void main(void) {
                     pending = true;
                 }
             }
-            const groups = this.collectLevel0TerrainGroups(map, nodes);
+            const assetHasTerrainPolygons = !!(asset && Array.isArray(asset.terrainPolygons));
+            const assetGroups = this.getLevel0TerrainPolygonGroupsFromAsset(map, asset);
+            const groups = assetHasTerrainPolygons
+                ? assetGroups
+                : this.collectLevel0TerrainGroups(map, nodes);
             groups.sort((a, b) => {
                 const orderA = this.getLevel0TerrainDrawOrder(a && a.type);
                 const orderB = this.getLevel0TerrainDrawOrder(b && b.type);
@@ -15226,7 +15351,7 @@ void main(void) {
             });
             for (let i = 0; i < groups.length; i++) {
                 if (groups[i] && groups[i].type === "water") continue;
-                const loops = this.buildLevel0TerrainRegionLoops(map, groups[i]);
+                const loops = Array.isArray(groups[i].loops) ? groups[i].loops : this.buildLevel0TerrainRegionLoops(map, groups[i]);
                 if (loops.length === 0) continue;
                 const regionBake = this.drawLevel0TerrainRegionToCanvas(ctx2d, map, groups[i], loops, bounds, scale, sectionKey, asset);
                 baked += regionBake && Number.isFinite(regionBake.baked) ? regionBake.baked : 0;
@@ -17139,8 +17264,25 @@ void main(void) {
                                 entries[entries.length - 1].buildingCutawayCompositeFrame = buildingCutawayCompositeFrame;
                                 entries[entries.length - 1].buildingCutawayCompositeAlpha = buildingCutawayCompositeAlpha;
                             }
+                            const terrainEntries = this.collectLevel0TerrainPolygonFloorVisualEntries(
+                                ctx,
+                                fragmentId,
+                                sectionKey,
+                                asset,
+                                baseZ,
+                                fadeMultiplier,
+                                activeInteriorDepthBump
+                            );
+                            for (let te = 0; te < terrainEntries.length; te++) {
+                                if (!terrainEntries[te]) continue;
+                                if (buildingCutawayCompositeFrame > 0) {
+                                    terrainEntries[te].buildingCutawayCompositeFrame = buildingCutawayCompositeFrame;
+                                    terrainEntries[te].buildingCutawayCompositeAlpha = buildingCutawayCompositeAlpha;
+                                }
+                                entries.push(terrainEntries[te]);
+                            }
                             if (sectionKey) level0Sections.add(sectionKey);
-                            level0Entries += 1;
+                            level0Entries += 1 + terrainEntries.length;
                             continue;
                         }
                         const chunkEntries = this.collectLevel0ChunkFloorVisualEntries(

@@ -900,6 +900,53 @@
             const keyFilter = sectionKeys instanceof Set
                 ? sectionKeys
                 : (Array.isArray(sectionKeys) ? new Set(sectionKeys) : null);
+            const cloneGroundTilesForSectionAsset = (asset) => {
+                const groundTiles = {};
+                const tileCoordKeys = Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys : [];
+                const tileKeySet = new Set(tileCoordKeys);
+                const sectionNodes = state.nodesBySectionKey instanceof Map
+                    ? (state.nodesBySectionKey.get(asset.key) || null)
+                    : null;
+                const assignGroundTile = (coordKey, rawValue, label) => {
+                    const textureId = Math.floor(Number(rawValue));
+                    if (!Number.isFinite(textureId) || textureId < 0) {
+                        throw new Error(`${label} must be a finite non-negative terrain texture id`);
+                    }
+                    groundTiles[coordKey] = textureId;
+                };
+                if (Array.isArray(sectionNodes)) {
+                    for (let i = 0; i < sectionNodes.length; i++) {
+                        const node = sectionNodes[i];
+                        if (!node || node._prototypeVoid === true) continue;
+                        const x = Number.isFinite(Number(node.xindex)) ? Math.round(Number(node.xindex)) : NaN;
+                        const y = Number.isFinite(Number(node.yindex)) ? Math.round(Number(node.yindex)) : NaN;
+                        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                            throw new Error(`section ${asset.key} ground node ${i} is missing terrain tile coordinates`);
+                        }
+                        const coordKey = `${x},${y}`;
+                        if (tileKeySet.size > 0 && !tileKeySet.has(coordKey)) continue;
+                        assignGroundTile(coordKey, node.groundTextureId, `section ${asset.key} groundTiles.${coordKey}`);
+                    }
+                }
+                const assetGroundTiles = asset.groundTiles && typeof asset.groundTiles === "object"
+                    ? asset.groundTiles
+                    : null;
+                for (let i = 0; i < tileCoordKeys.length; i++) {
+                    const coordKey = tileCoordKeys[i];
+                    if (typeof coordKey !== "string" || coordKey.length === 0) continue;
+                    if (Object.prototype.hasOwnProperty.call(groundTiles, coordKey)) continue;
+                    if (assetGroundTiles && Object.prototype.hasOwnProperty.call(assetGroundTiles, coordKey)) {
+                        assignGroundTile(coordKey, assetGroundTiles[coordKey], `section ${asset.key} groundTiles.${coordKey}`);
+                        continue;
+                    }
+                    if (Number.isFinite(Number(asset.groundTextureId))) {
+                        assignGroundTile(coordKey, asset.groundTextureId, `section ${asset.key} groundTextureId`);
+                        continue;
+                    }
+                    throw new Error(`Cannot export terrain tile membership for section ${asset.key} tile ${coordKey}.`);
+                }
+                return groundTiles;
+            };
             const cloneExportSectionAsset = (asset) => ({
                 id: asset.id,
                 key: asset.key,
@@ -908,8 +955,20 @@
                 centerOffset: { x: asset.centerOffset.x, y: asset.centerOffset.y },
                 neighborKeys: Array.isArray(asset.neighborKeys) ? asset.neighborKeys.slice() : [],
                 tileCoordKeys: Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys.slice() : [],
-                groundTextureId: Number.isFinite(asset.groundTextureId) ? Number(asset.groundTextureId) : 0,
-                groundTiles: (asset.groundTiles && typeof asset.groundTiles === "object") ? { ...asset.groundTiles } : {},
+                groundTiles: cloneGroundTilesForSectionAsset(asset),
+                terrainPolygons: Array.isArray(asset.terrainPolygons) ? asset.terrainPolygons.map((polygon) => {
+                    const points = Array.isArray(polygon.points)
+                        ? polygon.points.map(point => ({ x: Number(point.x), y: Number(point.y) }))
+                        : [];
+                    const holes = Array.isArray(polygon.holes)
+                        ? polygon.holes.map(hole => (
+                            Array.isArray(hole)
+                                ? hole.map(point => ({ x: Number(point.x), y: Number(point.y) }))
+                                : []
+                        ))
+                        : [];
+                    return holes.length > 0 ? { type: polygon.type, points, holes } : { type: polygon.type, points };
+                }) : [],
                 floors: clonePrototypeFloorRecords(asset.floors, asset.key),
                 floorHoles: typeof clonePrototypeFloorHoleRecords === "function" ? clonePrototypeFloorHoleRecords(asset.floorHoles) : [],
                 floorVoids: typeof clonePrototypeFloorVoidRecords === "function" ? clonePrototypeFloorVoidRecords(asset.floorVoids) : [],

@@ -84,12 +84,144 @@ let auraMenuKeyboardIndex = -1;
 let editorMenuKeyboardIndex = -1;
 let suppressNextCanvasMenuClose = false;
 let suppressNextTriggerAreaToolClick = false;
+let suppressNextTerrainPaintClick = false;
+let suppressNextTerrainPaintClickTimer = null;
+let terrainPaintDragState = {
+    active: false,
+    lastWorldX: NaN,
+    lastWorldY: NaN
+};
 let triggerAreaCameraDetachWasActive = false;
 const TRIGGER_AREA_EDGE_PAN_SPEED_UNITS_PER_SEC = 10;
 const DETACHED_CAMERA_PAN_SPEED_UNITS_PER_SEC = 18;
 
 function getFloorStairPlacementCameraContext() {
     return { viewport, viewscale, xyratio };
+}
+
+function getCanvasWorldPointFromMouseEvent(event) {
+    if (pointerLockActive && Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY)) {
+        return { x: mousePos.worldX, y: mousePos.worldY };
+    }
+    const rect = app.view.getBoundingClientRect();
+    const screenX = Number(event && event.clientX) - rect.left;
+    const screenY = Number(event && event.clientY) - rect.top;
+    if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) {
+        return { x: NaN, y: NaN };
+    }
+    mousePos.screenX = screenX;
+    mousePos.screenY = screenY;
+    const worldCoors = screenToWorld(screenX, screenY);
+    mousePos.worldX = worldCoors.x;
+    mousePos.worldY = worldCoors.y;
+    return { x: worldCoors.x, y: worldCoors.y };
+}
+
+function getTerrainPaintSampleStepWorldUnits() {
+    const mapRef = wizard && wizard.map ? wizard.map : null;
+    const hexWidth = Number(mapRef && mapRef.hexWidth);
+    const hexHeight = Number(mapRef && mapRef.hexHeight);
+    const base = Math.min(
+        Number.isFinite(hexWidth) && hexWidth > 0 ? hexWidth : 1,
+        Number.isFinite(hexHeight) && hexHeight > 0 ? hexHeight : 1
+    );
+    return Math.max(0.05, base * 0.35);
+}
+
+function paintTerrainBrushPoint(worldX, worldY) {
+    if (
+        !wizard ||
+        wizard.currentSpell !== "terrainedit" ||
+        typeof SpellSystem === "undefined" ||
+        typeof SpellSystem.paintTerrainAtWorldPoint !== "function" ||
+        !Number.isFinite(worldX) ||
+        !Number.isFinite(worldY)
+    ) {
+        return false;
+    }
+    return !!SpellSystem.paintTerrainAtWorldPoint(wizard, worldX, worldY);
+}
+
+function paintTerrainBrushSegment(worldX, worldY) {
+    if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return false;
+    const lastX = terrainPaintDragState.lastWorldX;
+    const lastY = terrainPaintDragState.lastWorldY;
+    if (!Number.isFinite(lastX) || !Number.isFinite(lastY)) {
+        terrainPaintDragState.lastWorldX = worldX;
+        terrainPaintDragState.lastWorldY = worldY;
+        return paintTerrainBrushPoint(worldX, worldY);
+    }
+    const dx = worldX - lastX;
+    const dy = worldY - lastY;
+    const distance = Math.hypot(dx, dy);
+    const step = getTerrainPaintSampleStepWorldUnits();
+    const samples = Math.max(1, Math.ceil(distance / step));
+    let changed = false;
+    for (let i = 1; i <= samples; i++) {
+        const t = i / samples;
+        if (paintTerrainBrushPoint(lastX + dx * t, lastY + dy * t)) {
+            changed = true;
+        }
+    }
+    terrainPaintDragState.lastWorldX = worldX;
+    terrainPaintDragState.lastWorldY = worldY;
+    return changed;
+}
+
+function beginTerrainPaintDrag(event) {
+    if (
+        !wizard ||
+        wizard.currentSpell !== "terrainedit" ||
+        event.button !== 0 ||
+        typeof SpellSystem === "undefined" ||
+        typeof SpellSystem.paintTerrainAtWorldPoint !== "function"
+    ) {
+        return false;
+    }
+    const world = getCanvasWorldPointFromMouseEvent(event);
+    if (!Number.isFinite(world.x) || !Number.isFinite(world.y)) return false;
+    terrainPaintDragState.active = true;
+    terrainPaintDragState.lastWorldX = NaN;
+    terrainPaintDragState.lastWorldY = NaN;
+    suppressNextTerrainPaintClick = true;
+    if (suppressNextTerrainPaintClickTimer) {
+        clearTimeout(suppressNextTerrainPaintClickTimer);
+    }
+    suppressNextTerrainPaintClickTimer = setTimeout(() => {
+        suppressNextTerrainPaintClick = false;
+        suppressNextTerrainPaintClickTimer = null;
+    }, 300);
+    paintTerrainBrushSegment(world.x, world.y);
+    return true;
+}
+
+function updateTerrainPaintDrag(event) {
+    if (!terrainPaintDragState.active) return false;
+    if (!wizard || wizard.currentSpell !== "terrainedit") {
+        terrainPaintDragState.active = false;
+        terrainPaintDragState.lastWorldX = NaN;
+        terrainPaintDragState.lastWorldY = NaN;
+        return false;
+    }
+    const world = getCanvasWorldPointFromMouseEvent(event);
+    paintTerrainBrushSegment(world.x, world.y);
+    return true;
+}
+
+function endTerrainPaintDrag() {
+    if (!terrainPaintDragState.active) return false;
+    terrainPaintDragState.active = false;
+    terrainPaintDragState.lastWorldX = NaN;
+    terrainPaintDragState.lastWorldY = NaN;
+    suppressNextTerrainPaintClick = true;
+    if (suppressNextTerrainPaintClickTimer) {
+        clearTimeout(suppressNextTerrainPaintClickTimer);
+    }
+    suppressNextTerrainPaintClickTimer = setTimeout(() => {
+        suppressNextTerrainPaintClick = false;
+        suppressNextTerrainPaintClickTimer = null;
+    }, 300);
+    return true;
 }
 
 if (typeof globalThis !== "undefined") {
@@ -5957,6 +6089,18 @@ jQuery(() => {
         if (
             wizard &&
             !$("#editorSelector").hasClass("hidden") &&
+            wizard.currentSpell === "terrainedit" &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.showTerrainMenu === "function"
+        ) {
+            event.preventDefault();
+            closeHudMenus({ spell: false, aura: true, editor: true });
+            SpellSystem.showTerrainMenu(wizard);
+            return;
+        }
+        if (
+            wizard &&
+            !$("#editorSelector").hasClass("hidden") &&
             typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.showEditorSubmenuForSelectedCategory === "function"
         ) {
@@ -6009,6 +6153,17 @@ jQuery(() => {
             event.preventDefault();
             closeHudMenus({ spell: false, aura: true, editor: true });
             SpellSystem.showFlooringMenu(wizard);
+            return;
+        }
+        if (
+            wizard &&
+            wizard.currentSpell === "terrainedit" &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.showTerrainMenu === "function"
+        ) {
+            event.preventDefault();
+            closeHudMenus({ spell: false, aura: true, editor: true });
+            SpellSystem.showTerrainMenu(wizard);
             return;
         }
         if (
@@ -6114,6 +6269,10 @@ jQuery(() => {
             mousePos.y = dest.y;
         }
 
+        if (updateTerrainPaintDrag(event)) {
+            event.preventDefault();
+        }
+
         // Update cursor immediately (don't wait for render loop)
         updateCursor();
 
@@ -6153,6 +6312,13 @@ jQuery(() => {
             });
         }
     })
+
+    document.addEventListener("mousemove", event => {
+        if (!terrainPaintDragState.active) return;
+        if (updateTerrainPaintDrag(event)) {
+            event.preventDefault();
+        }
+    });
 
     app.view.addEventListener("wheel", event => {
         const overMenu = pointerLockActive
@@ -6269,6 +6435,10 @@ jQuery(() => {
         }
         if (!pointerLockActive) {
             requestGameplayPointerLock(event);
+        }
+        if (beginTerrainPaintDrag(event)) {
+            event.preventDefault();
+            return;
         }
         if (
             event.button === 0 &&
@@ -6404,6 +6574,10 @@ jQuery(() => {
             pointerLockRangeDragInput = null;
             return;
         }
+        if (event.button === 0 && endTerrainPaintDrag()) {
+            event.preventDefault();
+            return;
+        }
         if (
             wizard &&
             typeof SpellSystem !== "undefined" &&
@@ -6454,15 +6628,31 @@ jQuery(() => {
         SpellSystem.completeDragSpell(wizard, wizard.currentSpell, worldCoors.x, worldCoors.y);
     });
 
+    document.addEventListener("mouseup", event => {
+        if (event.button === 0 && endTerrainPaintDrag()) {
+            event.preventDefault();
+        }
+    });
+
     app.view.addEventListener("click", event => {
         if (suppressNextTriggerAreaToolClick) {
             suppressNextTriggerAreaToolClick = false;
             event.preventDefault();
             return;
         }
+        if (suppressNextTerrainPaintClick) {
+            suppressNextTerrainPaintClick = false;
+            if (suppressNextTerrainPaintClickTimer) {
+                clearTimeout(suppressNextTerrainPaintClickTimer);
+                suppressNextTerrainPaintClickTimer = null;
+            }
+            event.preventDefault();
+            return;
+        }
         const castWithSpace = !!keysPressed[" "];
         const castWithEditorKey = isEditorPlacementSpellActive() && isEditorPlacementKeyHeld();
-        if (!castWithSpace && !castWithEditorKey) return;
+        const castWithTerrainPaintTool = !!(wizard && wizard.currentSpell === "terrainedit");
+        if (!castWithSpace && !castWithEditorKey && !castWithTerrainPaintTool) return;
 
         event.preventDefault();
         let castScreenX = null;
@@ -6858,6 +7048,19 @@ jQuery(() => {
             if (activation.activated) {
                 initAuraMenuKeyboardFocus();
             }
+            return;
+        }
+
+        if (
+            spellMenuVisible &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.handleTerrainMenuHotkey === "function" &&
+            SpellSystem.handleTerrainMenuHotkey(wizard, keyLower)
+        ) {
+            event.preventDefault();
             return;
         }
 

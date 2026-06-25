@@ -10,31 +10,63 @@
         return node._prototypeSectionKey === assetKey;
     }
 
+    function preservePrototypeTerrainPolygonsForSection(map, asset) {
+        if (!map || !asset) return;
+        const terrainPolygons = Array.isArray(asset.terrainPolygons) ? asset.terrainPolygons : [];
+        if (typeof map.normalizeGroundTerrainPolygons !== "function") {
+            if (terrainPolygons.length === 0) {
+                asset.terrainPolygons = [];
+                return;
+            }
+            throw new Error("section terrain hydration requires map.normalizeGroundTerrainPolygons");
+        }
+        // Terrain polygons are live authored geometry. Hydration must not project
+        // them back through every node, or repeated save/load cycles can creep.
+        asset.terrainPolygons = map.normalizeGroundTerrainPolygons(terrainPolygons);
+    }
+
+    function getPrototypeAssetGroundTextureId(asset, coordKey, offset, textureCount, pickPrototypeGroundTextureId) {
+        const groundTiles = asset && asset.groundTiles && typeof asset.groundTiles === "object"
+            ? asset.groundTiles
+            : null;
+        if (groundTiles && Object.prototype.hasOwnProperty.call(groundTiles, coordKey)) {
+            const textureId = Math.floor(Number(groundTiles[coordKey]));
+            if (!Number.isFinite(textureId) || textureId < 0) {
+                throw new Error(`section ${asset.key} groundTiles.${coordKey} must be a finite non-negative terrain texture id`);
+            }
+            return textureId;
+        }
+        if (Number.isFinite(Number(asset && asset.groundTextureId))) {
+            return Math.max(0, Math.floor(Number(asset.groundTextureId)));
+        }
+        return pickPrototypeGroundTextureId(offset.x, offset.y, textureCount);
+    }
+
     function refreshSparseNodesForSectionAsset(map, prototypeState, asset, deps) {
+        if (!map || !prototypeState || !asset) return 0;
         const {
             getPrototypeGroundTextureCount,
-            normalizePrototypeGroundTiles,
             pickPrototypeGroundTextureId
         } = deps;
-        if (!map || !prototypeState || !asset) return 0;
         const sectionNodes = prototypeState.nodesBySectionKey instanceof Map
             ? (prototypeState.nodesBySectionKey.get(asset.key) || [])
             : [];
         if (sectionNodes.length === 0) return 0;
+        preservePrototypeTerrainPolygonsForSection(map, asset);
         const textureCount = getPrototypeGroundTextureCount(map);
-        const groundTiles = (asset.groundTiles && typeof asset.groundTiles === "object")
-            ? asset.groundTiles
-            : normalizePrototypeGroundTiles(null, asset.tileCoordKeys, textureCount);
-        asset.groundTiles = groundTiles;
         let updated = 0;
         for (let i = 0; i < sectionNodes.length; i++) {
             const node = sectionNodes[i];
             if (!node) continue;
             const coordKey = `${node.xindex},${node.yindex}`;
             if (sectionOwnsPrototypeNode(node, asset.key)) {
-                node.groundTextureId = Number.isFinite(groundTiles[coordKey])
-                    ? Number(groundTiles[coordKey])
-                    : pickPrototypeGroundTextureId(node.xindex, node.yindex, textureCount);
+                node.groundTextureId = getPrototypeAssetGroundTextureId(
+                    asset,
+                    coordKey,
+                    { x: node.xindex, y: node.yindex },
+                    textureCount,
+                    pickPrototypeGroundTextureId
+                );
                 if (asset.clearanceByTile && Object.prototype.hasOwnProperty.call(asset.clearanceByTile, coordKey)) {
                     const rawClearance = asset.clearanceByTile[coordKey];
                     node.clearance = Number.isFinite(rawClearance) ? Number(rawClearance) : Infinity;
@@ -52,7 +84,6 @@
             globalScope: runtimeGlobalScope,
             getNeighborOffsetsForColumn,
             getPrototypeGroundTextureCount,
-            normalizePrototypeGroundTiles,
             pickPrototypeGroundTextureId
         } = deps;
         const NodeCtor = runtimeGlobalScope.MapNode
@@ -68,10 +99,6 @@
         const sectionNodes = [];
         const tileCoordKeys = Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys : [];
         const textureCount = getPrototypeGroundTextureCount(map);
-        const groundTiles = (asset.groundTiles && typeof asset.groundTiles === "object")
-            ? asset.groundTiles
-            : normalizePrototypeGroundTiles(null, tileCoordKeys, textureCount);
-        asset.groundTiles = groundTiles;
 
         for (let i = 0; i < tileCoordKeys.length; i++) {
             const coordKey = tileCoordKeys[i];
@@ -102,9 +129,13 @@
             }
             const sectionOwnsNode = sectionOwnsPrototypeNode(node, asset.key);
             if (sectionOwnsNode) {
-                node.groundTextureId = Number.isFinite(groundTiles[coordKey])
-                    ? Number(groundTiles[coordKey])
-                    : pickPrototypeGroundTextureId(offset.x, offset.y, textureCount);
+                node.groundTextureId = getPrototypeAssetGroundTextureId(
+                    asset,
+                    coordKey,
+                    offset,
+                    textureCount,
+                    pickPrototypeGroundTextureId
+                );
             }
             node._prototypeSectionActive = false;
             if (sectionOwnsNode && asset.clearanceByTile && Object.prototype.hasOwnProperty.call(asset.clearanceByTile, coordKey)) {
@@ -114,6 +145,7 @@
             sectionNodes.push(node);
         }
 
+        preservePrototypeTerrainPolygonsForSection(map, asset);
         prototypeState.nodesBySectionKey.set(asset.key, sectionNodes);
 
         // Pre-sort by draw order so bubble-shift rebuildLoaded emits sorted runs.
@@ -229,11 +261,13 @@
                     node.blockedByObjects = 0;
                     node.blocked = false;
                     node.clearance = Infinity;
-                    const groundTiles = (asset.groundTiles && typeof asset.groundTiles === "object") ? asset.groundTiles : null;
-                    const fallbackTextureId = pickPrototypeGroundTextureId(offset.x, offset.y, textureCount);
-                    node.groundTextureId = groundTiles && Number.isFinite(groundTiles[coordKey])
-                        ? Number(groundTiles[coordKey])
-                        : fallbackTextureId;
+                    node.groundTextureId = getPrototypeAssetGroundTextureId(
+                        asset,
+                        coordKey,
+                        offset,
+                        textureCount,
+                        pickPrototypeGroundTextureId
+                    );
                     node._prototypeVoid = false;
                     node._prototypeSectionKey = asset.key;
                     node._prototypeSectionActive = false;
@@ -244,10 +278,19 @@
                     prototypeState.allNodes.push(node);
                     prototypeState.allNodesByCoordKey.set(coordKey, node);
                 }
-                sectionOwnsPrototypeNode(node, asset.key);
+                if (sectionOwnsPrototypeNode(node, asset.key)) {
+                    node.groundTextureId = getPrototypeAssetGroundTextureId(
+                        asset,
+                        coordKey,
+                        offset,
+                        textureCount,
+                        pickPrototypeGroundTextureId
+                    );
+                }
                 sectionNodes.push(node);
             }
             prototypeState.nodesBySectionKey.set(asset.key, sectionNodes);
+            preservePrototypeTerrainPolygonsForSection(map, asset);
         }
 
         for (let i = 0; i < prototypeState.allNodes.length; i++) {
@@ -401,10 +444,7 @@
         if (!(prototypeState.allNodesByCoordKey instanceof Map)) prototypeState.allNodesByCoordKey = new Map();
         if (!Array.isArray(prototypeState.allNodes)) prototypeState.allNodes = [];
         const tileCoordKeys = Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys : [];
-        // Pre-compute groundTiles once for all batches
-        const groundTiles = (asset.groundTiles && typeof asset.groundTiles === "object")
-            ? asset.groundTiles : null;
-        prototypeState._sparseBuildStaging.set(asset.key, { asset, nodes: [], groundTiles, tileCount: tileCoordKeys.length });
+        prototypeState._sparseBuildStaging.set(asset.key, { asset, nodes: [], tileCount: tileCoordKeys.length });
         return true;
     }
 
@@ -414,7 +454,6 @@
             globalScope: runtimeGlobalScope,
             getNeighborOffsetsForColumn,
             getPrototypeGroundTextureCount,
-            normalizePrototypeGroundTiles,
             pickPrototypeGroundTextureId
         } = deps;
         if (!(prototypeState._sparseBuildStaging instanceof Map)) return 0;
@@ -427,11 +466,6 @@
         if (typeof NodeCtor !== "function") return 0;
         const end = Math.min(start + count, tileCoordKeys.length);
         const textureCount = getPrototypeGroundTextureCount(map);
-        if (!staging.groundTiles) {
-            staging.groundTiles = normalizePrototypeGroundTiles(null, tileCoordKeys, textureCount);
-            asset.groundTiles = staging.groundTiles;
-        }
-        const groundTiles = staging.groundTiles;
         for (let i = start; i < end; i++) {
             const coordKey = tileCoordKeys[i];
             if (typeof coordKey !== "string" || coordKey.length === 0) continue;
@@ -458,9 +492,13 @@
             }
             const sectionOwns = sectionOwnsPrototypeNode(node, asset.key);
             if (sectionOwns) {
-                node.groundTextureId = Number.isFinite(groundTiles[coordKey])
-                    ? Number(groundTiles[coordKey])
-                    : pickPrototypeGroundTextureId(offset.x, offset.y, textureCount);
+                node.groundTextureId = getPrototypeAssetGroundTextureId(
+                    asset,
+                    coordKey,
+                    offset,
+                    textureCount,
+                    pickPrototypeGroundTextureId
+                );
                 if (asset.clearanceByTile && Object.prototype.hasOwnProperty.call(asset.clearanceByTile, coordKey)) {
                     const rawClearance = asset.clearanceByTile[coordKey];
                     node.clearance = Number.isFinite(rawClearance) ? Number(rawClearance) : Infinity;
@@ -469,6 +507,7 @@
             node._prototypeSectionActive = false;
             stagingNodes.push(node);
         }
+        preservePrototypeTerrainPolygonsForSection(map, asset);
         return end - start;
     }
 

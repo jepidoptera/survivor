@@ -2384,11 +2384,6 @@
         } else {
             const sectionRecords = buildSectionRecords(config, map);
             const sectionAssets = buildPrototypeSectionAssets(sectionRecords, config.sectionRadius);
-            for (let i = 0; i < sectionAssets.orderedSectionAssets.length; i++) {
-                const asset = sectionAssets.orderedSectionAssets[i];
-                if (!asset) continue;
-                asset.groundTiles = normalizePrototypeGroundTiles(asset.groundTiles, asset.tileCoordKeys, textureCount);
-            }
             sectionStateSource = {
                 radius: config.sectionRadius,
                 sectionGraphRadius: config.sectionGraphRadius,
@@ -2404,11 +2399,6 @@
         if (!sectionStateSource) {
             const sectionRecords = buildSectionRecords(config, map);
             const sectionAssets = buildPrototypeSectionAssets(sectionRecords, config.sectionRadius);
-            for (let i = 0; i < sectionAssets.orderedSectionAssets.length; i++) {
-                const asset = sectionAssets.orderedSectionAssets[i];
-                if (!asset) continue;
-                asset.groundTiles = normalizePrototypeGroundTiles(asset.groundTiles, asset.tileCoordKeys, textureCount);
-            }
             sectionStateSource = {
                 radius: config.sectionRadius,
                 sectionGraphRadius: config.sectionGraphRadius,

@@ -214,8 +214,22 @@
                         centerWorld: offsetToWorld(centerOffset),
                         neighborKeys: Array.isArray(rawAsset.neighborKeys) ? rawAsset.neighborKeys.slice() : [],
                         tileCoordKeys: Array.isArray(rawAsset.tileCoordKeys) ? rawAsset.tileCoordKeys.slice() : [],
-                        groundTextureId: Number.isFinite(rawAsset.groundTextureId) ? Number(rawAsset.groundTextureId) : 0,
-                        groundTiles: normalizePrototypeGroundTiles(rawAsset.groundTiles, rawAsset.tileCoordKeys, textureCount),
+                        groundTiles: (rawAsset.groundTiles && typeof rawAsset.groundTiles === "object")
+                            ? { ...rawAsset.groundTiles }
+                            : {},
+                        terrainPolygons: Array.isArray(rawAsset.terrainPolygons) ? rawAsset.terrainPolygons.map((polygon) => {
+                            const points = Array.isArray(polygon.points)
+                                ? polygon.points.map(point => ({ x: Number(point.x), y: Number(point.y) }))
+                                : [];
+                            const holes = Array.isArray(polygon.holes)
+                                ? polygon.holes.map(hole => (
+                                    Array.isArray(hole)
+                                        ? hole.map(point => ({ x: Number(point.x), y: Number(point.y) }))
+                                        : []
+                                ))
+                                : [];
+                            return holes.length > 0 ? { type: polygon.type, points, holes } : { type: polygon.type, points };
+                        }) : [],
                         floors: [],
                         walls: [],
                         blockedEdges: [],
@@ -248,7 +262,8 @@
                     walls: rawWalls,
                     blockedEdges,
                     objects: sectionObjects,
-                    groundTiles: normalizePrototypeGroundTiles(rawAsset.groundTiles, rawAsset.tileCoordKeys, textureCount),
+                    groundTiles: rawAsset.groundTiles,
+                    terrainPolygons: Array.isArray(rawAsset.terrainPolygons) ? rawAsset.terrainPolygons : [],
                     animals: dedupePrototypeAnimalRecords(rawAsset.animals)
                 }, map, basis);
                 asset._prototypeBlockedEdgesDirty = blockedEdgesNeedCompute;

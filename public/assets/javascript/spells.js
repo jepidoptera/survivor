@@ -7479,19 +7479,25 @@ const SpellSystem = (() => {
         return { screenX, screenY };
     }
 
-    function markGroundTerrainSectionDirty(mapRef, node) {
+    function replaceGroundTerrainPolygonPatch(mapRef, node, terrainType) {
         const sectionKey = node && typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0
             ? node._prototypeSectionKey
             : (node && typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
-        if (!sectionKey || !mapRef || typeof mapRef.getPrototypeSectionAsset !== "function") return;
-        const asset = mapRef.getPrototypeSectionAsset(sectionKey);
-        if (!asset) return;
-        const coordKey = `${node.xindex},${node.yindex}`;
-        if (!asset.groundTiles || typeof asset.groundTiles !== "object") {
-            asset.groundTiles = {};
+        if (!mapRef) return;
+        if (!sectionKey || typeof mapRef.getPrototypeSectionAsset !== "function") {
+            if (typeof mapRef.replaceGroundTerrainPolygonPatch !== "function") {
+                throw new Error("terrain editor requires map.replaceGroundTerrainPolygonPatch for non-section terrain painting");
+            }
+            return mapRef.replaceGroundTerrainPolygonPatch(node, terrainType);
         }
-        asset.groundTiles[coordKey] = Number.isFinite(node.groundTextureId) ? Number(node.groundTextureId) : 0;
-        asset._level0GroundSurfaceVersion = (Number(asset._level0GroundSurfaceVersion) || 0) + 1;
+        const asset = mapRef.getPrototypeSectionAsset(sectionKey);
+        if (!asset) {
+            throw new Error(`terrain editor could not find prototype section asset for ${sectionKey}`);
+        }
+        if (typeof mapRef.replaceGroundTerrainPolygonPatch !== "function") {
+            throw new Error("terrain editor requires map.replaceGroundTerrainPolygonPatch");
+        }
+        return mapRef.replaceGroundTerrainPolygonPatch(node, terrainType, { asset, sectionKey });
     }
 
     function paintTerrainAtWorldPoint(wizardRef, worldX, worldY) {
@@ -7499,21 +7505,23 @@ const SpellSystem = (() => {
         if (!mapRef || typeof mapRef.worldToNode !== "function") {
             throw new Error("terrain editor requires map.worldToNode");
         }
-        if (typeof mapRef.setGroundTerrainType !== "function") {
-            throw new Error("terrain editor requires map.setGroundTerrainType");
-        }
         const node = mapRef.worldToNode(worldX, worldY);
         if (!node) {
             message("No terrain tile here.");
             return false;
         }
         const terrainType = getSelectedTerrainType(wizardRef);
-        const changed = mapRef.setGroundTerrainType(node.xindex, node.yindex, terrainType);
+        const changed = replaceGroundTerrainPolygonPatch(mapRef, node, terrainType);
         if (!changed) return false;
-        markGroundTerrainSectionDirty(mapRef, node);
         if (typeof globalThis !== "undefined") {
             if (typeof globalThis.invalidateMinimap === "function") {
                 globalThis.invalidateMinimap();
+            }
+            if (
+                globalThis.Rendering &&
+                typeof globalThis.Rendering.resetLevel0GroundSurfaceCaches === "function"
+            ) {
+                globalThis.Rendering.resetLevel0GroundSurfaceCaches("terrain paint");
             }
             if (typeof globalThis.presentGameFrame === "function") {
                 globalThis.presentGameFrame();
@@ -10579,10 +10587,7 @@ const SpellSystem = (() => {
                 })
                 .attr("title", terrain.label)
                 .click(() => {
-                    setSelectedTerrainType(wizardRef, terrain.name);
-                    setCurrentSpell(wizardRef, "terrainedit");
-                    refreshSpellSelector(wizardRef);
-                    $("#spellMenu").addClass("hidden");
+                    selectTerrainMenuType(wizardRef, terrain.name);
                 });
             if (terrain.name === selected) {
                 icon.addClass("selected");
@@ -10597,8 +10602,29 @@ const SpellSystem = (() => {
         }
         setSelectedTerrainType(wizardRef, getSelectedTerrainType(wizardRef));
         spellMenuMode = "terrain";
+        $("#editorMenu").addClass("hidden");
         $("#spellMenu").removeClass("hidden");
         renderTerrainSelector(wizardRef);
+    }
+
+    function selectTerrainMenuType(wizardRef, terrainType) {
+        if (!wizardRef) return false;
+        setSelectedTerrainType(wizardRef, terrainType);
+        setCurrentSpell(wizardRef, "terrainedit");
+        refreshSpellSelector(wizardRef);
+        $("#spellMenu").addClass("hidden");
+        $("#editorMenu").addClass("hidden");
+        return true;
+    }
+
+    function handleTerrainMenuHotkey(wizardRef, keyName) {
+        if (!wizardRef || spellMenuMode !== "terrain") return false;
+        const key = typeof keyName === "string" ? keyName.trim().toLowerCase() : "";
+        const terrainType = key === "g"
+            ? "grass"
+            : (key === "d" ? "desert" : (key === "w" ? "water" : ""));
+        if (!terrainType) return false;
+        return selectTerrainMenuType(wizardRef, terrainType);
     }
 
     function renderTreeSelector(wizardRef) {
@@ -12421,6 +12447,8 @@ const SpellSystem = (() => {
         showEditorMenu,
         showEditorSubmenuForSelectedCategory,
         showPlaceableMenu,
+        paintTerrainAtWorldPoint,
+        handleTerrainMenuHotkey,
         refreshEditorSelector,
         setEditorPanelVisible,
         toggleEditorPanelVisible,
