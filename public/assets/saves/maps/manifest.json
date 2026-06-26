@@ -1,8 +1,8 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -42.886161760047536,
-    "y": 116.91154519494762,
+    "x": -43.52329156646342,
+    "y": 121.66970297672145,
     "z": 0,
     "currentLayer": 8,
     "traversalLayer": 8,
@@ -24,18 +24,20 @@
     "shieldHp": 0,
     "maxShieldHp": 0,
     "food": 0,
-    "currentSpell": "editscript",
+    "currentSpell": "teleport",
     "activeAura": "speed",
     "activeAuras": [
-      "speed"
+      "speed",
+      "healing"
     ],
     "unlockedMagic": [],
     "selectedFlooringTexture": "/assets/images/flooring/dirt.jpg",
+    "selectedTerrainType": "water",
     "selectedTreeTextureVariant": "random",
-    "selectedPlaceableCategory": "furniture",
-    "selectedPlaceableTexturePath": "/assets/images/furniture/armor.png",
+    "selectedPlaceableCategory": "flowers",
+    "selectedPlaceableTexturePath": "/assets/images/flowers/red%20flower.png",
     "selectedPlaceableByCategory": {
-      "flowers": "/assets/images/flowers/white%20rosebush.png",
+      "flowers": "/assets/images/flowers/red%20flower.png",
       "windows": "/assets/images/windows/very%20plain%20arch.png",
       "doors": "/assets/images/doors/door2.png",
       "furniture": "/assets/images/furniture/armor.png",
@@ -63,9 +65,11 @@
       "/assets/images/furniture/bed.png": 0,
       "/assets/images/furniture/bed2.png": 0,
       "/assets/images/furniture/armor.png": 0,
-      "/assets/images/flowers/white%20rosebush.png": 0
+      "/assets/images/flowers/white%20rosebush.png": 0,
+      "/assets/images/flowers/blue%20flower%20bush.png": 0,
+      "/assets/images/flowers/lily%20plant.png": 0
     },
-    "selectedPlaceableScale": 1.5,
+    "selectedPlaceableScale": 0.927,
     "selectedPlaceableScaleByTexture": {
       "/assets/images/doors/door5.png": 1,
       "/assets/images/windows/window.png": 0.997,
@@ -74,8 +78,8 @@
       "/assets/images/furniture/chair.png": 1,
       "/assets/images/furniture/circlerug.png": 5.146,
       "/assets/images/doors/door2.png": 1.932,
-      "/assets/images/flowers/red%20flower.png": 0.55,
-      "/assets/images/flowers/fireflower.png": 5,
+      "/assets/images/flowers/red%20flower.png": 0.927,
+      "/assets/images/flowers/fireflower.png": 1.912,
       "/assets/images/flowers/thornflowers.png": 5,
       "/assets/images/furniture/hexrug.png": 4,
       "/assets/images/furniture/crystal%20ball.png": 1.372,
@@ -85,8 +89,10 @@
       "/assets/images/furniture/table.png": 2.733,
       "/assets/images/furniture/bed.png": 6.196,
       "/assets/images/furniture/bed2.png": 3.657,
-      "/assets/images/furniture/armor.png": 1.5,
-      "/assets/images/flowers/white%20rosebush.png": 2.773
+      "/assets/images/furniture/armor.png": 1.452,
+      "/assets/images/flowers/white%20rosebush.png": 2.773,
+      "/assets/images/flowers/blue%20flower%20bush.png": 1.618,
+      "/assets/images/flowers/lily%20plant.png": 1.618
     },
     "selectedPlaceableRotation": 0,
     "selectedPlaceableRotationByTexture": {
@@ -109,7 +115,9 @@
       "/assets/images/furniture/bed.png": 0,
       "/assets/images/furniture/bed2.png": 0,
       "/assets/images/furniture/armor.png": 0,
-      "/assets/images/flowers/white%20rosebush.png": 0
+      "/assets/images/flowers/white%20rosebush.png": 0,
+      "/assets/images/flowers/blue%20flower%20bush.png": 0,
+      "/assets/images/flowers/lily%20plant.png": 0
     },
     "selectedPlaceableRotationAxis": "none",
     "selectedPlaceableRotationAxisByTexture": {
@@ -132,10 +140,12 @@
       "/assets/images/furniture/bed.png": "visual",
       "/assets/images/furniture/bed2.png": "visual",
       "/assets/images/furniture/armor.png": "none",
-      "/assets/images/flowers/white%20rosebush.png": "none"
+      "/assets/images/flowers/white%20rosebush.png": "none",
+      "/assets/images/flowers/blue%20flower%20bush.png": "none",
+      "/assets/images/flowers/lily%20plant.png": "none"
     },
     "selectedPlaceableAnchorX": 0.5,
-    "selectedPlaceableAnchorY": 0.9,
+    "selectedPlaceableAnchorY": 0.5,
     "selectedPlaceableAnchorXByTexture": {
       "/assets/images/doors/door5.png": 0.5,
       "/assets/images/windows/window.png": 0.5,
@@ -156,7 +166,9 @@
       "/assets/images/furniture/bed.png": 0.5,
       "/assets/images/furniture/bed2.png": 0.5,
       "/assets/images/furniture/armor.png": 0.5,
-      "/assets/images/flowers/white%20rosebush.png": 0.5
+      "/assets/images/flowers/white%20rosebush.png": 0.5,
+      "/assets/images/flowers/blue%20flower%20bush.png": 0.5,
+      "/assets/images/flowers/lily%20plant.png": 0.5
     },
     "selectedPlaceableAnchorYByTexture": {
       "/assets/images/doors/door5.png": 1,
@@ -178,11 +190,13 @@
       "/assets/images/furniture/bed.png": 0.5,
       "/assets/images/furniture/bed2.png": 0.5,
       "/assets/images/furniture/armor.png": 0.9,
-      "/assets/images/flowers/white%20rosebush.png": 0.5
+      "/assets/images/flowers/white%20rosebush.png": 0.5,
+      "/assets/images/flowers/blue%20flower%20bush.png": 0.5,
+      "/assets/images/flowers/lily%20plant.png": 0.5
     },
-    "selectedPowerupPlacementScale": 1.269,
-    "selectedPowerupFileName": "spellbook2.png",
-    "selectedEditorCategory": "furniture",
+    "selectedPowerupPlacementScale": 0.465,
+    "selectedPowerupFileName": "lightning.png",
+    "selectedEditorCategory": "flowers",
     "selectedFloorEditLevel": 8,
     "selectedWallHeight": 6,
     "selectedWallThickness": 0.25,
@@ -203,6 +217,11 @@
         "name": "freeze",
         "icon": "/assets/images/magic/iceball.png",
         "key": "I"
+      },
+      {
+        "name": "lightning",
+        "icon": "/assets/images/magic/lightning.png",
+        "key": "L"
       },
       {
         "name": "spikes",
@@ -257,14 +276,15 @@
     ],
     "inventory": {
       "spellCredits": 4,
-      "gold": 6690
+      "gold": 6830,
+      "lightning": 7
     },
     "scriptingName": "human1",
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -58.382423950652274,
-      "y": 95.61802564506615
+      "x": -59.02329156646342,
+      "y": 108.16556415877511
     }
   },
   "los": {
