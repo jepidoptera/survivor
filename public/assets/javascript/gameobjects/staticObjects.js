@@ -4118,6 +4118,13 @@ void main(void) {
                         map.registerFloorObject(obj);
                     }
                 }
+                if (
+                    data.type === "placedObject" &&
+                    obj &&
+                    typeof obj.refreshPlacementAfterLoadPositionRestore === "function"
+                ) {
+                    obj.refreshPlacementAfterLoadPositionRestore({ fallbackNode: node });
+                }
                 attachLoadedPlacedObjectToFloorBuildingManifest(map, obj, data);
                 if (data.hp !== undefined) obj.hp = data.hp;
                 if (typeof data.burned === "boolean") obj.burned = data.burned;
@@ -5864,6 +5871,22 @@ class PlacedObject extends StaticObject {
         const merged = await getResolvedPlaceableMetadata(category, this.texturePath);
         if (!merged) return;
         this.applyPlaceableMetadata(merged);
+    }
+
+    refreshPlacementAfterLoadPositionRestore(options = {}) {
+        if (this.groundPlaneHitbox instanceof CircleHitbox) {
+            this.groundPlaneHitbox.x = this.x;
+            this.groundPlaneHitbox.y = this.y;
+        }
+        if (this.visualHitbox instanceof CircleHitbox) {
+            this.visualHitbox.x = this.x;
+            this.visualHitbox.y = this.y - this.height * 0.25;
+        }
+        this.refreshIndexedNodesFromHitbox({
+            fallbackNode: options && options.fallbackNode ? options.fallbackNode : null,
+            minExtent: 1.5,
+            sampleSpacing: 1.0
+        });
     }
 
     isDoorObject() {

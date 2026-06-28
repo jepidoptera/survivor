@@ -325,6 +325,24 @@
         return fallbackCoord ? makeSectionKey(fallbackCoord) : "";
     }
 
+    function shouldAnchorPrototypeBubbleToSupport(actor) {
+        if (!actor || typeof actor !== "object") return false;
+        const support = actor.currentMovementSupport && typeof actor.currentMovementSupport === "object"
+            ? actor.currentMovementSupport
+            : null;
+        const fragment = support && support.fragment && typeof support.fragment === "object"
+            ? support.fragment
+            : (actor._activeFloorFragment && typeof actor._activeFloorFragment === "object" ? actor._activeFloorFragment : null);
+        if (support && support.ownerType === "building") return true;
+        if (fragment && fragment.ownerType === "building") return true;
+        const supportLayer = support && Number.isFinite(Number(support.layer))
+            ? Math.round(Number(support.layer))
+            : (fragment && Number.isFinite(Number(fragment.level)) ? Math.round(Number(fragment.level)) : 0);
+        if (support && support.type === "floor" && supportLayer !== 0) return true;
+        if (fragment && Number.isFinite(Number(fragment.level)) && Math.round(Number(fragment.level)) !== 0) return true;
+        return false;
+    }
+
     function getPrototypeSectionSetFarthestDistance(state, sectionKeys, worldX, worldY) {
         if (!state || !(sectionKeys instanceof Set) || sectionKeys.size === 0) return Infinity;
         let farthest = 0;
@@ -2004,7 +2022,9 @@
         const actorSectionKey = resolvePrototypeBubbleSectionKeyForActor(map, state, actor, actorSectionCoord);
         if (!actorSectionKey) return false;
         const activeLimit = Math.max(1, Math.floor(Number(state.activeSectionLimit) || 3));
-        const supportFocus = actorSectionKey !== projectedActorSectionKey
+        const useSupportAnchor = shouldAnchorPrototypeBubbleToSupport(actor);
+        const bubbleAnchorSectionKey = useSupportAnchor ? actorSectionKey : projectedActorSectionKey;
+        const supportFocus = useSupportAnchor && actorSectionKey !== projectedActorSectionKey
             ? getSectionCenterWorldForCoord(state, parseSectionKey(actorSectionKey))
             : null;
         const screenSpaceSelection = options.useScreenSpaceSections === true
@@ -2018,7 +2038,7 @@
             : (supportFocus ? Number(supportFocus.y) : Number(actor.y));
         const representativeKey = screenSpaceSelection
             ? screenSpaceSelection.representativeKey
-            : actorSectionKey;
+            : bubbleAnchorSectionKey;
         state.bubbleFocusWorldX = Number.isFinite(focusWorldX) ? focusWorldX : 0;
         state.bubbleFocusWorldY = Number.isFinite(focusWorldY) ? focusWorldY : 0;
         state.bubbleFocusSectionKey = representativeKey;
@@ -2029,7 +2049,7 @@
                 state.bubbleFocusWorldX,
                 state.bubbleFocusWorldY,
                 activeLimit,
-                [actorSectionKey]
+                [bubbleAnchorSectionKey]
             );
         const currentKeys = state.activeSectionKeys instanceof Set
             ? new Set(state.activeSectionKeys)

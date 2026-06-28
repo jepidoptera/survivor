@@ -995,7 +995,7 @@ test("loadGameState restores encoded terrain tile membership from older saves", 
     assert.equal(map.nodes[0][0].groundTextureId, 53);
 });
 
-test("loadGameState drops terrain polygons with no matching saved terrain tile", () => {
+test("loadGameState preserves authored terrain polygons independent of saved terrain tiles", () => {
     const map = createRectMap();
     map.normalizeGroundTerrainPolygons = (polygons) => polygons;
 
@@ -1043,7 +1043,7 @@ test("loadGameState drops terrain polygons with no matching saved terrain tile",
     });
 
     assert.equal(loaded, true);
-    assert.deepEqual(map.terrainPolygons, [keptPolygon]);
+    assert.deepEqual(map.terrainPolygons, [keptPolygon, stalePolygon]);
 });
 
 test("loadGameState re-syncs prototype animals and powerups after loading section world", () => {

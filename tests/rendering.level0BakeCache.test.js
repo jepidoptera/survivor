@@ -7,7 +7,7 @@ const sectionWorldBuildings = require("../public/assets/javascript/prototypes/se
 
 function loadRenderingImpl(options = {}) {
     const context = {
-        console,
+        console: options.console || console,
         Math,
         Date,
         JSON,
@@ -2108,6 +2108,151 @@ test("floor visual mesh updates when a non-sampled vertex moves", () => {
     const positionData = Array.from(secondEntry.mesh.geometry.getBuffer("aVertexPosition").data);
     assert.equal(positionData[6], 7);
     assert.notEqual(secondEntry.signature, firstEntry.signature);
+});
+
+test("terrain fade clipping failures render an approximation with diagnostic geometry", () => {
+    class FakeBuffer {
+        constructor(data) {
+            this.data = data;
+            this.updateCount = 0;
+        }
+        update() {
+            this.updateCount += 1;
+        }
+    }
+    class FakeGeometry {
+        constructor() {
+            this.buffers = new Map();
+            this.index = null;
+        }
+        addAttribute(name, data) {
+            this.buffers.set(name, new FakeBuffer(data));
+            return this;
+        }
+        addIndex(data) {
+            this.index = new FakeBuffer(data);
+            return this;
+        }
+        getBuffer(name) {
+            return this.buffers.get(name) || null;
+        }
+    }
+    class FakeContainer {
+        constructor() {
+            this.children = [];
+            this.position = { set() {} };
+            this.scale = { set() {} };
+        }
+        addChild(child) {
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+        }
+        addChildAt(child) {
+            this.addChild(child);
+        }
+        removeChild(child) {
+            const index = this.children.indexOf(child);
+            if (index >= 0) this.children.splice(index, 1);
+            if (child.parent === this) child.parent = null;
+        }
+    }
+    class FakeMesh {
+        constructor(geometry, shader) {
+            this.geometry = geometry;
+            this.shader = shader;
+            this.parent = null;
+            this.visible = false;
+            this.position = { set() {} };
+            this.scale = { set() {} };
+        }
+        destroy() {}
+    }
+    const fakePixi = {
+        Container: FakeContainer,
+        Geometry: FakeGeometry,
+        Mesh: FakeMesh,
+        Shader: { from: (_vs, _fs, uniforms) => ({ uniforms }) },
+        State: class {},
+        Texture: {
+            WHITE: { id: "white" },
+            from: (path) => ({ id: path, baseTexture: {} })
+        },
+        utils: {
+            earcut(vertices) {
+                const count = Math.floor(vertices.length / 2);
+                const indices = [];
+                for (let i = 1; i < count - 1; i++) indices.push(0, i, i + 1);
+                return indices;
+            }
+        }
+    };
+    const warnings = [];
+    const RenderingImpl = loadRenderingImpl({
+        PIXI: fakePixi,
+        app: { screen: { width: 800, height: 600 } },
+        polygonClipping: {
+            intersection() {
+                throw new Error("test fade clip failed");
+            }
+        },
+        console: {
+            ...console,
+            warn(...args) {
+                warnings.push(args);
+            }
+        }
+    });
+    const renderer = new RenderingImpl();
+    renderer.layers = { depthObjects: new FakeContainer() };
+    renderer.camera = { x: 0, y: 0, z: 0, viewscale: 1, xyratio: 1 };
+    renderer.collectFloorVisualEntries = () => [{
+        key: "fragment:section:0,0:terrain:water:0:0:0",
+        level: 0,
+        baseZ: 0,
+        outer: [
+            { x: 0, y: 0 },
+            { x: 4, y: 0 },
+            { x: 4, y: 4 },
+            { x: 0, y: 4 }
+        ],
+        holes: [],
+        texture: null,
+        textureBounds: null,
+        textureRepeat: { x: 1, y: 1 },
+        texturePath: "/assets/images/water.png",
+        tint: 0xffffff,
+        alpha: 1,
+        depthBias: 0.001,
+        isHoleOverlay: false,
+        isAnimatedWater: true,
+        terrainType: "water",
+        edgeFadeWidth: 0.333,
+        edgeFadeClipRings: [[
+            { x: 0, y: 0 },
+            { x: 3, y: 0 },
+            { x: 3, y: 3 },
+            { x: 0, y: 3 }
+        ]],
+        edgeFadeDiagnosticContext: {
+            terrainType: "water",
+            sectionKey: "0,0",
+            groupIndex: 0,
+            polygonIndex: 0,
+            clippedPieceIndex: 0
+        }
+    }];
+
+    assert.doesNotThrow(() => renderer.renderFloorVisualPolygons({}));
+    const entry = renderer.floorVisualMeshByKey.get("fragment:section:0,0:terrain:water:0:0:0");
+    assert.ok(entry);
+    assert.ok(entry.triangulation.vertexCount > 4);
+    assert.ok(warnings.length > 0);
+    assert.equal(warnings[0][0], "[terrain fade clip approximation]");
+    assert.equal(warnings[0][1].terrainType, "water");
+    assert.equal(warnings[0][1].sectionKey, "0,0");
+    assert.equal(warnings[0][1].approximation, "unclipped fade band");
+    assert.equal(Array.isArray(warnings[0][1].bandOuter), true);
+    assert.equal(Array.isArray(warnings[0][1].clipRings), true);
 });
 
 test("interior presentation foreground promotes spell and selection overlays", () => {
@@ -7320,6 +7465,94 @@ test("straight stair records are not collected as floor visual polygons", () => 
 
     assert.equal(Array.isArray(entries), true);
     assert.equal(entries.length, 0);
+});
+
+test("road path render collection uses active runtime records without node scanning", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.camera = { x: 0, y: 0, z: 0, width: 20, height: 20 };
+    const roadPath = {
+        type: "roadPath",
+        traversalLayer: 0,
+        generatedGeometry: {
+            points: [{ x: 2, y: 2 }, { x: 10, y: 2 }],
+            outline: [
+                { x: 2, y: 0 },
+                { x: 10, y: 0 },
+                { x: 10, y: 4 },
+                { x: 2, y: 4 }
+            ]
+        }
+    };
+    const map = {
+        floorsById: new Map(),
+        objects: [],
+        _prototypeObjectState: {
+            activeRuntimeObjectsByRecordId: new Map([[42, roadPath]])
+        }
+    };
+
+    const result = renderer.collectRoadPathRenderObjects({
+        map,
+        camera: renderer.camera,
+        viewport: { width: 20, height: 20 }
+    }, new Set());
+
+    assert.equal(result.visibleRoadPathObjects.has(roadPath), true);
+    assert.equal(result.continuityRoadPathObjects.has(roadPath), true);
+    assert.equal(result.considered, 1);
+});
+
+test("level 0 terrain polygon floor visuals use active section assets without floor fragments", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.camera = { x: 0, y: 0, z: 0, width: 20, height: 20 };
+    const asset = {
+        key: "0,0",
+        sectionPolygon: [
+            { x: 0, y: 0 },
+            { x: 5, y: 0 },
+            { x: 5, y: 5 },
+            { x: 0, y: 5 }
+        ],
+        terrainPolygons: [{
+            type: "water",
+            points: [
+                { x: -2, y: 2 },
+                { x: 8, y: 2 },
+                { x: 8, y: 8 },
+                { x: -2, y: 8 }
+            ]
+        }]
+    };
+    const map = {
+        floorsById: new Map(),
+        hexWidth: 1 / 0.866,
+        hexHeight: 1,
+        getGroundPolygonMaterialPathForType: type => `/assets/images/${type}.png`,
+        getGroundPolygonMaterialScaleForType: () => 1,
+        _prototypeSectionState: {
+            activeSectionKeys: new Set(["0,0"]),
+            sectionAssetsByKey: new Map([["0,0", asset]])
+        }
+    };
+
+    const entries = renderer.collectFloorVisualEntries({
+        map,
+        camera: renderer.camera,
+        viewport: { width: 20, height: 20 }
+    });
+
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].isTerrainPolygon, true);
+    assert.equal(entries[0].terrainType, "water");
+    assert.match(entries[0].key, /^fragment:section:0,0:terrain:/);
+    assert.equal(entries[0].outer.every(point => (
+        point.x >= -0.0001 &&
+        point.x <= 5.0001 &&
+        point.y >= -0.0001 &&
+        point.y <= 5.0001
+    )), true);
 });
 
 test("building cutaway-rendered floor fragments are not collected as floor visual polygons", () => {

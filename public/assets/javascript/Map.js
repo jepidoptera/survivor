@@ -89,6 +89,148 @@ function getPointPolygonBoundaryDistanceSq2D(px, py, points) {
     return best;
 }
 
+function getClosestPointOnPolygonBoundary2D(px, py, points, label = "polygon boundary") {
+    if (!Array.isArray(points) || points.length < 3) {
+        throw new Error(`${label} requires at least three points`);
+    }
+    let best = null;
+    let bestDistSq = Infinity;
+    for (let i = 0; i < points.length; i++) {
+        const a = points[i];
+        const b = points[(i + 1) % points.length];
+        const ax = Number(a && a.x);
+        const ay = Number(a && a.y);
+        const bx = Number(b && b.x);
+        const by = Number(b && b.y);
+        if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) {
+            throw new Error(`${label} contains a non-finite point`);
+        }
+        const abx = bx - ax;
+        const aby = by - ay;
+        const lenSq = abx * abx + aby * aby;
+        const t = lenSq > 1e-12
+            ? Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / lenSq))
+            : 0;
+        const x = ax + abx * t;
+        const y = ay + aby * t;
+        const dx = px - x;
+        const dy = py - y;
+        const distSq = dx * dx + dy * dy;
+        if (distSq < bestDistSq) {
+            bestDistSq = distSq;
+            best = { x, y, distSq };
+        }
+    }
+    if (!best || !Number.isFinite(best.distSq)) {
+        throw new Error(`${label} could not resolve a closest boundary point`);
+    }
+    return best;
+}
+
+function normalizeTerrainCollisionRing2D(points, label) {
+    if (!Array.isArray(points) || points.length < 3) {
+        throw new Error(`${label} requires at least three points`);
+    }
+    const out = [];
+    for (let i = 0; i < points.length; i++) {
+        const x = Number(points[i] && points[i].x);
+        const y = Number(points[i] && points[i].y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error(`${label} contains a non-finite point`);
+        }
+        out.push({ x, y });
+    }
+    return out;
+}
+
+function resolveCircleTerrainPolygonCollision2D(polygon, hitbox, label = "terrain polygon") {
+    if (!polygon || typeof polygon !== "object") {
+        throw new Error(`${label} collision requires a polygon`);
+    }
+    const cx = Number(hitbox && hitbox.x);
+    const cy = Number(hitbox && hitbox.y);
+    const radius = Number(hitbox && hitbox.radius);
+    if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(radius) || radius < 0) {
+        throw new Error(`${label} collision requires a finite circle hitbox`);
+    }
+    const outer = normalizeTerrainCollisionRing2D(polygon.points, `${label}.points`);
+    const holes = Array.isArray(polygon.holes)
+        ? polygon.holes.map((hole, index) => normalizeTerrainCollisionRing2D(hole, `${label}.holes[${index}]`))
+        : [];
+    const bounds = getPolygonBounds2D(outer);
+    if (!bounds) {
+        throw new Error(`${label} collision could not resolve polygon bounds`);
+    }
+    if (
+        cx + radius < bounds.minX ||
+        cx - radius > bounds.maxX ||
+        cy + radius < bounds.minY ||
+        cy - radius > bounds.maxY
+    ) {
+        return null;
+    }
+
+    const insideOuter = pointInPolygon2D(cx, cy, outer);
+    let containingHole = null;
+    for (let i = 0; i < holes.length; i++) {
+        if (pointInPolygon2D(cx, cy, holes[i])) {
+            containingHole = holes[i];
+            break;
+        }
+    }
+
+    const pushFromClosest = (closest, directionSign, requiredDistance) => {
+        const dist = Math.sqrt(Math.max(0, closest.distSq));
+        let dx = cx - closest.x;
+        let dy = cy - closest.y;
+        if (!(dist > 1e-9)) {
+            const fallbackX = cx - ((bounds.minX + bounds.maxX) * 0.5);
+            const fallbackY = cy - ((bounds.minY + bounds.maxY) * 0.5);
+            const fallbackLen = Math.hypot(fallbackX, fallbackY);
+            if (fallbackLen > 1e-9) {
+                dx = fallbackX / fallbackLen;
+                dy = fallbackY / fallbackLen;
+            } else {
+                dx = 1;
+                dy = 0;
+            }
+        } else {
+            dx /= dist;
+            dy /= dist;
+        }
+        const distance = Math.max(0, Number(requiredDistance) || 0);
+        return {
+            pushX: dx * directionSign * distance,
+            pushY: dy * directionSign * distance,
+            overlap: distance
+        };
+    };
+
+    if (!insideOuter) {
+        const closestOuter = getClosestPointOnPolygonBoundary2D(cx, cy, outer, `${label}.points`);
+        const dist = Math.sqrt(Math.max(0, closestOuter.distSq));
+        if (dist >= radius) return null;
+        return pushFromClosest(closestOuter, 1, radius - dist);
+    }
+
+    if (containingHole) {
+        const closestHole = getClosestPointOnPolygonBoundary2D(cx, cy, containingHole, `${label}.hole`);
+        const dist = Math.sqrt(Math.max(0, closestHole.distSq));
+        if (dist >= radius) return null;
+        return pushFromClosest(closestHole, 1, radius - dist);
+    }
+
+    let closestBoundary = getClosestPointOnPolygonBoundary2D(cx, cy, outer, `${label}.points`);
+    for (let i = 0; i < holes.length; i++) {
+        const closestHole = getClosestPointOnPolygonBoundary2D(cx, cy, holes[i], `${label}.holes[${i}]`);
+        if (closestHole.distSq < closestBoundary.distSq) {
+            closestBoundary = closestHole;
+        }
+    }
+    const dist = Math.sqrt(Math.max(0, closestBoundary.distSq));
+    return pushFromClosest(closestBoundary, -1, dist + radius);
+}
+
 function segmentsIntersect2D(a, b, c, d) {
     if (!a || !b || !c || !d) return false;
     const ax = Number(a.x), ay = Number(a.y);
@@ -342,6 +484,17 @@ const GROUND_TERRAIN_DEFS = [
         icon: "/assets/images/land tiles/water1.png",
         polygonMaterial: "/assets/images/terrain/materials/water.png",
         polygonMaterialScale: 4
+    },
+    {
+        name: "mud",
+        label: "Mud",
+        idStart: FOREST_GROUND_TEXTURE_COUNT + 2,
+        baseCount: 1,
+        textureNames: ["mud"],
+        texturePaths: ["/assets/images/terrain/materials/dirt.png"],
+        icon: "/assets/images/terrain/materials/dirt.png",
+        polygonMaterial: "/assets/images/terrain/materials/dirt.png",
+        polygonMaterialScale: 20
     }
 ];
 
@@ -371,6 +524,12 @@ const GROUND_TERRAIN_ID_COUNT = GROUND_TERRAIN_DEFS_WITH_OFFSETS.reduce((maxId, 
     Math.max(maxId, def.idStart + def.baseCount)
 ), 0);
 const GROUND_TERRAIN_TEXTURE_NAMES = GROUND_TERRAIN_DEFS_WITH_OFFSETS.flatMap(def => def.textureNames);
+const GROUND_TERRAIN_TEXTURE_PATHS = GROUND_TERRAIN_DEFS_WITH_OFFSETS.flatMap(def => {
+    if (Array.isArray(def.texturePaths) && def.texturePaths.length === def.textureNames.length) {
+        return def.texturePaths;
+    }
+    return def.textureNames.map(name => `/assets/images/land tiles/${name}.png`);
+});
 
 function getGroundTerrainDefForTextureId(textureId) {
     const id = Number.isFinite(textureId) ? Math.floor(Number(textureId)) : NaN;
@@ -889,9 +1048,13 @@ class GameMap {
         this.groundTerrainDefs = GROUND_TERRAIN_DEFS_WITH_OFFSETS.map(cloneGroundTerrainDefForUi);
         this.terrainPolygons = [];
         this.groundPalette = GROUND_TERRAIN_TEXTURE_NAMES.slice();
+        this.groundTexturePaths = GROUND_TERRAIN_TEXTURE_PATHS.slice();
         this.groundTextures = this.groundPalette.map(() => PIXI.Texture.WHITE);
         this.groundPalette.forEach((name, idx) => {
-            const path = `/assets/images/land tiles/${name}.png`;
+            const path = this.groundTexturePaths[idx];
+            if (typeof path !== "string" || path.length === 0) {
+                throw new Error(`missing ground terrain texture path at palette index ${idx}`);
+            }
             this.groundTextures[idx] = createRuntimeGroundTexture(path, (processed) => {
                 this.groundTextures[idx] = processed;
             });
@@ -6040,6 +6203,133 @@ class GameMap {
         return typeName === "water";
     }
 
+    collectGroundTerrainCollisionPolygons(bounds = null, options = {}) {
+        const queryBounds = bounds && typeof bounds === "object" ? bounds : null;
+        if (queryBounds) {
+            for (const key of ["minX", "minY", "maxX", "maxY"]) {
+                if (!Number.isFinite(Number(queryBounds[key]))) {
+                    throw new Error("terrain collision bounds must be finite");
+                }
+            }
+        }
+        const out = [];
+        const seenPolygons = new Set();
+        const canTraverseTerrain = options && typeof options.canTraverseTerrain === "function"
+            ? options.canTraverseTerrain
+            : null;
+        const addPolygons = (polygons, sourceKey = "") => {
+            if (!Array.isArray(polygons)) return;
+            for (let i = 0; i < polygons.length; i++) {
+                const polygon = polygons[i];
+                if (!polygon || typeof polygon !== "object") continue;
+                if (seenPolygons.has(polygon)) continue;
+                seenPolygons.add(polygon);
+                const terrainType = typeof polygon.type === "string" ? polygon.type : "";
+                if (!terrainType) {
+                    throw new Error(`terrain collision polygon ${sourceKey || "map"}[${i}] is missing terrain type`);
+                }
+                if (canTraverseTerrain) {
+                    const result = canTraverseTerrain(terrainType, null, {
+                        map: this,
+                        terrainType,
+                        polygon
+                    });
+                    if (result === true) continue;
+                    if (result !== false && !this.isGroundTerrainTypeImpassableForTraversal(terrainType)) continue;
+                } else if (!this.isGroundTerrainTypeImpassableForTraversal(terrainType)) {
+                    continue;
+                }
+                const polygonBounds = getPolygonBounds2D(polygon.points);
+                if (!polygonBounds) {
+                    throw new Error(`terrain collision polygon ${sourceKey || "map"}[${i}] has invalid bounds`);
+                }
+                if (queryBounds && !polygonBoundsOverlap2D(queryBounds, polygonBounds)) continue;
+                out.push({ polygon, sourceKey, index: i, bounds: polygonBounds, terrainType });
+            }
+        };
+
+        addPolygons(this.terrainPolygons, "map.terrainPolygons");
+
+        const state = this._prototypeSectionState || null;
+        if (state && state.sectionAssetsByKey instanceof Map) {
+            const keys = state.loadedSectionAssetKeys instanceof Set && state.loadedSectionAssetKeys.size > 0
+                ? Array.from(state.loadedSectionAssetKeys)
+                : Array.from(state.sectionAssetsByKey.keys());
+            for (let i = 0; i < keys.length; i++) {
+                const key = keys[i];
+                const asset = state.sectionAssetsByKey.get(key) || null;
+                if (!asset) {
+                    throw new Error(`terrain collision could not resolve loaded section asset ${key}`);
+                }
+                addPolygons(asset.terrainPolygons, `section ${key}.terrainPolygons`);
+            }
+        }
+
+        return out;
+    }
+
+    resolveGroundTerrainHitboxCollision(hitbox, options = {}) {
+        if (options && options.ignoreTerrainPassability === true) return null;
+        const traversalLayer = Number.isFinite(options && options.traversalLayer)
+            ? Math.round(Number(options.traversalLayer))
+            : 0;
+        if (traversalLayer !== 0) return null;
+        const x = Number(hitbox && hitbox.x);
+        const y = Number(hitbox && hitbox.y);
+        const radius = Number(hitbox && hitbox.radius);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(radius) || radius < 0) {
+            throw new Error("terrain hitbox collision requires a finite circle hitbox");
+        }
+        const bounds = {
+            minX: x - radius,
+            minY: y - radius,
+            maxX: x + radius,
+            maxY: y + radius
+        };
+        const candidates = Array.isArray(options && options.terrainCollisionPolygons)
+            ? options.terrainCollisionPolygons
+            : this.collectGroundTerrainCollisionPolygons(bounds, options);
+        let totalPushX = 0;
+        let totalPushY = 0;
+        let maxPushLen = 0;
+        const collisions = [];
+        for (let i = 0; i < candidates.length; i++) {
+            const entry = candidates[i];
+            const polygon = entry && entry.polygon ? entry.polygon : entry;
+            const terrainType = typeof (entry && entry.terrainType) === "string"
+                ? entry.terrainType
+                : (typeof (polygon && polygon.type) === "string" ? polygon.type : "");
+            const sourceKey = typeof (entry && entry.sourceKey) === "string" ? entry.sourceKey : "terrain";
+            const index = Number.isInteger(entry && entry.index) ? entry.index : i;
+            const collision = resolveCircleTerrainPolygonCollision2D(
+                polygon,
+                hitbox,
+                `${sourceKey}[${index}]`
+            );
+            if (!collision) continue;
+            const pushX = Number(collision.pushX);
+            const pushY = Number(collision.pushY);
+            if (!Number.isFinite(pushX) || !Number.isFinite(pushY)) {
+                throw new Error(`terrain collision for ${sourceKey}[${index}] produced non-finite push`);
+            }
+            const pushLen = Math.hypot(pushX, pushY);
+            if (!(pushLen > 0)) continue;
+            totalPushX += pushX;
+            totalPushY += pushY;
+            maxPushLen = Math.max(maxPushLen, pushLen);
+            collisions.push({ terrainType, sourceKey, index, pushX, pushY, overlap: pushLen });
+        }
+        if (collisions.length === 0) return null;
+        return {
+            pushX: totalPushX,
+            pushY: totalPushY,
+            maxPushLen,
+            terrainType: collisions[0].terrainType,
+            sourceKey: collisions[0].sourceKey,
+            collisions
+        };
+    }
+
     isNodeTerrainImpassableForTraversal(node, options = {}) {
         if (!this.isGroundTerrainTraversalNode(node)) return false;
         if (options && options.ignoreTerrainPassability === true) return false;
@@ -8171,28 +8461,6 @@ class GameMap {
         return out;
     }
 
-    getGroundTerrainNonGroupTouchCountFromSlots(point, nodeKeys, vertexSlotsByPointKey) {
-        if (!(nodeKeys instanceof Set)) {
-            throw new Error("terrain vertex membership requires a terrain group node set");
-        }
-        if (!(vertexSlotsByPointKey instanceof Map)) {
-            throw new Error("terrain vertex membership requires a vertex slot map");
-        }
-        const pointKey = this.getGroundTerrainPointKey(point);
-        const slots = vertexSlotsByPointKey.get(pointKey);
-        if (!(slots instanceof Set)) {
-            throw new Error("terrain vertex membership could not resolve touching hex slots for boundary vertex");
-        }
-        if (slots.size !== 3) {
-            throw new Error(`terrain vertex membership expected 3 touching hex slots, found ${slots.size}`);
-        }
-        let groupCount = 0;
-        for (const slotKey of slots) {
-            if (nodeKeys.has(slotKey)) groupCount += 1;
-        }
-        return 3 - groupCount;
-    }
-
     smoothGroundTerrainPolygonPoints(points, group, options = {}) {
         const simplified = this.simplifyGroundTerrainPolygonPoints(points);
         if (simplified.length < 3) return simplified;
@@ -8205,13 +8473,27 @@ class GameMap {
             if (!node) continue;
             nodesByKey.set(this.getGroundTerrainNodeKey(node), node);
         }
-        const requiredNonGroupCount = options && options.isHole === true ? 1 : 2;
         const pointRecords = simplified.map(point => {
-            const nonGroupCount = this.getGroundTerrainNonGroupTouchCountFromSlots(point, nodeKeys, vertexSlotsByPointKey);
+            const slots = this.getGroundTerrainPointSlots(point, vertexSlotsByPointKey);
+            if (!(slots instanceof Set)) {
+                throw new Error("terrain polygon smoothing could not resolve touching hex slots for boundary vertex");
+            }
+            if (slots.size !== 3) {
+                throw new Error(`terrain polygon smoothing expected 3 touching hex slots, found ${slots.size}`);
+            }
+            const stats = this.getGroundTerrainBoundaryKeepNonGroupCount(
+                group && group.type ? group.type : "grass",
+                slots,
+                nodesByKey,
+                options
+            );
             return {
                 point,
-                nonGroupCount,
-                baseKeep: nonGroupCount === requiredNonGroupCount
+                nonGroupCount: stats.nonGroupCount,
+                keepNonGroupCount: stats.keepNonGroupCount,
+                forcedNonGroupCount: 3 - stats.keepNonGroupCount,
+                priorityAdjusted: stats.higherPriorityNeighbor,
+                baseKeep: stats.nonGroupCount === stats.keepNonGroupCount
             };
         });
         const forcedPointsByRunStart = new Map();
@@ -8247,6 +8529,13 @@ class GameMap {
                 y: yindex + (xindex % 2 === 0 ? 0.5 : 0)
             };
         };
+        const groupType = group && group.type ? group.type : "grass";
+        const slotMatchesSkippedRunCenterSide = (slotKey, record) => {
+            const slotType = this.getGroundTerrainTypeForSlotKey(slotKey, nodesByKey);
+            const slotIsGroup = slotType === groupType;
+            const useGroupSide = Number(record && record.forcedNonGroupCount) >= 2;
+            return useGroupSide ? slotIsGroup : !slotIsGroup;
+        };
         const getSkippedRunHexCenter = (runStart, runLength) => {
             const count = pointRecords.length;
             const slotCounts = new Map();
@@ -8259,13 +8548,13 @@ class GameMap {
                 ySum += Number(point && point.y);
                 const slots = getPointRecordSlots(record);
                 for (const slotKey of slots) {
-                    if (nodeKeys.has(slotKey)) continue;
+                    if (!slotMatchesSkippedRunCenterSide(slotKey, record)) continue;
                     if (!resolveTerrainSlotCenter(slotKey)) continue;
                     slotCounts.set(slotKey, (slotCounts.get(slotKey) || 0) + 1);
                 }
             }
             if (slotCounts.size === 0) {
-                throw new Error("terrain polygon smoothing could not resolve a non-terrain hex center for skipped vertices");
+                throw new Error("terrain polygon smoothing could not resolve a forced hex center for skipped vertices");
             }
             const centroid = { x: xSum / runLength, y: ySum / runLength };
             let bestKey = "";
@@ -8296,7 +8585,7 @@ class GameMap {
         const isForcedCandidate = (record) => !!(
             record &&
             record.baseKeep === false &&
-            record.nonGroupCount === 1
+            record.nonGroupCount === record.forcedNonGroupCount
         );
         const addForcedRunPoint = (runStart, runLength) => {
             if (runLength < 3) return;
@@ -8358,6 +8647,9 @@ class GameMap {
             if (pointRecords[p].baseKeep) kept.push(pointRecords[p].point);
         }
         const out = this.simplifyGroundTerrainPolygonPoints(kept);
+        if (out.length < 3 && pointRecords.some(record => record && record.priorityAdjusted === true)) {
+            return simplified;
+        }
         if (out.length < 3) {
             throw new Error(`terrain polygon smoothing produced fewer than three vertices for ${group && group.type ? group.type : "unknown"} terrain`);
         }
@@ -8461,6 +8753,459 @@ class GameMap {
         return out;
     }
 
+    getGroundTerrainHexClipGeometry(node) {
+        const ring = polygonToClipRing2D(this.getGroundTerrainHexCorners(node));
+        if (!ring) {
+            throw new Error("terrain local patch requires a valid edited hex");
+        }
+        return [[ring]];
+    }
+
+    unionGroundTerrainClipGeometries(geometries, label = "terrain local patch") {
+        const api = getPolygonClippingApi2D();
+        if (!api || typeof api.union !== "function") {
+            throw new Error(`${label} requires polygon clipping union`);
+        }
+        const source = Array.isArray(geometries)
+            ? geometries.filter(geometry => !clipGeometryIsEmpty2D(geometry))
+            : [];
+        if (source.length === 0) return [];
+        if (source.length === 1) return source[0];
+        try {
+            return api.union(...source);
+        } catch (err) {
+            throw new Error(`${label} union failed: ${err && err.message ? err.message : err}`);
+        }
+    }
+
+    applyGroundTerrainLocalHexOperand(geometry, hexGeometry, include, label = "terrain local patch") {
+        const api = getPolygonClippingApi2D();
+        if (!api || typeof api.union !== "function" || typeof api.difference !== "function") {
+            throw new Error(`${label} requires polygon clipping union and difference`);
+        }
+        if (include) {
+            if (clipGeometryIsEmpty2D(geometry)) return hexGeometry;
+            try {
+                return api.union(geometry, hexGeometry);
+            } catch (err) {
+                throw new Error(`${label} union operand failed: ${err && err.message ? err.message : err}`);
+            }
+        }
+        if (clipGeometryIsEmpty2D(geometry)) return [];
+        try {
+            return api.difference(geometry, hexGeometry);
+        } catch (err) {
+            throw new Error(`${label} difference operand failed: ${err && err.message ? err.message : err}`);
+        }
+    }
+
+    groundTerrainRingsTouch(pointsA, pointsB) {
+        const a = Array.isArray(pointsA) ? pointsA : [];
+        const b = Array.isArray(pointsB) ? pointsB : [];
+        if (a.length < 3 || b.length < 3) return false;
+        if (!polygonBoundsOverlap2D(getPolygonBounds2D(a), getPolygonBounds2D(b))) return false;
+        for (let i = 0; i < a.length; i++) {
+            const a0 = a[i];
+            const a1 = a[(i + 1) % a.length];
+            for (let j = 0; j < b.length; j++) {
+                if (segmentsIntersect2D(a0, a1, b[j], b[(j + 1) % b.length])) return true;
+            }
+        }
+        return false;
+    }
+
+    groundTerrainPolygonTouchesHex(polygon, hexPoints, hexGeometry) {
+        const api = getPolygonClippingApi2D();
+        if (!api || typeof api.intersection !== "function") {
+            throw new Error("terrain local patch participation requires polygon clipping intersection");
+        }
+        const geometry = this.groundTerrainPolygonToClipGeometry(polygon);
+        try {
+            if (!clipGeometryIsEmpty2D(api.intersection(geometry, hexGeometry))) return true;
+        } catch (err) {
+            throw new Error(`terrain local patch participation failed for ${polygon.type}: ${err && err.message ? err.message : err}`);
+        }
+        if (this.groundTerrainRingsTouch(polygon.points, hexPoints)) return true;
+        const holes = Array.isArray(polygon.holes) ? polygon.holes : [];
+        for (let h = 0; h < holes.length; h++) {
+            if (this.groundTerrainRingsTouch(holes[h], hexPoints)) return true;
+        }
+        return false;
+    }
+
+    groundTerrainPolygonTouchesAnyPatchHex(polygon, nodes) {
+        const patchNodes = Array.isArray(nodes) ? nodes : [];
+        for (let i = 0; i < patchNodes.length; i++) {
+            const node = patchNodes[i];
+            if (!node || node._prototypeVoid === true) continue;
+            if (this.groundTerrainPolygonTouchesHex(
+                polygon,
+                this.getGroundTerrainHexCorners(node),
+                this.getGroundTerrainHexClipGeometry(node)
+            )) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    buildGroundTerrainLocalSmoothingGroup(type, affectedNodes, vertexSlotsByPointKey) {
+        const nodeKeys = new Set();
+        const nodes = [];
+        const addNode = (candidate) => {
+            if (!candidate || candidate._prototypeVoid === true) return;
+            if (this.getGroundTerrainTypeForNode(candidate) !== type) return;
+            const key = this.getGroundTerrainNodeKey(candidate);
+            if (nodeKeys.has(key)) return;
+            nodeKeys.add(key);
+            nodes.push(candidate);
+        };
+        const sourceNodes = Array.isArray(affectedNodes) ? affectedNodes : [];
+        for (let i = 0; i < sourceNodes.length; i++) {
+            addNode(sourceNodes[i]);
+        }
+        if (vertexSlotsByPointKey instanceof Map) {
+            for (const slots of vertexSlotsByPointKey.values()) {
+                if (!(slots instanceof Set)) continue;
+                for (const slotKey of slots) {
+                    const match = /^(-?\d+),(-?\d+)$/.exec(String(slotKey || ""));
+                    if (!match) continue;
+                    addNode(this.getGroundTerrainNodeAtCoord(Number(match[1]), Number(match[2])));
+                }
+            }
+        }
+        return { type, nodes, nodeKeys };
+    }
+
+    getGroundTerrainEditPriority(typeName) {
+        const type = typeof typeName === "string" ? typeName.trim().toLowerCase() : "";
+        if (type === "water") return 0;
+        if (type === "mud") return 1;
+        if (type === "grass") return 2;
+        if (type === "desert" || type === "sand") return 3;
+        throw new Error(`unknown terrain edit priority for "${typeName}"`);
+    }
+
+    getGroundTerrainTypeForSlotKey(slotKey, nodesByKey = null) {
+        const key = String(slotKey || "");
+        if (nodesByKey instanceof Map && nodesByKey.has(key)) {
+            return this.getGroundTerrainTypeForNode(nodesByKey.get(key));
+        }
+        const match = /^(-?\d+),(-?\d+)$/.exec(key);
+        if (match) {
+            const node = this.getGroundTerrainNodeAtCoord(Number(match[1]), Number(match[2]));
+            if (node) {
+                if (nodesByKey instanceof Map) nodesByKey.set(key, node);
+                return this.getGroundTerrainTypeForNode(node);
+            }
+            return "grass";
+        }
+        if (key.startsWith("missing:")) return "grass";
+        throw new Error(`terrain smoothing could not resolve slot terrain for "${key}"`);
+    }
+
+    getGroundTerrainBoundarySlotStats(type, slots, nodesByKey = null) {
+        if (!(slots instanceof Set)) {
+            throw new Error("terrain smoothing boundary stats require vertex slots");
+        }
+        const groupType = typeof type === "string" && type.length > 0 ? type : "grass";
+        const groupPriority = this.getGroundTerrainEditPriority(groupType);
+        let groupCount = 0;
+        let higherPriorityNeighbor = false;
+        for (const slotKey of slots) {
+            const slotType = this.getGroundTerrainTypeForSlotKey(slotKey, nodesByKey);
+            if (slotType === groupType) {
+                groupCount += 1;
+                continue;
+            }
+            if (this.getGroundTerrainEditPriority(slotType) > groupPriority) {
+                higherPriorityNeighbor = true;
+            }
+        }
+        return {
+            groupCount,
+            nonGroupCount: 3 - groupCount,
+            higherPriorityNeighbor
+        };
+    }
+
+    getGroundTerrainBoundaryKeepNonGroupCount(type, slots, nodesByKey = null, options = {}) {
+        const stats = this.getGroundTerrainBoundarySlotStats(type, slots, nodesByKey);
+        const normalKeepNonGroupCount = options && options.isHole === true ? 1 : 2;
+        const suppressPriorityInversion = !!(options && options.suppressPriorityInversion === true);
+        return {
+            ...stats,
+            keepNonGroupCount: stats.higherPriorityNeighbor &&
+                !suppressPriorityInversion &&
+                !(options && options.isHole === true)
+                ? 3 - normalKeepNonGroupCount
+                : normalKeepNonGroupCount
+        };
+    }
+
+    smoothGroundTerrainLocalPatchRingPoints(points, group, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes, options = {}) {
+        const simplified = this.simplifyGroundTerrainPolygonPoints(points);
+        if (simplified.length < 3) return simplified;
+        const nodeKeys = group && group.nodeKeys instanceof Set ? group.nodeKeys : new Set();
+        const localVertexSlotsByPointKey = this.buildGroundTerrainVertexSlotMap(group);
+        const nodesByKey = new Map();
+        const groupNodes = Array.isArray(group && group.nodes) ? group.nodes : [];
+        for (let n = 0; n < groupNodes.length; n++) {
+            const groupNode = groupNodes[n];
+            if (!groupNode) continue;
+            nodesByKey.set(this.getGroundTerrainNodeKey(groupNode), groupNode);
+        }
+        const pointRecords = simplified.map(point => {
+            const affected = this.groundTerrainPointTouchesNodeKeys(
+                point,
+                affectedNodeKeys,
+                vertexSlotsByPointKey,
+                affectedNodes
+            );
+            if (!affected) {
+                return { point, affected: false, nonGroupCount: null, baseKeep: true };
+            }
+            const slots = this.getGroundTerrainReplacementPointSlots(
+                point,
+                localVertexSlotsByPointKey,
+                groupNodes
+            );
+            if (!(slots instanceof Set) || slots.size !== 3) {
+                const onAffectedBoundary = this.groundTerrainPointTouchesAnyHexBoundary(point, affectedNodes);
+                return {
+                    point,
+                    affected: true,
+                    nonGroupCount: null,
+                    keepNonGroupCount: null,
+                    forcedNonGroupCount: null,
+                    priorityAdjusted: false,
+                    baseKeep: onAffectedBoundary,
+                    needsAnchorCheck: !onAffectedBoundary
+                };
+            }
+            const stats = this.getGroundTerrainBoundaryKeepNonGroupCount(
+                group && group.type ? group.type : "grass",
+                slots,
+                nodesByKey,
+                options
+            );
+            return {
+                point,
+                affected: true,
+                nonGroupCount: stats.nonGroupCount,
+                keepNonGroupCount: stats.keepNonGroupCount,
+                forcedNonGroupCount: 3 - stats.keepNonGroupCount,
+                priorityAdjusted: stats.higherPriorityNeighbor,
+                baseKeep: stats.nonGroupCount === stats.keepNonGroupCount
+            };
+        });
+        for (let i = 0; i < pointRecords.length; i++) {
+            const record = pointRecords[i];
+            if (!record || record.needsAnchorCheck !== true) continue;
+            const prev = pointRecords[(i + pointRecords.length - 1) % pointRecords.length];
+            const next = pointRecords[(i + 1) % pointRecords.length];
+            record.baseKeep = !!(
+                (prev && prev.affected === false) ||
+                (next && next.affected === false)
+            );
+        }
+        const forcedPointsByRunStart = new Map();
+        const getPointRecordSlots = (record) => {
+            if (!record) return null;
+            const slots = this.getGroundTerrainReplacementPointSlots(
+                record.point,
+                localVertexSlotsByPointKey,
+                groupNodes
+            );
+            if (!(slots instanceof Set)) {
+                throw new Error("terrain local patch smoothing could not resolve skipped vertex slots");
+            }
+            return slots;
+        };
+        const resolveTerrainSlotCenter = (slotKey) => {
+            const existingNode = nodesByKey.get(slotKey);
+            if (existingNode) {
+                const x = Number(existingNode.x);
+                const y = Number(existingNode.y);
+                return (Number.isFinite(x) && Number.isFinite(y)) ? { x, y } : null;
+            }
+            const match = /^(-?\d+),(-?\d+)$/.exec(String(slotKey || ""));
+            if (!match) return null;
+            const xindex = Number(match[1]);
+            const yindex = Number(match[2]);
+            const resolvedNode = this.getGroundTerrainNodeAtCoord(xindex, yindex);
+            if (resolvedNode) {
+                nodesByKey.set(slotKey, resolvedNode);
+                const x = Number(resolvedNode.x);
+                const y = Number(resolvedNode.y);
+                return (Number.isFinite(x) && Number.isFinite(y)) ? { x, y } : null;
+            }
+            return {
+                x: xindex * 0.866,
+                y: yindex + (xindex % 2 === 0 ? 0.5 : 0)
+            };
+        };
+        const groupType = group && group.type ? group.type : "grass";
+        const slotMatchesSkippedRunCenterSide = (slotKey, record) => {
+            const slotType = this.getGroundTerrainTypeForSlotKey(slotKey, nodesByKey);
+            const slotIsGroup = slotType === groupType;
+            const useGroupSide = Number(record && record.forcedNonGroupCount) >= 2;
+            return useGroupSide ? slotIsGroup : !slotIsGroup;
+        };
+        const getSkippedRunHexCenter = (runStart, runLength) => {
+            const count = pointRecords.length;
+            const slotCounts = new Map();
+            let xSum = 0;
+            let ySum = 0;
+            for (let r = 0; r < runLength; r++) {
+                const record = pointRecords[(runStart + r) % count];
+                const point = record && record.point;
+                xSum += Number(point && point.x);
+                ySum += Number(point && point.y);
+                const slots = getPointRecordSlots(record);
+                for (const slotKey of slots) {
+                    if (!slotMatchesSkippedRunCenterSide(slotKey, record)) continue;
+                    if (!resolveTerrainSlotCenter(slotKey)) continue;
+                    slotCounts.set(slotKey, (slotCounts.get(slotKey) || 0) + 1);
+                }
+            }
+            if (slotCounts.size === 0) {
+                throw new Error("terrain local patch smoothing could not resolve a forced hex center for skipped vertices");
+            }
+            const centroid = { x: xSum / runLength, y: ySum / runLength };
+            let bestKey = "";
+            let bestCount = -1;
+            let bestDistance = Infinity;
+            for (const [slotKey, slotCount] of slotCounts.entries()) {
+                const center = resolveTerrainSlotCenter(slotKey);
+                if (!center) continue;
+                const distance = Math.hypot(center.x - centroid.x, center.y - centroid.y);
+                if (
+                    slotCount > bestCount ||
+                    (slotCount === bestCount && distance < bestDistance)
+                ) {
+                    bestKey = slotKey;
+                    bestCount = slotCount;
+                    bestDistance = distance;
+                }
+            }
+            if (!bestKey) {
+                throw new Error("terrain local patch smoothing resolved skipped-run hex candidates without finite centers");
+            }
+            const center = resolveTerrainSlotCenter(bestKey);
+            if (!center) {
+                throw new Error("terrain local patch smoothing resolved a skipped-run hex center without finite coordinates");
+            }
+            return center;
+        };
+        const isForcedCandidate = (record) => !!(
+            record &&
+            record.affected === true &&
+            record.baseKeep === false &&
+            record.nonGroupCount === record.forcedNonGroupCount
+        );
+        const addForcedRunPoint = (runStart, runLength) => {
+            if (runLength < 3) return;
+            const count = pointRecords.length;
+            if (runLength === 3) {
+                forcedPointsByRunStart.set(runStart, getSkippedRunHexCenter(runStart, 3));
+                return;
+            }
+            if (runLength === 4) {
+                for (let windowStart = 0; windowStart <= 1; windowStart++) {
+                    let xSum = 0;
+                    let ySum = 0;
+                    for (let r = 0; r < 3; r++) {
+                        const point = pointRecords[(runStart + windowStart + r) % count].point;
+                        xSum += Number(point.x);
+                        ySum += Number(point.y);
+                    }
+                    forcedPointsByRunStart.set((runStart + windowStart) % count, {
+                        x: xSum / 3,
+                        y: ySum / 3
+                    });
+                }
+                return;
+            }
+            let xSum = 0;
+            let ySum = 0;
+            for (let r = 0; r < runLength; r++) {
+                const point = pointRecords[(runStart + r) % count].point;
+                xSum += Number(point.x);
+                ySum += Number(point.y);
+            }
+            forcedPointsByRunStart.set(runStart, {
+                x: xSum / runLength,
+                y: ySum / runLength
+            });
+        };
+        if (pointRecords.length >= 3) {
+            const count = pointRecords.length;
+            const startIndex = pointRecords.findIndex(record => !isForcedCandidate(record));
+            if (startIndex >= 0) {
+                let runStart = -1;
+                let runLength = 0;
+                for (let step = 1; step <= count; step++) {
+                    const index = (startIndex + step) % count;
+                    if (isForcedCandidate(pointRecords[index])) {
+                        if (runStart < 0) runStart = index;
+                        runLength += 1;
+                    } else if (runStart >= 0) {
+                        addForcedRunPoint(runStart, runLength);
+                        runStart = -1;
+                        runLength = 0;
+                    }
+                }
+            }
+        }
+        const kept = [];
+        for (let p = 0; p < pointRecords.length; p++) {
+            if (forcedPointsByRunStart.has(p)) kept.push(forcedPointsByRunStart.get(p));
+            if (pointRecords[p].baseKeep) kept.push(pointRecords[p].point);
+        }
+        const out = this.simplifyGroundTerrainPolygonPoints(kept);
+        if (out.length < 3 && pointRecords.some(record => record && record.priorityAdjusted === true)) {
+            return simplified;
+        }
+        if (out.length < 3) {
+            throw new Error(`terrain local patch smoothing produced fewer than three vertices for ${group && group.type ? group.type : "unknown"} terrain`);
+        }
+        return out;
+    }
+
+    groundTerrainClipGeometryToLocalPatchPolygons(type, geometry, group, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes) {
+        this.getGroundTerrainTextureIdForType(type);
+        if (clipGeometryIsEmpty2D(geometry)) return [];
+        const out = [];
+        for (let p = 0; p < geometry.length; p++) {
+            const polygon = geometry[p];
+            if (!Array.isArray(polygon) || !Array.isArray(polygon[0])) {
+                throw new Error(`terrain local patch produced malformed geometry for ${type}`);
+            }
+            const points = this.smoothGroundTerrainLocalPatchRingPoints(
+                clipRingToPolygonPoints2D(polygon[0], `terrain ${type} local patch ring`),
+                group,
+                affectedNodeKeys,
+                vertexSlotsByPointKey,
+                affectedNodes,
+                { isHole: false }
+            );
+            const holes = [];
+            for (let h = 1; h < polygon.length; h++) {
+                holes.push(this.smoothGroundTerrainLocalPatchRingPoints(
+                    clipRingToPolygonPoints2D(polygon[h], `terrain ${type} local patch hole`),
+                    group,
+                    affectedNodeKeys,
+                    vertexSlotsByPointKey,
+                    affectedNodes,
+                    { isHole: true }
+                ));
+            }
+            out.push(holes.length > 0 ? { type, points, holes } : { type, points });
+        }
+        return out;
+    }
+
     collectGroundTerrainLocalPatchNodes(node, options = {}) {
         if (!node) return [];
         const sectionKey = options && typeof options.sectionKey === "string" ? options.sectionKey : "";
@@ -8492,6 +9237,45 @@ class GameMap {
                 Number(node.xindex) + Number(offset.x),
                 Number(node.yindex) + Number(offset.y)
             ));
+        }
+        return Array.from(nodesByKey.values());
+    }
+
+    collectGroundTerrainExpandedLocalAffectedNodes(patchNodes, options = {}) {
+        const sourceNodes = Array.isArray(patchNodes) ? patchNodes : [];
+        const sectionKey = options && typeof options.sectionKey === "string" ? options.sectionKey : "";
+        const dirs = [1, 3, 5, 7, 9, 11];
+        const nodesByKey = new Map();
+        const addNode = (candidate) => {
+            if (!candidate || candidate._prototypeVoid === true) return;
+            if (sectionKey) {
+                const candidateSectionKey = typeof candidate._prototypeSectionKey === "string" && candidate._prototypeSectionKey.length > 0
+                    ? candidate._prototypeSectionKey
+                    : (typeof candidate.ownerSectionKey === "string" ? candidate.ownerSectionKey : "");
+                if (candidateSectionKey !== sectionKey) return;
+            }
+            nodesByKey.set(this.getGroundTerrainNodeKey(candidate), candidate);
+        };
+        const resolveNeighbor = (node, direction) => {
+            const neighbor = node && node.neighbors && node.neighbors[direction]
+                ? node.neighbors[direction]
+                : null;
+            if (neighbor) return neighbor;
+            const offset = node && node.neighborOffsets && node.neighborOffsets[direction]
+                ? node.neighborOffsets[direction]
+                : null;
+            if (!offset || !Number.isFinite(offset.x) || !Number.isFinite(offset.y)) return null;
+            return this.getGroundTerrainNodeAtCoord(
+                Number(node.xindex) + Number(offset.x),
+                Number(node.yindex) + Number(offset.y)
+            );
+        };
+        for (let i = 0; i < sourceNodes.length; i++) {
+            const node = sourceNodes[i];
+            addNode(node);
+            for (let d = 0; d < dirs.length; d++) {
+                addNode(resolveNeighbor(node, dirs[d]));
+            }
         }
         return Array.from(nodesByKey.values());
     }
@@ -8568,11 +9352,81 @@ class GameMap {
         return 1e-3;
     }
 
+    getGroundTerrainRepairPointKey(point) {
+        const q = Math.round(1 / this.getGroundTerrainVertexRepairEpsilon());
+        return `${Math.round(Number(point && point.x) * q)},${Math.round(Number(point && point.y) * q)}`;
+    }
+
+    groundTerrainPointTouchesHexBoundary(point, node, eps = this.getGroundTerrainVertexRepairEpsilon()) {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !node) return false;
+        const corners = this.getGroundTerrainHexCorners(node);
+        const epsSq = eps * eps;
+        for (let i = 0; i < corners.length; i++) {
+            const a = corners[i];
+            const b = corners[(i + 1) % corners.length];
+            if (getPointSegmentDistanceSq2D(x, y, a.x, a.y, b.x, b.y) <= epsSq) return true;
+        }
+        return false;
+    }
+
+    groundTerrainPointTouchesAnyHexBoundary(point, nodes, eps = this.getGroundTerrainVertexRepairEpsilon()) {
+        const sourceNodes = Array.isArray(nodes) ? nodes : [];
+        for (let i = 0; i < sourceNodes.length; i++) {
+            if (this.groundTerrainPointTouchesHexBoundary(point, sourceNodes[i], eps)) return true;
+        }
+        return false;
+    }
+
     getGroundTerrainPointSlots(point, vertexSlotsByPointKey) {
         if (!(vertexSlotsByPointKey instanceof Map)) {
             throw new Error("terrain vertex repair requires a vertex slot map");
         }
         return vertexSlotsByPointKey.get(this.getGroundTerrainPointKey(point)) || null;
+    }
+
+    getGroundTerrainReplacementPointSlots(point, vertexSlotsByPointKey, affectedNodes = null) {
+        const exact = this.getGroundTerrainPointSlots(point, vertexSlotsByPointKey);
+        if (exact instanceof Set) return exact;
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        const eps = this.getGroundTerrainVertexRepairEpsilon();
+        const epsSq = eps * eps;
+        const nodes = Array.isArray(affectedNodes) ? affectedNodes : [];
+        let best = null;
+        let bestDistanceSq = Infinity;
+        for (let n = 0; n < nodes.length; n++) {
+            const corners = this.getGroundTerrainHexCorners(nodes[n]);
+            for (let c = 0; c < corners.length; c++) {
+                const corner = corners[c];
+                const dx = Number(corner.x) - x;
+                const dy = Number(corner.y) - y;
+                const distanceSq = dx * dx + dy * dy;
+                if (distanceSq > epsSq || distanceSq >= bestDistanceSq) continue;
+                const slots = vertexSlotsByPointKey.get(this.getGroundTerrainPointKey(corner));
+                if (!(slots instanceof Set)) continue;
+                best = slots;
+                bestDistanceSq = distanceSq;
+            }
+        }
+        return best;
+    }
+
+    getGroundTerrainNeighborNodeForDirection(node, direction) {
+        const neighbor = node && node.neighbors && node.neighbors[direction]
+            ? node.neighbors[direction]
+            : null;
+        if (neighbor) return neighbor;
+        const offset = node && node.neighborOffsets && node.neighborOffsets[direction]
+            ? node.neighborOffsets[direction]
+            : null;
+        if (!offset || !Number.isFinite(offset.x) || !Number.isFinite(offset.y)) return null;
+        return this.getGroundTerrainNodeAtCoord(
+            Number(node.xindex) + Number(offset.x),
+            Number(node.yindex) + Number(offset.y)
+        );
     }
 
     groundTerrainPointTouchesHex(point, node, eps = this.getGroundTerrainVertexRepairEpsilon()) {
@@ -8676,6 +9530,61 @@ class GameMap {
         throw new Error("terrain ring path could not reach its endpoint");
     }
 
+    dedupeGroundTerrainPathPoints(points) {
+        if (!Array.isArray(points)) return [];
+        const out = [];
+        for (let i = 0; i < points.length; i++) {
+            const x = Number(points[i] && points[i].x);
+            const y = Number(points[i] && points[i].y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                throw new Error("terrain replacement path contains a non-finite point");
+            }
+            const prev = out[out.length - 1];
+            if (prev && Math.abs(prev.x - x) < 1e-7 && Math.abs(prev.y - y) < 1e-7) continue;
+            out.push({ x, y });
+        }
+        return out;
+    }
+
+    simplifyGroundTerrainPathPoints(points) {
+        const out = this.dedupeGroundTerrainPathPoints(points);
+        let changed = true;
+        while (changed && out.length > 2) {
+            changed = false;
+            for (let i = 1; i < out.length - 1; i++) {
+                const prev = out[i - 1];
+                const cur = out[i];
+                const next = out[i + 1];
+                const ax = cur.x - prev.x;
+                const ay = cur.y - prev.y;
+                const bx = next.x - cur.x;
+                const by = next.y - cur.y;
+                if (Math.abs(ax * by - ay * bx) < 1e-7) {
+                    out.splice(i, 1);
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+
+    getGroundTerrainPathLength(points) {
+        const path = Array.isArray(points) ? points : [];
+        let length = 0;
+        for (let i = 1; i < path.length; i++) {
+            const ax = Number(path[i - 1] && path[i - 1].x);
+            const ay = Number(path[i - 1] && path[i - 1].y);
+            const bx = Number(path[i] && path[i].x);
+            const by = Number(path[i] && path[i].y);
+            if (![ax, ay, bx, by].every(Number.isFinite)) {
+                throw new Error("terrain replacement path length requires finite points");
+            }
+            length += Math.hypot(bx - ax, by - ay);
+        }
+        return length;
+    }
+
     groundTerrainPathTouchesAffectedNodes(points, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes = null) {
         const path = Array.isArray(points) ? points : [];
         for (let i = 0; i < path.length; i++) {
@@ -8684,46 +9593,876 @@ class GameMap {
         return false;
     }
 
-    spliceGroundTerrainAffectedRun(points, run, replacementPolygons, type, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes = null) {
-        const ring = this.simplifyGroundTerrainPolygonPoints(points);
-        if (!run || run.all === true) {
-            return null;
+    groundTerrainSegmentTouchesHex(a, b, node) {
+        if (!a || !b || !node) return false;
+        const ax = Number(a.x);
+        const ay = Number(a.y);
+        const bx = Number(b.x);
+        const by = Number(b.y);
+        if (![ax, ay, bx, by].every(Number.isFinite)) return false;
+        if (this.groundTerrainPointTouchesHex(a, node) || this.groundTerrainPointTouchesHex(b, node)) return true;
+        const corners = this.getGroundTerrainHexCorners(node);
+        const mid = { x: (ax + bx) * 0.5, y: (ay + by) * 0.5 };
+        if (pointInPolygon2D(mid.x, mid.y, corners)) return true;
+        for (let i = 0; i < corners.length; i++) {
+            if (segmentsIntersect2D(a, b, corners[i], corners[(i + 1) % corners.length])) return true;
         }
-        const beforeIndex = (run.start + ring.length - 1) % ring.length;
-        const afterIndex = (run.end + 1) % ring.length;
-        let best = null;
+        return false;
+    }
+
+    groundTerrainPathTouchesAffectedArea(points, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes = null) {
+        if (this.groundTerrainPathTouchesAffectedNodes(points, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes)) {
+            return true;
+        }
+        const path = Array.isArray(points) ? points : [];
+        const nodes = Array.isArray(affectedNodes) ? affectedNodes : [];
+        for (let i = 1; i < path.length; i++) {
+            for (let n = 0; n < nodes.length; n++) {
+                if (this.groundTerrainSegmentTouchesHex(path[i - 1], path[i], nodes[n])) return true;
+            }
+        }
+        return false;
+    }
+
+    buildGroundTerrainLocalBoundaryGraph(type, affectedNodes) {
+        this.getGroundTerrainTextureIdForType(type);
+        const dirs = [1, 3, 5, 7, 9, 11];
+        const nodes = Array.isArray(affectedNodes) ? affectedNodes : [];
+        const vertices = new Map();
+        const edges = new Map();
+        const addVertex = (point) => {
+            const key = this.getGroundTerrainRepairPointKey(point);
+            if (!vertices.has(key)) {
+                vertices.set(key, {
+                    key,
+                    point: { x: Number(point.x), y: Number(point.y) },
+                    neighbors: new Map()
+                });
+            }
+            return vertices.get(key);
+        };
+        const addEdge = (a, b) => {
+            const av = addVertex(a);
+            const bv = addVertex(b);
+            if (av.key === bv.key) return;
+            const edgeKey = av.key < bv.key ? `${av.key}:${bv.key}` : `${bv.key}:${av.key}`;
+            if (edges.has(edgeKey)) return;
+            const length = Math.hypot(bv.point.x - av.point.x, bv.point.y - av.point.y);
+            if (!(length > 1e-9)) {
+                throw new Error(`terrain local boundary graph produced a zero-length edge for ${type}`);
+            }
+            edges.set(edgeKey, {
+                key: edgeKey,
+                aKey: av.key,
+                bKey: bv.key,
+                a: av.point,
+                b: bv.point,
+                length
+            });
+            av.neighbors.set(bv.key, length);
+            bv.neighbors.set(av.key, length);
+        };
+        for (let n = 0; n < nodes.length; n++) {
+            const node = nodes[n];
+            if (!node || node._prototypeVoid === true) continue;
+            const corners = this.getGroundTerrainHexCorners(node);
+            const nodeIsType = this.getGroundTerrainTypeForNode(node) === type;
+            for (let c = 0; c < 6; c++) {
+                const neighbor = this.getGroundTerrainNeighborNodeForDirection(node, dirs[c]);
+                const neighborIsType = !!(
+                    neighbor &&
+                    neighbor._prototypeVoid !== true &&
+                    this.getGroundTerrainTypeForNode(neighbor) === type
+                );
+                if (nodeIsType === neighborIsType) continue;
+                addEdge(corners[c], corners[(c + 1) % 6]);
+            }
+        }
+        return { type, vertices, edges };
+    }
+
+    getGroundTerrainBoundaryGraphPointCandidates(graph, anchor, reference, affectedNodes) {
+        if (!graph || !(graph.vertices instanceof Map)) {
+            throw new Error("terrain local boundary graph candidates require a graph");
+        }
+        const ax = Number(anchor && anchor.x);
+        const ay = Number(anchor && anchor.y);
+        const rx = Number(reference && reference.x);
+        const ry = Number(reference && reference.y);
+        if (![ax, ay, rx, ry].every(Number.isFinite)) {
+            throw new Error("terrain local boundary graph candidates require finite anchor points");
+        }
+        const candidates = [];
+        const nodes = Array.isArray(affectedNodes) ? affectedNodes : [];
+        for (const vertex of graph.vertices.values()) {
+            const point = vertex.point;
+            const anchorDistance = Math.hypot(point.x - ax, point.y - ay);
+            const referenceDistance = Math.hypot(point.x - rx, point.y - ry);
+            let touchesAffected = false;
+            for (let n = 0; n < nodes.length; n++) {
+                if (this.groundTerrainSegmentTouchesHex(anchor, point, nodes[n])) {
+                    touchesAffected = true;
+                    break;
+                }
+            }
+            candidates.push({
+                key: vertex.key,
+                point,
+                anchorDistance,
+                referenceDistance,
+                score: (referenceDistance * 3) + anchorDistance + (touchesAffected ? 0 : 100)
+            });
+        }
+        candidates.sort((a, b) => a.score - b.score);
+        return candidates.slice(0, 12);
+    }
+
+    getGroundTerrainBoundaryGraphComponentEdgeCount(graph, startKey) {
+        if (!graph || !(graph.vertices instanceof Map)) {
+            throw new Error("terrain local boundary graph component count requires a graph");
+        }
+        if (!graph.vertices.has(startKey)) return 0;
+        const visited = new Set();
+        const stack = [startKey];
+        while (stack.length > 0) {
+            const key = stack.pop();
+            if (!key || visited.has(key)) continue;
+            visited.add(key);
+            const vertex = graph.vertices.get(key);
+            if (!vertex || !(vertex.neighbors instanceof Map)) continue;
+            for (const neighborKey of vertex.neighbors.keys()) {
+                if (!visited.has(neighborKey)) stack.push(neighborKey);
+            }
+        }
+        let edgeRefs = 0;
+        for (const key of visited) {
+            const vertex = graph.vertices.get(key);
+            if (!vertex || !(vertex.neighbors instanceof Map)) continue;
+            for (const neighborKey of vertex.neighbors.keys()) {
+                if (visited.has(neighborKey)) edgeRefs += 1;
+            }
+        }
+        return edgeRefs / 2;
+    }
+
+    getGroundTerrainBoundaryGraphSimplePaths(graph, startKey, endKey, maxPaths = 128) {
+        if (!graph || !(graph.vertices instanceof Map)) {
+            throw new Error("terrain local boundary graph path enumeration requires a graph");
+        }
+        if (!graph.vertices.has(startKey) || !graph.vertices.has(endKey)) return [];
+        const paths = [];
+        const stack = [{
+            key: startKey,
+            path: [startKey],
+            visited: new Set([startKey])
+        }];
+        while (stack.length > 0) {
+            const current = stack.pop();
+            if (!current || !current.key) continue;
+            if (current.key === endKey) {
+                paths.push(current.path);
+                if (paths.length > maxPaths) {
+                    throw new Error("terrain local boundary graph produced too many possible border paths");
+                }
+                continue;
+            }
+            if (current.path.length > graph.vertices.size) continue;
+            const vertex = graph.vertices.get(current.key);
+            if (!vertex || !(vertex.neighbors instanceof Map)) continue;
+            for (const neighborKey of vertex.neighbors.keys()) {
+                if (current.visited.has(neighborKey)) continue;
+                const nextVisited = new Set(current.visited);
+                nextVisited.add(neighborKey);
+                stack.push({
+                    key: neighborKey,
+                    path: current.path.concat(neighborKey),
+                    visited: nextVisited
+                });
+            }
+        }
+        return paths.map(pathKeys => pathKeys.map(pathKey => graph.vertices.get(pathKey).point));
+    }
+
+    getGroundTerrainReplacementIndexForAnchoredPath(replacementPolygons, type, beforeAnchor, afterAnchor, path, options = {}) {
         const replacements = Array.isArray(replacementPolygons) ? replacementPolygons : [];
+        const wantHole = options && options.isHole === true;
         for (let p = 0; p < replacements.length; p++) {
             const replacement = replacements[p];
             if (!replacement || replacement.type !== type) continue;
-            const replacementRing = this.simplifyGroundTerrainPolygonPoints(replacement.points);
-            const beforeNewIndex = this.findGroundTerrainRingPointIndex(replacementRing, ring[beforeIndex]);
-            const afterNewIndex = this.findGroundTerrainRingPointIndex(replacementRing, ring[afterIndex]);
-            if (beforeNewIndex < 0 || afterNewIndex < 0 || beforeNewIndex === afterNewIndex) continue;
-            for (const step of [1, -1]) {
-                const newPath = this.getGroundTerrainRingPath(replacementRing, beforeNewIndex, afterNewIndex, step);
-                if (!this.groundTerrainPathTouchesAffectedNodes(newPath, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes)) continue;
-                if (!best || newPath.length < best.path.length) {
-                    best = { replacementIndex: p, path: newPath };
+            const rings = wantHole
+                ? (Array.isArray(replacement.holes) ? replacement.holes : [])
+                : [replacement.points];
+            for (let r = 0; r < rings.length; r++) {
+                const ring = this.simplifyGroundTerrainPolygonPoints(rings[r]);
+                if (
+                    this.findGroundTerrainRingPointIndex(ring, beforeAnchor) >= 0 &&
+                    this.findGroundTerrainRingPointIndex(ring, afterAnchor) >= 0
+                ) {
+                    return p;
+                }
+            }
+        }
+        let bestIndex = -1;
+        let bestDistanceSq = Infinity;
+        const pathPoints = Array.isArray(path) ? path : [];
+        for (let p = 0; p < replacements.length; p++) {
+            const replacement = replacements[p];
+            if (!replacement || replacement.type !== type) continue;
+            const rings = [replacement.points];
+            if (Array.isArray(replacement.holes)) rings.push(...replacement.holes);
+            for (let r = 0; r < rings.length; r++) {
+                const ring = this.simplifyGroundTerrainPolygonPoints(rings[r]);
+                if (ring.length < 3) continue;
+                for (let i = 1; i < pathPoints.length - 1; i++) {
+                    const x = Number(pathPoints[i] && pathPoints[i].x);
+                    const y = Number(pathPoints[i] && pathPoints[i].y);
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                    const distanceSq = getPointPolygonBoundaryDistanceSq2D(x, y, ring);
+                    if (distanceSq < bestDistanceSq) {
+                        bestDistanceSq = distanceSq;
+                        bestIndex = p;
+                    }
+                }
+            }
+        }
+        return bestIndex;
+    }
+
+    getGroundTerrainPathReplacementHoleOverlapCount(path, replacementPolygons, type) {
+        const points = Array.isArray(path) ? path : [];
+        if (points.length < 2) return 0;
+        const replacements = Array.isArray(replacementPolygons) ? replacementPolygons : [];
+        const holeRings = [];
+        for (let p = 0; p < replacements.length; p++) {
+            const replacement = replacements[p];
+            if (!replacement || replacement.type !== type || !Array.isArray(replacement.holes)) continue;
+            for (let h = 0; h < replacement.holes.length; h++) {
+                const ring = this.simplifyGroundTerrainPolygonPoints(replacement.holes[h]);
+                if (ring.length >= 3) holeRings.push(ring);
+            }
+        }
+        if (holeRings.length === 0) return 0;
+        const epsSq = this.getGroundTerrainVertexRepairEpsilon() * this.getGroundTerrainVertexRepairEpsilon();
+        let count = 0;
+        for (let i = 1; i < points.length; i++) {
+            const ax = Number(points[i - 1] && points[i - 1].x);
+            const ay = Number(points[i - 1] && points[i - 1].y);
+            const bx = Number(points[i] && points[i].x);
+            const by = Number(points[i] && points[i].y);
+            if (![ax, ay, bx, by].every(Number.isFinite)) {
+                throw new Error(`terrain local replacement path for ${type} contains a non-finite hole-overlap segment`);
+            }
+            const midpoint = { x: (ax + bx) * 0.5, y: (ay + by) * 0.5 };
+            for (let h = 0; h < holeRings.length; h++) {
+                if (getPointPolygonBoundaryDistanceSq2D(midpoint.x, midpoint.y, holeRings[h]) <= epsSq) {
+                    count += 1;
+                    break;
+                }
+            }
+        }
+        return count;
+    }
+
+    getGroundTerrainBoundaryGraphReplacementPathForRun(points, run, replacementPolygons, type, vertexSlotsByPointKey, affectedNodes = null, options = {}) {
+        const ring = this.simplifyGroundTerrainPolygonPoints(points);
+        if (!run || run.all === true) return null;
+        const beforeIndex = (run.start + ring.length - 1) % ring.length;
+        const afterIndex = (run.end + 1) % ring.length;
+        const beforeAnchor = ring[beforeIndex];
+        const afterAnchor = ring[afterIndex];
+        const graph = this.buildGroundTerrainLocalBoundaryGraph(type, affectedNodes);
+        if (!graph || !(graph.edges instanceof Map) || graph.edges.size === 0) {
+            throw new Error(`terrain local boundary graph has no replacement edges for ${type}`);
+        }
+        const startCandidates = this.getGroundTerrainBoundaryGraphPointCandidates(
+            graph,
+            beforeAnchor,
+            ring[run.start],
+            affectedNodes
+        );
+        const endCandidates = this.getGroundTerrainBoundaryGraphPointCandidates(
+            graph,
+            afterAnchor,
+            ring[run.end],
+            affectedNodes
+        );
+        let best = null;
+        for (let s = 0; s < startCandidates.length; s++) {
+            for (let e = 0; e < endCandidates.length; e++) {
+                const graphPaths = this.getGroundTerrainBoundaryGraphSimplePaths(
+                    graph,
+                    startCandidates[s].key,
+                    endCandidates[e].key
+                );
+                if (graphPaths.length === 0) continue;
+                const componentEdgeCount = this.getGroundTerrainBoundaryGraphComponentEdgeCount(
+                    graph,
+                    startCandidates[s].key
+                );
+                for (let p = 0; p < graphPaths.length; p++) {
+                    const graphPath = graphPaths[p];
+                    const rawPath = this.dedupeGroundTerrainPathPoints([
+                        beforeAnchor,
+                        ...graphPath,
+                        afterAnchor
+                    ]);
+                    if (!this.groundTerrainPathTouchesAffectedArea(rawPath, new Set(), vertexSlotsByPointKey, affectedNodes)) continue;
+                    const pathEdgeCount = Math.max(0, graphPath.length - 1);
+                    const missingComponentEdges = Math.max(0, componentEdgeCount - pathEdgeCount);
+                    const graphLength = this.getGroundTerrainPathLength(graphPath);
+                    const attachmentLength = startCandidates[s].anchorDistance + endCandidates[e].anchorDistance;
+                    const endpointDistance = startCandidates[s].referenceDistance + endCandidates[e].referenceDistance;
+                    const holeBoundaryOverlap = options && options.isHole === true
+                        ? 0
+                        : this.getGroundTerrainPathReplacementHoleOverlapCount(graphPath, replacementPolygons, type);
+                    const score = (holeBoundaryOverlap * 1000000000) +
+                        (missingComponentEdges * 1000) +
+                        attachmentLength +
+                        endpointDistance +
+                        (graphLength * 0.001);
+                    if (!best || score < best.score) {
+                        best = { rawPath, score };
+                    }
                 }
             }
         }
         if (!best) {
-            throw new Error(`terrain polygon repair could not find replacement anchors for ${type}`);
+            throw new Error(`terrain local boundary graph could not bridge replacement anchors for ${type}`);
         }
-        const oldReturnPath = this.getGroundTerrainRingPath(ring, afterIndex, beforeIndex, 1);
-        const spliced = this.simplifyGroundTerrainPolygonPoints(
-            best.path.concat(oldReturnPath.slice(1, oldReturnPath.length - 1))
+        const smoothingGroup = this.buildGroundTerrainLocalSmoothingGroup(
+            type,
+            affectedNodes,
+            vertexSlotsByPointKey
         );
+        const path = this.smoothGroundTerrainReplacementPathPoints(
+            best.rawPath,
+            smoothingGroup,
+            vertexSlotsByPointKey,
+            affectedNodes,
+            {
+                ...options,
+                isHole: options && options.isHole === true
+            }
+        );
+        return {
+            replacementIndex: this.getGroundTerrainReplacementIndexForAnchoredPath(
+                replacementPolygons,
+                type,
+                beforeAnchor,
+                afterAnchor,
+                best.rawPath,
+                options
+            ),
+            rawPath: best.rawPath,
+            path
+        };
+    }
+
+    smoothGroundTerrainReplacementPathPoints(points, group, vertexSlotsByPointKey, affectedNodes, options = {}) {
+        const path = this.dedupeGroundTerrainPathPoints(points);
+        if (path.length < 2) {
+            throw new Error(`terrain local replacement path for ${group && group.type ? group.type : "unknown"} has fewer than two points`);
+        }
+        const nodeKeys = group && group.nodeKeys instanceof Set ? group.nodeKeys : new Set();
+        const nodesByKey = new Map();
+        const groupNodes = Array.isArray(group && group.nodes) ? group.nodes : [];
+        for (let n = 0; n < groupNodes.length; n++) {
+            const node = groupNodes[n];
+            if (!node) continue;
+            nodesByKey.set(this.getGroundTerrainNodeKey(node), node);
+        }
+        const pointRecords = path.map((point, index) => {
+            if (index === 0 || index === path.length - 1) {
+                return {
+                    point,
+                    baseKeep: true,
+                    endpoint: true,
+                    nonGroupCount: null,
+                    keepNonGroupCount: null,
+                    forcedNonGroupCount: null,
+                    priorityAdjusted: false
+                };
+            }
+            const slots = this.getGroundTerrainReplacementPointSlots(point, vertexSlotsByPointKey, affectedNodes);
+            if (!(slots instanceof Set)) {
+                throw new Error(`terrain local replacement path contained a non-hex vertex for ${group && group.type ? group.type : "unknown"} terrain`);
+            }
+            if (slots.size !== 3) {
+                throw new Error(`terrain local replacement path expected 3 touching hex slots, found ${slots.size}`);
+            }
+            const stats = this.getGroundTerrainBoundaryKeepNonGroupCount(
+                group && group.type ? group.type : "grass",
+                slots,
+                nodesByKey,
+                options
+            );
+            return {
+                point,
+                baseKeep: stats.nonGroupCount === stats.keepNonGroupCount,
+                endpoint: false,
+                nonGroupCount: stats.nonGroupCount,
+                keepNonGroupCount: stats.keepNonGroupCount,
+                forcedNonGroupCount: 3 - stats.keepNonGroupCount,
+                priorityAdjusted: stats.higherPriorityNeighbor
+            };
+        });
+        const getPointRecordSlots = (record) => {
+            const slots = this.getGroundTerrainReplacementPointSlots(
+                record && record.point,
+                vertexSlotsByPointKey,
+                affectedNodes
+            );
+            if (!(slots instanceof Set)) {
+                throw new Error("terrain local replacement path could not resolve skipped vertex slots");
+            }
+            return slots;
+        };
+        const resolveTerrainSlotCenter = (slotKey) => {
+            const existingNode = nodesByKey.get(slotKey);
+            if (existingNode) {
+                const x = Number(existingNode.x);
+                const y = Number(existingNode.y);
+                return (Number.isFinite(x) && Number.isFinite(y)) ? { x, y } : null;
+            }
+            const match = /^(-?\d+),(-?\d+)$/.exec(String(slotKey || ""));
+            if (!match) return null;
+            const xindex = Number(match[1]);
+            const yindex = Number(match[2]);
+            const resolvedNode = this.getGroundTerrainNodeAtCoord(xindex, yindex);
+            if (resolvedNode) {
+                nodesByKey.set(slotKey, resolvedNode);
+                const x = Number(resolvedNode.x);
+                const y = Number(resolvedNode.y);
+                return (Number.isFinite(x) && Number.isFinite(y)) ? { x, y } : null;
+            }
+            return {
+                x: xindex * 0.866,
+                y: yindex + (xindex % 2 === 0 ? 0.5 : 0)
+            };
+        };
+        const groupType = group && group.type ? group.type : "grass";
+        const slotMatchesSkippedRunCenterSide = (slotKey, record) => {
+            const slotType = this.getGroundTerrainTypeForSlotKey(slotKey, nodesByKey);
+            const slotIsGroup = slotType === groupType;
+            const useGroupSide = Number(record && record.forcedNonGroupCount) >= 2;
+            return useGroupSide ? slotIsGroup : !slotIsGroup;
+        };
+        const getSkippedRunHexCenter = (runStart, runLength) => {
+            const slotCounts = new Map();
+            let xSum = 0;
+            let ySum = 0;
+            for (let r = 0; r < runLength; r++) {
+                const record = pointRecords[runStart + r];
+                const point = record && record.point;
+                xSum += Number(point && point.x);
+                ySum += Number(point && point.y);
+                const slots = getPointRecordSlots(record);
+                for (const slotKey of slots) {
+                    if (!slotMatchesSkippedRunCenterSide(slotKey, record)) continue;
+                    if (!resolveTerrainSlotCenter(slotKey)) continue;
+                    slotCounts.set(slotKey, (slotCounts.get(slotKey) || 0) + 1);
+                }
+            }
+            if (slotCounts.size === 0) {
+                throw new Error("terrain local replacement path could not resolve a forced hex center for skipped vertices");
+            }
+            const centroid = { x: xSum / runLength, y: ySum / runLength };
+            let bestKey = "";
+            let bestCount = -1;
+            let bestDistance = Infinity;
+            for (const [slotKey, slotCount] of slotCounts.entries()) {
+                const center = resolveTerrainSlotCenter(slotKey);
+                if (!center) continue;
+                const distance = Math.hypot(center.x - centroid.x, center.y - centroid.y);
+                if (
+                    slotCount > bestCount ||
+                    (slotCount === bestCount && distance < bestDistance)
+                ) {
+                    bestKey = slotKey;
+                    bestCount = slotCount;
+                    bestDistance = distance;
+                }
+            }
+            if (!bestKey) {
+                throw new Error("terrain local replacement path resolved skipped-run candidates without finite centers");
+            }
+            const center = resolveTerrainSlotCenter(bestKey);
+            if (!center) {
+                throw new Error("terrain local replacement path resolved a skipped-run hex center without finite coordinates");
+            }
+            return center;
+        };
+        const forcedPointsByRunStart = new Map();
+        const addForcedRunPoint = (runStart, runLength) => {
+            if (runLength < 3) return;
+            if (runLength === 3) {
+                forcedPointsByRunStart.set(runStart, getSkippedRunHexCenter(runStart, 3));
+                return;
+            }
+            if (runLength === 4) {
+                for (let windowStart = 0; windowStart <= 1; windowStart++) {
+                    let xSum = 0;
+                    let ySum = 0;
+                    for (let r = 0; r < 3; r++) {
+                        const point = pointRecords[runStart + windowStart + r].point;
+                        xSum += Number(point.x);
+                        ySum += Number(point.y);
+                    }
+                    forcedPointsByRunStart.set(runStart + windowStart, {
+                        x: xSum / 3,
+                        y: ySum / 3
+                    });
+                }
+                return;
+            }
+            let xSum = 0;
+            let ySum = 0;
+            for (let r = 0; r < runLength; r++) {
+                const point = pointRecords[runStart + r].point;
+                xSum += Number(point.x);
+                ySum += Number(point.y);
+            }
+            forcedPointsByRunStart.set(runStart, {
+                x: xSum / runLength,
+                y: ySum / runLength
+            });
+        };
+        const isForcedCandidate = (record) => !!(
+            record &&
+            record.endpoint !== true &&
+            record.baseKeep === false &&
+            record.nonGroupCount === record.forcedNonGroupCount
+        );
+        let runStart = -1;
+        let runLength = 0;
+        for (let i = 1; i < pointRecords.length - 1; i++) {
+            if (isForcedCandidate(pointRecords[i])) {
+                if (runStart < 0) runStart = i;
+                runLength += 1;
+            } else if (runStart >= 0) {
+                addForcedRunPoint(runStart, runLength);
+                runStart = -1;
+                runLength = 0;
+            }
+        }
+        if (runStart >= 0) addForcedRunPoint(runStart, runLength);
+        const kept = [];
+        for (let p = 0; p < pointRecords.length; p++) {
+            if (forcedPointsByRunStart.has(p)) kept.push(forcedPointsByRunStart.get(p));
+            if (pointRecords[p].baseKeep) kept.push(pointRecords[p].point);
+        }
+        const out = this.dedupeGroundTerrainPathPoints(kept);
+        if (out.length < 2) {
+            throw new Error(`terrain local replacement path smoothing produced fewer than two vertices for ${group && group.type ? group.type : "unknown"} terrain`);
+        }
+        return out;
+    }
+
+    getGroundTerrainReplacementPathForRun(points, run, replacementPolygons, type, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes = null, options = {}) {
+        return this.getGroundTerrainBoundaryGraphReplacementPathForRun(
+            points,
+            run,
+            replacementPolygons,
+            type,
+            vertexSlotsByPointKey,
+            affectedNodes,
+            options
+        );
+    }
+
+    spliceGroundTerrainAffectedRuns(points, runs, replacementPolygons, type, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes = null, options = {}) {
+        const ring = this.simplifyGroundTerrainPolygonPoints(points);
+        const sourceRuns = Array.isArray(runs) ? runs : [];
+        if (ring.length < 3 || sourceRuns.length === 0) return null;
+        if (sourceRuns.some(run => run && run.all === true)) return null;
+        const affected = new Array(ring.length).fill(false);
+        const runByStart = new Map();
+        for (let r = 0; r < sourceRuns.length; r++) {
+            const run = sourceRuns[r];
+            if (!run || run.all === true) continue;
+            runByStart.set(run.start, run);
+            let index = run.start;
+            for (let guard = 0; guard < ring.length; guard++) {
+                affected[index] = true;
+                if (index === run.end) break;
+                index = (index + 1) % ring.length;
+            }
+        }
+        const firstUnaffected = affected.findIndex(value => !value);
+        if (firstUnaffected < 0) return null;
+        const replacementsByRunStart = new Map();
+        const usedReplacementIndexes = new Set();
+        const rawReplacementSegments = [];
+        const replacementSegments = [];
+        for (let r = 0; r < sourceRuns.length; r++) {
+            const run = sourceRuns[r];
+            if (!run || run.all === true) continue;
+            const replacement = this.getGroundTerrainReplacementPathForRun(
+                ring,
+                run,
+                replacementPolygons,
+                type,
+                affectedNodeKeys,
+                vertexSlotsByPointKey,
+                affectedNodes,
+                options
+            );
+            replacementsByRunStart.set(run.start, replacement.path);
+            if (Number.isInteger(replacement.replacementIndex) && replacement.replacementIndex >= 0) {
+                usedReplacementIndexes.add(replacement.replacementIndex);
+            }
+            rawReplacementSegments.push(...this.collectGroundTerrainDebugPathSegments(
+                replacement.rawPath,
+                type
+            ));
+            replacementSegments.push(...this.collectGroundTerrainDebugPathSegments(
+                replacement.path,
+                type
+            ));
+        }
+        const ordered = [];
+        for (let i = 0; i < ring.length; i++) {
+            const originalIndex = (firstUnaffected + i) % ring.length;
+            ordered.push({
+                originalIndex,
+                point: ring[originalIndex],
+                affected: affected[originalIndex]
+            });
+        }
+        const out = [];
+        for (let i = 0; i < ordered.length;) {
+            const record = ordered[i];
+            if (!record.affected) {
+                out.push(record.point);
+                i += 1;
+                continue;
+            }
+            const run = runByStart.get(record.originalIndex);
+            if (!run) {
+                throw new Error(`terrain polygon repair could not resolve an affected run start for ${type}`);
+            }
+            const path = replacementsByRunStart.get(run.start);
+            if (!Array.isArray(path) || path.length < 2) {
+                throw new Error(`terrain polygon repair resolved an empty replacement path for ${type}`);
+            }
+            for (let p = 1; p < path.length; p++) {
+                out.push(path[p]);
+            }
+            let endOffset = i;
+            while (endOffset < ordered.length && ordered[endOffset].originalIndex !== run.end) {
+                endOffset += 1;
+            }
+            if (endOffset >= ordered.length) {
+                throw new Error(`terrain polygon repair could not locate an affected run end for ${type}`);
+            }
+            i = endOffset + 2;
+        }
+        const spliced = this.simplifyGroundTerrainPolygonPoints(out);
         if (spliced.length < 3) {
             throw new Error(`terrain polygon repair produced fewer than three points for ${type}`);
         }
-        return { replacementIndex: best.replacementIndex, points: spliced };
+        return { points: spliced, usedReplacementIndexes, rawReplacementSegments, replacementSegments };
     }
 
-    getGroundTerrainAffectedReplacementPolygonsForType(type, replacementPolygons, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes = null) {
+    getGroundTerrainRepairRingSignature(points) {
+        const ring = this.simplifyGroundTerrainPolygonPoints(points);
+        if (ring.length < 3) return "";
+        const segments = [];
+        for (let i = 0; i < ring.length; i++) {
+            const a = this.getGroundTerrainRepairPointKey(ring[i]);
+            const b = this.getGroundTerrainRepairPointKey(ring[(i + 1) % ring.length]);
+            segments.push(a < b ? `${a}:${b}` : `${b}:${a}`);
+        }
+        segments.sort();
+        return segments.join("|");
+    }
+
+    snapGroundTerrainPointToAffectedHexCorner(point, affectedNodes) {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error("terrain replacement ring contains a non-finite point");
+        }
+        const nodes = Array.isArray(affectedNodes) ? affectedNodes : [];
+        const epsSq = this.getGroundTerrainVertexRepairEpsilon() * this.getGroundTerrainVertexRepairEpsilon();
+        let best = null;
+        let bestDistanceSq = Infinity;
+        for (let n = 0; n < nodes.length; n++) {
+            const corners = this.getGroundTerrainHexCorners(nodes[n]);
+            for (let c = 0; c < corners.length; c++) {
+                const corner = corners[c];
+                const dx = Number(corner.x) - x;
+                const dy = Number(corner.y) - y;
+                const distanceSq = dx * dx + dy * dy;
+                if (distanceSq > epsSq || distanceSq >= bestDistanceSq) continue;
+                best = corner;
+                bestDistanceSq = distanceSq;
+            }
+        }
+        return best ? { x: Number(best.x), y: Number(best.y) } : { x, y };
+    }
+
+    snapGroundTerrainRingToAffectedHexCorners(points, affectedNodes) {
+        const source = Array.isArray(points) ? points : [];
+        return this.simplifyGroundTerrainPolygonPoints(source.map(point => (
+            this.snapGroundTerrainPointToAffectedHexCorner(point, affectedNodes)
+        )));
+    }
+
+    repairGroundTerrainReplacementRing(type, points, replacementPolygons, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes = null, options = {}) {
+        const rawRing = this.snapGroundTerrainRingToAffectedHexCorners(points, affectedNodes);
+        if (rawRing.length < 3) {
+            throw new Error(`terrain replacement ring for ${type} has fewer than three points`);
+        }
+        const affectedRuns = this.getGroundTerrainAffectedVertexRuns(
+            rawRing,
+            affectedNodeKeys,
+            vertexSlotsByPointKey,
+            affectedNodes
+        );
+        if (affectedRuns.length === 0) {
+            return { points: rawRing, rawReplacementSegments: [], replacementSegments: [] };
+        }
+        if (affectedRuns.some(run => run && run.all === true)) {
+            const smoothingGroup = this.buildGroundTerrainLocalSmoothingGroup(
+                type,
+                affectedNodes,
+                vertexSlotsByPointKey
+            );
+            const smoothedRing = this.smoothGroundTerrainLocalPatchRingPoints(
+                rawRing,
+                smoothingGroup,
+                affectedNodeKeys,
+                vertexSlotsByPointKey,
+                affectedNodes,
+                {
+                    ...options,
+                    isHole: options && options.isHole === true
+                }
+            );
+            return {
+                points: smoothedRing,
+                rawReplacementSegments: this.collectGroundTerrainDebugRingSegments(rawRing, type),
+                replacementSegments: this.collectGroundTerrainDebugRingSegments(smoothedRing, type)
+            };
+        }
+        const repaired = this.spliceGroundTerrainAffectedRuns(
+            rawRing,
+            affectedRuns,
+            replacementPolygons,
+            type,
+            affectedNodeKeys,
+            vertexSlotsByPointKey,
+            affectedNodes,
+            {
+                ...options,
+                isHole: options && options.isHole === true
+            }
+        );
+        if (!repaired || !Array.isArray(repaired.points)) {
+            throw new Error(`terrain polygon repair could not splice replacement ring for ${type}`);
+        }
+        return repaired;
+    }
+
+    repairGroundTerrainReplacementPolygon(replacement, replacementPolygons, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes = null, options = {}) {
+        if (!replacement || typeof replacement.type !== "string" || replacement.type.length === 0) {
+            throw new Error("terrain replacement polygon repair requires a terrain type");
+        }
+        const rawReplacementSegments = [];
+        const replacementSegments = [];
+        const repairedOuter = this.repairGroundTerrainReplacementRing(
+            replacement.type,
+            replacement.points,
+            replacementPolygons,
+            affectedNodeKeys,
+            vertexSlotsByPointKey,
+            affectedNodes,
+            {
+                ...options,
+                isHole: false
+            }
+        );
+        rawReplacementSegments.push(...(Array.isArray(repairedOuter.rawReplacementSegments) ? repairedOuter.rawReplacementSegments : []));
+        replacementSegments.push(...(Array.isArray(repairedOuter.replacementSegments) ? repairedOuter.replacementSegments : []));
+        const holes = [];
+        const sourceHoles = Array.isArray(replacement.holes) ? replacement.holes : [];
+        for (let h = 0; h < sourceHoles.length; h++) {
+            const repairedHole = this.repairGroundTerrainReplacementRing(
+                replacement.type,
+                sourceHoles[h],
+                replacementPolygons,
+                affectedNodeKeys,
+                vertexSlotsByPointKey,
+                affectedNodes,
+                {
+                    ...options,
+                    isHole: true
+                }
+            );
+            holes.push(repairedHole.points);
+            rawReplacementSegments.push(...(Array.isArray(repairedHole.rawReplacementSegments) ? repairedHole.rawReplacementSegments : []));
+            replacementSegments.push(...(Array.isArray(repairedHole.replacementSegments) ? repairedHole.replacementSegments : []));
+        }
+        return {
+            polygon: holes.length > 0
+                ? { type: replacement.type, points: repairedOuter.points, holes }
+                : { type: replacement.type, points: repairedOuter.points },
+            rawReplacementSegments,
+            replacementSegments
+        };
+    }
+
+    collectGroundTerrainReplacementHolesForUsedIndexes(type, replacementPolygons, usedReplacementIndexes, existingHoles, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes = null, options = {}) {
+        if (!(usedReplacementIndexes instanceof Set) || usedReplacementIndexes.size === 0) {
+            return { holes: [], rawReplacementSegments: [], replacementSegments: [] };
+        }
+        const seenHoleSignatures = new Set();
+        const currentHoles = Array.isArray(existingHoles) ? existingHoles : [];
+        for (let h = 0; h < currentHoles.length; h++) {
+            const signature = this.getGroundTerrainRepairRingSignature(currentHoles[h]);
+            if (signature) seenHoleSignatures.add(signature);
+        }
+        const out = [];
+        const rawReplacementSegments = [];
+        const replacementSegments = [];
+        const replacements = Array.isArray(replacementPolygons) ? replacementPolygons : [];
+        for (const index of usedReplacementIndexes) {
+            const replacement = replacements[index];
+            if (!replacement || replacement.type !== type || !Array.isArray(replacement.holes)) continue;
+            for (let h = 0; h < replacement.holes.length; h++) {
+                const rawHole = this.snapGroundTerrainRingToAffectedHexCorners(replacement.holes[h], affectedNodes);
+                const affectedRuns = this.getGroundTerrainAffectedVertexRuns(rawHole, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes);
+                if (affectedRuns.length === 0) continue;
+                const repairedHole = this.repairGroundTerrainReplacementRing(
+                    type,
+                    rawHole,
+                    replacementPolygons,
+                    affectedNodeKeys,
+                    vertexSlotsByPointKey,
+                    affectedNodes,
+                    {
+                        ...options,
+                        isHole: true
+                    }
+                );
+                const smoothedHole = repairedHole.points;
+                const signature = this.getGroundTerrainRepairRingSignature(smoothedHole);
+                if (!signature || seenHoleSignatures.has(signature)) continue;
+                seenHoleSignatures.add(signature);
+                out.push(smoothedHole);
+                rawReplacementSegments.push(...(Array.isArray(repairedHole.rawReplacementSegments) ? repairedHole.rawReplacementSegments : []));
+                replacementSegments.push(...(Array.isArray(repairedHole.replacementSegments) ? repairedHole.replacementSegments : []));
+            }
+        }
+        return { holes: out, rawReplacementSegments, replacementSegments };
+    }
+
+    getGroundTerrainAffectedReplacementPolygonsForType(type, replacementPolygons, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes = null, options = {}) {
         const out = [];
         const used = new Set();
+        const rawReplacementSegments = [];
+        const replacementSegments = [];
         const replacements = Array.isArray(replacementPolygons) ? replacementPolygons : [];
         for (let i = 0; i < replacements.length; i++) {
             const replacement = replacements[i];
@@ -8732,77 +10471,193 @@ class GameMap {
                 replacement.points,
                 affectedNodeKeys,
                 vertexSlotsByPointKey,
-                affectedNodes
+                affectedNodes,
+                options
             );
             const hasAffectedHole = Array.isArray(replacement.holes) && replacement.holes.some((hole) => (
                 this.getGroundTerrainAffectedVertexRuns(hole, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes).length > 0
             ));
-            if (outerRuns.length === 0 && !hasAffectedHole) continue;
-            out.push(replacement);
+            const touchesAffectedPatch = outerRuns.length === 0 && !hasAffectedHole
+                ? this.groundTerrainPolygonTouchesAnyPatchHex(replacement, affectedNodes)
+                : false;
+            if (outerRuns.length === 0 && !hasAffectedHole && !touchesAffectedPatch) continue;
+            const repaired = this.repairGroundTerrainReplacementPolygon(
+                replacement,
+                replacements,
+                affectedNodeKeys,
+                vertexSlotsByPointKey,
+                affectedNodes,
+                options
+            );
+            out.push(repaired.polygon);
+            rawReplacementSegments.push(...(Array.isArray(repaired.rawReplacementSegments) ? repaired.rawReplacementSegments : []));
+            replacementSegments.push(...(Array.isArray(repaired.replacementSegments) ? repaired.replacementSegments : []));
             used.add(i);
         }
-        return { polygons: out, usedReplacementIndexes: used };
+        return { polygons: out, usedReplacementIndexes: used, rawReplacementSegments, replacementSegments };
     }
 
-    repairGroundTerrainPolygonVertices(polygon, replacementPolygons, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes = null) {
+    groundTerrainReplacementChangesAffectedHoleTopology(polygon, replacementPolygons, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes = null) {
+        const existingHoles = Array.isArray(polygon && polygon.holes) ? polygon.holes : [];
+        const existingHoleCount = existingHoles.length;
+        const affectedExistingHole = existingHoles.some((hole) => (
+            this.getGroundTerrainAffectedVertexRuns(hole, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes).length > 0
+        ));
+        const replacements = Array.isArray(replacementPolygons) ? replacementPolygons : [];
+        for (let i = 0; i < replacements.length; i++) {
+            const replacement = replacements[i];
+            if (!replacement || replacement.type !== polygon.type) continue;
+            const replacementHoles = Array.isArray(replacement.holes) ? replacement.holes : [];
+            if (replacementHoles.length > existingHoleCount) {
+                const hasAffectedNewHole = replacementHoles.some((hole) => (
+                    this.getGroundTerrainAffectedVertexRuns(hole, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes).length > 0
+                ));
+                if (hasAffectedNewHole) return true;
+            }
+            if (replacementHoles.length < existingHoleCount && affectedExistingHole) return true;
+        }
+        return false;
+    }
+
+    repairGroundTerrainPolygonVertices(polygon, replacementPolygons, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes = null, options = {}) {
         const outerRuns = this.getGroundTerrainAffectedVertexRuns(
             polygon.points,
             affectedNodeKeys,
             vertexSlotsByPointKey,
             affectedNodes
         );
-        const affectedHoleIndex = Array.isArray(polygon.holes)
-            ? polygon.holes.findIndex((hole) => (
-                this.getGroundTerrainAffectedVertexRuns(hole, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes).length > 0
-            ))
-            : -1;
-        if (affectedHoleIndex >= 0) {
-            return this.getGroundTerrainAffectedReplacementPolygonsForType(
-                polygon.type,
-                replacementPolygons,
-                affectedNodeKeys,
-                vertexSlotsByPointKey,
-                affectedNodes
-            );
-        }
-        if (outerRuns.length === 0) {
-            return { polygons: [polygon], usedReplacementIndexes: new Set() };
-        }
-        if (outerRuns.length > 1) {
-            return this.getGroundTerrainAffectedReplacementPolygonsForType(
-                polygon.type,
-                replacementPolygons,
-                affectedNodeKeys,
-                vertexSlotsByPointKey,
-                affectedNodes
-            );
-        }
-        const run = outerRuns[0];
-        if (run.all === true) {
-            return this.getGroundTerrainAffectedReplacementPolygonsForType(
-                polygon.type,
-                replacementPolygons,
-                affectedNodeKeys,
-                vertexSlotsByPointKey,
-                affectedNodes
-            );
-        }
-        const repaired = this.spliceGroundTerrainAffectedRun(
-            polygon.points,
-            run,
+        const holes = Array.isArray(polygon.holes) ? polygon.holes : [];
+        const holeRuns = holes.map((hole) => (
+            this.getGroundTerrainAffectedVertexRuns(hole, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes)
+        ));
+        const hasAffectedHole = holeRuns.some(runs => runs.length > 0);
+        if (this.groundTerrainReplacementChangesAffectedHoleTopology(
+            polygon,
             replacementPolygons,
-            polygon.type,
             affectedNodeKeys,
             vertexSlotsByPointKey,
             affectedNodes
+        )) {
+            return this.getGroundTerrainAffectedReplacementPolygonsForType(
+                polygon.type,
+                replacementPolygons,
+                affectedNodeKeys,
+                vertexSlotsByPointKey,
+                affectedNodes,
+                options
+            );
+        }
+        if (outerRuns.some(run => run && run.all === true) || holeRuns.some(runs => runs.some(run => run && run.all === true))) {
+            return this.getGroundTerrainAffectedReplacementPolygonsForType(
+                polygon.type,
+                replacementPolygons,
+                affectedNodeKeys,
+                vertexSlotsByPointKey,
+                affectedNodes,
+                options
+            );
+        }
+        if (outerRuns.length === 0 && !hasAffectedHole) {
+            const affectedReplacement = this.getGroundTerrainAffectedReplacementPolygonsForType(
+                polygon.type,
+                replacementPolygons,
+                affectedNodeKeys,
+                vertexSlotsByPointKey,
+                affectedNodes,
+                options
+            );
+            if (affectedReplacement.polygons.length > 0) return affectedReplacement;
+            return { polygons: [polygon], usedReplacementIndexes: new Set() };
+        }
+        const usedReplacementIndexes = new Set();
+        const rawReplacementSegments = [];
+        const replacementSegments = [];
+        let points = this.simplifyGroundTerrainPolygonPoints(polygon.points);
+        if (outerRuns.length > 0) {
+            const repairedOuter = this.spliceGroundTerrainAffectedRuns(
+                points,
+                outerRuns,
+                replacementPolygons,
+                polygon.type,
+                affectedNodeKeys,
+                vertexSlotsByPointKey,
+                affectedNodes,
+                {
+                    ...options,
+                    isHole: false
+                }
+            );
+            if (!repairedOuter) {
+                return this.getGroundTerrainAffectedReplacementPolygonsForType(
+                    polygon.type,
+                    replacementPolygons,
+                    affectedNodeKeys,
+                    vertexSlotsByPointKey,
+                    affectedNodes,
+                    options
+                );
+            }
+            points = repairedOuter.points;
+            for (const index of repairedOuter.usedReplacementIndexes) usedReplacementIndexes.add(index);
+            rawReplacementSegments.push(...(Array.isArray(repairedOuter.rawReplacementSegments) ? repairedOuter.rawReplacementSegments : []));
+            replacementSegments.push(...(Array.isArray(repairedOuter.replacementSegments) ? repairedOuter.replacementSegments : []));
+        }
+        const nextHoles = [];
+        for (let h = 0; h < holes.length; h++) {
+            const runs = holeRuns[h];
+            if (!Array.isArray(runs) || runs.length === 0) {
+                nextHoles.push(holes[h]);
+                continue;
+            }
+            const repairedHole = this.spliceGroundTerrainAffectedRuns(
+                holes[h],
+                runs,
+                replacementPolygons,
+                polygon.type,
+                affectedNodeKeys,
+                vertexSlotsByPointKey,
+                affectedNodes,
+                {
+                    ...options,
+                    isHole: true
+                }
+            );
+            if (!repairedHole) {
+                return this.getGroundTerrainAffectedReplacementPolygonsForType(
+                    polygon.type,
+                    replacementPolygons,
+                    affectedNodeKeys,
+                    vertexSlotsByPointKey,
+                    affectedNodes,
+                    options
+                );
+            }
+            nextHoles.push(repairedHole.points);
+            for (const index of repairedHole.usedReplacementIndexes) usedReplacementIndexes.add(index);
+            rawReplacementSegments.push(...(Array.isArray(repairedHole.rawReplacementSegments) ? repairedHole.rawReplacementSegments : []));
+            replacementSegments.push(...(Array.isArray(repairedHole.replacementSegments) ? repairedHole.replacementSegments : []));
+        }
+        const replacementHoles = this.collectGroundTerrainReplacementHolesForUsedIndexes(
+            polygon.type,
+            replacementPolygons,
+            usedReplacementIndexes,
+            nextHoles,
+            affectedNodeKeys,
+            vertexSlotsByPointKey,
+            affectedNodes,
+            options
         );
-        const holes = Array.isArray(polygon.holes) ? polygon.holes : [];
-        const repairedPolygon = holes.length > 0
-            ? { type: polygon.type, points: repaired.points, holes }
-            : { type: polygon.type, points: repaired.points };
+        nextHoles.push(...replacementHoles.holes);
+        rawReplacementSegments.push(...replacementHoles.rawReplacementSegments);
+        replacementSegments.push(...replacementHoles.replacementSegments);
+        const repairedPolygon = nextHoles.length > 0
+            ? { type: polygon.type, points, holes: nextHoles }
+            : { type: polygon.type, points };
         return {
             polygons: [repairedPolygon],
-            usedReplacementIndexes: new Set([repaired.replacementIndex])
+            usedReplacementIndexes,
+            rawReplacementSegments,
+            replacementSegments
         };
     }
 
@@ -8831,6 +10686,420 @@ class GameMap {
         return out;
     }
 
+    terrainPolygonContainsPoint(polygon, x, y) {
+        if (!polygon || !Array.isArray(polygon.points) || polygon.points.length < 3) return false;
+        if (!pointInPolygon2D(x, y, polygon.points)) return false;
+        const holes = Array.isArray(polygon.holes) ? polygon.holes : [];
+        for (let h = 0; h < holes.length; h++) {
+            if (pointInPolygon2D(x, y, holes[h])) return false;
+        }
+        return true;
+    }
+
+    collectGroundTerrainSectionContinuitySourceNodes(sectionKey) {
+        const key = typeof sectionKey === "string" ? sectionKey : "";
+        if (!key) {
+            throw new Error("terrain section continuity source collection requires a section key");
+        }
+        const state = this._prototypeSectionState || null;
+        const sectionNodes = state && state.nodesBySectionKey instanceof Map
+            ? (state.nodesBySectionKey.get(key) || null)
+            : null;
+        if (!Array.isArray(sectionNodes)) {
+            throw new Error(`terrain section continuity requires loaded nodes for section ${key}`);
+        }
+        const dirs = [1, 3, 5, 7, 9, 11];
+        const nodesByKey = new Map();
+        const addNode = (candidate) => {
+            if (!candidate || candidate._prototypeVoid === true) return;
+            nodesByKey.set(this.getGroundTerrainNodeKey(candidate), candidate);
+        };
+        const resolveNeighbor = (node, direction) => {
+            const direct = node && node.neighbors && node.neighbors[direction] ? node.neighbors[direction] : null;
+            if (direct) return direct;
+            const offset = node && node.neighborOffsets && node.neighborOffsets[direction] ? node.neighborOffsets[direction] : null;
+            if (!offset || !Number.isFinite(offset.x) || !Number.isFinite(offset.y)) return null;
+            return this.getGroundTerrainNodeAtCoord(
+                Number(node.xindex) + Number(offset.x),
+                Number(node.yindex) + Number(offset.y)
+            );
+        };
+        for (let i = 0; i < sectionNodes.length; i++) {
+            const node = sectionNodes[i];
+            addNode(node);
+            for (let d = 0; d < dirs.length; d++) {
+                addNode(resolveNeighbor(node, dirs[d]));
+            }
+        }
+        return Array.from(nodesByKey.values());
+    }
+
+    collectGroundTerrainSectionRebuildKeys(sectionKey) {
+        const key = typeof sectionKey === "string" ? sectionKey : "";
+        if (!key) return [];
+        const state = this._prototypeSectionState || null;
+        const sectionNodes = state && state.nodesBySectionKey instanceof Map
+            ? (state.nodesBySectionKey.get(key) || null)
+            : null;
+        if (!Array.isArray(sectionNodes)) {
+            throw new Error(`terrain section rebuild requires loaded nodes for section ${key}`);
+        }
+        const dirs = [1, 3, 5, 7, 9, 11];
+        const keys = new Set([key]);
+        const addNeighborKey = (neighbor) => {
+            const neighborKey = typeof (neighbor && neighbor._prototypeSectionKey) === "string"
+                ? neighbor._prototypeSectionKey
+                : "";
+            if (neighborKey) keys.add(neighborKey);
+        };
+        const resolveNeighbor = (node, direction) => {
+            const direct = node && node.neighbors && node.neighbors[direction] ? node.neighbors[direction] : null;
+            if (direct) return direct;
+            const offset = node && node.neighborOffsets && node.neighborOffsets[direction] ? node.neighborOffsets[direction] : null;
+            if (!offset || !Number.isFinite(offset.x) || !Number.isFinite(offset.y)) return null;
+            return this.getGroundTerrainNodeAtCoord(
+                Number(node.xindex) + Number(offset.x),
+                Number(node.yindex) + Number(offset.y)
+            );
+        };
+        for (let i = 0; i < sectionNodes.length; i++) {
+            const node = sectionNodes[i];
+            for (let d = 0; d < dirs.length; d++) {
+                addNeighborKey(resolveNeighbor(node, dirs[d]));
+            }
+        }
+        return Array.from(keys);
+    }
+
+    buildGroundTerrainPolygonsForSection(sectionKey) {
+        const key = typeof sectionKey === "string" ? sectionKey : "";
+        if (!key) {
+            throw new Error("terrain section polygon rebuild requires a section key");
+        }
+        const sourceNodes = this.collectGroundTerrainSectionContinuitySourceNodes(key);
+        return this.buildGroundTerrainPolygonsFromNodes(sourceNodes, { requiredSectionKey: key });
+    }
+
+    syncGroundTerrainTilesForSectionAsset(asset, sectionKey) {
+        const key = typeof sectionKey === "string" && sectionKey.length > 0
+            ? sectionKey
+            : (typeof (asset && asset.key) === "string" ? asset.key : "");
+        if (!asset || typeof asset !== "object") {
+            throw new Error(`terrain section tile sync requires a section asset for ${key || "(unknown)"}`);
+        }
+        if (!key) {
+            throw new Error("terrain section tile sync requires a section key");
+        }
+        const state = this._prototypeSectionState || null;
+        const sectionNodes = state && state.nodesBySectionKey instanceof Map
+            ? (state.nodesBySectionKey.get(key) || null)
+            : null;
+        if (!Array.isArray(sectionNodes)) {
+            throw new Error(`terrain section tile sync requires loaded nodes for section ${key}`);
+        }
+        const tileCoordKeys = Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys : [];
+        const tileKeySet = new Set(tileCoordKeys);
+        const nextGroundTiles = asset.groundTiles && typeof asset.groundTiles === "object"
+            ? { ...asset.groundTiles }
+            : {};
+        let synced = 0;
+        for (let i = 0; i < sectionNodes.length; i++) {
+            const node = sectionNodes[i];
+            if (!node || node._prototypeVoid === true) continue;
+            const x = Number(node.xindex);
+            const y = Number(node.yindex);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                throw new Error(`section ${key} terrain node ${i} is missing tile coordinates`);
+            }
+            const coordKey = `${Math.round(x)},${Math.round(y)}`;
+            if (tileKeySet.size > 0 && !tileKeySet.has(coordKey)) {
+                throw new Error(`section ${key} terrain node ${coordKey} is missing from tileCoordKeys`);
+            }
+            const textureId = Math.floor(Number(node.groundTextureId));
+            if (!Number.isFinite(textureId) || textureId < 0) {
+                throw new Error(`section ${key} groundTiles.${coordKey} must be a finite non-negative terrain texture id`);
+            }
+            getGroundTerrainDefForTextureId(textureId);
+            nextGroundTiles[coordKey] = textureId;
+            synced += 1;
+        }
+        for (let i = 0; i < tileCoordKeys.length; i++) {
+            const coordKey = tileCoordKeys[i];
+            if (typeof coordKey !== "string" || coordKey.length === 0) continue;
+            if (!Object.prototype.hasOwnProperty.call(nextGroundTiles, coordKey)) {
+                throw new Error(`section ${key} terrain edit could not sync groundTiles.${coordKey}`);
+            }
+        }
+        if (synced === 0 && tileCoordKeys.length > 0) {
+            throw new Error(`section ${key} terrain edit could not sync any ground tiles`);
+        }
+        asset.groundTiles = nextGroundTiles;
+        return synced;
+    }
+
+    syncGroundTerrainEditedTileForSectionAsset(asset, sectionKey, node) {
+        const key = typeof sectionKey === "string" && sectionKey.length > 0
+            ? sectionKey
+            : (typeof (asset && asset.key) === "string" ? asset.key : "");
+        if (!asset || typeof asset !== "object") {
+            throw new Error(`terrain section tile edit requires a section asset for ${key || "(unknown)"}`);
+        }
+        if (!key) {
+            throw new Error("terrain section tile edit requires a section key");
+        }
+        const x = Number(node && node.xindex);
+        const y = Number(node && node.yindex);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error(`section ${key} terrain edit node is missing tile coordinates`);
+        }
+        const coordKey = `${Math.round(x)},${Math.round(y)}`;
+        const tileCoordKeys = Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys : [];
+        if (tileCoordKeys.length > 0 && !tileCoordKeys.includes(coordKey)) {
+            throw new Error(`section ${key} terrain edit node ${coordKey} is missing from tileCoordKeys`);
+        }
+        const textureId = Math.floor(Number(node.groundTextureId));
+        if (!Number.isFinite(textureId) || textureId < 0) {
+            throw new Error(`section ${key} groundTiles.${coordKey} must be a finite non-negative terrain texture id`);
+        }
+        getGroundTerrainDefForTextureId(textureId);
+        asset.groundTiles = asset.groundTiles && typeof asset.groundTiles === "object"
+            ? { ...asset.groundTiles, [coordKey]: textureId }
+            : { [coordKey]: textureId };
+        return true;
+    }
+
+    collectGroundTerrainPatchPolygonSources(options = {}) {
+        const sectionKey = options && typeof options.sectionKey === "string" ? options.sectionKey : "";
+        const asset = options && options.asset ? options.asset : null;
+        const state = this._prototypeSectionState || null;
+        if (sectionKey || asset) {
+            const out = [];
+            if (state && state.sectionAssetsByKey instanceof Map) {
+                for (const [key, sectionAsset] of state.sectionAssetsByKey.entries()) {
+                    if (!sectionAsset) continue;
+                    out.push({
+                        kind: "section",
+                        key,
+                        asset: sectionAsset,
+                        polygons: Array.isArray(sectionAsset.terrainPolygons) ? sectionAsset.terrainPolygons : []
+                    });
+                }
+            } else if (asset) {
+                out.push({
+                    kind: "section",
+                    key: sectionKey || (typeof asset.key === "string" ? asset.key : ""),
+                    asset,
+                    polygons: Array.isArray(asset.terrainPolygons) ? asset.terrainPolygons : []
+                });
+            }
+            if (out.length === 0) {
+                throw new Error(`terrain local patch could not resolve section polygon sources for ${sectionKey || "(unknown)"}`);
+            }
+            return out;
+        }
+        return [{
+            kind: "map",
+            key: "",
+            asset: null,
+            polygons: Array.isArray(this.terrainPolygons) ? this.terrainPolygons : []
+        }];
+    }
+
+    getGroundTerrainSectionClipGeometry(sectionKey, asset) {
+        const key = typeof sectionKey === "string" ? sectionKey : "";
+        const explicitPolygon = Array.isArray(asset && asset.sectionPolygon) ? asset.sectionPolygon : null;
+        if (explicitPolygon && explicitPolygon.length >= 3) {
+            const ring = polygonToClipRing2D(explicitPolygon);
+            if (ring) return [[ring]];
+        }
+        const state = this._prototypeSectionState || null;
+        const section = (
+            state &&
+            state.sectionsByKey instanceof Map &&
+            key
+        ) ? (state.sectionsByKey.get(key) || null) : null;
+        const centerAxial = (
+            asset &&
+            asset.centerAxial &&
+            Number.isFinite(Number(asset.centerAxial.q)) &&
+            Number.isFinite(Number(asset.centerAxial.r))
+        ) ? asset.centerAxial : (
+            section &&
+            section.centerAxial &&
+            Number.isFinite(Number(section.centerAxial.q)) &&
+            Number.isFinite(Number(section.centerAxial.r))
+        ) ? section.centerAxial : null;
+        const geometryApi = (typeof globalThis !== "undefined" && globalThis.__sectionGeometry)
+            ? globalThis.__sectionGeometry
+            : null;
+        const polygon = (
+            geometryApi &&
+            typeof geometryApi.getSectionHexagonCorners === "function" &&
+            centerAxial &&
+            state &&
+            state.basis
+        ) ? geometryApi.getSectionHexagonCorners(centerAxial, state.basis) : null;
+        const ring = polygonToClipRing2D(polygon);
+        if (ring) return [[ring]];
+        throw new Error(`terrain local patch cannot split section ${key || "(unknown)"} without section polygon geometry`);
+    }
+
+    getGroundTerrainDebugPointKey(point) {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error("terrain paint debug segment requires finite points");
+        }
+        const scale = 1000000;
+        const ix = Math.round(x * scale);
+        const iy = Math.round(y * scale);
+        return `${Object.is(ix, -0) ? 0 : ix},${Object.is(iy, -0) ? 0 : iy}`;
+    }
+
+    getGroundTerrainDebugSegmentKey(a, b) {
+        const ak = this.getGroundTerrainDebugPointKey(a);
+        const bk = this.getGroundTerrainDebugPointKey(b);
+        return ak < bk ? `${ak}:${bk}` : `${bk}:${ak}`;
+    }
+
+    cloneGroundTerrainDebugPoint(point) {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error("terrain paint debug segment requires finite points");
+        }
+        return { x, y };
+    }
+
+    collectGroundTerrainDebugRingSegments(points, type = "") {
+        const ring = this.simplifyGroundTerrainPolygonPoints(points);
+        if (ring.length < 3) return [];
+        const out = [];
+        for (let i = 0; i < ring.length; i++) {
+            const a = this.cloneGroundTerrainDebugPoint(ring[i]);
+            const b = this.cloneGroundTerrainDebugPoint(ring[(i + 1) % ring.length]);
+            if (Math.hypot(b.x - a.x, b.y - a.y) <= 1e-9) continue;
+            out.push({
+                a,
+                b,
+                key: this.getGroundTerrainDebugSegmentKey(a, b),
+                type
+            });
+        }
+        return out;
+    }
+
+    collectGroundTerrainDebugPathSegments(points, type = "") {
+        const path = this.dedupeGroundTerrainPathPoints(points);
+        if (path.length < 2) return [];
+        const out = [];
+        for (let i = 1; i < path.length; i++) {
+            const a = this.cloneGroundTerrainDebugPoint(path[i - 1]);
+            const b = this.cloneGroundTerrainDebugPoint(path[i]);
+            if (Math.hypot(b.x - a.x, b.y - a.y) <= 1e-9) continue;
+            out.push({
+                a,
+                b,
+                key: this.getGroundTerrainDebugSegmentKey(a, b),
+                type
+            });
+        }
+        return out;
+    }
+
+    collectGroundTerrainDebugPolygonSegments(polygons) {
+        const source = Array.isArray(polygons) ? polygons : [];
+        const out = [];
+        for (let p = 0; p < source.length; p++) {
+            const polygon = source[p];
+            if (!polygon) continue;
+            const type = typeof polygon.type === "string" ? polygon.type : "";
+            out.push(...this.collectGroundTerrainDebugRingSegments(polygon.points, type));
+            const holes = Array.isArray(polygon.holes) ? polygon.holes : [];
+            for (let h = 0; h < holes.length; h++) {
+                out.push(...this.collectGroundTerrainDebugRingSegments(holes[h], type));
+            }
+        }
+        return out;
+    }
+
+    groundTerrainDebugSegmentOverlapsBounds(segment, bounds) {
+        if (!bounds) return true;
+        const pad = 0.001;
+        const minX = Math.min(Number(segment.a.x), Number(segment.b.x));
+        const maxX = Math.max(Number(segment.a.x), Number(segment.b.x));
+        const minY = Math.min(Number(segment.a.y), Number(segment.b.y));
+        const maxY = Math.max(Number(segment.a.y), Number(segment.b.y));
+        if (
+            !Number.isFinite(minX) ||
+            !Number.isFinite(maxX) ||
+            !Number.isFinite(minY) ||
+            !Number.isFinite(maxY)
+        ) {
+            throw new Error("terrain paint debug segment bounds require finite points");
+        }
+        return !(
+            maxX < Number(bounds.minX) - pad ||
+            minX > Number(bounds.maxX) + pad ||
+            maxY < Number(bounds.minY) - pad ||
+            minY > Number(bounds.maxY) + pad
+        );
+    }
+
+    collectGroundTerrainModifiedDebugSegments(beforePolygons, afterPolygons, bounds = null) {
+        const beforeKeys = new Set(this.collectGroundTerrainDebugPolygonSegments(beforePolygons).map(segment => segment.key));
+        const afterSegments = this.collectGroundTerrainDebugPolygonSegments(afterPolygons);
+        const out = [];
+        const seen = new Set();
+        for (let i = 0; i < afterSegments.length; i++) {
+            const segment = afterSegments[i];
+            if (beforeKeys.has(segment.key)) continue;
+            if (!this.groundTerrainDebugSegmentOverlapsBounds(segment, bounds)) continue;
+            if (seen.has(segment.key)) continue;
+            seen.add(segment.key);
+            out.push({
+                a: segment.a,
+                b: segment.b,
+                type: segment.type
+            });
+        }
+        return out;
+    }
+
+    recordGroundTerrainPaintDebugEdit(node, terrainType, options = {}) {
+        if (!node) return;
+        const sectionKeys = Array.isArray(options && options.sectionKeys)
+            ? options.sectionKeys.filter(key => typeof key === "string" && key.length > 0)
+            : [];
+        const modifiedSegments = Array.isArray(options && options.modifiedSegments)
+            ? options.modifiedSegments.map(segment => ({
+                a: this.cloneGroundTerrainDebugPoint(segment && segment.a),
+                b: this.cloneGroundTerrainDebugPoint(segment && segment.b),
+                type: typeof (segment && segment.type) === "string" ? segment.type : ""
+            }))
+            : [];
+        const rawReplacementSegments = Array.isArray(options && options.rawReplacementSegments)
+            ? options.rawReplacementSegments.map(segment => ({
+                a: this.cloneGroundTerrainDebugPoint(segment && segment.a),
+                b: this.cloneGroundTerrainDebugPoint(segment && segment.b),
+                type: typeof (segment && segment.type) === "string" ? segment.type : ""
+            }))
+            : [];
+        this._terrainPaintDebugLastEdit = {
+            sequence: (Number(this._terrainPaintDebugEditSequence) || 0) + 1,
+            terrainType: typeof terrainType === "string" ? terrainType : "",
+            nodeKey: this.getGroundTerrainNodeKey(node),
+            editedHex: this.getGroundTerrainHexCorners(node).map(point => ({
+                x: Number(point.x),
+                y: Number(point.y)
+            })),
+            sectionKeys,
+            rawReplacementSegments,
+            modifiedSegments
+        };
+        this._terrainPaintDebugEditSequence = this._terrainPaintDebugLastEdit.sequence;
+    }
+
     replaceGroundTerrainPolygonPatch(node, terrainType, options = {}) {
         if (!node) {
             throw new Error("terrain patch replacement requires an edited node");
@@ -8843,30 +11112,253 @@ class GameMap {
             return false;
         }
         const sectionKey = options && typeof options.sectionKey === "string" ? options.sectionKey : "";
-        const patchNodes = this.collectGroundTerrainLocalPatchNodes(node, { sectionKey });
+        const patchNodes = this.collectGroundTerrainLocalPatchNodes(node);
         const editedNodeKey = this.getGroundTerrainNodeKey(node);
         if (!patchNodes.some((patchNode) => this.getGroundTerrainNodeKey(patchNode) === editedNodeKey)) {
             throw new Error("terrain patch replacement could not include the edited node");
         }
         const previousTextureId = Number.isFinite(node.groundTextureId) ? Number(node.groundTextureId) : 0;
+        const sources = this.collectGroundTerrainPatchPolygonSources(options);
+        const centerHexPoints = this.getGroundTerrainHexCorners(node);
+        const centerHexGeometry = this.getGroundTerrainHexClipGeometry(node);
+        // Terrain paint is intentionally a seven-hex local span edit. Do not change
+        // this back to full-polygon regeneration or a wider derived tile rebuild
+        // without asking; authored vertices outside this bubble must survive paint.
+        const affectedNodes = patchNodes;
+        const affectedNodeKeys = new Set(affectedNodes.map(affectedNode => this.getGroundTerrainNodeKey(affectedNode)));
+        const vertexSlotsByPointKey = this.buildGroundTerrainVertexSlotMap({ nodes: affectedNodes });
+        const patchBounds = this.getGroundTerrainHexPatchBounds(affectedNodes);
+        const patchNodesByType = new Map();
+        for (let i = 0; i < patchNodes.length; i++) {
+            const patchNode = patchNodes[i];
+            if (!patchNode) continue;
+            const patchType = this.getGroundTerrainTypeForNode(patchNode);
+            if (!patchNodesByType.has(patchType)) patchNodesByType.set(patchType, []);
+            patchNodesByType.get(patchType).push(patchNode);
+        }
+        const polygonTouchesTerrainPatchType = (polygon, type) => {
+            const typedNodes = patchNodesByType.get(type) || [];
+            for (let i = 0; i < typedNodes.length; i++) {
+                const typedNode = typedNodes[i];
+                if (this.groundTerrainPolygonTouchesHex(
+                    polygon,
+                    this.getGroundTerrainHexCorners(typedNode),
+                    this.getGroundTerrainHexClipGeometry(typedNode)
+                )) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        const records = [];
+        for (let s = 0; s < sources.length; s++) {
+            const source = sources[s];
+            const normalized = this.normalizeGroundTerrainPolygons(source.polygons);
+            for (let p = 0; p < normalized.length; p++) {
+                const polygon = normalized[p];
+                const centerParticipating = this.groundTerrainPolygonTouchesHex(
+                    polygon,
+                    centerHexPoints,
+                    centerHexGeometry
+                );
+                const sameTerrainPatchParticipating = !centerParticipating && (
+                    polygon.type === nextType ||
+                    polygon.type === currentType
+                ) && polygonTouchesTerrainPatchType(polygon, polygon.type);
+                records.push({
+                    source,
+                    sourceIndex: p,
+                    polygon,
+                    participating: centerParticipating || sameTerrainPatchParticipating
+                });
+            }
+        }
+        const participatingRecords = records.filter(record => record.participating);
+        const participatingKeySet = new Set(participatingRecords.map(record => `${record.source.key}:${record.sourceIndex}`));
+        const typeSet = new Set(participatingRecords.map(record => record.polygon.type));
+        const debugBeforePolygons = participatingRecords.map(record => record.polygon);
+        if (nextType !== "grass") typeSet.add(nextType);
         this.setGroundTerrainType(node.xindex, node.yindex, nextType);
-        let outputPolygons = null;
+        const resultPolygonsByType = new Map();
         try {
-            const replacementSourceNodes = this.collectGroundTerrainPolygonRepairSourceNodes({ sectionKey });
-            // Tile membership is authoritative during painting. Rebuilding the
-            // polygons from nodes avoids partial-splice anchor drift between old
-            // smoothed polygons and newly smoothed replacement polygons.
-            outputPolygons = this.buildGroundTerrainPolygonsFromNodes(replacementSourceNodes);
+            for (const type of typeSet) {
+                if (type === "grass") continue;
+                const typeRecords = participatingRecords.filter(record => record.polygon.type === type);
+                const sourceGeometries = [];
+                for (let i = 0; i < typeRecords.length; i++) {
+                    sourceGeometries.push(this.groundTerrainPolygonToClipGeometry(typeRecords[i].polygon));
+                }
+                let geometry = this.unionGroundTerrainClipGeometries(
+                    sourceGeometries,
+                    `terrain local patch ${type}`
+                );
+                const operandNodes = typeRecords.length > 0 ? patchNodes : [node];
+                for (let i = 0; i < operandNodes.length; i++) {
+                    const operandNode = operandNodes[i];
+                    if (!operandNode) continue;
+                    const operandType = this.getGroundTerrainTypeForNode(operandNode);
+                    const include = operandType === type;
+                    geometry = this.applyGroundTerrainLocalHexOperand(
+                        geometry,
+                        this.getGroundTerrainHexClipGeometry(operandNode),
+                        include,
+                        `terrain local patch ${type}`
+                    );
+                }
+                resultPolygonsByType.set(type, this.groundTerrainClipGeometryToPolygons(type, geometry));
+            }
         } catch (err) {
             node.groundTextureId = previousTextureId;
             throw err;
         }
-        if (asset) {
-            asset.terrainPolygons = outputPolygons;
-            asset._level0GroundSurfaceVersion = (Number(asset._level0GroundSurfaceVersion) || 0) + 1;
+        const patchedPolygonsByType = new Map();
+        const debugRawReplacementSegments = [];
+        const debugReplacementSegments = [];
+        for (const type of typeSet) {
+            if (type === "grass") continue;
+            const replacements = resultPolygonsByType.get(type) || [];
+            const typeRecords = participatingRecords.filter(record => record.polygon.type === type);
+            if (typeRecords.length === 0) {
+                patchedPolygonsByType.set(type, replacements);
+                continue;
+            }
+            const polygons = [];
+            const usedReplacementIndexes = new Set();
+            const repairOptions = {
+                suppressPriorityInversion: nextType === "grass" &&
+                    this.getGroundTerrainEditPriority(nextType) > this.getGroundTerrainEditPriority(type)
+            };
+            for (let i = 0; i < typeRecords.length; i++) {
+                const repaired = this.repairGroundTerrainPolygonVertices(
+                    typeRecords[i].polygon,
+                    replacements,
+                    affectedNodeKeys,
+                    vertexSlotsByPointKey,
+                    affectedNodes,
+                    repairOptions
+                );
+                const repairUsedIndexes = repaired && repaired.usedReplacementIndexes instanceof Set
+                    ? Array.from(repaired.usedReplacementIndexes)
+                    : [];
+                const alreadyRepresented = repairUsedIndexes.length > 0 && repairUsedIndexes.every(index => (
+                    usedReplacementIndexes.has(index)
+                ));
+                if (!alreadyRepresented) {
+                    polygons.push(...(Array.isArray(repaired && repaired.polygons) ? repaired.polygons : []));
+                }
+                for (const index of repairUsedIndexes) usedReplacementIndexes.add(index);
+                debugRawReplacementSegments.push(...(
+                    Array.isArray(repaired && repaired.rawReplacementSegments)
+                        ? repaired.rawReplacementSegments
+                        : []
+                ));
+                debugReplacementSegments.push(...(
+                    Array.isArray(repaired && repaired.replacementSegments)
+                        ? repaired.replacementSegments
+                        : []
+                ));
+            }
+            for (let i = 0; i < replacements.length; i++) {
+                if (usedReplacementIndexes.has(i)) continue;
+                const replacement = replacements[i];
+                const outerRuns = this.getGroundTerrainAffectedVertexRuns(
+                    replacement.points,
+                    affectedNodeKeys,
+                    vertexSlotsByPointKey,
+                    affectedNodes
+                );
+                const hasAffectedHole = Array.isArray(replacement.holes) && replacement.holes.some((hole) => (
+                    this.getGroundTerrainAffectedVertexRuns(hole, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes).length > 0
+                ));
+                if (outerRuns.length === 0 && !hasAffectedHole) continue;
+                polygons.push(replacement);
+            }
+            patchedPolygonsByType.set(type, polygons);
+        }
+        if (sectionKey || asset) {
+            const sourceByKey = new Map(sources.map(source => [source.key, source]));
+            const touchedSectionKeys = new Set(participatingRecords.map(record => record.source.key).filter(Boolean));
+            if (sectionKey) touchedSectionKeys.add(sectionKey);
+            if (asset && typeof asset.key === "string" && asset.key.length > 0) touchedSectionKeys.add(asset.key);
+            const nextPolygonsBySourceKey = new Map();
+            for (let s = 0; s < sources.length; s++) {
+                const source = sources[s];
+                const normalized = this.normalizeGroundTerrainPolygons(source.polygons);
+                nextPolygonsBySourceKey.set(source.key, normalized.filter((polygon, index) => (
+                    !participatingKeySet.has(`${source.key}:${index}`)
+                )));
+            }
+            const api = getPolygonClippingApi2D();
+            if (!api || typeof api.intersection !== "function") {
+                throw new Error("terrain local patch section split requires polygon clipping intersection");
+            }
+            const debugAfterPolygons = [];
+            for (const [, polygons] of patchedPolygonsByType.entries()) {
+                for (let p = 0; p < polygons.length; p++) {
+                    const polygonGeometry = this.groundTerrainPolygonToClipGeometry(polygons[p]);
+                    for (const key of touchedSectionKeys) {
+                        const source = sourceByKey.get(key);
+                        if (!source || !source.asset) continue;
+                        const clipGeometry = this.getGroundTerrainSectionClipGeometry(key, source.asset);
+                        let clipped = [];
+                        try {
+                            clipped = api.intersection(polygonGeometry, clipGeometry);
+                        } catch (err) {
+                            throw new Error(`terrain local patch section split failed for ${key}: ${err && err.message ? err.message : err}`);
+                        }
+                        const splitPolygons = this.groundTerrainClipGeometryToPolygons(polygons[p].type, clipped);
+                        const target = nextPolygonsBySourceKey.get(key);
+                        if (!target) {
+                            throw new Error(`terrain local patch could not resolve output list for section ${key}`);
+                        }
+                        target.push(...splitPolygons);
+                        debugAfterPolygons.push(...splitPolygons);
+                    }
+                }
+            }
+            for (const key of touchedSectionKeys) {
+                const source = sourceByKey.get(key);
+                if (!source || !source.asset) continue;
+                source.asset.terrainPolygons = this.normalizeGroundTerrainPolygons(nextPolygonsBySourceKey.get(key) || []);
+                source.asset._level0GroundSurfaceVersion = (Number(source.asset._level0GroundSurfaceVersion) || 0) + 1;
+            }
+            const editedSource = sourceByKey.get(sectionKey) || null;
+            const editedAsset = asset || (editedSource && editedSource.asset ? editedSource.asset : null);
+            this.syncGroundTerrainEditedTileForSectionAsset(editedAsset, sectionKey, node);
+            const modifiedSegments = debugReplacementSegments.length > 0
+                ? debugReplacementSegments
+                : this.collectGroundTerrainModifiedDebugSegments(
+                    debugBeforePolygons,
+                    debugAfterPolygons,
+                    patchBounds
+                );
+            this.recordGroundTerrainPaintDebugEdit(node, nextType, {
+                sectionKeys: Array.from(touchedSectionKeys),
+                rawReplacementSegments: debugRawReplacementSegments,
+                modifiedSegments
+            });
         } else {
-            this.terrainPolygons = outputPolygons;
+            const nextPolygons = records
+                .filter(record => !record.participating)
+                .map(record => record.polygon);
+            const debugAfterPolygons = [];
+            for (const [, polygons] of patchedPolygonsByType.entries()) {
+                nextPolygons.push(...polygons);
+                debugAfterPolygons.push(...polygons);
+            }
+            this.terrainPolygons = this.normalizeGroundTerrainPolygons(nextPolygons);
             this._level0GroundSurfaceVersion = (Number(this._level0GroundSurfaceVersion) || 0) + 1;
+            const modifiedSegments = debugReplacementSegments.length > 0
+                ? debugReplacementSegments
+                : this.collectGroundTerrainModifiedDebugSegments(
+                    debugBeforePolygons,
+                    debugAfterPolygons,
+                    patchBounds
+                );
+            this.recordGroundTerrainPaintDebugEdit(node, nextType, {
+                rawReplacementSegments: debugRawReplacementSegments,
+                modifiedSegments
+            });
         }
         return true;
     }
@@ -8926,6 +11418,15 @@ class GameMap {
         const out = [];
         for (let g = 0; g < groups.length; g++) {
             const group = groups[g];
+            const requiredSectionKey = typeof (options && options.requiredSectionKey) === "string"
+                ? options.requiredSectionKey
+                : "";
+            if (requiredSectionKey) {
+                const hasRequiredSectionNode = Array.isArray(group.nodes) && group.nodes.some(node => (
+                    node && node._prototypeSectionKey === requiredSectionKey
+                ));
+                if (!hasRequiredSectionNode) continue;
+            }
             const geometries = [];
             for (let n = 0; n < group.nodes.length; n++) {
                 const ring = polygonToClipRing2D(this.getGroundTerrainHexCorners(group.nodes[n]));
@@ -8969,15 +11470,11 @@ class GameMap {
     }
 
     rebuildGroundTerrainPolygonsForSection(sectionKey) {
-        const state = this._prototypeSectionState || null;
         const asset = typeof this.getPrototypeSectionAsset === "function"
             ? this.getPrototypeSectionAsset(sectionKey)
             : null;
         if (!asset) return [];
-        const nodes = state && state.nodesBySectionKey instanceof Map
-            ? (state.nodesBySectionKey.get(sectionKey) || [])
-            : [];
-        const polygons = this.buildGroundTerrainPolygonsFromNodes(nodes);
+        const polygons = this.buildGroundTerrainPolygonsForSection(sectionKey);
         asset.terrainPolygons = polygons;
         asset._level0GroundSurfaceVersion = (Number(asset._level0GroundSurfaceVersion) || 0) + 1;
         return polygons;
@@ -9058,7 +11555,11 @@ class GameMap {
         if (typeof textureName !== "string" || textureName.length === 0) {
             throw new Error(`missing ground terrain texture name at palette index ${textureIndex}`);
         }
-        return `/assets/images/land tiles/${textureName}.png`;
+        const texturePath = Array.isArray(this.groundTexturePaths) ? this.groundTexturePaths[textureIndex] : "";
+        if (typeof texturePath !== "string" || texturePath.length === 0) {
+            throw new Error(`missing ground terrain texture path at palette index ${textureIndex}`);
+        }
+        return texturePath;
     }
 
     getGroundTexturePathForNode(node) {

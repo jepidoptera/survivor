@@ -18,6 +18,8 @@
     const FLOOR_LAYER_DEFAULT_HEIGHT_UNITS = 3;
     const FLOOR_LEVEL0_SURFACE_TEXTURE_PX_PER_WORLD = 128;
     const FLOOR_LEVEL0_SURFACE_TEXTURE_MAX_SIZE = 4096;
+    const FLOOR_LEVEL0_TERRAIN_DEPTH_BIAS_STEP_UNITS = 0.01;
+    const FLOOR_LEVEL0_TERRAIN_ALPHA_BLEND_WIDTH_UNITS = 1 / 3;
     // Terrain polygons are rendered live through floorVisual entries. The level-0
     // baked-surface path below still exists for legacy ground/road surface work,
     // but it is not the source of truth for painted terrain polygon visibility.
@@ -33,6 +35,7 @@
     const FLOOR_LEVEL0_CHUNK_CACHE_LIMIT = 96;
     const FLOOR_LEVEL0_SEAM_BLEED_UNITS = 0.16;
     const FLOOR_LEVEL0_TERRAIN_BOUNDARY_MODEL_VERSION = 4;
+    const FLOOR_LEVEL0_TERRAIN_FADE_CLIP_WARNING_LIMIT = 50;
     const FLOOR_VISUAL_DEPTH_NEAR_METRIC = -128;
     const FLOOR_VISUAL_DEPTH_FAR_METRIC = 256;
     const FLOOR_VISUAL_DEPTH_BIAS_UNITS = 0.001;
@@ -67,6 +70,7 @@
 precision highp float;
 attribute vec2 aVertexPosition;
 attribute vec2 aUvs;
+attribute float aEdgeAlpha;
 uniform vec2 uScreenSize;
 uniform vec2 uCameraWorld;
 uniform float uCameraZ;
@@ -77,6 +81,7 @@ uniform float uXyRatio;
 uniform vec2 uDepthRange;
 varying vec2 vUvs;
 varying float vWorldZ;
+varying float vEdgeAlpha;
 void main(void) {
     float camDx = aVertexPosition.x - uCameraWorld.x;
     float camDy = aVertexPosition.y - uCameraWorld.y;
@@ -96,6 +101,7 @@ void main(void) {
     gl_Position = vec4(clip, nd * 2.0 - 1.0, 1.0);
     vUvs = aUvs;
     vWorldZ = uBaseZ;
+    vEdgeAlpha = clamp(aEdgeAlpha, 0.0, 1.0);
 }
 `;
     const ROAD_PATH_DEPTH_VS = `
@@ -136,6 +142,8 @@ void main(void) {
     vEdgeAlpha = clamp(aEdgeAlpha, 0.0, 1.0);
 }
 `;
+    const warnedTerrainFadeClipFailures = new Set();
+    let suppressedTerrainFadeClipWarnings = 0;
     const LOS_SHADOW_DEPTH_VS = `
 precision highp float;
 attribute vec2 aWorldPosition;
@@ -177,13 +185,16 @@ void main(void) {
 precision highp float;
 varying vec2 vUvs;
 varying float vWorldZ;
+varying float vEdgeAlpha;
 uniform sampler2D uSampler;
 uniform vec4 uTint;
 uniform float uAlphaCutoff;
 uniform float uBuildingCutawayDataPass;
 uniform vec2 uBuildingCutawayDataZRange;
 void main(void) {
-    vec4 outColor = texture2D(uSampler, vUvs) * uTint;
+    vec4 outColor = texture2D(uSampler, fract(vUvs)) * uTint;
+    float edgeAlpha = clamp(vEdgeAlpha, 0.0, 1.0);
+    outColor = vec4(outColor.rgb * edgeAlpha, outColor.a * edgeAlpha);
     if (outColor.a < uAlphaCutoff) discard;
     if (uBuildingCutawayDataPass > 0.5) {
         float minZ = uBuildingCutawayDataZRange.x;
@@ -199,6 +210,7 @@ void main(void) {
 precision highp float;
 varying vec2 vUvs;
 varying float vWorldZ;
+varying float vEdgeAlpha;
 uniform sampler2D uSampler;
 uniform vec4 uTint;
 uniform vec2 uPhaseOffset0;
@@ -220,8 +232,7 @@ void main(void) {
         return;
     }
     vec3 w = max(uPhaseWeights, vec3(0.0));
-    float spatial = 0.5 + 0.5 * sin((vUvs.x + vUvs.y) * uSpatialFrequency + uSpatialPhase);
-    w = mix(w, vec3(w.y, w.z, w.x), spatial * clamp(uSpatialStrength, 0.0, 1.0));
+    w *= smoothstep(vec3(0.0), vec3(0.08), uPhaseWeights);
     float weightSum = max(0.0001, w.x + w.y + w.z);
     w /= weightSum;
     vec2 uv0 = vUvs;
@@ -230,9 +241,9 @@ void main(void) {
     vec3 c0 = texture2D(uSampler, fract(uv0 + uPhaseOffset0)).rgb;
     vec3 c1 = texture2D(uSampler, fract(uv1 + uPhaseOffset1)).rgb;
     vec3 c2 = texture2D(uSampler, fract(uv2 + uPhaseOffset2)).rgb;
-    float alpha = clamp(uTint.a, 0.0, 1.0);
+    float alpha = clamp(uTint.a * vEdgeAlpha, 0.0, 1.0);
     if (alpha < uAlphaCutoff) discard;
-    gl_FragColor = vec4((c0 * w.x + c1 * w.y + c2 * w.z) * uTint.rgb, alpha);
+    gl_FragColor = vec4((c0 * w.x + c1 * w.y + c2 * w.z) * uTint.rgb * alpha, alpha);
 }
 `;
     const ROAD_PATH_DEPTH_FS = `
@@ -365,6 +376,67 @@ void main(void) {
         return parts.join("");
     }
 
+    function buildFloorVisualClipBoundarySignature(rings) {
+        const normalized = Array.isArray(rings) ? rings : [];
+        if (normalized.length === 0) return "";
+        return normalized.map(ring => buildFloorVisualSignature(normalizeFloorVisualPointList(ring), [])).join("|");
+    }
+
+    function cloneFloorVisualDiagnosticRing(points) {
+        return normalizeFloorVisualPointList(points).map(point => ({
+            x: Math.round(Number(point.x) * 1000000) / 1000000,
+            y: Math.round(Number(point.y) * 1000000) / 1000000
+        }));
+    }
+
+    function warnTerrainFadeClipApproximation(err, diagnostic) {
+        const key = [
+            diagnostic && diagnostic.entryKey ? diagnostic.entryKey : "",
+            diagnostic && diagnostic.ringKind ? diagnostic.ringKind : "",
+            diagnostic && Number.isFinite(diagnostic.holeIndex) ? diagnostic.holeIndex : "",
+            diagnostic && Number.isFinite(diagnostic.edgeIndex) ? diagnostic.edgeIndex : "",
+            diagnostic && diagnostic.bandSignature ? diagnostic.bandSignature : "",
+            diagnostic && diagnostic.clipSignature ? diagnostic.clipSignature : "",
+            err && err.message ? String(err.message) : String(err)
+        ].join("|");
+        if (warnedTerrainFadeClipFailures.has(key)) return;
+        if (warnedTerrainFadeClipFailures.size >= FLOOR_LEVEL0_TERRAIN_FADE_CLIP_WARNING_LIMIT) {
+            suppressedTerrainFadeClipWarnings += 1;
+            if (suppressedTerrainFadeClipWarnings === 1) {
+                console.warn("[terrain fade clip approximation] warning limit reached", {
+                    limit: FLOOR_LEVEL0_TERRAIN_FADE_CLIP_WARNING_LIMIT,
+                    message: "Additional distinct terrain fade clipping failures are suppressed."
+                });
+            }
+            return;
+        }
+        warnedTerrainFadeClipFailures.add(key);
+        console.warn("[terrain fade clip approximation]", {
+            message: "Polygon clipping failed while clipping a terrain edge fade band; drawing the unclipped fade band as a diagnostic approximation.",
+            error: err && err.message ? String(err.message) : String(err),
+            approximation: "unclipped fade band",
+            entryKey: diagnostic && diagnostic.entryKey ? diagnostic.entryKey : "",
+            terrainType: diagnostic && diagnostic.terrainType ? diagnostic.terrainType : "",
+            sectionKey: diagnostic && diagnostic.sectionKey ? diagnostic.sectionKey : "",
+            groupIndex: diagnostic && Number.isFinite(diagnostic.groupIndex) ? diagnostic.groupIndex : null,
+            polygonIndex: diagnostic && Number.isFinite(diagnostic.polygonIndex) ? diagnostic.polygonIndex : null,
+            clippedPieceIndex: diagnostic && Number.isFinite(diagnostic.clippedPieceIndex) ? diagnostic.clippedPieceIndex : null,
+            ringKind: diagnostic && diagnostic.ringKind ? diagnostic.ringKind : "",
+            holeIndex: diagnostic && Number.isFinite(diagnostic.holeIndex) ? diagnostic.holeIndex : null,
+            edgeIndex: diagnostic && Number.isFinite(diagnostic.edgeIndex) ? diagnostic.edgeIndex : null,
+            blendWidth: diagnostic && Number.isFinite(diagnostic.blendWidth) ? diagnostic.blendWidth : null,
+            sourceSignature: diagnostic && diagnostic.sourceSignature ? diagnostic.sourceSignature : "",
+            bandSignature: diagnostic && diagnostic.bandSignature ? diagnostic.bandSignature : "",
+            clipSignature: diagnostic && diagnostic.clipSignature ? diagnostic.clipSignature : "",
+            edgeStart: diagnostic && diagnostic.edgeStart ? diagnostic.edgeStart : null,
+            edgeEnd: diagnostic && diagnostic.edgeEnd ? diagnostic.edgeEnd : null,
+            bandOuter: diagnostic && Array.isArray(diagnostic.bandOuter) ? diagnostic.bandOuter : [],
+            sourceOuter: diagnostic && Array.isArray(diagnostic.sourceOuter) ? diagnostic.sourceOuter : [],
+            sourceHoles: diagnostic && Array.isArray(diagnostic.sourceHoles) ? diagnostic.sourceHoles : [],
+            clipRings: diagnostic && Array.isArray(diagnostic.clipRings) ? diagnostic.clipRings : []
+        });
+    }
+
     function triangulateFloorVisualPolygon(outer, holes) {
         const earcut = getFloorEarcut();
         if (!earcut || outer.length < 3) return null;
@@ -395,6 +467,243 @@ void main(void) {
             points: allPoints,
             indices: new IndexArray(indices),
             vertexCount: allPoints.length
+        };
+    }
+
+    function getFloorVisualRingSignedArea(points) {
+        const ring = normalizeFloorVisualPointList(points);
+        if (ring.length < 3) return 0;
+        let area = 0;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            area += (ring[j].x * ring[i].y) - (ring[i].x * ring[j].y);
+        }
+        return area * 0.5;
+    }
+
+    function offsetFloorVisualRing(points, amount) {
+        const ring = normalizeFloorVisualPointList(points);
+        const distance = Number(amount);
+        if (ring.length < 3 || !Number.isFinite(distance) || Math.abs(distance) <= 1e-9) return ring;
+        const signedArea = getFloorVisualRingSignedArea(ring);
+        if (!Number.isFinite(signedArea) || Math.abs(signedArea) <= 1e-9) {
+            throw new Error("terrain alpha blend requires a non-degenerate polygon ring");
+        }
+        const outwardSign = signedArea >= 0 ? 1 : -1;
+        const edgeNormal = (a, b) => {
+            const dx = Number(b.x) - Number(a.x);
+            const dy = Number(b.y) - Number(a.y);
+            const length = Math.hypot(dx, dy);
+            if (!(length > 1e-9)) return null;
+            return {
+                x: outwardSign * dy / length,
+                y: -outwardSign * dx / length
+            };
+        };
+        const intersectLines = (p1, p2, p3, p4) => {
+            const x1 = Number(p1.x);
+            const y1 = Number(p1.y);
+            const x2 = Number(p2.x);
+            const y2 = Number(p2.y);
+            const x3 = Number(p3.x);
+            const y3 = Number(p3.y);
+            const x4 = Number(p4.x);
+            const y4 = Number(p4.y);
+            const den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+            if (Math.abs(den) <= 1e-9) return null;
+            const det12 = x1 * y2 - y1 * x2;
+            const det34 = x3 * y4 - y3 * x4;
+            return {
+                x: (det12 * (x3 - x4) - (x1 - x2) * det34) / den,
+                y: (det12 * (y3 - y4) - (y1 - y2) * det34) / den
+            };
+        };
+        const out = [];
+        const maxMiter = Math.max(Math.abs(distance) * 6, Math.abs(distance) + 0.001);
+        for (let i = 0; i < ring.length; i++) {
+            const prev = ring[(i + ring.length - 1) % ring.length];
+            const cur = ring[i];
+            const next = ring[(i + 1) % ring.length];
+            const prevNormal = edgeNormal(prev, cur);
+            const nextNormal = edgeNormal(cur, next);
+            if (!prevNormal || !nextNormal) {
+                throw new Error("terrain alpha blend cannot offset a polygon ring with zero-length edges");
+            }
+            const prevA = { x: prev.x + prevNormal.x * distance, y: prev.y + prevNormal.y * distance };
+            const prevB = { x: cur.x + prevNormal.x * distance, y: cur.y + prevNormal.y * distance };
+            const nextA = { x: cur.x + nextNormal.x * distance, y: cur.y + nextNormal.y * distance };
+            const nextB = { x: next.x + nextNormal.x * distance, y: next.y + nextNormal.y * distance };
+            let point = intersectLines(prevA, prevB, nextA, nextB);
+            if (!point) {
+                const nx = prevNormal.x + nextNormal.x;
+                const ny = prevNormal.y + nextNormal.y;
+                const length = Math.hypot(nx, ny);
+                point = length > 1e-9
+                    ? { x: cur.x + (nx / length) * distance, y: cur.y + (ny / length) * distance }
+                    : { x: cur.x + nextNormal.x * distance, y: cur.y + nextNormal.y * distance };
+            }
+            const dx = point.x - cur.x;
+            const dy = point.y - cur.y;
+            const miterLength = Math.hypot(dx, dy);
+            if (miterLength > maxMiter) {
+                point = {
+                    x: cur.x + (dx / miterLength) * maxMiter,
+                    y: cur.y + (dy / miterLength) * maxMiter
+                };
+            }
+            if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+                throw new Error("terrain alpha blend produced a non-finite offset vertex");
+            }
+            out.push(point);
+        }
+        return out;
+    }
+
+    function triangulateFloorVisualTerrainBlendPolygon(outer, holes, blendWidth, options = null) {
+        const sourceOuter = normalizeFloorVisualPointList(outer);
+        if (sourceOuter.length < 3) return null;
+        const width = Number(blendWidth);
+        if (!Number.isFinite(width) || !(width > 0)) {
+            return triangulateFloorVisualPolygon(sourceOuter, holes);
+        }
+        const base = triangulateFloorVisualPolygon(sourceOuter, holes);
+        if (!base) return null;
+        const points = base.points.slice();
+        const edgeAlpha = new Array(points.length).fill(1);
+        const indices = Array.from(base.indices);
+        const emitVertex = (point, alpha) => {
+            if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+                throw new Error("terrain alpha blend cannot emit a non-finite vertex");
+            }
+            points.push({ x: Number(point.x), y: Number(point.y) });
+            edgeAlpha.push(Math.max(0, Math.min(1, Number(alpha))));
+            return points.length - 1;
+        };
+        const emitTriangle = (a, b, c) => {
+            indices.push(a, b, c);
+        };
+        const clipBoundaryRings = Array.isArray(options && options.edgeFadeClipRings)
+            ? options.edgeFadeClipRings.map(ring => normalizeFloorVisualPointList(ring)).filter(ring => ring.length >= 3)
+            : [];
+        const clipBoundaryOuter = clipBoundaryRings.length > 0 ? clipBoundaryRings[0] : null;
+        const clipBoundaryHoles = clipBoundaryRings.length > 1 ? clipBoundaryRings.slice(1) : [];
+        const sourceHoles = Array.isArray(holes)
+            ? holes.map(hole => normalizeFloorVisualPointList(hole)).filter(hole => hole.length >= 3)
+            : [];
+        const diagnosticBase = options && typeof options.edgeFadeDiagnosticContext === "object" && options.edgeFadeDiagnosticContext
+            ? options.edgeFadeDiagnosticContext
+            : {};
+        const sourceSignature = buildFloorVisualSignature(sourceOuter, sourceHoles);
+        const clipSignature = buildFloorVisualClipBoundarySignature(clipBoundaryRings);
+        const clipFadeBandPolygon = (bandOuter, bandContext = null) => {
+            if (!clipBoundaryOuter) return [{ outer: bandOuter, holes: [] }];
+            const api = getFloorVisualPolygonClippingApi();
+            if (!api || typeof api.intersection !== "function") {
+                throw new Error("terrain alpha blend clipping requires polygon clipping intersection");
+            }
+            const bandGeometry = floorVisualClipMultiPolygonFromRings(bandOuter, []);
+            const clipGeometry = floorVisualClipMultiPolygonFromRings(clipBoundaryOuter, clipBoundaryHoles);
+            if (bandGeometry.length === 0 || clipGeometry.length === 0) return [];
+            try {
+                return floorVisualClipGeometryToPolygons(api.intersection(bandGeometry, clipGeometry));
+            } catch (err) {
+                warnTerrainFadeClipApproximation(err, {
+                    ...diagnosticBase,
+                    ringKind: bandContext && bandContext.ringKind ? bandContext.ringKind : "",
+                    holeIndex: bandContext && Number.isFinite(bandContext.holeIndex) ? bandContext.holeIndex : null,
+                    edgeIndex: bandContext && Number.isFinite(bandContext.edgeIndex) ? bandContext.edgeIndex : null,
+                    edgeStart: bandContext && bandContext.edgeStart ? bandContext.edgeStart : null,
+                    edgeEnd: bandContext && bandContext.edgeEnd ? bandContext.edgeEnd : null,
+                    blendWidth: width,
+                    sourceSignature,
+                    bandSignature: buildFloorVisualSignature(bandOuter, []),
+                    clipSignature,
+                    bandOuter: cloneFloorVisualDiagnosticRing(bandOuter),
+                    sourceOuter: cloneFloorVisualDiagnosticRing(sourceOuter),
+                    sourceHoles: sourceHoles.map(hole => cloneFloorVisualDiagnosticRing(hole)),
+                    clipRings: clipBoundaryRings.map(ring => cloneFloorVisualDiagnosticRing(ring))
+                });
+                return [{ outer: bandOuter, holes: [] }];
+            }
+        };
+        const getFadeBandAlpha = (point, innerA, innerB, outerA, outerB) => {
+            const ax = Number(innerA && innerA.x);
+            const ay = Number(innerA && innerA.y);
+            const bx = Number(innerB && innerB.x);
+            const by = Number(innerB && innerB.y);
+            const px = Number(point && point.x);
+            const py = Number(point && point.y);
+            if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by) || !Number.isFinite(px) || !Number.isFinite(py)) {
+                throw new Error("terrain alpha blend clipping produced a non-finite alpha sample");
+            }
+            const edgeX = bx - ax;
+            const edgeY = by - ay;
+            const edgeLengthSq = edgeX * edgeX + edgeY * edgeY;
+            const edgeT = edgeLengthSq > 1e-9
+                ? Math.max(0, Math.min(1, ((px - ax) * edgeX + (py - ay) * edgeY) / edgeLengthSq))
+                : 0;
+            const innerX = ax + edgeX * edgeT;
+            const innerY = ay + edgeY * edgeT;
+            const outerX = Number(outerA.x) + (Number(outerB.x) - Number(outerA.x)) * edgeT;
+            const outerY = Number(outerA.y) + (Number(outerB.y) - Number(outerA.y)) * edgeT;
+            const fadeX = outerX - innerX;
+            const fadeY = outerY - innerY;
+            const fadeLengthSq = fadeX * fadeX + fadeY * fadeY;
+            if (!(fadeLengthSq > 1e-9)) return 1;
+            const fadeT = ((px - innerX) * fadeX + (py - innerY) * fadeY) / fadeLengthSq;
+            return 1 - Math.max(0, Math.min(1, fadeT));
+        };
+        const emitAlphaPolygon = (polygon, alphaForPoint) => {
+            if (!polygon || !Array.isArray(polygon.outer) || polygon.outer.length < 3) return;
+            const clippedTriangulation = triangulateFloorVisualPolygon(polygon.outer, polygon.holes);
+            if (!clippedTriangulation) return;
+            const baseIndex = points.length;
+            for (let i = 0; i < clippedTriangulation.points.length; i++) {
+                emitVertex(clippedTriangulation.points[i], alphaForPoint(clippedTriangulation.points[i]));
+            }
+            for (let i = 0; i + 2 < clippedTriangulation.indices.length; i += 3) {
+                emitTriangle(
+                    baseIndex + clippedTriangulation.indices[i],
+                    baseIndex + clippedTriangulation.indices[i + 1],
+                    baseIndex + clippedTriangulation.indices[i + 2]
+                );
+            }
+        };
+        const emitFadeBand = (innerRing, outerRing, ringContext = null) => {
+            const inner = normalizeFloorVisualPointList(innerRing);
+            const outerBand = normalizeFloorVisualPointList(outerRing);
+            if (inner.length !== outerBand.length || inner.length < 3) {
+                throw new Error("terrain alpha blend requires matching inner and outer fade rings");
+            }
+            for (let i = 0; i < inner.length; i++) {
+                const next = (i + 1) % inner.length;
+                const bandOuter = [inner[i], inner[next], outerBand[next], outerBand[i]];
+                const clippedBands = clipFadeBandPolygon(bandOuter, {
+                    edgeIndex: i,
+                    ringKind: ringContext && ringContext.ringKind ? ringContext.ringKind : "outer",
+                    holeIndex: ringContext && Number.isFinite(ringContext.holeIndex) ? ringContext.holeIndex : null,
+                    edgeStart: cloneFloorVisualDiagnosticRing([inner[i]])[0] || null,
+                    edgeEnd: cloneFloorVisualDiagnosticRing([inner[next]])[0] || null
+                });
+                for (let b = 0; b < clippedBands.length; b++) {
+                    emitAlphaPolygon(clippedBands[b], point => (
+                        getFadeBandAlpha(point, inner[i], inner[next], outerBand[i], outerBand[next])
+                    ));
+                }
+            }
+        };
+        emitFadeBand(sourceOuter, offsetFloorVisualRing(sourceOuter, width), { ringKind: "outer" });
+        const normalizedHoles = Array.isArray(holes) ? holes : [];
+        for (let h = 0; h < normalizedHoles.length; h++) {
+            const hole = normalizeFloorVisualPointList(normalizedHoles[h]);
+            if (hole.length < 3) continue;
+            emitFadeBand(hole, offsetFloorVisualRing(hole, -width), { ringKind: "hole", holeIndex: h });
+        }
+        const IndexArray = points.length > 65535 ? Uint32Array : Uint16Array;
+        return {
+            points,
+            indices: new IndexArray(indices),
+            vertexCount: points.length,
+            edgeAlpha: new Float32Array(edgeAlpha)
         };
     }
 
@@ -610,6 +919,24 @@ void main(void) {
             return floorVisualClipGeometryToPolygons(api.intersection(subject, clip));
         } catch (_err) {
             return [];
+        }
+    }
+
+    function intersectFloorVisualPolygonWithPolygonStrict(outer, holes, clipPolygon, label = "floor visual polygon") {
+        const normalizedOuter = normalizeFloorVisualPointList(outer);
+        const clipOuter = normalizeFloorVisualPointList(clipPolygon && clipPolygon.outer);
+        if (normalizedOuter.length < 3 || clipOuter.length < 3) return [];
+        const api = getFloorVisualPolygonClippingApi();
+        if (!api || typeof api.intersection !== "function") {
+            throw new Error(`${label} clipping requires polygon-clipping intersection support`);
+        }
+        const subject = floorVisualClipMultiPolygonFromRings(normalizedOuter, holes);
+        const clip = floorVisualClipMultiPolygonFromRings(clipOuter, Array.isArray(clipPolygon && clipPolygon.holes) ? clipPolygon.holes : []);
+        if (!Array.isArray(subject) || subject.length === 0 || !Array.isArray(clip) || clip.length === 0) return [];
+        try {
+            return floorVisualClipGeometryToPolygons(api.intersection(subject, clip));
+        } catch (err) {
+            throw new Error(`${label} clipping failed: ${err && err.message ? err.message : err}`);
         }
     }
 
@@ -1180,6 +1507,7 @@ void main(void) {
             this.powerupPlacementPreviewItem = null;
             this.wallPlacementPreviewGraphics = null;
             this.floorEditorPolygonOverlayGraphics = null;
+            this.terrainPolygonDiagnosticGraphics = null;
             this.layerCutawayDebugGraphics = null;
             this.buildingCutawayGroundMaskGraphics = null;
             this.buildingCutawayGroundMaskMeshes = new Map();
@@ -10971,6 +11299,42 @@ void main(void) {
             return section._cachedRenderWorldBounds;
         }
 
+        getPrototypeSectionTerrainClipPolygon(sectionKey, asset, state) {
+            const explicitPolygon = normalizeFloorVisualPointList(asset && asset.sectionPolygon);
+            if (explicitPolygon.length >= 3) {
+                return { outer: explicitPolygon, holes: [] };
+            }
+            const section = (
+                state &&
+                state.sectionsByKey instanceof Map &&
+                typeof sectionKey === "string"
+            ) ? (state.sectionsByKey.get(sectionKey) || null) : null;
+            const centerAxial = (
+                asset &&
+                asset.centerAxial &&
+                Number.isFinite(Number(asset.centerAxial.q)) &&
+                Number.isFinite(Number(asset.centerAxial.r))
+            ) ? asset.centerAxial : (
+                section &&
+                section.centerAxial &&
+                Number.isFinite(Number(section.centerAxial.q)) &&
+                Number.isFinite(Number(section.centerAxial.r))
+            ) ? section.centerAxial : null;
+            const geometry = typeof global !== "undefined" ? global.__sectionGeometry : null;
+            const polygon = (
+                geometry &&
+                typeof geometry.getSectionHexagonCorners === "function" &&
+                centerAxial &&
+                state &&
+                state.basis
+            ) ? geometry.getSectionHexagonCorners(centerAxial, state.basis) : null;
+            const normalized = normalizeFloorVisualPointList(polygon);
+            if (normalized.length >= 3) {
+                return { outer: normalized, holes: [] };
+            }
+            throw new Error(`Cannot render terrain polygons for section ${sectionKey || "(unknown)"} without section polygon geometry.`);
+        }
+
         collectViewportCandidateSectionKeys(ctx, mapRef, viewportBounds) {
             const sectionKeys = new Set();
             const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
@@ -11133,7 +11497,7 @@ void main(void) {
                 4,
                 Number.isFinite(cameraRef.z) ? Number(cameraRef.z) : (Number.isFinite(viewportRef.z) ? Number(viewportRef.z) : 0)
             );
-            const viewportSectionKeys = this.collectViewportFloorSectionKeys(ctx, map, viewportBounds);
+            const viewportSectionKeys = this.collectViewportCandidateSectionKeys(ctx, map, viewportBounds);
             const useViewportSectionFilter = !!(map.floorsById instanceof Map && viewportBounds);
             const activeSectionKeys = (
                 !useViewportSectionFilter &&
@@ -13848,15 +14212,23 @@ void main(void) {
             return out;
         }
 
-        collectLevel0TerrainPolygonFloorVisualEntries(ctx, fragmentId, sectionKey, asset, baseZ, alpha, activeInteriorDepthBump = 0) {
+        collectLevel0TerrainPolygonFloorVisualEntries(ctx, fragmentId, sectionKey, asset, baseZ, alpha, activeInteriorDepthBump = 0, clipPolygon = null) {
             const map = ctx && ctx.map;
             if (!map || !asset || !Array.isArray(asset.terrainPolygons) || asset.terrainPolygons.length === 0) return [];
             const groups = this.getLevel0TerrainPolygonGroupsFromAsset(map, asset);
+            this.sortLevel0TerrainGroupsForDraw(groups);
             const nowMs = (ctx && Number.isFinite(ctx.renderNowMs)) ? Number(ctx.renderNowMs) : Date.now();
             const out = [];
+            const clipOuter = normalizeFloorVisualPointList(clipPolygon && clipPolygon.outer);
+            const clipHoles = Array.isArray(clipPolygon && clipPolygon.holes) ? clipPolygon.holes : [];
+            const hasClipPolygon = clipOuter.length >= 3;
+            const edgeFadeClipRings = hasClipPolygon
+                ? [clipOuter].concat(clipHoles.map(hole => normalizeFloorVisualPointList(hole)).filter(hole => hole.length >= 3))
+                : [];
+            const edgeFadeClipSignature = buildFloorVisualClipBoundarySignature(edgeFadeClipRings);
             for (let i = 0; i < groups.length; i++) {
                 const group = groups[i];
-                if (!group || group.type === "grass") continue;
+                if (!group) continue;
                 const loops = Array.isArray(group.loops) ? group.loops : [];
                 if (loops.length === 0) continue;
                 const polygons = this.getLevel0TerrainRegionPolygonsFromLoops(loops);
@@ -13864,30 +14236,111 @@ void main(void) {
                     ? group.materialPath
                     : this.getLevel0TerrainMaterialPathForType(map, group.type);
                 const textureRepeat = this.getLevel0TerrainMaterialRepeat(map, group.type);
+                const terrainDrawOrder = this.getLevel0TerrainDrawOrder(group.type);
+                const terrainDepthBias = FLOOR_VISUAL_DEPTH_BIAS_UNITS +
+                    0.002 +
+                    this.getLevel0TerrainDepthBiasOffset(group.type) +
+                    activeInteriorDepthBump;
+                const terrainAlphaBlendWidth = FLOOR_LEVEL0_TERRAIN_ALPHA_BLEND_WIDTH_UNITS;
                 for (let p = 0; p < polygons.length; p++) {
                     const polygon = polygons[p];
                     if (!polygon || !Array.isArray(polygon.outer) || polygon.outer.length < 3) continue;
-                    out.push({
-                        key: `fragment:${fragmentId}:terrain:${sectionKey || ""}:${group.type}:${i}:${p}`,
-                        level: 0,
-                        baseZ,
-                        outer: polygon.outer,
-                        holes: Array.isArray(polygon.holes) ? polygon.holes : [],
-                        texture: null,
-                        textureBounds: null,
-                        textureRepeat,
-                        texturePath,
-                        tint: this.getLayerDarkenedTint(0xffffff, 0),
-                        alpha,
-                        depthBias: FLOOR_VISUAL_DEPTH_BIAS_UNITS + 0.002 + activeInteriorDepthBump,
-                        isHoleOverlay: false,
-                        isAnimatedWater: group.type === "water",
-                        isTerrainPolygon: true,
-                        terrainType: group.type,
-                        animationNowMs: nowMs
-                    });
+                    const clippedPolygons = hasClipPolygon
+                        ? intersectFloorVisualPolygonWithPolygonStrict(
+                            polygon.outer,
+                            Array.isArray(polygon.holes) ? polygon.holes : [],
+                            { outer: clipOuter, holes: clipHoles },
+                            `terrain ${group.type || "unknown"} section ${sectionKey || "(none)"}`
+                        )
+                        : [polygon];
+                    for (let c = 0; c < clippedPolygons.length; c++) {
+                        const piece = clippedPolygons[c];
+                        if (!piece || !Array.isArray(piece.outer) || piece.outer.length < 3) continue;
+                        out.push({
+                            key: `fragment:${fragmentId}:terrain:${sectionKey || ""}:${group.type}:${i}:${p}:${c}`,
+                            level: 0,
+                            baseZ,
+                            outer: piece.outer,
+                            holes: Array.isArray(piece.holes) ? piece.holes : [],
+                            texture: null,
+                            textureBounds: null,
+                            textureRepeat,
+                            texturePath,
+                            tint: this.getLayerDarkenedTint(0xffffff, 0),
+                            alpha,
+                            depthBias: terrainDepthBias,
+                            isHoleOverlay: false,
+                            isAnimatedWater: group.type === "water",
+                            isTerrainPolygon: true,
+                            terrainType: group.type,
+                            floorVisualSortOrder: 100 + terrainDrawOrder,
+                            edgeFadeWidth: terrainAlphaBlendWidth,
+                            edgeFadeClipRings,
+                            edgeFadeClipSignature,
+                            edgeFadeDiagnosticContext: {
+                                terrainType: group.type,
+                                sectionKey: sectionKey || "",
+                                groupIndex: i,
+                                polygonIndex: p,
+                                clippedPieceIndex: c
+                            },
+                            animationNowMs: nowMs
+                        });
+                    }
                 }
             }
+            this.sortLevel0TerrainFloorVisualEntriesForDraw(out);
+            return out;
+        }
+
+        collectLevel0SectionTerrainPolygonFloorVisualEntries(ctx, viewportSectionKeys, nowMs) {
+            if (!FLOOR_LEVEL0_POLYGON_MATERIAL_ENABLED) return [];
+            const map = ctx && ctx.map;
+            const state = map && map._prototypeSectionState;
+            if (!map || !state || !(state.sectionAssetsByKey instanceof Map)) return [];
+            const selectedLevel = this.getSelectedFloorVisualLevel();
+            if (isFloorEditIsolationActive() && selectedLevel !== 0) return [];
+            const wizard = (ctx && ctx.wizard) || global.wizard || null;
+            const mazeLayerOnly = !!(
+                this.isLosMazeModeEnabled() &&
+                !this.isOmnivisionActive(wizard) &&
+                wizard
+            );
+            const wizardLayer = this.getWizardVisualLayerIndex(wizard, 0);
+            if (mazeLayerOnly && wizardLayer !== 0) return [];
+            const sourceSectionKeys = viewportSectionKeys instanceof Set && viewportSectionKeys.size > 0
+                ? viewportSectionKeys
+                : (
+                    state.activeSectionKeys instanceof Set
+                        ? state.activeSectionKeys
+                        : (
+                            typeof map.getPrototypeActiveSectionKeys === "function"
+                                ? map.getPrototypeActiveSectionKeys()
+                                : null
+                        )
+                );
+            const out = [];
+            if (!(sourceSectionKeys instanceof Set) || sourceSectionKeys.size === 0) return out;
+            const baseZ = this.getLayerBaseZForLevel(0);
+            const alpha = this.getLiveLayerFadeMultiplier(0, nowMs);
+            sourceSectionKeys.forEach((sectionKey) => {
+                const asset = state.sectionAssetsByKey.get(sectionKey);
+                if (!asset || !Array.isArray(asset.terrainPolygons) || asset.terrainPolygons.length === 0) return;
+                const clipPolygon = this.getPrototypeSectionTerrainClipPolygon(sectionKey, asset, state);
+                const terrainEntries = this.collectLevel0TerrainPolygonFloorVisualEntries(
+                    ctx,
+                    `section:${sectionKey}`,
+                    sectionKey,
+                    asset,
+                    baseZ,
+                    alpha,
+                    0,
+                    clipPolygon
+                );
+                for (let i = 0; i < terrainEntries.length; i++) {
+                    if (terrainEntries[i]) out.push(terrainEntries[i]);
+                }
+            });
             return out;
         }
 
@@ -14162,6 +14615,107 @@ void main(void) {
                 }
             }
             return out;
+        }
+
+        getRoadPathRenderViewportBounds(ctx, margin = 8) {
+            const cameraRef = (ctx && ctx.camera) || this.camera || {};
+            const cameraZ = Number.isFinite(cameraRef.z)
+                ? Number(cameraRef.z)
+                : (Number.isFinite(ctx && ctx.viewport && ctx.viewport.z) ? Number(ctx.viewport.z) : 0);
+            const projected = this.getCameraScreenSpaceWorldBoundsAtZ(ctx, margin, cameraZ);
+            if (projected) return projected;
+            const viewportRef = (ctx && ctx.viewport) || {};
+            const width = Math.max(0, Number(viewportRef.width) || 0);
+            const height = Math.max(0, Number(viewportRef.height) || 0);
+            const x = Number(cameraRef.x) || 0;
+            const y = Number(cameraRef.y) || 0;
+            return {
+                minX: x - margin,
+                minY: y - margin,
+                maxX: x + width + margin,
+                maxY: y + height + margin
+            };
+        }
+
+        expandWorldBounds(bounds, margin = 0) {
+            if (!bounds) return null;
+            const amount = Math.max(0, Number(margin) || 0);
+            return {
+                minX: Number(bounds.minX) - amount,
+                minY: Number(bounds.minY) - amount,
+                maxX: Number(bounds.maxX) + amount,
+                maxY: Number(bounds.maxY) + amount
+            };
+        }
+
+        collectRoadPathRenderObjects(ctx, bakedLevel0SectionKeys = null) {
+            const visibleRoadPathObjects = new Set();
+            const continuityRoadPathObjects = new Set();
+            const bakedRoadPathObjects = new Set();
+            const map = ctx && ctx.map;
+            if (!map) {
+                return {
+                    visibleRoadPathObjects,
+                    continuityRoadPathObjects,
+                    bakedRoadPathObjects,
+                    considered: 0,
+                    skippedOffscreen: 0,
+                    skippedForLevel0Bake: 0
+                };
+            }
+            const wizard = (ctx && ctx.wizard) || global.wizard || null;
+            const mazeLayerOnly = !!(
+                this.isLosMazeModeEnabled() &&
+                !this.isOmnivisionActive(wizard) &&
+                wizard
+            );
+            const wizardLayer = this.getWizardVisualLayerIndex(wizard, 0);
+            const cutawayState = this.getLayerCutawayState(ctx);
+            const viewportBounds = this.getRoadPathRenderViewportBounds(ctx, 8);
+            const continuityBounds = this.expandWorldBounds(viewportBounds, 16);
+            const seen = new Set();
+            let considered = 0;
+            let skippedOffscreen = 0;
+            let skippedForLevel0Bake = 0;
+            const addCandidate = (roadPath) => {
+                if (!roadPath || seen.has(roadPath)) return;
+                seen.add(roadPath);
+                if (roadPath.gone || roadPath.vanishing || roadPath._prototypeParked === true || roadPath.type !== "roadPath") return;
+                considered += 1;
+                if (!this.isScriptVisible(roadPath)) return;
+                const fallbackNode = typeof roadPath.getNode === "function" ? roadPath.getNode() : roadPath.node;
+                const roadLayer = this.getLayerIndexForObject(roadPath, this.getLayerIndexForNode(fallbackNode || roadPath));
+                if (mazeLayerOnly && roadLayer !== wizardLayer && !this.isFallRevealHiddenLayer(roadLayer)) return;
+                if (this.isRenderItemHiddenByLayerCutaway(roadPath, roadLayer, cutawayState, map)) return;
+                const bounds = this.getRoadPathVisualBounds(roadPath);
+                const inContinuityRange = !continuityBounds || this.floorFragmentBoundsIntersectViewport(bounds, continuityBounds);
+                if (inContinuityRange) continuityRoadPathObjects.add(roadPath);
+                if (viewportBounds && !this.floorFragmentBoundsIntersectViewport(bounds, viewportBounds)) {
+                    skippedOffscreen += 1;
+                    return;
+                }
+                if (this.isRoadPathBakedIntoLevel0Surface(ctx, roadPath, bakedLevel0SectionKeys)) {
+                    bakedRoadPathObjects.add(roadPath);
+                    skippedForLevel0Bake += 1;
+                    return;
+                }
+                visibleRoadPathObjects.add(roadPath);
+            };
+            const objectState = map._prototypeObjectState || null;
+            if (objectState && objectState.activeRuntimeObjectsByRecordId instanceof Map) {
+                for (const roadPath of objectState.activeRuntimeObjectsByRecordId.values()) addCandidate(roadPath);
+            }
+            if (Array.isArray(map.objects)) {
+                for (let i = 0; i < map.objects.length; i++) addCandidate(map.objects[i]);
+            }
+            return {
+                visibleRoadPathObjects,
+                continuityRoadPathObjects,
+                bakedRoadPathObjects,
+                considered,
+                skippedOffscreen,
+                skippedForLevel0Bake
+            };
         }
 
         isRoadPathCoveredByReadyLevel0Chunks(ctx, roadPath) {
@@ -15116,11 +15670,38 @@ void main(void) {
         }
 
         getLevel0TerrainDrawOrder(typeName) {
-            const type = typeof typeName === "string" ? typeName : "";
-            if (type === "desert" || type === "sand") return 10;
-            if (type === "water") return 20;
+            const type = typeof typeName === "string" ? typeName.trim().toLowerCase() : "";
             if (type === "grass") return 0;
-            return 15;
+            if (type === "mud") return 1;
+            if (type === "desert" || type === "sand") return 2;
+            if (type === "water") return 3;
+            throw new Error(`unknown level 0 terrain draw order for "${typeName}"`);
+        }
+
+        getLevel0TerrainDepthBiasOffset(typeName) {
+            return this.getLevel0TerrainDrawOrder(typeName) * FLOOR_LEVEL0_TERRAIN_DEPTH_BIAS_STEP_UNITS;
+        }
+
+        sortLevel0TerrainGroupsForDraw(groups) {
+            if (!Array.isArray(groups)) return groups;
+            groups.sort((a, b) => {
+                const orderA = this.getLevel0TerrainDrawOrder(a && a.type);
+                const orderB = this.getLevel0TerrainDrawOrder(b && b.type);
+                if (orderA !== orderB) return orderA - orderB;
+                return String(a && a.type || "").localeCompare(String(b && b.type || ""));
+            });
+            return groups;
+        }
+
+        sortLevel0TerrainFloorVisualEntriesForDraw(entries) {
+            if (!Array.isArray(entries)) return entries;
+            entries.sort((a, b) => {
+                const orderA = this.getLevel0TerrainDrawOrder(a && a.terrainType);
+                const orderB = this.getLevel0TerrainDrawOrder(b && b.terrainType);
+                if (orderA !== orderB) return orderA - orderB;
+                return String(a && a.key || "").localeCompare(String(b && b.key || ""));
+            });
+            return entries;
         }
 
         getLevel0TerrainMaterialRepeat(map, typeName) {
@@ -15343,12 +15924,7 @@ void main(void) {
             const groups = assetHasTerrainPolygons
                 ? assetGroups
                 : this.collectLevel0TerrainGroups(map, nodes);
-            groups.sort((a, b) => {
-                const orderA = this.getLevel0TerrainDrawOrder(a && a.type);
-                const orderB = this.getLevel0TerrainDrawOrder(b && b.type);
-                if (orderA !== orderB) return orderA - orderB;
-                return String(a && a.type || "").localeCompare(String(b && b.type || ""));
-            });
+            this.sortLevel0TerrainGroupsForDraw(groups);
             for (let i = 0; i < groups.length; i++) {
                 if (groups[i] && groups[i].type === "water") continue;
                 const loops = Array.isArray(groups[i].loops) ? groups[i].loops : this.buildLevel0TerrainRegionLoops(map, groups[i]);
@@ -16851,9 +17427,12 @@ void main(void) {
             }
             const vertexData = new Float32Array(entry.triangulation.vertexCount * 2);
             const uvData = new Float32Array(entry.triangulation.vertexCount * 2);
+            const edgeAlphaData = new Float32Array(entry.triangulation.vertexCount);
+            edgeAlphaData.fill(1);
             const geometry = new PIXI.Geometry()
                 .addAttribute("aVertexPosition", vertexData, 2)
                 .addAttribute("aUvs", uvData, 2)
+                .addAttribute("aEdgeAlpha", edgeAlphaData, 1)
                 .addIndex(entry.triangulation.indices);
             const nearMetric = FLOOR_VISUAL_DEPTH_NEAR_METRIC;
             const farMetric = FLOOR_VISUAL_DEPTH_FAR_METRIC;
@@ -17003,6 +17582,11 @@ void main(void) {
                 ? geometry.getBuffer("aUvs")
                 : null;
             const uvData = uvBuffer && uvBuffer.data ? uvBuffer.data : null;
+            const edgeAlphaBuffer = geometry && typeof geometry.getBuffer === "function"
+                ? geometry.getBuffer("aEdgeAlpha")
+                : null;
+            const edgeAlphaData = edgeAlphaBuffer && edgeAlphaBuffer.data ? edgeAlphaBuffer.data : null;
+            const sourceEdgeAlpha = entry.triangulation && entry.triangulation.edgeAlpha ? entry.triangulation.edgeAlpha : null;
             for (let i = 0; i < points.length; i++) {
                 const pt = points[i];
                 data[i * 2] = pt.x;
@@ -17019,9 +17603,15 @@ void main(void) {
                         uvData[i * 2 + 1] = pt.y * repeatY;
                     }
                 }
+                if (edgeAlphaData && edgeAlphaData.length > i) {
+                    edgeAlphaData[i] = sourceEdgeAlpha && sourceEdgeAlpha.length > i
+                        ? Math.max(0, Math.min(1, Number(sourceEdgeAlpha[i])))
+                        : 1;
+                }
             }
             buffer.update();
             if (uvBuffer) uvBuffer.update();
+            if (edgeAlphaBuffer) edgeAlphaBuffer.update();
             entry.uploadedGeometrySignature = entry.signature || "";
             entry.uploadedTextureBoundsSignature = this.getFloorVisualTextureBoundsSignature(entry.textureBounds);
             entry.uploadedTextureRepeatSignature = this.getFloorVisualTextureRepeatSignature(entry.textureRepeat);
@@ -17080,8 +17670,17 @@ void main(void) {
                     const w0 = 0.5 + 0.5 * Math.sin(wave);
                     const w1 = 0.5 + 0.5 * Math.sin(wave + Math.PI * 2 / 3);
                     const w2 = 0.5 + 0.5 * Math.sin(wave + Math.PI * 4 / 3);
-                    const wSum = Math.max(0.0001, w0 + w1 + w2);
-                    const phaseWeights = [w0 / wSum, w1 / wSum, w2 / wSum];
+                    const zeroHold = 0.02;
+                    const zeroFadeWidth = 0.12;
+                    const smoothZeroGate = (value) => {
+                        const t0 = Math.max(0, Math.min(1, (value - zeroHold) / zeroFadeWidth));
+                        return t0 * t0 * (3 - 2 * t0);
+                    };
+                    const z0 = w0 * smoothZeroGate(w0);
+                    const z1 = w1 * smoothZeroGate(w1);
+                    const z2 = w2 * smoothZeroGate(w2);
+                    const wSum = Math.max(0.0001, z0 + z1 + z2);
+                    const phaseWeights = [z0 / wSum, z1 / wSum, z2 / wSum];
                     if (uniforms.uPhaseWeights) {
                         uniforms.uPhaseWeights[0] = phaseWeights[0];
                         uniforms.uPhaseWeights[1] = phaseWeights[1];
@@ -17090,7 +17689,6 @@ void main(void) {
                     uniforms.uSpatialPhase = wave;
                     uniforms.uSpatialFrequency = 2.25;
                     uniforms.uSpatialStrength = 0.42;
-                    const wrapUnit = (value) => ((value % 1) + 1) % 1;
                     if (!this._animatedWaterDriftState) {
                         this._animatedWaterDriftState = {
                             timeSeconds: t,
@@ -17098,25 +17696,55 @@ void main(void) {
                                 [0, 0],
                                 [0, 0],
                                 [0, 0]
-                            ]
+                            ],
+                            previousOpacities: [1, 1, 1]
                         };
                     }
                     const driftState = this._animatedWaterDriftState;
+                    if (!Array.isArray(driftState.offsets) || driftState.offsets.length !== 3) {
+                        driftState.offsets = [
+                            [0, 0],
+                            [0, 0],
+                            [0, 0]
+                        ];
+                    }
+                    if (!Array.isArray(driftState.previousOpacities) || driftState.previousOpacities.length !== 3) {
+                        driftState.previousOpacities = [1, 1, 1];
+                    }
                     const previousTime = Number.isFinite(driftState.timeSeconds) ? Number(driftState.timeSeconds) : t;
                     const driftDt = Math.max(0, Math.min(0.25, t - previousTime));
                     driftState.timeSeconds = t;
                     const baseDriftX = 0.014;
                     const baseDriftY = 0.010;
+                    const maxFadeDriftMultiplier = 2;
+                    const minFadeDriftDenominator = 1 / maxFadeDriftMultiplier;
+                    const invisibleOpacityThreshold = 0.0005;
                     const rotateUvDrift = (offset, cos, sin) => ([
                         offset[0] * cos + offset[1] * sin,
                         -offset[0] * sin + offset[1] * cos
                     ]);
                     for (let i = 0; i < 3; i++) {
                         const opacity = Math.max(0, Math.min(1, Number(phaseWeights[i]) || 0));
-                        const speedMultiplier = 1 / Math.max(0.1, 0.1 + 0.9 * opacity);
-                        const offset = driftState.offsets[i];
-                        offset[0] = wrapUnit(offset[0] + baseDriftX * speedMultiplier * driftDt);
-                        offset[1] = wrapUnit(offset[1] + baseDriftY * speedMultiplier * driftDt);
+                        const speedMultiplier = 1 / Math.max(
+                            minFadeDriftDenominator,
+                            minFadeDriftDenominator + (1 - minFadeDriftDenominator) * opacity
+                        );
+                        const offset = Array.isArray(driftState.offsets[i]) ? driftState.offsets[i] : [0, 0];
+                        offset[0] = Number(offset[0]) || 0;
+                        offset[1] = Number(offset[1]) || 0;
+                        offset[0] += baseDriftX * speedMultiplier * driftDt;
+                        offset[1] += baseDriftY * speedMultiplier * driftDt;
+                        const previousOpacity = Number.isFinite(driftState.previousOpacities[i])
+                            ? Math.max(0, Math.min(1, Number(driftState.previousOpacities[i])))
+                            : 1;
+                        if (opacity <= invisibleOpacityThreshold && previousOpacity > invisibleOpacityThreshold) {
+                            const randomAngle = Math.random() * Math.PI * 2;
+                            const randomDistance = 0.15 + Math.random() * 0.85;
+                            offset[0] += Math.cos(randomAngle) * randomDistance;
+                            offset[1] += Math.sin(randomAngle) * randomDistance;
+                        }
+                        driftState.previousOpacities[i] = opacity;
+                        driftState.offsets[i] = offset;
                     }
                     const drift0 = driftState.offsets[0];
                     const drift1 = rotateUvDrift(driftState.offsets[1], 0.7986355, 0.6018150);
@@ -17126,12 +17754,12 @@ void main(void) {
                         uniforms.uPhaseOffset0[1] = drift0[1];
                     }
                     if (uniforms.uPhaseOffset1) {
-                        uniforms.uPhaseOffset1[0] = wrapUnit(0.37 + drift1[0]);
-                        uniforms.uPhaseOffset1[1] = wrapUnit(0.19 + drift1[1]);
+                        uniforms.uPhaseOffset1[0] = 0.37 + drift1[0];
+                        uniforms.uPhaseOffset1[1] = 0.19 + drift1[1];
                     }
                     if (uniforms.uPhaseOffset2) {
-                        uniforms.uPhaseOffset2[0] = wrapUnit(0.71 + drift2[0]);
-                        uniforms.uPhaseOffset2[1] = wrapUnit(0.43 + drift2[1]);
+                        uniforms.uPhaseOffset2[0] = 0.71 + drift2[0];
+                        uniforms.uPhaseOffset2[1] = 0.43 + drift2[1];
                     }
                 }
             }
@@ -17241,11 +17869,11 @@ void main(void) {
                         const baseZ = Number.isFinite(fragment.nodeBaseZ)
                             ? Number(fragment.nodeBaseZ)
                             : this.getLayerBaseZForLevel(level);
-                        const fadeMultiplier = this.getLiveLayerFadeMultiplier(level, nowMs) * floorCutawayAlpha;
-                        if (FLOOR_LEVEL0_POLYGON_MATERIAL_ENABLED) {
-                            const renderOuter = expandFloorVisualPolygonFromCentroid(outer, FLOOR_LEVEL0_SEAM_BLEED_UNITS);
-                            const texturePath = this.getLevel0TerrainMaterialPathForType(map, "grass") || FLOOR_LEVEL0_GRASS_MATERIAL_PATH;
-                            entries.push({
+                            const fadeMultiplier = this.getLiveLayerFadeMultiplier(level, nowMs) * floorCutawayAlpha;
+                            if (FLOOR_LEVEL0_POLYGON_MATERIAL_ENABLED) {
+                                const renderOuter = outer;
+                                const texturePath = this.getLevel0TerrainMaterialPathForType(map, "grass") || FLOOR_LEVEL0_GRASS_MATERIAL_PATH;
+                                entries.push({
                                 key: `fragment:${fragmentId}:level0-material`,
                                 level,
                                 baseZ,
@@ -17264,25 +17892,8 @@ void main(void) {
                                 entries[entries.length - 1].buildingCutawayCompositeFrame = buildingCutawayCompositeFrame;
                                 entries[entries.length - 1].buildingCutawayCompositeAlpha = buildingCutawayCompositeAlpha;
                             }
-                            const terrainEntries = this.collectLevel0TerrainPolygonFloorVisualEntries(
-                                ctx,
-                                fragmentId,
-                                sectionKey,
-                                asset,
-                                baseZ,
-                                fadeMultiplier,
-                                activeInteriorDepthBump
-                            );
-                            for (let te = 0; te < terrainEntries.length; te++) {
-                                if (!terrainEntries[te]) continue;
-                                if (buildingCutawayCompositeFrame > 0) {
-                                    terrainEntries[te].buildingCutawayCompositeFrame = buildingCutawayCompositeFrame;
-                                    terrainEntries[te].buildingCutawayCompositeAlpha = buildingCutawayCompositeAlpha;
-                                }
-                                entries.push(terrainEntries[te]);
-                            }
                             if (sectionKey) level0Sections.add(sectionKey);
-                            level0Entries += 1 + terrainEntries.length;
+                            level0Entries += 1;
                             continue;
                         }
                         const chunkEntries = this.collectLevel0ChunkFloorVisualEntries(
@@ -17453,6 +18064,23 @@ void main(void) {
                     }
                 }
             }
+            const viewportBounds = this.getCameraScreenSpaceWorldBoundsAtZ(ctx, 4, this.getLayerBaseZForLevel(0));
+            const viewportSectionKeys = this.collectViewportFloorSectionKeys(ctx, map, viewportBounds);
+            const sectionTerrainEntries = this.collectLevel0SectionTerrainPolygonFloorVisualEntries(
+                ctx,
+                viewportSectionKeys,
+                nowMs
+            );
+            for (let i = 0; i < sectionTerrainEntries.length; i++) {
+                const entry = sectionTerrainEntries[i];
+                if (!entry) continue;
+                entries.push(entry);
+                if (typeof entry.key === "string") {
+                    const match = /^fragment:section:([^:]+):terrain:/.exec(entry.key);
+                    if (match && match[1]) level0Sections.add(match[1]);
+                }
+            }
+            level0Entries += sectionTerrainEntries.length;
             if (metrics) {
                 metrics.floorFragmentsScanned = scannedFragments;
                 metrics.floorFragmentsSkippedInteriorScope = skippedInteriorScope;
@@ -17469,6 +18097,9 @@ void main(void) {
                 const levelA = Number.isFinite(a && a.level) ? Number(a.level) : 0;
                 const levelB = Number.isFinite(b && b.level) ? Number(b.level) : 0;
                 if (levelA !== levelB) return levelA - levelB;
+                const sortA = Number.isFinite(a && a.floorVisualSortOrder) ? Number(a.floorVisualSortOrder) : 0;
+                const sortB = Number.isFinite(b && b.floorVisualSortOrder) ? Number(b.floorVisualSortOrder) : 0;
+                if (sortA !== sortB) return sortA - sortB;
                 return String(a && a.key).localeCompare(String(b && b.key));
             });
             return entries;
@@ -17499,7 +18130,7 @@ void main(void) {
                 if (outer.length < 3) continue;
                 const cacheKey = source.key;
                 let entry = this.floorVisualMeshByKey.get(cacheKey);
-                const signature = buildFloorVisualSignature(outer, source.holes);
+                const signature = `${buildFloorVisualSignature(outer, source.holes)}:edgeFadeClip:${source.edgeFadeClipSignature || ""}`;
                 if (
                     !entry ||
                     entry.signature !== signature ||
@@ -17510,7 +18141,16 @@ void main(void) {
                     if (entry && entry.mesh) {
                         this.destroyCachedPixiMesh(entry.mesh, "floor visual mesh");
                     }
-                    const triangulation = triangulateFloorVisualPolygon(outer, source.holes);
+                    const triangulation = Number.isFinite(source.edgeFadeWidth) && Number(source.edgeFadeWidth) > 0
+                        ? triangulateFloorVisualTerrainBlendPolygon(outer, source.holes, Number(source.edgeFadeWidth), {
+                            edgeFadeClipRings: source.edgeFadeClipRings,
+                            edgeFadeDiagnosticContext: {
+                                ...(source.edgeFadeDiagnosticContext || {}),
+                                entryKey: cacheKey,
+                                terrainType: source.terrainType || (source.edgeFadeDiagnosticContext && source.edgeFadeDiagnosticContext.terrainType) || ""
+                            }
+                        })
+                        : triangulateFloorVisualPolygon(outer, source.holes);
                     if (!triangulation) continue;
                     entry = {
                         signature,
@@ -17617,6 +18257,7 @@ void main(void) {
                 Math.max(FLOOR_LEVEL0_CHUNK_CACHE_LIMIT * 4, visibleKeys.size * 2)
             );
             const trimMs = _pnow ? (_pnow() - trimStartMs) : 0;
+            this.renderTerrainPolygonDiagnosticOverlay(ctx, entries);
             this.setFrameMetric("floorVisualPolygons", rendered);
             this.setFrameMetric("floorVisualMeshesCreated", meshesCreated);
             this.setFrameMetric("floorVisualGeometryUploads", geometryUploads);
@@ -17642,6 +18283,31 @@ void main(void) {
                 this.level0GroundSurfaceChunkCache instanceof Map ? this.level0GroundSurfaceChunkCache.size : 0
             );
             this.setFrameMetric("floorLevel0ChunksTrimmed", trimmedLevel0Chunks);
+        }
+
+        clearTerrainPolygonDiagnosticOverlay() {
+            const debugRenderer = global.RenderingTerrainPaintDebugRenderer;
+            if (debugRenderer && typeof debugRenderer.clear === "function") {
+                debugRenderer.clear(this);
+                return;
+            }
+            if (!this.terrainPolygonDiagnosticGraphics) return;
+            this.terrainPolygonDiagnosticGraphics.clear();
+            this.terrainPolygonDiagnosticGraphics.visible = false;
+        }
+
+        renderTerrainPolygonDiagnosticOverlay(ctx, entries) {
+            const debugRenderer = global.RenderingTerrainPaintDebugRenderer;
+            if (
+                !debugRenderer ||
+                typeof debugRenderer.render !== "function" ||
+                typeof debugRenderer.isEnabled !== "function" ||
+                !debugRenderer.isEnabled()
+            ) {
+                this.clearTerrainPolygonDiagnosticOverlay();
+                return;
+            }
+            debugRenderer.render(this, ctx, entries);
         }
 
         renderRoadsAndFloors(ctx, visibleNodes) {
@@ -18162,48 +18828,25 @@ void main(void) {
                 return true;
             };
 
-            const visibleRoadObjects = new Set();
-            const visibleRoadPathObjects = new Set();
-            const continuityRoadPathObjects = new Set();
             const nodes = Array.isArray(visibleNodes) ? visibleNodes : [];
             const bakedLevel0SectionKeys = this.getBakedLevel0SectionKeys(ctx);
-            let roadsSkippedForLevel0Bake = 0;
+            const roadPathRenderObjects = this.collectRoadPathRenderObjects(ctx, bakedLevel0SectionKeys);
+            const visibleRoadObjects = new Set();
+            const visibleRoadPathObjects = roadPathRenderObjects.visibleRoadPathObjects;
+            const continuityRoadPathObjects = roadPathRenderObjects.continuityRoadPathObjects;
+            const bakedRoadPathObjects = roadPathRenderObjects.bakedRoadPathObjects;
+            let roadsSkippedForLevel0Bake = Number(roadPathRenderObjects.skippedForLevel0Bake) || 0;
             for (let n = 0; n < nodes.length; n++) {
                 const node = nodes[n];
                 if (!node || !Array.isArray(node.objects)) continue;
                 for (let i = 0; i < node.objects.length; i++) {
                     const obj = node.objects[i];
                     if (!obj || obj.gone) continue;
-                    if (obj.type !== "road" && obj.type !== "roadPath") continue;
+                    if (obj.type !== "road") continue;
                     if (!this.isScriptVisible(obj)) continue;
                     const roadLayer = this.getLayerIndexForNode(obj && obj.node ? obj.node : node);
                     if (mazeLayerOnly && roadLayer !== wizardLayer && !this.isFallRevealHiddenLayer(roadLayer)) continue;
                     if (this.isRenderItemHiddenByLayerCutaway(obj, roadLayer, cutawayState, map)) continue;
-                    if (obj.type === "roadPath") {
-                        continuityRoadPathObjects.add(obj);
-                        if (this.isRoadPathBakedIntoLevel0Surface(ctx, obj, bakedLevel0SectionKeys)) {
-                            const bakedMesh = this.roadPathMeshByObject instanceof Map
-                                ? this.roadPathMeshByObject.get(obj)
-                                : null;
-                            if (bakedMesh) {
-                                bakedMesh.visible = false;
-                                if (Object.prototype.hasOwnProperty.call(bakedMesh, "renderable")) {
-                                    bakedMesh.renderable = false;
-                                }
-                            }
-                            if (obj._renderingDisplayObject === bakedMesh) {
-                                obj._renderingDisplayObject = null;
-                            }
-                            const pickProxy = this.getGroundHitboxPickProxyForItem(obj, 1);
-                            if (pickProxy) {
-                                this.addPickRenderItem(obj, pickProxy, { forceInclude: true });
-                            }
-                            roadsSkippedForLevel0Bake += 1;
-                            continue;
-                        }
-                        visibleRoadPathObjects.add(obj);
-                        continue;
-                    }
                     if (this.isRoadBakedIntoLevel0Surface(ctx, obj, bakedLevel0SectionKeys)) {
                         const bakedSprite = this.roadSpriteByObject.get(obj);
                         if (bakedSprite) {
@@ -18225,6 +18868,22 @@ void main(void) {
 
             if (!(this.roadPathMeshByObject instanceof Map)) {
                 this.roadPathMeshByObject = new Map();
+            }
+            for (const roadPath of bakedRoadPathObjects) {
+                const bakedMesh = this.roadPathMeshByObject.get(roadPath);
+                if (bakedMesh) {
+                    bakedMesh.visible = false;
+                    if (Object.prototype.hasOwnProperty.call(bakedMesh, "renderable")) {
+                        bakedMesh.renderable = false;
+                    }
+                }
+                if (roadPath && roadPath._renderingDisplayObject === bakedMesh) {
+                    roadPath._renderingDisplayObject = null;
+                }
+                const pickProxy = this.getGroundHitboxPickProxyForItem(roadPath, 1);
+                if (pickProxy) {
+                    this.addPickRenderItem(roadPath, pickProxy, { forceInclude: true });
+                }
             }
             const roadPathContainer = visibleRoadPathObjects.size > 0
                 ? this.ensureRoadPathDepthContainer()
@@ -18443,6 +19102,10 @@ void main(void) {
             this.setFrameMetric("roadsDestroyed", roadDestroyedSprites);
             this.setFrameMetric("roadsEvicted", roadEvictedSprites);
             this.setFrameMetric("roadsSkippedForLevel0Bake", roadsSkippedForLevel0Bake);
+            this.setFrameMetric("roadPathsConsidered", Number(roadPathRenderObjects.considered) || 0);
+            this.setFrameMetric("roadPathsVisible", visibleRoadPathObjects.size);
+            this.setFrameMetric("roadPathsContinuity", continuityRoadPathObjects.size);
+            this.setFrameMetric("roadPathsSkippedOffscreen", Number(roadPathRenderObjects.skippedOffscreen) || 0);
             this.setFrameMetric(
                 "roadsMs",
                 diagnosticsEnabled ? (performance.now() - functionStartMs) : 0

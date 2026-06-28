@@ -6,6 +6,10 @@ let debugMode = false; // Toggle all debug graphics (hitboxes, grid, animal mark
 if (typeof globalThis !== "undefined") {
     globalThis.debugMode = debugMode;
 }
+let showTerrainPaintDiagnostics = false; // White/pink/yellow terrain edit outlines.
+if (typeof globalThis !== "undefined") {
+    globalThis.debugTerrainPolygonDiagnostics = showTerrainPaintDiagnostics;
+}
 const debugFreezePrototypeInteriorInvalidationFrame = false;
 if (typeof globalThis !== "undefined") {
     globalThis.debugFreezePrototypeInteriorInvalidationFrame = debugFreezePrototypeInteriorInvalidationFrame;
@@ -864,6 +868,14 @@ function setLosDebugFillEnabled(enabled) {
     return losDebugFillEnabled;
 }
 
+function setTerrainPaintDiagnosticsVisible(enabled) {
+    showTerrainPaintDiagnostics = !!enabled;
+    if (typeof globalThis !== "undefined") {
+        globalThis.debugTerrainPolygonDiagnostics = showTerrainPaintDiagnostics;
+    }
+    return showTerrainPaintDiagnostics;
+}
+
 function setPickerScreenVisible(enabled) {
     if (typeof globalThis !== "undefined") {
         globalThis.renderingShowPickerScreen = !!enabled;
@@ -934,6 +946,7 @@ class DebugViewSettings {
             return this._showVisualHitboxes;
         });
         this._defineBooleanSetting("showLosFill", () => losDebugFillEnabled, value => setLosDebugFillEnabled(value));
+        this._defineBooleanSetting("showTerrainPaintDiagnostics", () => showTerrainPaintDiagnostics, value => setTerrainPaintDiagnosticsVisible(value));
         this._defineBooleanSetting("showPickerScreen", () => !!(typeof globalThis !== "undefined" && globalThis.renderingShowPickerScreen), value => setPickerScreenVisible(value));
         this._defineBooleanSetting("showSectionWorldSeams", () => getSectionWorldSeamsVisible(), value => setSectionWorldSeamsVisible(value));
         this._defineBooleanSetting("showSectionSeams", () => getSectionWorldSeamsVisible(), value => setSectionWorldSeamsVisible(value));
@@ -969,6 +982,7 @@ class DebugViewSettings {
             perfInstrumentationEnabled: this.perfInstrumentationEnabled,
             showVisualHitboxes: this.showVisualHitboxes,
             showLosFill: this.showLosFill,
+            showTerrainPaintDiagnostics: this.showTerrainPaintDiagnostics,
             showPickerScreen: this.showPickerScreen,
             showSectionWorldSeams: this.showSectionWorldSeams,
             showSectionSeams: this.showSectionSeams,
@@ -1077,6 +1091,14 @@ if (typeof globalThis !== "undefined") {
         toggleWallGroundHitboxesOnly: () => {
             debugViewSettings.showWallGroundHitboxesOnly = !debugViewSettings.showWallGroundHitboxesOnly;
             return debugViewSettings.showWallGroundHitboxesOnly;
+        },
+        setTerrainPaintDiagnosticsVisible: visible => {
+            debugViewSettings.showTerrainPaintDiagnostics = !!visible;
+            return debugViewSettings.showTerrainPaintDiagnostics;
+        },
+        toggleTerrainPaintDiagnostics: () => {
+            debugViewSettings.showTerrainPaintDiagnostics = !debugViewSettings.showTerrainPaintDiagnostics;
+            return debugViewSettings.showTerrainPaintDiagnostics;
         }
     };
     globalThis.DebugView = debugView;
@@ -1092,6 +1114,7 @@ if (typeof globalThis !== "undefined") {
     globalThis.isPerfInstrumentationEnabled = isPerfInstrumentationEnabled;
     globalThis.setPerfInstrumentationEnabled = setPerfInstrumentationEnabled;
     globalThis.describePerfInstrumentation = describePerfInstrumentation;
+    globalThis.setTerrainPaintDiagnosticsVisible = setTerrainPaintDiagnosticsVisible;
 }
 
 if (typeof globalThis !== "undefined" && typeof globalThis.setLosDebugFillEnabled !== "function") {

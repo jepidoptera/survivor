@@ -99,6 +99,7 @@
             if (textureId >= 0 && textureId < 52) return "grass";
             if (textureId === 52) return "desert";
             if (textureId === 53) return "water";
+            if (textureId === 54) return "mud";
             throw new Error(`${label} cannot resolve terrain type without map.getGroundTerrainDef`);
         }
 
@@ -744,10 +745,8 @@
                 ? sortPrototypeTileCoordKeys(rawAsset.tileCoordKeys)
                 : sortPrototypeTileCoordKeys(asset.tileCoordKeys);
             asset.groundTiles = normalizePrototypeGroundTiles(rawAsset.groundTiles, asset.tileCoordKeys, textureCount);
-            asset.terrainPolygons = filterPrototypeTerrainPolygonsByGroundTiles(
+            asset.terrainPolygons = clonePrototypeTerrainPolygons(
                 rawAsset.terrainPolygons,
-                asset.groundTiles,
-                map,
                 `section ${asset.key} terrainPolygons`
             );
             asset.floors = clonePrototypeFloorRecords(rawAsset.floors, asset.key);

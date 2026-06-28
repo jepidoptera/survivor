@@ -374,8 +374,15 @@ const SpellSystem = (() => {
     const TERRAIN_TOOL_DEFS = [
         { name: "grass", label: "Grass", icon: "/assets/images/land tiles/forest0.png" },
         { name: "desert", label: "Desert", icon: "/assets/images/land tiles/desert0.png" },
-        { name: "water", label: "Water", icon: "/assets/images/land tiles/water1.png" }
+        { name: "water", label: "Water", icon: "/assets/images/land tiles/water1.png" },
+        { name: "mud", label: "Mud", icon: "/assets/images/terrain/materials/dirt.png" }
     ];
+    const TERRAIN_HOTKEY_TYPES = {
+        g: "grass",
+        d: "desert",
+        w: "water",
+        m: "mud"
+    };
     const DEFAULT_ROOF_TEXTURE = "/assets/images/roofs/smallshingles.png";
     const DEFAULT_PLACEABLE_CATEGORY = "doors";
     const DEFAULT_PLACEABLE_BY_CATEGORY = {
@@ -7517,12 +7524,9 @@ const SpellSystem = (() => {
             if (typeof globalThis.invalidateMinimap === "function") {
                 globalThis.invalidateMinimap();
             }
-            if (
-                globalThis.Rendering &&
-                typeof globalThis.Rendering.resetLevel0GroundSurfaceCaches === "function"
-            ) {
-                globalThis.Rendering.resetLevel0GroundSurfaceCaches("terrain paint");
-            }
+            // Terrain paint edits live terrain polygons locally. Do not reset
+            // level-0 ground caches here without asking; doing so makes brush
+            // painting slow and hides the benefit of the local polygon patch.
             if (typeof globalThis.presentGameFrame === "function") {
                 globalThis.presentGameFrame();
             }
@@ -10607,22 +10611,30 @@ const SpellSystem = (() => {
         renderTerrainSelector(wizardRef);
     }
 
-    function selectTerrainMenuType(wizardRef, terrainType) {
+    function selectTerrainType(wizardRef, terrainType, options = {}) {
         if (!wizardRef) return false;
         setSelectedTerrainType(wizardRef, terrainType);
         setCurrentSpell(wizardRef, "terrainedit");
         refreshSpellSelector(wizardRef);
-        $("#spellMenu").addClass("hidden");
-        $("#editorMenu").addClass("hidden");
+        if (!options || options.closeMenus !== false) {
+            $("#spellMenu").addClass("hidden");
+            $("#editorMenu").addClass("hidden");
+        }
         return true;
+    }
+
+    function selectTerrainMenuType(wizardRef, terrainType) {
+        return selectTerrainType(wizardRef, terrainType);
+    }
+
+    function getTerrainTypeForHotkey(keyName) {
+        const key = typeof keyName === "string" ? keyName.trim().toLowerCase() : "";
+        return TERRAIN_HOTKEY_TYPES[key] || "";
     }
 
     function handleTerrainMenuHotkey(wizardRef, keyName) {
         if (!wizardRef || spellMenuMode !== "terrain") return false;
-        const key = typeof keyName === "string" ? keyName.trim().toLowerCase() : "";
-        const terrainType = key === "g"
-            ? "grass"
-            : (key === "d" ? "desert" : (key === "w" ? "water" : ""));
+        const terrainType = getTerrainTypeForHotkey(keyName);
         if (!terrainType) return false;
         return selectTerrainMenuType(wizardRef, terrainType);
     }
@@ -12449,6 +12461,7 @@ const SpellSystem = (() => {
         showPlaceableMenu,
         paintTerrainAtWorldPoint,
         handleTerrainMenuHotkey,
+        selectTerrainType,
         refreshEditorSelector,
         setEditorPanelVisible,
         toggleEditorPanelVisible,

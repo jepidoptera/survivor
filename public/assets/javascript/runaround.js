@@ -6780,6 +6780,28 @@ jQuery(() => {
             return;
         }
 
+        if (
+            event.shiftKey &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey &&
+            !event.repeat &&
+            wizard &&
+            ["w", "m", "d", "g"].includes(keyLower) &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.isEditorMode === "function" &&
+            SpellSystem.isEditorMode() &&
+            typeof SpellSystem.selectTerrainType === "function"
+        ) {
+            const terrainType = keyLower === "w"
+                ? "water"
+                : (keyLower === "m" ? "mud" : (keyLower === "d" ? "desert" : "grass"));
+            event.preventDefault();
+            SpellSystem.selectTerrainType(wizard, terrainType);
+            updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
+            return;
+        }
+
         if (event.key === "Tab") {
             event.preventDefault();
             const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());

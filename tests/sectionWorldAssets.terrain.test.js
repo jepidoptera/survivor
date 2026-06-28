@@ -24,7 +24,7 @@ function createAssetHelpers() {
     });
 }
 
-test("section asset load drops terrain polygons with no matching saved terrain tile", () => {
+test("section asset load preserves authored terrain polygons independent of saved terrain tiles", () => {
     const helpers = createAssetHelpers();
     const asset = {
         key: "0,0",
@@ -88,5 +88,5 @@ test("section asset load drops terrain polygons with no matching saved terrain t
         buildingRefs: []
     }, map, null);
 
-    assert.deepEqual(asset.terrainPolygons, [keptPolygon]);
+    assert.deepEqual(asset.terrainPolygons, [keptPolygon, stalePolygon]);
 });

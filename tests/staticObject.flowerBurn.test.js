@@ -905,6 +905,7 @@ test("placed object load restores upper-floor building manifest membership", () 
         z: 3,
         traversalLayer: 1,
         level: 1,
+        currentLayerBaseZ: 0,
         surfaceId: "upper-surface",
         fragmentId: "upper-fragment"
     }, map);
@@ -922,6 +923,98 @@ test("placed object load restores upper-floor building manifest membership", () 
         surfaceId: "upper-surface",
         level: 1
     });
+
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    restoreGlobals();
+});
+
+test("placed object load recenters hitboxes and node index after saved position restore", () => {
+    restoreGlobals();
+    installTestGlobals();
+    delete require.cache[STATIC_OBJECTS_MODULE_PATH];
+    require(STATIC_OBJECTS_MODULE_PATH);
+
+    const constructorGroundNode = new TestNode();
+    constructorGroundNode.xindex = 4;
+    constructorGroundNode.yindex = 5;
+    constructorGroundNode.x = 4;
+    constructorGroundNode.y = 5;
+    const constructorUpperNode = new TestNode();
+    constructorUpperNode.xindex = 4;
+    constructorUpperNode.yindex = 5;
+    constructorUpperNode.x = 4;
+    constructorUpperNode.y = 5;
+    constructorUpperNode.traversalLayer = 1;
+    constructorUpperNode.level = 1;
+    constructorUpperNode.surfaceId = "upper-surface";
+    constructorUpperNode.fragmentId = "upper-fragment";
+
+    const savedGroundNode = new TestNode();
+    savedGroundNode.xindex = 8;
+    savedGroundNode.yindex = 9;
+    savedGroundNode.x = 8;
+    savedGroundNode.y = 9;
+    const savedUpperNode = new TestNode();
+    savedUpperNode.xindex = 8;
+    savedUpperNode.yindex = 9;
+    savedUpperNode.x = 8;
+    savedUpperNode.y = 9;
+    savedUpperNode.traversalLayer = 1;
+    savedUpperNode.level = 1;
+    savedUpperNode.surfaceId = "upper-surface";
+    savedUpperNode.fragmentId = "upper-fragment";
+
+    const map = {
+        objects: [],
+        scenery: {},
+        worldToNode(x, y) {
+            if (x === 8 && y === 9) return savedGroundNode;
+            return constructorGroundNode;
+        },
+        getFloorNodeAtLayer(x, y, layer, options) {
+            assert.equal(layer, 1);
+            assert.equal(options.surfaceId, "upper-surface");
+            assert.equal(options.fragmentId, "upper-fragment");
+            if (x === 8 && y === 9) return savedUpperNode;
+            return constructorUpperNode;
+        },
+        registerFloorObject() {
+            return {};
+        },
+        addObjectToFloorBuildingManifest() {
+            return true;
+        }
+    };
+
+    const obj = globalThis.StaticObject.loadJson({
+        type: "placedObject",
+        category: "furniture",
+        texturePath: "/assets/images/furniture/crystal%20ball.png",
+        x: 8,
+        y: 9,
+        z: 0,
+        zMode: "local",
+        traversalLayer: 1,
+        level: 1,
+        currentLayerBaseZ: 0,
+        surfaceId: "upper-surface",
+        fragmentId: "upper-fragment",
+        floorMembership: {
+            ownerType: "building",
+            ownerId: "building:placed-9",
+            floorId: "upper-fragment"
+        }
+    }, map);
+
+    assert.ok(obj);
+    assert.equal(obj.groundPlaneHitbox.x, 8);
+    assert.equal(obj.groundPlaneHitbox.y, 9);
+    assert.equal(obj.visualHitbox.x, 8);
+    assert.equal(obj.visualHitbox.y, 9 - obj.height * 0.25);
+    assert.equal(obj.node, savedUpperNode);
+    assert.equal(savedUpperNode.objects.includes(obj), true);
+    assert.equal(constructorUpperNode.objects.includes(obj), false);
+    assert.equal(constructorGroundNode.objects.includes(obj), false);
 
     delete require.cache[STATIC_OBJECTS_MODULE_PATH];
     restoreGlobals();
@@ -988,6 +1081,7 @@ test("placed object load skips legacy floor manifest for prototype building frag
         zMode: "local",
         traversalLayer: 1,
         level: 1,
+        currentLayerBaseZ: 0,
         surfaceId: upperNode.surfaceId,
         fragmentId: upperNode.fragmentId
     }, map);

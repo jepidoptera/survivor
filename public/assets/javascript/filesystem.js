@@ -532,6 +532,7 @@ function getGroundTerrainTypeForTextureIdForLoad(mapRef, textureId, label) {
     if (id >= 0 && id < 52) return "grass";
     if (id === 52) return "desert";
     if (id === 53) return "water";
+    if (id === 54) return "mud";
     throw new Error(`${label} cannot resolve terrain type without map.getGroundTerrainDef`);
 }
 
@@ -3579,7 +3580,6 @@ function loadGameState(saveData) {
             wizard.restoreSavedMovementSupport({ deferIfMissing: true });
         }
 
-        const savedGroundTileRecords = collectSavedGroundTileRecordsForTerrainLoad(map, saveData.groundTiles);
         applySavedGroundTilesToMapNodes(map, saveData.groundTiles);
 
         if (Array.isArray(saveData.terrainPolygons)) {
@@ -3587,12 +3587,7 @@ function loadGameState(saveData) {
                 throw new Error("loading terrain polygons requires map.normalizeGroundTerrainPolygons");
             }
             const terrainPolygons = cloneTerrainPolygons(saveData.terrainPolygons);
-            const filteredTerrainPolygons = filterTerrainPolygonsBySavedGroundTiles(
-                terrainPolygons,
-                savedGroundTileRecords,
-                "terrainPolygons"
-            );
-            map.terrainPolygons = map.normalizeGroundTerrainPolygons(filteredTerrainPolygons);
+            map.terrainPolygons = map.normalizeGroundTerrainPolygons(terrainPolygons);
         }
         resetLoadedLevel0GroundRenderCaches("loadGameState");
         const _lt5 = performance.now();
