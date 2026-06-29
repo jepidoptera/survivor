@@ -10343,6 +10343,33 @@ class GameMap {
                 return true;
             }
         }
+        const state = this._prototypeSectionState || null;
+        if (state && state.sectionAssetsByKey instanceof Map) {
+            const api = getPolygonClippingApi2D();
+            if (!api || typeof api.intersection !== "function") {
+                throw new Error("terrain generated section polygon match requires polygon clipping intersection");
+            }
+            for (let i = 0; i < generatedPolygons.length; i++) {
+                const generated = generatedPolygons[i];
+                const generatedGeometry = this.groundTerrainPolygonToClipGeometry(generated);
+                for (const [key, asset] of state.sectionAssetsByKey.entries()) {
+                    if (!asset) continue;
+                    const clipGeometry = this.getGroundTerrainSectionClipGeometry(key, asset);
+                    let clipped = [];
+                    try {
+                        clipped = api.intersection(generatedGeometry, clipGeometry);
+                    } catch (err) {
+                        throw new Error(`terrain generated section polygon match failed for ${key}: ${err && err.message ? err.message : err}`);
+                    }
+                    const splitPolygons = this.groundTerrainClipGeometryToPolygons(type, clipped);
+                    for (let p = 0; p < splitPolygons.length; p++) {
+                        if (this.getGroundTerrainGeneratedPolygonSignature(splitPolygons[p]) === signature) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
         return false;
     }
 
@@ -11950,6 +11977,13 @@ class GameMap {
             for (const type of typeSet) {
                 if (type === "grass") continue;
                 const typeRecords = participatingRecords.filter(record => record.polygon.type === type);
+                const typeRecordsAreGenerated = typeRecords.length > 0 && typeRecords.every(record => (
+                    this.groundTerrainPolygonHasGeneratedSignature(record.polygon)
+                ));
+                if (typeRecordsAreGenerated) {
+                    resultPolygonsByType.set(type, []);
+                    continue;
+                }
                 const sourceGeometries = [];
                 for (let i = 0; i < typeRecords.length; i++) {
                     sourceGeometries.push(this.groundTerrainPolygonToClipGeometry(typeRecords[i].polygon));
@@ -11978,6 +12012,7 @@ class GameMap {
             throw err;
         }
         const patchedPolygonsByType = new Map();
+        const generatedPatchedTypes = new Set();
         const debugRawReplacementSegments = [];
         const debugReplacementSegments = [];
         for (const type of typeSet) {
@@ -11986,6 +12021,7 @@ class GameMap {
             const typeRecords = participatingRecords.filter(record => record.polygon.type === type);
             if (typeRecords.length === 0) {
                 this.markGroundTerrainPolygonsGenerated(replacements);
+                generatedPatchedTypes.add(type);
                 patchedPolygonsByType.set(type, replacements);
                 continue;
             }
@@ -12006,6 +12042,7 @@ class GameMap {
                     ? this.buildGroundTerrainPolygonsFromNodes(componentNodes)
                     : [];
                 patchedPolygonsByType.set(type, rebuiltPolygons);
+                generatedPatchedTypes.add(type);
                 debugRawReplacementSegments.push(...this.collectGroundTerrainDebugPolygonSegments(rebuiltPolygons));
                 continue;
             }
@@ -12120,6 +12157,9 @@ class GameMap {
                             throw new Error(`terrain local patch could not resolve output list for section ${key}`);
                         }
                         target.push(...splitPolygons);
+                        if (generatedPatchedTypes.has(polygons[p].type)) {
+                            this.markGroundTerrainPolygonsGenerated(splitPolygons);
+                        }
                         debugAfterPolygons.push(...splitPolygons);
                     }
                 }
