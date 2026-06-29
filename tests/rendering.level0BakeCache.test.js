@@ -1672,6 +1672,393 @@ test("wizard body layer uses shared 3d depth layer while hat remains an overlay"
     assert.match(source, /shadowProxy\.z = shadowLocalZ;/);
 });
 
+test("wizard body gets active interior floor depth bump when the active plan has no live items", () => {
+    const bodyMesh = { name: "wizardBodyMesh", visible: false, renderable: false, parent: null };
+    const shadowMesh = { name: "wizardShadowMesh", visible: false, renderable: false, parent: null };
+    const calls = [];
+    const RenderingImpl = loadRenderingImpl({
+        PIXI: {
+            Texture: {
+                WHITE: { id: "white" },
+                from(path) { return { path }; }
+            },
+            Sprite: class {
+                constructor(texture) {
+                    this.texture = texture;
+                    this.name = "";
+                    this.visible = true;
+                    this.renderable = true;
+                    this.alpha = 1;
+                    this.tint = 0xffffff;
+                    this.width = 0;
+                    this.height = 0;
+                    this.rotation = 0;
+                    this.parent = null;
+                    this.anchor = {
+                        x: 0,
+                        y: 0,
+                        set(x, y) {
+                            this.x = x;
+                            this.y = y;
+                        }
+                    };
+                    this.scale = { set() {} };
+                    this.transform = { scale: this.scale };
+                    this._anchor = this.anchor;
+                }
+            },
+            Graphics: class {},
+            State: class {},
+            BLEND_MODES: { NORMAL: 0 }
+        }
+    });
+    RenderingImpl.__testContext.StaticObject = function StaticObject() {};
+    RenderingImpl.__testContext.StaticObject.prototype.updateDepthBillboardMesh = function updateDepthBillboardMesh() {
+        const mesh = this.type === "wizardShadow" ? shadowMesh : bodyMesh;
+        calls.push({
+            target: this.type === "wizardShadow" ? "shadow" : "body",
+            depthBias: this._renderDepthBias,
+            depthFlattenZ: this._renderDepthFlattenZ === true,
+            z: this.z
+        });
+        return mesh;
+    };
+    RenderingImpl.__testContext.StaticObject.prototype.ensureDepthBillboardMesh = function ensureDepthBillboardMesh() {
+        return this.type === "wizardShadow" ? shadowMesh : bodyMesh;
+    };
+    RenderingImpl.__testContext.StaticObject.prototype.updateDepthBillboardUvsForTexture = function updateDepthBillboardUvsForTexture() {
+        return true;
+    };
+
+    const makeContainer = (name) => ({
+        name,
+        children: [],
+        sortableChildren: false,
+        sortDirty: false,
+        addChild(child) {
+            if (child.parent && child.parent !== this && typeof child.parent.removeChild === "function") {
+                child.parent.removeChild(child);
+            }
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+            return child;
+        },
+        removeChild(child) {
+            const index = this.children.indexOf(child);
+            if (index >= 0) this.children.splice(index, 1);
+            if (child.parent === this) child.parent = null;
+        },
+        setChildIndex(child, index) {
+            const current = this.children.indexOf(child);
+            if (current < 0) return;
+            this.children.splice(current, 1);
+            this.children.splice(Math.max(0, Math.min(index, this.children.length)), 0, child);
+        }
+    });
+
+    const renderer = new RenderingImpl();
+    renderer.camera = {
+        viewscale: 16,
+        xyratio: 1,
+        map: {},
+        worldToScreen(x, y, z = 0) {
+            return { x: (x * 16), y: (y * 16) - z };
+        }
+    };
+    renderer.layers = {
+        objects3d: makeContainer("objects3d"),
+        entities: makeContainer("entities"),
+        ui: makeContainer("ui")
+    };
+    renderer._wizardShadowTexture = { id: "shadow" };
+    renderer.addPickRenderItem = () => {};
+    renderer.shouldRenderBuildingInteriorDoorItem = () => false;
+    renderer.shouldRenderBuildingInteriorOverlayWall = () => false;
+    renderer.shouldRenderBuildingInteriorOverlayItem = () => true;
+    renderer.shouldRenderBuildingInteriorCharacter = () => false;
+    renderer.collectBuildingInteriorFloorRenderItems = () => [];
+
+    const region = {
+        id: "fragment:floor-active",
+        fragmentId: "floor-active",
+        level: 1,
+        polygon: {
+            outer: [
+                { x: 0, y: 0 },
+                { x: 4, y: 0 },
+                { x: 4, y: 4 },
+                { x: 0, y: 4 }
+            ],
+            holes: []
+        },
+        staticObjects: []
+    };
+    const cutawayState = {
+        active: true,
+        triggers: [{
+            building: {},
+            activeInteriorRegion: region,
+            renderCache: {
+                renderItems: [],
+                interiorRegions: [region]
+            }
+        }]
+    };
+    const hatGraphics = {
+        name: "wizardHat",
+        visible: true,
+        renderable: true,
+        zIndex: 0,
+        parent: null,
+        scale: { set() {} }
+    };
+    const wizard = {
+        x: 1,
+        y: 1,
+        z: 0,
+        prevX: 1,
+        prevY: 1,
+        currentLayer: 1,
+        currentLayerBaseZ: 3,
+        currentMovementSupport: { layer: 1, baseZ: 3 },
+        movementVector: { x: 0, y: 0 },
+        speed: 1,
+        animationSpeedMultiplier: 1,
+        lastDirectionRow: 0,
+        hatGraphics,
+        getInterpolatedPosition() {
+            return { x: 1, y: 1, z: 0 };
+        }
+    };
+
+    const emptyPlan = renderer.buildBuildingInteriorRenderPlan(
+        { map: {}, wizard },
+        cutawayState
+    );
+    assert.equal(emptyPlan.active, false);
+    assert.equal(renderer.shouldApplyBuildingInteriorActiveFloorDepthBumpToItem(wizard, 1, emptyPlan, {}), true);
+
+    renderer.renderWizard({
+        wizard,
+        wizardFrames: [{ id: "wizard-frame" }],
+        map: renderer.camera.map,
+        _renderingLayerCutawayState: cutawayState,
+        renderAlpha: 1,
+        renderNowMs: 0
+    });
+
+    assert.ok(Math.abs(calls.find(call => call.target === "body").depthBias - 32.27) < 1e-9);
+    assert.equal(calls.find(call => call.target === "shadow").depthBias, 32.02);
+    assert.equal(calls.find(call => call.target === "body").depthFlattenZ, true);
+    assert.equal(calls.find(call => call.target === "shadow").depthFlattenZ, false);
+    assert.equal(bodyMesh.parent, renderer.layers.objects3d);
+    assert.equal(shadowMesh.parent, renderer.layers.objects3d);
+    assert.equal(bodyMesh.zIndex, 2147483649);
+    assert.equal(shadowMesh.zIndex, 2147483648.999);
+    assert.equal(renderer.layers.objects3d.sortableChildren, true);
+    assert.equal(hatGraphics.parent, renderer.layers.ui);
+});
+
+test("wizard body gets active interior depth bump while on stair support", () => {
+    const bodyMesh = { name: "wizardBodyMesh", visible: false, renderable: false, parent: null };
+    const shadowMesh = { name: "wizardShadowMesh", visible: false, renderable: false, parent: null };
+    const calls = [];
+    const RenderingImpl = loadRenderingImpl({
+        PIXI: {
+            Texture: {
+                WHITE: { id: "white" },
+                from(path) { return { path }; }
+            },
+            Sprite: class {
+                constructor(texture) {
+                    this.texture = texture;
+                    this.name = "";
+                    this.visible = true;
+                    this.renderable = true;
+                    this.alpha = 1;
+                    this.tint = 0xffffff;
+                    this.width = 0;
+                    this.height = 0;
+                    this.rotation = 0;
+                    this.parent = null;
+                    this.anchor = {
+                        x: 0,
+                        y: 0,
+                        set(x, y) {
+                            this.x = x;
+                            this.y = y;
+                        }
+                    };
+                    this.scale = { set() {} };
+                    this.transform = { scale: this.scale };
+                    this._anchor = this.anchor;
+                }
+            },
+            Graphics: class {},
+            State: class {},
+            BLEND_MODES: { NORMAL: 0 }
+        }
+    });
+    RenderingImpl.__testContext.StaticObject = function StaticObject() {};
+    RenderingImpl.__testContext.StaticObject.prototype.updateDepthBillboardMesh = function updateDepthBillboardMesh() {
+        const mesh = this.type === "wizardShadow" ? shadowMesh : bodyMesh;
+        calls.push({
+            target: this.type === "wizardShadow" ? "shadow" : "body",
+            depthBias: this._renderDepthBias,
+            depthFlattenZ: this._renderDepthFlattenZ === true,
+            z: this.z
+        });
+        return mesh;
+    };
+    RenderingImpl.__testContext.StaticObject.prototype.ensureDepthBillboardMesh = function ensureDepthBillboardMesh() {
+        return this.type === "wizardShadow" ? shadowMesh : bodyMesh;
+    };
+    RenderingImpl.__testContext.StaticObject.prototype.updateDepthBillboardUvsForTexture = function updateDepthBillboardUvsForTexture() {
+        return true;
+    };
+
+    const makeContainer = (name) => ({
+        name,
+        children: [],
+        sortableChildren: false,
+        sortDirty: false,
+        addChild(child) {
+            if (child.parent && child.parent !== this && typeof child.parent.removeChild === "function") {
+                child.parent.removeChild(child);
+            }
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+            return child;
+        },
+        removeChild(child) {
+            const index = this.children.indexOf(child);
+            if (index >= 0) this.children.splice(index, 1);
+            if (child.parent === this) child.parent = null;
+        },
+        setChildIndex(child, index) {
+            const current = this.children.indexOf(child);
+            if (current < 0) return;
+            this.children.splice(current, 1);
+            this.children.splice(Math.max(0, Math.min(index, this.children.length)), 0, child);
+        }
+    });
+
+    const renderer = new RenderingImpl();
+    renderer.camera = {
+        viewscale: 16,
+        xyratio: 1,
+        map: {
+            stairsById: new Map([[
+                "stairs-1",
+                {
+                    id: "stairs-1",
+                    stairKind: "treadPath",
+                    lowerZ: 3,
+                    higherZ: 4,
+                    stepCount: 4
+                }
+            ]])
+        },
+        worldToScreen(x, y, z = 0) {
+            return { x: (x * 16), y: (y * 16) - z };
+        }
+    };
+    renderer.layers = {
+        objects3d: makeContainer("objects3d"),
+        entities: makeContainer("entities"),
+        ui: makeContainer("ui")
+    };
+    renderer._wizardShadowTexture = { id: "shadow" };
+    renderer.addPickRenderItem = () => {};
+    renderer.shouldRenderBuildingInteriorDoorItem = () => false;
+    renderer.shouldRenderBuildingInteriorOverlayWall = () => false;
+    renderer.shouldRenderBuildingInteriorOverlayItem = () => true;
+    renderer.shouldRenderBuildingInteriorCharacter = () => false;
+    renderer.collectBuildingInteriorFloorRenderItems = () => [];
+
+    const region = {
+        id: "fragment:upper-floor-active",
+        fragmentId: "upper-floor-active",
+        level: 2,
+        polygon: {
+            outer: [
+                { x: 10, y: 10 },
+                { x: 14, y: 10 },
+                { x: 14, y: 14 },
+                { x: 10, y: 14 }
+            ],
+            holes: []
+        },
+        staticObjects: []
+    };
+    const cutawayState = {
+        active: true,
+        triggers: [{
+            building: {},
+            activeInteriorRegion: region,
+            renderCache: {
+                renderItems: [],
+                interiorRegions: [region]
+            }
+        }]
+    };
+    const wizard = {
+        x: 1,
+        y: 1,
+        z: 0.8,
+        prevX: 1,
+        prevY: 1,
+        currentLayer: 1,
+        currentLayerBaseZ: 3,
+        currentMovementSupport: {
+            type: "stair",
+            layer: 1,
+            baseZ: 3,
+            stairId: "stairs-1",
+            stairKind: "treadPath",
+            treadIndex: 0,
+            localZ: 0.25,
+            continuousLocalZ: 0
+        },
+        movementVector: { x: 0, y: 0 },
+        speed: 1,
+        animationSpeedMultiplier: 1,
+        lastDirectionRow: 0,
+        hatGraphics: {
+            name: "wizardHat",
+            visible: true,
+            renderable: true,
+            zIndex: 0,
+            parent: null,
+            scale: { set() {} }
+        },
+        getInterpolatedPosition() {
+            return { x: 1, y: 1, z: 0 };
+        }
+    };
+
+    const emptyPlan = renderer.buildBuildingInteriorRenderPlan(
+        { map: {}, wizard },
+        cutawayState
+    );
+    assert.equal(emptyPlan.active, false);
+    assert.equal(renderer.shouldApplyBuildingInteriorActiveFloorDepthBumpToItem(wizard, 1, emptyPlan, {}), false);
+
+    renderer.renderWizard({
+        wizard,
+        wizardFrames: [{ id: "wizard-frame" }],
+        map: renderer.camera.map,
+        _renderingLayerCutawayState: cutawayState,
+        renderAlpha: 1,
+        renderNowMs: 0
+    });
+
+    assert.ok(Math.abs(calls.find(call => call.target === "body").depthBias - 32.27) < 1e-9);
+    assert.equal(calls.find(call => call.target === "body").depthFlattenZ, true);
+    assert.equal(calls.find(call => call.target === "body").z, 0);
+    assert.equal(bodyMesh.zIndex, 2147483649);
+});
+
 test("building interior foreground promotion moves display object temporarily and restores it", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -2309,23 +2696,23 @@ test("interior presentation foreground promotes spell and selection overlays", (
     const originalTintZ = tintedDisplay.zIndex;
     const promoted = renderer.promoteInteriorPresentationForeground({ wizard });
 
-    assert.equal(promoted, 5);
+    assert.equal(promoted, 4);
     assert.equal(projectileSprite.parent, ui);
     assert.equal(projectileParticles.parent, ui);
     assert.equal(highlightGraphics.parent, ui);
-    assert.equal(wizardBody.parent, ui);
+    assert.equal(wizardBody.parent, entities);
     assert.equal(wizardHat.parent, ui);
     assert.equal(tintedDisplay.parent, originalTintParent);
     assert.equal(hiddenHighlight.parent, ui);
     assert.equal(projectileSprite.zIndex, 2147483650);
     assert.equal(highlightGraphics.zIndex, 2147483650);
-    assert.equal(wizardBody.zIndex, 2147483650);
+    assert.equal(wizardBody.zIndex, 0);
     assert.equal(wizardHat.zIndex, 2147483651);
     assert.equal(tintedDisplay.zIndex, originalTintZ);
     assert.equal(hiddenHighlight.zIndex, 0);
 });
 
-test("interior presentation keeps wizard hat above body when body is promoted later", () => {
+test("interior presentation promotes wizard hat without promoting body", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
     const makeContainer = () => ({
@@ -2363,12 +2750,11 @@ test("interior presentation keeps wizard hat above body when body is promoted la
         }
     });
 
-    assert.equal(promoted, 2);
-    assert.equal(wizardBody.parent, ui);
+    assert.equal(promoted, 1);
+    assert.equal(wizardBody.parent, entities);
     assert.equal(wizardHat.parent, ui);
-    assert.equal(wizardBody.zIndex, 2147483650);
+    assert.equal(wizardBody.zIndex, 0);
     assert.equal(wizardHat.zIndex, 2147483651);
-    assert.equal(wizardHat.zIndex > wizardBody.zIndex, true);
 });
 
 test("place object center snap guide promotes with render context", () => {
@@ -7401,7 +7787,7 @@ test("straight stairs build a full 3d mesh with treads, risers, and sides", () =
     assert.equal(Math.max(...zValues), 3);
 });
 
-test("tread path stairs render a floor-height entry tread and final upper riser", () => {
+test("tread path stairs render a raised entry tread through the upper floor", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
 
@@ -7431,7 +7817,7 @@ test("tread path stairs render a floor-height entry tread and final upper riser"
         const vertexStart = faceIndex * 4 * 3;
         treadZValues.push(geometry.positions[vertexStart + 2]);
     }
-    assert.deepEqual(treadZValues.map(z => Number(z.toFixed(6))), [0, 1, 2]);
+    assert.deepEqual(treadZValues.map(z => Number(z.toFixed(6))), [1, 2, 3]);
     assert.equal(Math.max(...Array.from(geometry.positions).filter((_, index) => index % 3 === 2)), 3);
 });
 

@@ -611,7 +611,7 @@
         if (index < 0 || index >= count) {
             throw new Error(`tread path stair has invalid tread index ${index}`);
         }
-        return low + (high - low) * (index / count);
+        return low + (high - low) * ((index + 1) / count);
     }
 
     function supportFromPathLocal(stair, frame, local) {

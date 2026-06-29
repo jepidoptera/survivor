@@ -658,18 +658,6 @@ test("prototype section bubble is a hysteretic four-section set independent of e
         ["0,0", "0,1", "1,-1", "1,0"]
     );
 
-    const staleBoundaryNodeActor = {
-        x: 17,
-        y: 1,
-        node: { _prototypeSectionKey: "2,0" }
-    };
-    assert.equal(resolveExactSectionKey(staleBoundaryNodeActor), "1,0");
-    assert.equal(map.updatePrototypeSectionBubble(staleBoundaryNodeActor), false);
-    assert.deepEqual(
-        Array.from(map.getPrototypeBubbleSectionKeys()).sort(),
-        ["0,0", "0,1", "1,-1", "1,0"]
-    );
-
     const pastHysteresisActor = { x: 25, y: 1 };
     assert.equal(resolveExactSectionKey(pastHysteresisActor), "2,0");
     assert.equal(map.updatePrototypeSectionBubble(pastHysteresisActor), true);

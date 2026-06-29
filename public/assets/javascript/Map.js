@@ -3583,9 +3583,16 @@ class GameMap {
                 ? Math.max(0, Math.min(1, Number(support.upDown)))
                 : null;
             const localZ = Number(support.baseZ) - Number(nextBaseZ);
-            const continuousBaseZ = Number.isFinite(lowerZ) && Number.isFinite(higherZ) && upDown !== null
+            const supportStairKind = typeof support.stairKind === "string"
+                ? support.stairKind
+                : (typeof (stair && stair.stairKind) === "string" ? stair.stairKind : "");
+            const rampBaseZ = Number.isFinite(lowerZ) && Number.isFinite(higherZ) && upDown !== null
                 ? lowerZ + (higherZ - lowerZ) * upDown
                 : Number(support.baseZ);
+            const rampLocalZ = Number(rampBaseZ) - Number(nextBaseZ);
+            const continuousBaseZ = supportStairKind === "treadPath"
+                ? Number(support.baseZ)
+                : rampBaseZ;
             const continuousLocalZ = Number(continuousBaseZ) - Number(nextBaseZ);
             actor._stairSupport = {
                 stairId: support.stairId,
@@ -3594,6 +3601,8 @@ class GameMap {
                 leftRight: support.leftRight,
                 baseZ: support.baseZ,
                 localZ,
+                rampBaseZ,
+                rampLocalZ,
                 continuousBaseZ,
                 continuousLocalZ
             };
@@ -3608,6 +3617,8 @@ class GameMap {
                 upDown: Number.isFinite(support.upDown) ? Number(support.upDown) : null,
                 leftRight: Number.isFinite(support.leftRight) ? Number(support.leftRight) : null,
                 localZ,
+                rampBaseZ,
+                rampLocalZ,
                 continuousBaseZ,
                 continuousLocalZ
             };

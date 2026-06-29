@@ -1952,6 +1952,8 @@ class Wizard extends Character {
             "leftRight",
             "baseZ",
             "localZ",
+            "rampBaseZ",
+            "rampLocalZ",
             "continuousBaseZ",
             "continuousLocalZ"
         ];

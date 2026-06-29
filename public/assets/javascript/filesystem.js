@@ -2830,6 +2830,8 @@ function getLoadedWizardCameraFollowZ(wizardRef) {
         throw new Error(`loaded wizard camera follow for layer ${layer} requires support baseZ or currentLayerBaseZ`);
     }
     if (support && support.type === "stair") {
+        if (Number.isFinite(Number(support.rampLocalZ))) return baseZ + Number(support.rampLocalZ);
+        if (Number.isFinite(Number(support.rampBaseZ))) return Number(support.rampBaseZ);
         if (Number.isFinite(Number(support.continuousLocalZ))) return baseZ + Number(support.continuousLocalZ);
         if (Number.isFinite(Number(support.continuousBaseZ))) return Number(support.continuousBaseZ);
         if (Number.isFinite(Number(support.localZ))) return baseZ + Number(support.localZ);

@@ -59,6 +59,8 @@
     const BUILDING_DOORWAY_TRANSITION_EXIT_SPAN_PADDING = 0.6;
     const BUILDING_INTERIOR_OVERLAY_Z = 2147483648;
     const BUILDING_INTERIOR_FOREGROUND_Z = 2147483650;
+    const BUILDING_INTERIOR_WIZARD_BODY_Z = BUILDING_INTERIOR_FOREGROUND_Z - 1;
+    const BUILDING_INTERIOR_WIZARD_SHADOW_Z = BUILDING_INTERIOR_WIZARD_BODY_Z - 0.001;
     const BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS = 32;
     const BUILDING_INTERIOR_LOWER_FLOOR_LIGHT_FACTOR = 0.62;
     const BUILDING_INTERIOR_WIZARD_HAT_Z = BUILDING_INTERIOR_FOREGROUND_Z + 1;
@@ -66,6 +68,7 @@
     const WIZARD_SHADOW_DEPTH_BIAS_UNITS = 0.02;
     const WIZARD_HAT_LIFT_UNITS = 0.15;
     const WIZARD_BODY_LOWER_UNITS = 0.25;
+    const BUILDING_INTERIOR_WIZARD_BODY_DEPTH_LIFT_UNITS = WIZARD_BODY_LOWER_UNITS + 0.02;
     const FLOOR_VISUAL_DEPTH_VS = `
 precision highp float;
 attribute vec2 aVertexPosition;
@@ -2300,6 +2303,44 @@ void main(void) {
                 }
             }
             return baseZ + (Number.isFinite(Number(wizard && wizard.z)) ? Number(wizard.z) : 0);
+        }
+
+        getWizardStairRenderSurfaceLocalZ(support = null, mapRef = null, fallbackLocalZ = NaN) {
+            if (!support || support.type !== "stair") return Number(fallbackLocalZ);
+            const fallback = Number.isFinite(Number(fallbackLocalZ))
+                ? Number(fallbackLocalZ)
+                : (Number.isFinite(Number(support.localZ)) ? Number(support.localZ) : 0);
+            const stair = support.stair || (
+                mapRef &&
+                mapRef.stairsById instanceof Map &&
+                typeof support.stairId === "string"
+                    ? mapRef.stairsById.get(support.stairId)
+                    : null
+            );
+            if (!stair || typeof stair !== "object") {
+                return Number.isFinite(Number(support.localZ)) ? Number(support.localZ) : fallback;
+            }
+            const lowerZ = Number(stair.lowerZ);
+            const higherZ = Number(stair.higherZ);
+            const baseZ = Number(support.baseZ);
+            if (!Number.isFinite(lowerZ) || !Number.isFinite(higherZ) || !Number.isFinite(baseZ)) {
+                return Number.isFinite(Number(support.localZ)) ? Number(support.localZ) : fallback;
+            }
+            const stepCount = Number.isFinite(Number(stair.stepCount))
+                ? Math.max(1, Math.round(Number(stair.stepCount)))
+                : 1;
+            const treadIndex = Number.isFinite(Number(support.treadIndex))
+                ? Math.max(0, Math.min(stepCount - 1, Math.round(Number(support.treadIndex))))
+                : Math.max(0, Math.min(stepCount - 1, Math.floor(Math.max(0, Math.min(1, Number(support.upDown) || 0)) * stepCount)));
+            let surfaceZ = NaN;
+            if (stair.stairKind === "straight" || support.stairKind === "straight") {
+                surfaceZ = lowerZ + ((higherZ - lowerZ) * ((treadIndex + 1) / stepCount));
+            } else if (stair.stairKind === "treadPath" || support.stairKind === "treadPath") {
+                surfaceZ = lowerZ + ((higherZ - lowerZ) * ((treadIndex + 1) / stepCount));
+            }
+            return Number.isFinite(surfaceZ)
+                ? surfaceZ - baseZ
+                : (Number.isFinite(Number(support.localZ)) ? Number(support.localZ) : fallback);
         }
 
         projectWorldPointToCutawayPlane(x, y, z = 0) {
@@ -5286,7 +5327,7 @@ void main(void) {
         }
 
         shouldApplyBuildingInteriorActiveFloorDepthBumpToItem(item, itemLayer, plan = null, mapRef = null) {
-            if (!item || item.type === "roof" || !plan || !plan.active) return false;
+            if (!item || item.type === "roof" || !plan) return false;
             if (plan.depthBumpedItems instanceof Set && plan.depthBumpedItems.has(item)) return true;
             const regions = Array.isArray(plan.depthBumpRegions) ? plan.depthBumpRegions : [];
             if (regions.length === 0) return false;
@@ -20269,12 +20310,46 @@ void main(void) {
                 : (Number.isFinite(wizard.currentLayerBaseZ)
                     ? Number(wizard.currentLayerBaseZ)
                     : this.getLayerBaseZForLevel(wizardLayer));
+            const mapRef = (ctx && ctx.map) || (this.camera && this.camera.map) || global.map || null;
+            const cutawayState = this.getLayerCutawayState(ctx);
+            const buildingInteriorRenderPlan = this.buildBuildingInteriorRenderPlan(ctx, cutawayState);
+            const wizardOnActiveInteriorStair = !!(
+                support &&
+                support.type === "stair" &&
+                this.cutawayStateHasActiveInteriorRegion(cutawayState)
+            );
+            const wizardActiveFloorDepthBump = (
+                wizardOnActiveInteriorStair ||
+                this.shouldApplyBuildingInteriorActiveFloorDepthBumpToItem(
+                    wizard,
+                    wizardLayer,
+                    buildingInteriorRenderPlan,
+                    mapRef
+                )
+            ) ? BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS : 0;
+            const wizardBodyDepthBump = wizardActiveFloorDepthBump > 0
+                ? wizardActiveFloorDepthBump + BUILDING_INTERIOR_WIZARD_BODY_DEPTH_LIFT_UNITS
+                : 0;
             const pGround = this.camera.worldToScreen(renderPos.x, renderPos.y, wizardLayerBaseZ);
             const interpolatedJumpHeight = Number.isFinite(renderPos.z) ? renderPos.z : 0;
+            let stairSurfaceLocalZ = NaN;
+            let wizardVisualLocalZ = interpolatedJumpHeight;
+            if (support && support.type === "stair") {
+                stairSurfaceLocalZ = this.getWizardStairRenderSurfaceLocalZ(support, mapRef, interpolatedJumpHeight);
+                if (Number.isFinite(stairSurfaceLocalZ)) {
+                    const continuousLocalZ = Number.isFinite(Number(support.continuousLocalZ))
+                        ? Number(support.continuousLocalZ)
+                        : (Number.isFinite(Number(support.localZ)) ? Number(support.localZ) : stairSurfaceLocalZ);
+                    const jumpLift = Math.max(0, interpolatedJumpHeight - continuousLocalZ);
+                    wizardVisualLocalZ = stairSurfaceLocalZ + jumpLift;
+                }
+            }
             const jumpHeight = Number.isFinite(wizard.jumpHeight) ? Math.max(0, Number(wizard.jumpHeight)) : 0;
             let shadowLocalZ = 0;
             if (wizard._floorFallState && wizard._floorFallState.active) {
                 shadowLocalZ = 0;
+            } else if (support && support.type === "stair" && Number.isFinite(stairSurfaceLocalZ)) {
+                shadowLocalZ = stairSurfaceLocalZ;
             } else if (support && support.type === "stair" && Number.isFinite(Number(support.continuousLocalZ))) {
                 shadowLocalZ = Number(support.continuousLocalZ);
             } else if (support && support.type === "stair" && Number.isFinite(Number(support.localZ))) {
@@ -20284,7 +20359,7 @@ void main(void) {
             } else {
                 shadowLocalZ = Math.max(0, interpolatedJumpHeight - jumpHeight);
             }
-            const jumpOffsetPx = interpolatedJumpHeight * this.camera.viewscale * this.camera.xyratio;
+            const jumpOffsetPx = wizardVisualLocalZ * this.camera.viewscale * this.camera.xyratio;
             const wizardCenterY = pGround.y - jumpOffsetPx - (this.camera.viewscale * 0.25);
             const renderNowMs = Number.isFinite(ctx.renderNowMs)
                 ? Number(ctx.renderNowMs)
@@ -20363,7 +20438,8 @@ void main(void) {
                 : null;
             let wizardDepthMesh = null;
             wizard._renderLayerBaseZ = wizardLayerBaseZ;
-            wizard._renderDepthBias = 0;
+            wizard._renderDepthBias = wizardBodyDepthBump;
+            wizard._renderDepthFlattenZ = true;
             if (!deathAnimationActive && staticProto && typeof staticProto.updateDepthBillboardMesh === "function") {
                 if (typeof staticProto.ensureDepthBillboardMesh === "function") {
                     wizard.ensureDepthBillboardMesh = staticProto.ensureDepthBillboardMesh;
@@ -20376,7 +20452,7 @@ void main(void) {
                 const savedZ = wizard.z;
                 wizard.x = renderPos.x;
                 wizard.y = renderPos.y;
-                wizard.z = (Number.isFinite(renderPos.z) ? Number(renderPos.z) : 0) - WIZARD_BODY_LOWER_UNITS;
+                wizard.z = wizardVisualLocalZ - WIZARD_BODY_LOWER_UNITS;
                 wizardDepthMesh = staticProto.updateDepthBillboardMesh.call(wizard, ctx, this.camera, {
                     alphaCutoff: TREE_ALPHA_CUTOFF,
                     mazeMode: false,
@@ -20391,10 +20467,17 @@ void main(void) {
                 if (wizardDepthMesh.parent !== depthContainer) {
                     depthContainer.addChild(wizardDepthMesh);
                 }
+                wizardDepthMesh.zIndex = wizardActiveFloorDepthBump > 0 ? BUILDING_INTERIOR_WIZARD_BODY_Z : 0;
                 wizardDepthMesh.alpha = wizardAlpha;
                 wizardDepthMesh.visible = true;
                 if (Object.prototype.hasOwnProperty.call(wizardDepthMesh, "renderable")) {
                     wizardDepthMesh.renderable = true;
+                }
+                if (Object.prototype.hasOwnProperty.call(depthContainer, "sortableChildren")) {
+                    depthContainer.sortableChildren = true;
+                }
+                if (Object.prototype.hasOwnProperty.call(depthContainer, "sortDirty")) {
+                    depthContainer.sortDirty = true;
                 }
                 this.addPickRenderItem(wizard, wizardDepthMesh, { forceInclude: true });
             } else if (wizard._renderingDepthMesh) {
@@ -20407,7 +20490,7 @@ void main(void) {
             const shadowProxy = this.ensureWizardShadowProxy();
             if (!deathAnimationActive && shadowProxy && typeof shadowProxy.updateDepthBillboardMesh === "function") {
                 shadowProxy._renderLayerBaseZ = wizardLayerBaseZ;
-                shadowProxy._renderDepthBias = WIZARD_SHADOW_DEPTH_BIAS_UNITS;
+                shadowProxy._renderDepthBias = WIZARD_SHADOW_DEPTH_BIAS_UNITS + wizardActiveFloorDepthBump;
                 shadowProxy.map = wizard.map || global.map || null;
                 shadowProxy.x = renderPos.x;
                 shadowProxy.y = renderPos.y + 0.18;
@@ -20431,10 +20514,17 @@ void main(void) {
                     if (shadowMesh.parent !== depthContainer) {
                         depthContainer.addChild(shadowMesh);
                     }
+                    shadowMesh.zIndex = wizardActiveFloorDepthBump > 0 ? BUILDING_INTERIOR_WIZARD_SHADOW_Z : 0;
                     shadowMesh.alpha = invisibilityActive ? 0.25 : 1;
                     shadowMesh.visible = true;
                     if (Object.prototype.hasOwnProperty.call(shadowMesh, "renderable")) {
                         shadowMesh.renderable = true;
+                    }
+                    if (Object.prototype.hasOwnProperty.call(depthContainer, "sortableChildren")) {
+                        depthContainer.sortableChildren = true;
+                    }
+                    if (Object.prototype.hasOwnProperty.call(depthContainer, "sortDirty")) {
+                        depthContainer.sortDirty = true;
                     }
                 }
             } else if (shadowProxy && shadowProxy._renderingDepthMesh) {

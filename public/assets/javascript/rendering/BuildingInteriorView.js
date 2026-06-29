@@ -1,6 +1,5 @@
 (function attachRenderingBuildingInteriorView(global) {
     const BUILDING_INTERIOR_FOREGROUND_Z = 2147483650;
-    const BUILDING_INTERIOR_WIZARD_SHADOW_Z = BUILDING_INTERIOR_FOREGROUND_Z - 1;
     const BUILDING_INTERIOR_WIZARD_HAT_Z = BUILDING_INTERIOR_FOREGROUND_Z + 1;
 
     class RenderingBuildingInteriorView {
@@ -72,11 +71,6 @@
             addCandidate(r.placeObjectPreviewDisplayObject);
             addCandidate(r.powerupPlacementPreviewDisplayObject);
             const wizardRef = (ctx && ctx.wizard) || global.wizard || null;
-            const shadowProxy = r.wizardShadowProxy || null;
-            addCandidate(shadowProxy && shadowProxy._renderingDepthMesh, BUILDING_INTERIOR_WIZARD_SHADOW_Z);
-            addCandidate(shadowProxy && shadowProxy.pixiSprite, BUILDING_INTERIOR_WIZARD_SHADOW_Z);
-            addCandidate(wizardRef && wizardRef._renderingDepthMesh);
-            addCandidate(wizardRef && wizardRef.pixiSprite);
             addCandidate(wizardRef && wizardRef.hatGraphics, BUILDING_INTERIOR_WIZARD_HAT_Z);
             if (r.activeProjectileDisplayObjects instanceof Set) {
                 for (const obj of r.activeProjectileDisplayObjects) addCandidate(obj);

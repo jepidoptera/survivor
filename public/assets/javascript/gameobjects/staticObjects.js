@@ -1437,6 +1437,7 @@ uniform vec2 uWrapEnabled;
 uniform vec2 uWrapAnchorWorld;
 uniform float uLayerBaseZ;
 uniform float uDepthBias;
+uniform float uDepthFlattenZ;
 uniform float uZOffset;
 varying vec2 vUvs;
 varying float vWorldZ;
@@ -1462,7 +1463,7 @@ void main(void) {
     float sy = max(1.0, uScreenSize.y);
     float screenX = camDx * uViewScale;
     float screenY = (camDy - camDz) * uViewScale * uXyRatio;
-    float depthMetric = camDy + camDz + uDepthBias;
+    float depthMetric = camDy + (camDz * (1.0 - clamp(uDepthFlattenZ, 0.0, 1.0))) + uDepthBias;
     float farMetric = uDepthRange.x;
     float invSpan = max(1e-6, uDepthRange.y);
     float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
@@ -1542,6 +1543,7 @@ uniform vec2 uWrapEnabled;
 uniform vec2 uWrapAnchorWorld;
 uniform float uLayerBaseZ;
 uniform float uDepthBias;
+uniform float uDepthFlattenZ;
 uniform float uZOffset;
 out vec2 vUvs;
 out float vWorldZ;
@@ -1569,7 +1571,7 @@ void main(void) {
     float sy = max(1.0, uScreenSize.y);
     float screenX = camDx * uViewScale;
     float screenY = (camDy - camDz) * uViewScale * uXyRatio;
-    float depthMetric = camDy + camDz + uDepthBias;
+    float depthMetric = camDy + (camDz * (1.0 - clamp(uDepthFlattenZ, 0.0, 1.0))) + uDepthBias;
     float farMetric = uDepthRange.x;
     float invSpan = max(1e-6, uDepthRange.y);
     float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
@@ -2062,6 +2064,7 @@ void main(void) {
             uWrapAnchorWorld: new Float32Array([0, 0]),
             uLayerBaseZ: 0,
             uDepthBias: 0,
+            uDepthFlattenZ: 0,
             uTint: new Float32Array([1, 1, 1, 1]),
             uBrightness: 0,
             uAlphaCutoff: Number.isFinite(alphaCutoff) ? Number(alphaCutoff) : 0.08,
@@ -2176,6 +2179,7 @@ void main(void) {
             uWrapAnchorWorld: new Float32Array([0, 0]),
             uLayerBaseZ: 0,
             uDepthBias: 0,
+            uDepthFlattenZ: 0,
             uTint: new Float32Array([1, 1, 1, 1]),
             uAlphaCutoff: Number.isFinite(alphaCutoff) ? Number(alphaCutoff) : 0.08,
             uClipMinZ: -1000000,
@@ -2623,6 +2627,7 @@ void main(void) {
         }
         uniforms.uLayerBaseZ = effectiveLayerBaseZ;
         uniforms.uDepthBias = (Number.isFinite(this._renderDepthBias) ? Number(this._renderDepthBias) : 0) + extraDepthBias;
+        uniforms.uDepthFlattenZ = this._renderDepthFlattenZ === true ? 1 : 0;
         uniforms.uViewScale = Number(cam.viewscale) || 1;
         uniforms.uXyRatio = Number(cam.xyratio) || 1;
         uniforms.uDepthRange[0] = farMetric;
@@ -2683,6 +2688,7 @@ void main(void) {
                     uU.uWrapAnchorWorld[1] = uniforms.uWrapAnchorWorld[1];
                     uU.uLayerBaseZ = effectiveLayerBaseZ;
                     uU.uDepthBias = uniforms.uDepthBias;
+                    uU.uDepthFlattenZ = uniforms.uDepthFlattenZ;
                     uU.uViewScale = uniforms.uViewScale;
                     uU.uXyRatio = uniforms.uXyRatio;
                     uU.uDepthRange[0] = uniforms.uDepthRange[0];
