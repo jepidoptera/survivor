@@ -490,7 +490,7 @@ test("terrain local patch treats affected holes as editable polygon rings", () =
     assert.equal(map.terrainPolygonContainsPoint(map.terrainPolygons[0], center.x, center.y), true);
 });
 
-test("terrain local patch keeps base grass dominant when closing a tiny water ring", () => {
+test("terrain local patch applies grass priority when closing a tiny water ring", () => {
     const map = createTerrainPatchMap();
     const center = map.nodes[4][4];
     const gapDirection = 1;
@@ -817,6 +817,158 @@ test("section water line cut across the middle matches painting separated segmen
     assert.equal(separatedFixture.asset.terrainPolygons.filter(polygon => polygon.type === "water").length, 2);
 });
 
+test("section water patch remains editable after save and reload", () => {
+    const makeSectionMap = (savedAsset = null) => {
+        const map = createTerrainPatchMap(18, 16);
+        const sectionKey = "0,0";
+        const sectionNodes = [];
+        for (let x = 0; x < map.width; x++) {
+            for (let y = 0; y < map.height; y++) {
+                const node = map.nodes[x][y];
+                node._prototypeSectionKey = sectionKey;
+                sectionNodes.push(node);
+            }
+        }
+        const tileCoordKeys = sectionNodes.map(node => `${node.xindex},${node.yindex}`);
+        const asset = savedAsset
+            ? {
+                ...savedAsset,
+                groundTiles: { ...savedAsset.groundTiles },
+                terrainPolygons: savedAsset.terrainPolygons.map(polygon => ({
+                    type: polygon.type,
+                    points: polygon.points.map(point => ({ ...point })),
+                    holes: Array.isArray(polygon.holes)
+                        ? polygon.holes.map(hole => hole.map(point => ({ ...point })))
+                        : undefined
+                }))
+            }
+            : {
+                key: sectionKey,
+                tileCoordKeys,
+                groundTiles: {},
+                terrainPolygons: [],
+                sectionPolygon: getSectionPolygonForNodes(map, sectionNodes),
+                _level0GroundSurfaceVersion: 0
+            };
+        asset.key = sectionKey;
+        asset.tileCoordKeys = tileCoordKeys;
+        asset.sectionPolygon = getSectionPolygonForNodes(map, sectionNodes);
+        map._prototypeSectionState = {
+            nodesBySectionKey: new NativeMap([[sectionKey, sectionNodes]]),
+            sectionAssetsByKey: new NativeMap([[sectionKey, asset]])
+        };
+        map.getPrototypeSectionAsset = (key) => map._prototypeSectionState.sectionAssetsByKey.get(key) || null;
+        if (savedAsset) {
+            for (const node of sectionNodes) {
+                const coordKey = `${node.xindex},${node.yindex}`;
+                if (Object.prototype.hasOwnProperty.call(asset.groundTiles, coordKey)) {
+                    node.groundTextureId = asset.groundTiles[coordKey];
+                }
+            }
+            asset.terrainPolygons = map.normalizeGroundTerrainPolygons(asset.terrainPolygons);
+        }
+        return { map, asset, sectionKey };
+    };
+    const paintCoords = (fixture, coords) => {
+        for (const [x, y] of coords) {
+            const node = fixture.map.nodes[x][y];
+            if (fixture.map.getGroundTerrainTypeForNode(node) !== "water") {
+                assert.equal(fixture.map.replaceGroundTerrainPolygonPatch(node, "water", {
+                    asset: fixture.asset,
+                    sectionKey: fixture.sectionKey
+                }), true);
+            }
+        }
+    };
+    const cloneSavedAsset = (asset) => JSON.parse(JSON.stringify({
+        key: asset.key,
+        tileCoordKeys: asset.tileCoordKeys,
+        groundTiles: asset.groundTiles,
+        terrainPolygons: asset.terrainPolygons,
+        sectionPolygon: asset.sectionPolygon,
+        _level0GroundSurfaceVersion: asset._level0GroundSurfaceVersion
+    }));
+    const initialCoords = [
+        [7, 7], [8, 7], [9, 7],
+        [8, 8], [9, 8],
+        [8, 6]
+    ];
+    const edgeCoord = [10, 7];
+
+    const reloadedFixture = makeSectionMap();
+    paintCoords(reloadedFixture, initialCoords);
+    const savedAsset = cloneSavedAsset(reloadedFixture.asset);
+    const hydratedFixture = makeSectionMap(savedAsset);
+    paintCoords(hydratedFixture, [edgeCoord]);
+
+    const continuousFixture = makeSectionMap();
+    paintCoords(continuousFixture, initialCoords.concat([edgeCoord]));
+
+    assert.deepEqual(
+        canonicalTerrainPolygonsForType(hydratedFixture.map, hydratedFixture.asset.terrainPolygons, "water"),
+        canonicalTerrainPolygonsForType(continuousFixture.map, continuousFixture.asset.terrainPolygons, "water")
+    );
+});
+
+test("water painted through reloaded mud matches direct final terrain", () => {
+    const cloneReloadedTerrainMap = (sourceMap) => {
+        const reloaded = createTerrainPatchMap(sourceMap.width, sourceMap.height);
+        for (let x = 0; x < sourceMap.width; x++) {
+            for (let y = 0; y < sourceMap.height; y++) {
+                reloaded.nodes[x][y].groundTextureId = sourceMap.nodes[x][y].groundTextureId;
+            }
+        }
+        reloaded.terrainPolygons = reloaded.normalizeGroundTerrainPolygons(
+            JSON.parse(JSON.stringify(sourceMap.terrainPolygons))
+        );
+        return reloaded;
+    };
+    const paintCoords = (map, coords, terrainType) => {
+        for (const [x, y] of coords) {
+            const node = map.nodes[x][y];
+            if (map.getGroundTerrainTypeForNode(node) !== terrainType) {
+                assert.equal(map.replaceGroundTerrainPolygonPatch(node, terrainType), true);
+            }
+        }
+    };
+    const waterCoords = [
+        [8, 8], [8, 9],
+        [9, 8], [9, 9],
+        [10, 8], [10, 9]
+    ];
+    const mudCoords = [
+        [11, 7], [11, 8], [11, 9],
+        [12, 7], [12, 8], [12, 9],
+        [13, 7], [13, 8], [13, 9]
+    ];
+    const cutWaterCoords = [
+        [10, 8], [11, 8], [12, 8], [13, 8]
+    ];
+    const cutWaterKeys = new NativeSet(cutWaterCoords.map(([x, y]) => `${x},${y}`));
+    const finalMudCoords = mudCoords.filter(([x, y]) => !cutWaterKeys.has(`${x},${y}`));
+
+    const reloadedCutMap = createTerrainPatchMap(26, 20);
+    paintCoords(reloadedCutMap, waterCoords, "water");
+    paintCoords(reloadedCutMap, mudCoords, "mud");
+    const hydratedCutMap = cloneReloadedTerrainMap(reloadedCutMap);
+    paintCoords(hydratedCutMap, cutWaterCoords, "water");
+
+    const directFinalMap = createTerrainPatchMap(26, 20);
+    paintCoords(directFinalMap, waterCoords.concat(cutWaterCoords), "water");
+    paintCoords(directFinalMap, finalMudCoords, "mud");
+
+    assert.deepEqual(
+        {
+            water: canonicalTerrainPolygonsForType(hydratedCutMap, hydratedCutMap.terrainPolygons, "water"),
+            mud: canonicalTerrainPolygonsForType(hydratedCutMap, hydratedCutMap.terrainPolygons, "mud")
+        },
+        {
+            water: canonicalTerrainPolygonsForType(directFinalMap, directFinalMap.terrainPolygons, "water"),
+            mud: canonicalTerrainPolygonsForType(directFinalMap, directFinalMap.terrainPolygons, "mud")
+        }
+    );
+});
+
 test("water immersion query reports shore distance and slope depth", () => {
     const map = createTerrainPatchMap(16, 16);
     const waterNodes = [];
@@ -1076,7 +1228,7 @@ test("road path bridge collision uses section runtime road path registry", () =>
     assert.ok(collision, "deep-water swimmer should collide with section runtime roadPath bridge");
 });
 
-test("terrain replacement path smoothing lets base grass take priority over water", () => {
+test("terrain replacement path smoothing applies absolute terrain priority", () => {
     const map = createTerrainPatchMap();
     const center = map.nodes[4][4];
     const neighbor = center.neighbors[1];
@@ -1119,6 +1271,15 @@ test("terrain replacement path smoothing lets base grass take priority over wate
         Math.abs(point.x - keepCandidate.point.x) < 1e-7 &&
         Math.abs(point.y - keepCandidate.point.y) < 1e-7
     )), false);
+
+    const smoothedWithLegacySuppression = map.smoothGroundTerrainReplacementPathPoints([
+        { x: skipCandidate.point.x - 0.25, y: skipCandidate.point.y - 0.25 },
+        skipCandidate.point,
+        keepCandidate.point,
+        { x: keepCandidate.point.x + 0.25, y: keepCandidate.point.y + 0.25 }
+    ], group, vertexSlotsByPointKey, affectedNodes, { isHole: false, suppressPriorityInversion: true });
+
+    assert.deepEqual(smoothedWithLegacySuppression, smoothed);
 });
 
 test("terrain polygon repair treats rounded hex-corner vertices as affected", () => {

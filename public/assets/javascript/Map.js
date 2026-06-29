@@ -8948,11 +8948,9 @@ class GameMap {
     getGroundTerrainBoundaryKeepNonGroupCount(type, slots, nodesByKey = null, options = {}) {
         const stats = this.getGroundTerrainBoundarySlotStats(type, slots, nodesByKey);
         const normalKeepNonGroupCount = options && options.isHole === true ? 1 : 2;
-        const suppressPriorityInversion = !!(options && options.suppressPriorityInversion === true);
         return {
             ...stats,
             keepNonGroupCount: stats.higherPriorityNeighbor &&
-                !suppressPriorityInversion &&
                 !(options && options.isHole === true)
                 ? 3 - normalKeepNonGroupCount
                 : normalKeepNonGroupCount
@@ -10322,6 +10320,46 @@ class GameMap {
         return !!signature && this._groundTerrainGeneratedPolygonSignatures.has(signature);
     }
 
+    groundTerrainPolygonMatchesCurrentTileGeometry(polygon) {
+        if (!polygon || typeof polygon.type !== "string" || polygon.type.length === 0) return false;
+        const type = polygon.type;
+        const signature = this.getGroundTerrainGeneratedPolygonSignature(polygon);
+        if (!signature) return false;
+        const sourceNodes = this.collectGroundTerrainPolygonRepairSourceNodes();
+        const seedNodes = [];
+        for (let i = 0; i < sourceNodes.length; i++) {
+            const node = sourceNodes[i];
+            if (!node || node._prototypeVoid === true) continue;
+            if (this.getGroundTerrainTypeForNode(node) !== type) continue;
+            if (!this.terrainPolygonContainsPoint(polygon, node.x, node.y)) continue;
+            seedNodes.push(node);
+        }
+        if (seedNodes.length === 0) return false;
+        const componentNodes = this.collectGroundTerrainConnectedComponentNodesForType(type, seedNodes);
+        if (componentNodes.length === 0) return false;
+        const generatedPolygons = this.buildGroundTerrainPolygonsFromNodes(componentNodes);
+        for (let i = 0; i < generatedPolygons.length; i++) {
+            if (this.getGroundTerrainGeneratedPolygonSignature(generatedPolygons[i]) === signature) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    markMatchingCurrentTileTerrainPolygonsGenerated(polygons) {
+        const source = Array.isArray(polygons) ? polygons : [];
+        const matched = [];
+        for (let i = 0; i < source.length; i++) {
+            const polygon = source[i];
+            if (this.groundTerrainPolygonHasGeneratedSignature(polygon)) continue;
+            if (this.groundTerrainPolygonMatchesCurrentTileGeometry(polygon)) {
+                matched.push(polygon);
+            }
+        }
+        if (matched.length > 0) this.markGroundTerrainPolygonsGenerated(matched);
+        return matched.length;
+    }
+
     snapGroundTerrainPointToAffectedHexCorner(point, affectedNodes) {
         const x = Number(point && point.x);
         const y = Number(point && point.y);
@@ -10549,9 +10587,25 @@ class GameMap {
             this.getGroundTerrainAffectedVertexRuns(hole, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes).length > 0
         ));
         const replacements = Array.isArray(replacementPolygons) ? replacementPolygons : [];
+        let affectedReplacementCount = 0;
         for (let i = 0; i < replacements.length; i++) {
             const replacement = replacements[i];
             if (!replacement || replacement.type !== polygon.type) continue;
+            const replacementOuterRuns = this.getGroundTerrainAffectedVertexRuns(
+                replacement.points,
+                affectedNodeKeys,
+                vertexSlotsByPointKey,
+                affectedNodes
+            );
+            const replacementHasAffectedHole = Array.isArray(replacement.holes) && replacement.holes.some((hole) => (
+                this.getGroundTerrainAffectedVertexRuns(hole, affectedNodeKeys, vertexSlotsByPointKey, affectedNodes).length > 0
+            ));
+            const replacementTouchesAffectedPatch = replacementOuterRuns.length === 0 && !replacementHasAffectedHole
+                ? this.groundTerrainPolygonTouchesAnyPatchHex(replacement, affectedNodes)
+                : false;
+            if (replacementOuterRuns.length > 0 || replacementHasAffectedHole || replacementTouchesAffectedPatch) {
+                affectedReplacementCount += 1;
+            }
             const replacementHoles = Array.isArray(replacement.holes) ? replacement.holes : [];
             if (replacementHoles.length > existingHoleCount) {
                 const hasAffectedNewHole = replacementHoles.some((hole) => (
@@ -10561,6 +10615,7 @@ class GameMap {
             }
             if (replacementHoles.length < existingHoleCount && affectedExistingHole) return true;
         }
+        if (affectedReplacementCount !== 1) return true;
         return false;
     }
 
@@ -11888,6 +11943,7 @@ class GameMap {
         const typeSet = new Set(participatingRecords.map(record => record.polygon.type));
         const debugBeforePolygons = participatingRecords.map(record => record.polygon);
         if (nextType !== "grass") typeSet.add(nextType);
+        this.markMatchingCurrentTileTerrainPolygonsGenerated(debugBeforePolygons);
         this.setGroundTerrainType(node.xindex, node.yindex, nextType);
         const resultPolygonsByType = new Map();
         try {
@@ -11935,10 +11991,7 @@ class GameMap {
             }
             const polygons = [];
             const usedReplacementIndexes = new Set();
-            const repairOptions = {
-                suppressPriorityInversion: nextType === "grass" &&
-                    this.getGroundTerrainEditPriority(nextType) > this.getGroundTerrainEditPriority(type)
-            };
+            const repairOptions = {};
             const typeRecordsAreGenerated = typeRecords.every(record => (
                 this.groundTerrainPolygonHasGeneratedSignature(record.polygon)
             ));
