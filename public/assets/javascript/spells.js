@@ -374,8 +374,15 @@ const SpellSystem = (() => {
     const TERRAIN_TOOL_DEFS = [
         { name: "grass", label: "Grass", icon: "/assets/images/land tiles/forest0.png" },
         { name: "desert", label: "Desert", icon: "/assets/images/land tiles/desert0.png" },
-        { name: "water", label: "Water", icon: "/assets/images/land tiles/water1.png" }
+        { name: "water", label: "Water", icon: "/assets/images/land tiles/water1.png" },
+        { name: "mud", label: "Mud", icon: "/assets/images/terrain/materials/dirt.png" }
     ];
+    const TERRAIN_HOTKEY_TYPES = {
+        g: "grass",
+        d: "desert",
+        w: "water",
+        m: "mud"
+    };
     const DEFAULT_ROOF_TEXTURE = "/assets/images/roofs/smallshingles.png";
     const DEFAULT_PLACEABLE_CATEGORY = "doors";
     const DEFAULT_PLACEABLE_BY_CATEGORY = {
@@ -7479,19 +7486,25 @@ const SpellSystem = (() => {
         return { screenX, screenY };
     }
 
-    function markGroundTerrainSectionDirty(mapRef, node) {
+    function replaceGroundTerrainPolygonPatch(mapRef, node, terrainType) {
         const sectionKey = node && typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0
             ? node._prototypeSectionKey
             : (node && typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
-        if (!sectionKey || !mapRef || typeof mapRef.getPrototypeSectionAsset !== "function") return;
-        const asset = mapRef.getPrototypeSectionAsset(sectionKey);
-        if (!asset) return;
-        const coordKey = `${node.xindex},${node.yindex}`;
-        if (!asset.groundTiles || typeof asset.groundTiles !== "object") {
-            asset.groundTiles = {};
+        if (!mapRef) return;
+        if (!sectionKey || typeof mapRef.getPrototypeSectionAsset !== "function") {
+            if (typeof mapRef.replaceGroundTerrainPolygonPatch !== "function") {
+                throw new Error("terrain editor requires map.replaceGroundTerrainPolygonPatch for non-section terrain painting");
+            }
+            return mapRef.replaceGroundTerrainPolygonPatch(node, terrainType);
         }
-        asset.groundTiles[coordKey] = Number.isFinite(node.groundTextureId) ? Number(node.groundTextureId) : 0;
-        asset._level0GroundSurfaceVersion = (Number(asset._level0GroundSurfaceVersion) || 0) + 1;
+        const asset = mapRef.getPrototypeSectionAsset(sectionKey);
+        if (!asset) {
+            throw new Error(`terrain editor could not find prototype section asset for ${sectionKey}`);
+        }
+        if (typeof mapRef.replaceGroundTerrainPolygonPatch !== "function") {
+            throw new Error("terrain editor requires map.replaceGroundTerrainPolygonPatch");
+        }
+        return mapRef.replaceGroundTerrainPolygonPatch(node, terrainType, { asset, sectionKey });
     }
 
     function paintTerrainAtWorldPoint(wizardRef, worldX, worldY) {
@@ -7499,22 +7512,21 @@ const SpellSystem = (() => {
         if (!mapRef || typeof mapRef.worldToNode !== "function") {
             throw new Error("terrain editor requires map.worldToNode");
         }
-        if (typeof mapRef.setGroundTerrainType !== "function") {
-            throw new Error("terrain editor requires map.setGroundTerrainType");
-        }
         const node = mapRef.worldToNode(worldX, worldY);
         if (!node) {
             message("No terrain tile here.");
             return false;
         }
         const terrainType = getSelectedTerrainType(wizardRef);
-        const changed = mapRef.setGroundTerrainType(node.xindex, node.yindex, terrainType);
+        const changed = replaceGroundTerrainPolygonPatch(mapRef, node, terrainType);
         if (!changed) return false;
-        markGroundTerrainSectionDirty(mapRef, node);
         if (typeof globalThis !== "undefined") {
             if (typeof globalThis.invalidateMinimap === "function") {
                 globalThis.invalidateMinimap();
             }
+            // Terrain paint edits live terrain polygons locally. Do not reset
+            // level-0 ground caches here without asking; doing so makes brush
+            // painting slow and hides the benefit of the local polygon patch.
             if (typeof globalThis.presentGameFrame === "function") {
                 globalThis.presentGameFrame();
             }
@@ -10579,10 +10591,7 @@ const SpellSystem = (() => {
                 })
                 .attr("title", terrain.label)
                 .click(() => {
-                    setSelectedTerrainType(wizardRef, terrain.name);
-                    setCurrentSpell(wizardRef, "terrainedit");
-                    refreshSpellSelector(wizardRef);
-                    $("#spellMenu").addClass("hidden");
+                    selectTerrainMenuType(wizardRef, terrain.name);
                 });
             if (terrain.name === selected) {
                 icon.addClass("selected");
@@ -10597,8 +10606,37 @@ const SpellSystem = (() => {
         }
         setSelectedTerrainType(wizardRef, getSelectedTerrainType(wizardRef));
         spellMenuMode = "terrain";
+        $("#editorMenu").addClass("hidden");
         $("#spellMenu").removeClass("hidden");
         renderTerrainSelector(wizardRef);
+    }
+
+    function selectTerrainType(wizardRef, terrainType, options = {}) {
+        if (!wizardRef) return false;
+        setSelectedTerrainType(wizardRef, terrainType);
+        setCurrentSpell(wizardRef, "terrainedit");
+        refreshSpellSelector(wizardRef);
+        if (!options || options.closeMenus !== false) {
+            $("#spellMenu").addClass("hidden");
+            $("#editorMenu").addClass("hidden");
+        }
+        return true;
+    }
+
+    function selectTerrainMenuType(wizardRef, terrainType) {
+        return selectTerrainType(wizardRef, terrainType);
+    }
+
+    function getTerrainTypeForHotkey(keyName) {
+        const key = typeof keyName === "string" ? keyName.trim().toLowerCase() : "";
+        return TERRAIN_HOTKEY_TYPES[key] || "";
+    }
+
+    function handleTerrainMenuHotkey(wizardRef, keyName) {
+        if (!wizardRef || spellMenuMode !== "terrain") return false;
+        const terrainType = getTerrainTypeForHotkey(keyName);
+        if (!terrainType) return false;
+        return selectTerrainMenuType(wizardRef, terrainType);
     }
 
     function renderTreeSelector(wizardRef) {
@@ -12421,6 +12459,9 @@ const SpellSystem = (() => {
         showEditorMenu,
         showEditorSubmenuForSelectedCategory,
         showPlaceableMenu,
+        paintTerrainAtWorldPoint,
+        handleTerrainMenuHotkey,
+        selectTerrainType,
         refreshEditorSelector,
         setEditorPanelVisible,
         toggleEditorPanelVisible,

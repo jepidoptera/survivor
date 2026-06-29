@@ -153,6 +153,8 @@
                 : null);
         if (!Number.isFinite(baseZ)) return null;
         if (support && support.type === "stair") {
+            if (Number.isFinite(support.rampLocalZ)) return baseZ + Number(support.rampLocalZ);
+            if (Number.isFinite(support.rampBaseZ)) return Number(support.rampBaseZ);
             if (Number.isFinite(support.continuousLocalZ)) return baseZ + Number(support.continuousLocalZ);
             if (Number.isFinite(support.continuousBaseZ)) return Number(support.continuousBaseZ);
             if (Number.isFinite(support.localZ)) return baseZ + Number(support.localZ);

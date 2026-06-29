@@ -82,7 +82,7 @@ test.afterEach(() => {
     restoreGlobals();
 });
 
-test("saveGameState uses numeric ground tile encoding for terrain ids above base36", () => {
+test("saveGameState stores terrain polygons and terrain tile membership", () => {
     const prototypeSectionAsset = {
         id: "section-0",
         key: "0,0",
@@ -91,13 +91,50 @@ test("saveGameState uses numeric ground tile encoding for terrain ids above base
         centerOffset: { x: 0, y: 0 },
         neighborKeys: [],
         tileCoordKeys: ["0,0"],
-        groundTextureId: 0,
+        groundTiles: { "0,0": 0 },
+        terrainPolygons: [
+            {
+                type: "water",
+                points: [
+                    { x: 0, y: 0 },
+                    { x: 1, y: 0 },
+                    { x: 0, y: 1 }
+                ],
+                holes: [
+                    [
+                        { x: 0.2, y: 0.2 },
+                        { x: 0.4, y: 0.2 },
+                        { x: 0.2, y: 0.4 }
+                    ]
+                ]
+            }
+        ],
         walls: [],
         objects: [],
         animals: [],
         powerups: []
     };
     const map = createRectMap();
+    map.terrainPolygons = [
+        {
+            type: "water",
+            points: [
+                { x: 0, y: 0 },
+                { x: 1, y: 0 },
+                { x: 0, y: 1 }
+            ],
+            holes: [
+                [
+                    { x: 0.2, y: 0.2 },
+                    { x: 0.4, y: 0.2 },
+                    { x: 0.2, y: 0.4 }
+                ]
+            ]
+        }
+    ];
+    map.buildGroundTerrainPolygonsFromNodes = () => {
+        throw new Error("saveGameState must not rebuild map terrain polygons");
+    };
     map.nodes[0][0].xindex = 0;
     map.nodes[0][0].yindex = 0;
     map.nodes[0][0].groundTextureId = 53;
@@ -111,6 +148,9 @@ test("saveGameState uses numeric ground tile encoding for terrain ids above base
     };
     map.getPrototypeActiveSectionKeys = () => new Set(["0,0"]);
     map.getPrototypeSectionAsset = () => prototypeSectionAsset;
+    map.rebuildGroundTerrainPolygonsForSection = () => {
+        throw new Error("saveGameState must not rebuild terrain polygons");
+    };
     map.syncPrototypeWalls = () => false;
     map.syncPrototypeObjects = () => false;
     map.syncPrototypeAnimals = () => false;
@@ -129,8 +169,10 @@ test("saveGameState uses numeric ground tile encoding for terrain ids above base
 
     const saveData = filesystem.saveGameState();
 
-    assert.equal(saveData.groundTiles.encoding, "number-grid-v2");
-    assert.deepEqual(saveData.groundTiles.data, [53]);
+    assert.deepEqual(saveData.groundTiles, { "0,0": 53 });
+    assert.deepEqual(saveData.terrainPolygons, map.terrainPolygons);
+    assert.deepEqual(saveData.prototypeSectionWorld.sections[0].groundTiles, { "0,0": 53 });
+    assert.deepEqual(saveData.prototypeSectionWorld.sections[0].terrainPolygons, prototypeSectionAsset.terrainPolygons);
 });
 
 test("saveGameState persists prototype animals in section data without duplicating runtime records", () => {
@@ -884,6 +926,124 @@ test("loadGameState strips generated outdoor ground support before wizard restor
     assert.ok(loadedWizardData);
     assert.equal(loadedWizardData.fragmentId, "");
     assert.equal(loadedWizardData.surfaceId, "");
+});
+
+test("loadGameState restores saved terrain tile membership to map nodes", () => {
+    const map = createRectMap();
+    map.nodes[0][0].groundTextureId = 0;
+
+    globalThis.map = map;
+    globalThis.wizard = {
+        loadJson() {}
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.viewport = { x: 0, y: 0, width: 100, height: 100 };
+    globalThis.paused = false;
+    globalThis.projectiles = [];
+    globalThis.Road = { clearRuntimeCaches() {} };
+    globalThis.StaticObject = { loadJson() { return null; } };
+    globalThis.Animal = { loadJson() { return null; } };
+    globalThis.Powerup = { loadJson() { return null; } };
+
+    const loaded = filesystem.loadGameState({
+        wizard: { x: 0, y: 0 },
+        animals: [],
+        powerups: [],
+        staticObjects: [],
+        groundTiles: { "0,0": 53 }
+    });
+
+    assert.equal(loaded, true);
+    assert.equal(map.nodes[0][0].groundTextureId, 53);
+});
+
+test("loadGameState restores encoded terrain tile membership from older saves", () => {
+    const map = createRectMap();
+    map.nodes[0][0].groundTextureId = 0;
+
+    globalThis.map = map;
+    globalThis.wizard = {
+        loadJson() {}
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.viewport = { x: 0, y: 0, width: 100, height: 100 };
+    globalThis.paused = false;
+    globalThis.projectiles = [];
+    globalThis.Road = { clearRuntimeCaches() {} };
+    globalThis.StaticObject = { loadJson() { return null; } };
+    globalThis.Animal = { loadJson() { return null; } };
+    globalThis.Powerup = { loadJson() { return null; } };
+
+    const loaded = filesystem.loadGameState({
+        wizard: { x: 0, y: 0 },
+        animals: [],
+        powerups: [],
+        staticObjects: [],
+        groundTiles: {
+            encoding: "number-grid-v2",
+            width: 1,
+            height: 1,
+            data: [53]
+        }
+    });
+
+    assert.equal(loaded, true);
+    assert.equal(map.nodes[0][0].groundTextureId, 53);
+});
+
+test("loadGameState preserves authored terrain polygons independent of saved terrain tiles", () => {
+    const map = createRectMap();
+    map.normalizeGroundTerrainPolygons = (polygons) => polygons;
+
+    globalThis.map = map;
+    globalThis.wizard = {
+        loadJson() {}
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.viewport = { x: 0, y: 0, width: 100, height: 100 };
+    globalThis.paused = false;
+    globalThis.projectiles = [];
+    globalThis.Road = { clearRuntimeCaches() {} };
+    globalThis.StaticObject = { loadJson() { return null; } };
+    globalThis.Animal = { loadJson() { return null; } };
+    globalThis.Powerup = { loadJson() { return null; } };
+
+    const keptPolygon = {
+        type: "water",
+        points: [
+            { x: -1, y: 0 },
+            { x: 1, y: 0 },
+            { x: 1, y: 1 },
+            { x: -1, y: 1 }
+        ]
+    };
+    const stalePolygon = {
+        type: "water",
+        points: [
+            { x: 10, y: 10 },
+            { x: 11, y: 10 },
+            { x: 11, y: 11 },
+            { x: 10, y: 11 }
+        ]
+    };
+
+    const loaded = filesystem.loadGameState({
+        wizard: { x: 0, y: 0 },
+        animals: [],
+        powerups: [],
+        staticObjects: [],
+        groundTiles: { "0,0": 53 },
+        terrainPolygons: [keptPolygon, stalePolygon]
+    });
+
+    assert.equal(loaded, true);
+    assert.deepEqual(map.terrainPolygons, [keptPolygon, stalePolygon]);
 });
 
 test("loadGameState re-syncs prototype animals and powerups after loading section world", () => {

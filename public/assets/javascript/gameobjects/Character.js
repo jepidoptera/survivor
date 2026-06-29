@@ -1234,6 +1234,21 @@ class Character {
         const nearbyCharacters = options.includeCharacterBlockers === true
             ? this.collectNearbyBlockingCharacters(newX, newY, radius, options)
             : [];
+        let nearbyTerrainPolygons = [];
+        if (
+            this.map &&
+            typeof this.map.collectGroundTerrainCollisionPolygons === "function" &&
+            this.getCurrentMovementLayer(options) === 0 &&
+            options.ignoreTerrainPassability !== true
+        ) {
+            const resolvedRadius = Math.max(0, Number(radius) || 0);
+            nearbyTerrainPolygons = this.map.collectGroundTerrainCollisionPolygons({
+                minX: Math.min(Number(this.x) || 0, Number(newX) || 0) - resolvedRadius,
+                minY: Math.min(Number(this.y) || 0, Number(newY) || 0) - resolvedRadius,
+                maxX: Math.max(Number(this.x) || 0, Number(newX) || 0) + resolvedRadius,
+                maxY: Math.max(Number(this.y) || 0, Number(newY) || 0) + resolvedRadius
+            }, options);
+        }
         this._updateHitboxCollisionDebugSnapshot({
             actor: this._getHitboxDebugLabel(this),
             actorType: this.type || (this.constructor && this.constructor.name) || "unknown",
@@ -1249,6 +1264,11 @@ class Character {
             closeCombatPhase: this._closeCombatState && this._closeCombatState.phase ? this._closeCombatState.phase : null,
             nearbyObjectBlockers: nearbyObjects.map(obj => this._buildHitboxDebugCandidateSummary(obj, newX, newY, radius, options)),
             nearbyCharacterBlockers: nearbyCharacters.map(char => this._buildHitboxDebugCandidateSummary(char, newX, newY, radius, options)),
+            nearbyTerrainBlockers: nearbyTerrainPolygons.map(entry => ({
+                terrainType: entry && entry.terrainType ? entry.terrainType : "",
+                sourceKey: entry && entry.sourceKey ? entry.sourceKey : "",
+                index: Number.isInteger(entry && entry.index) ? entry.index : null
+            })),
             staticCollisions: [],
             dynamicCharacterInteractions: [],
             dynamicResolutionIterations: 0
@@ -1256,6 +1276,7 @@ class Character {
         return {
             nearbyObjects,
             nearbyCharacters,
+            nearbyTerrainPolygons,
             forceTouchedObjects
         };
     }
@@ -1458,6 +1479,9 @@ class Character {
         let iteration = 0;
         const maxIterations = 3;
         const nearbyObjects = Array.isArray(movementContext.nearbyObjects) ? movementContext.nearbyObjects : [];
+        const nearbyTerrainPolygons = Array.isArray(movementContext.nearbyTerrainPolygons)
+            ? movementContext.nearbyTerrainPolygons
+            : [];
         let collided = false;
         const staticCollisionLog = (this._hitboxCollisionDebug && Array.isArray(this._hitboxCollisionDebug.staticCollisions))
             ? this._hitboxCollisionDebug.staticCollisions
@@ -1523,8 +1547,40 @@ class Character {
             }
             return { pushX, pushY };
         };
+        const resolveTerrainCollision = (hitbox) => {
+            if (
+                nearbyTerrainPolygons.length === 0 ||
+                !this.map ||
+                typeof this.map.resolveGroundTerrainHitboxCollision !== "function"
+            ) {
+                return null;
+            }
+            return this.map.resolveGroundTerrainHitboxCollision(hitbox, {
+                ...options,
+                actor: this,
+                traversalLayer: this.getCurrentMovementLayer(options),
+                terrainCollisionPolygons: nearbyTerrainPolygons
+            });
+        };
+        const addTerrainCollision = (collision, iteration, sampleX, sampleY) => {
+            if (!collision) return { pushX: 0, pushY: 0, pushLen: 0 };
+            const pushX = Number(collision.pushX) || 0;
+            const pushY = Number(collision.pushY) || 0;
+            const pushLen = Math.hypot(pushX, pushY);
+            if (!(pushLen > 0)) return { pushX: 0, pushY: 0, pushLen: 0 };
+            staticCollisionLog.push({
+                label: `terrain:${collision.terrainType || "impassable"}`,
+                iteration,
+                sampleX,
+                sampleY,
+                pushX,
+                pushY,
+                overlap: pushLen
+            });
+            return { pushX, pushY, pushLen };
+        };
         const isStaticCollisionAt = (x, y) => {
-            if (!nearbyObjects.length) return false;
+            if (!nearbyObjects.length && !nearbyTerrainPolygons.length) return false;
             const hitbox = this._movementStartHitbox || { type: "circle", x, y, radius: movementRadius };
             hitbox.x = x;
             hitbox.y = y;
@@ -1533,10 +1589,10 @@ class Character {
             for (const obj of nearbyObjects) {
                 if (resolveCollision(obj, hitbox)) return true;
             }
-            return false;
+            return !!resolveTerrainCollision(hitbox);
         };
         const findSweptCollision = (fromX, fromY, toX, toY) => {
-            if (!nearbyObjects.length) return null;
+            if (!nearbyObjects.length && !nearbyTerrainPolygons.length) return null;
             const dx = toX - fromX;
             const dy = toY - fromY;
             const distance = Math.hypot(dx, dy);
@@ -1581,6 +1637,18 @@ class Character {
                         pushY: Number(collision.pushY) || 0,
                         overlap: pushLen
                     });
+                }
+                const terrainCollision = addTerrainCollision(
+                    resolveTerrainCollision(sweepHitbox),
+                    "sweep",
+                    sweepHitbox.x,
+                    sweepHitbox.y
+                );
+                if (terrainCollision.pushLen > 0) {
+                    hasCollision = true;
+                    totalPushX += terrainCollision.pushX;
+                    totalPushY += terrainCollision.pushY;
+                    maxPushLen = Math.max(maxPushLen, terrainCollision.pushLen);
                 }
 
                 if (hasCollision) {
@@ -1634,6 +1702,13 @@ class Character {
                         overlap: pushLen
                     });
                 }
+            }
+            const terrainCollision = addTerrainCollision(resolveTerrainCollision(testHitbox), iteration, testX, testY);
+            if (terrainCollision.pushLen > 0) {
+                hasCollision = true;
+                totalPushX += terrainCollision.pushX;
+                totalPushY += terrainCollision.pushY;
+                maxPushLen = Math.max(maxPushLen, terrainCollision.pushLen);
             }
             const boundaryPush = this._getFloorFragmentBoundaryPush(testX, testY, movementRadius);
             if (boundaryPush) {
@@ -1748,6 +1823,12 @@ class Character {
                     overlap: pushLen
                 });
             }
+        }
+        const terrainCollisionFinal = addTerrainCollision(resolveTerrainCollision(testHitbox), "final", testX, testY);
+        if (terrainCollisionFinal.pushLen > 0) {
+            totalPushX += terrainCollisionFinal.pushX;
+            totalPushY += terrainCollisionFinal.pushY;
+            maxPushLen = Math.max(maxPushLen, terrainCollisionFinal.pushLen);
         }
         const boundaryPushFinal = this._getFloorFragmentBoundaryPush(testX, testY, movementRadius);
         if (boundaryPushFinal) {

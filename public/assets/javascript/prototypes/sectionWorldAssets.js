@@ -42,13 +42,149 @@
         }
 
         function normalizePrototypeGroundTextureId(rawValue, textureCount) {
-            const count = Math.max(1, Math.floor(Number(textureCount)) || 1);
             const value = Math.floor(Number(rawValue));
             if (!Number.isFinite(value)) return null;
-            if (count <= 15 && value >= count) {
-                return Math.max(0, Math.min(12, value));
+            return Math.max(0, value);
+        }
+
+        function clonePrototypeTerrainPolygons(polygons, label = "terrainPolygons") {
+            if (!Array.isArray(polygons)) return [];
+            const clonePointLoop = (points, pointLabel) => {
+                if (!Array.isArray(points)) return [];
+                return points.map((point, pointIndex) => {
+                    const x = Number(point && point.x);
+                    const y = Number(point && point.y);
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                        throw new Error(`${pointLabel}[${pointIndex}] must be finite`);
+                    }
+                    return { x, y };
+                });
+            };
+            return polygons.map((polygon, index) => {
+                const type = polygon && typeof polygon.type === "string" && polygon.type.length > 0
+                    ? polygon.type
+                    : "";
+                if (!type) {
+                    throw new Error(`${label}[${index}] is missing terrain type`);
+                }
+                const points = clonePointLoop(polygon.points, `${label}[${index}].points`);
+                if (points.length < 3) {
+                    throw new Error(`${label}[${index}] must contain at least three points`);
+                }
+                const holes = Array.isArray(polygon.holes)
+                    ? polygon.holes.map((hole, holeIndex) => {
+                        const holePoints = clonePointLoop(hole, `${label}[${index}].holes[${holeIndex}]`);
+                        if (holePoints.length < 3) {
+                            throw new Error(`${label}[${index}].holes[${holeIndex}] must contain at least three points`);
+                        }
+                        return holePoints;
+                    })
+                    : [];
+                return holes.length > 0 ? { type, points, holes } : { type, points };
+            });
+        }
+
+        function getPrototypeGroundTerrainTypeForTextureId(map, rawTextureId, label) {
+            const textureId = normalizePrototypeGroundTextureId(rawTextureId, 1);
+            if (textureId === null) {
+                throw new Error(`${label} must be a finite non-negative terrain texture id`);
             }
-            return Math.max(0, Math.min(count - 1, value));
+            if (map && typeof map.getGroundTerrainDef === "function") {
+                const def = map.getGroundTerrainDef(textureId);
+                if (!def || typeof def.name !== "string" || def.name.length === 0) {
+                    throw new Error(`${label} resolved to a ground terrain definition without a name`);
+                }
+                return def.name;
+            }
+            if (textureId >= 0 && textureId < 52) return "grass";
+            if (textureId === 52) return "desert";
+            if (textureId === 53) return "water";
+            if (textureId === 54) return "mud";
+            throw new Error(`${label} cannot resolve terrain type without map.getGroundTerrainDef`);
+        }
+
+        function prototypeTerrainPointOnSegment(point, a, b, eps = 1e-7) {
+            const px = Number(point && point.x);
+            const py = Number(point && point.y);
+            const ax = Number(a && a.x);
+            const ay = Number(a && a.y);
+            const bx = Number(b && b.x);
+            const by = Number(b && b.y);
+            if (![px, py, ax, ay, bx, by].every(Number.isFinite)) return false;
+            const cross = (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+            if (Math.abs(cross) > eps) return false;
+            const dot = (px - ax) * (px - bx) + (py - ay) * (py - by);
+            return dot <= eps;
+        }
+
+        function prototypeTerrainPointInLoop(point, loop) {
+            if (!Array.isArray(loop) || loop.length < 3) return false;
+            const x = Number(point && point.x);
+            const y = Number(point && point.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+            let inside = false;
+            for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+                const a = loop[j];
+                const b = loop[i];
+                if (prototypeTerrainPointOnSegment(point, a, b)) return true;
+                const ax = Number(a && a.x);
+                const ay = Number(a && a.y);
+                const bx = Number(b && b.x);
+                const by = Number(b && b.y);
+                if (![ax, ay, bx, by].every(Number.isFinite)) continue;
+                if ((ay > y) !== (by > y)) {
+                    const intersectX = ((bx - ax) * (y - ay)) / (by - ay) + ax;
+                    if (x < intersectX) inside = !inside;
+                }
+            }
+            return inside;
+        }
+
+        function prototypeTerrainPolygonContainsPoint(polygon, point) {
+            if (!polygon || !prototypeTerrainPointInLoop(point, polygon.points)) return false;
+            const holes = Array.isArray(polygon.holes) ? polygon.holes : [];
+            for (let i = 0; i < holes.length; i++) {
+                if (prototypeTerrainPointInLoop(point, holes[i])) return false;
+            }
+            return true;
+        }
+
+        function buildPrototypeSavedGroundTileRecords(groundTiles, map) {
+            const source = groundTiles && typeof groundTiles === "object" ? groundTiles : {};
+            return Object.keys(source).map((coordKey) => {
+                const [xRaw, yRaw] = coordKey.split(",");
+                const x = Number(xRaw);
+                const y = Number(yRaw);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                    throw new Error(`section groundTiles coordinate "${coordKey}" must be finite`);
+                }
+                const textureId = normalizePrototypeGroundTextureId(source[coordKey], 1);
+                if (textureId === null) {
+                    throw new Error(`section groundTiles.${coordKey} must be a finite non-negative terrain texture id`);
+                }
+                return {
+                    coordKey,
+                    textureId,
+                    type: getPrototypeGroundTerrainTypeForTextureId(map, textureId, `section groundTiles.${coordKey}`),
+                    point: offsetToWorld({ x, y })
+                };
+            });
+        }
+
+        function filterPrototypeTerrainPolygonsByGroundTiles(polygons, groundTiles, map, label = "terrainPolygons") {
+            const sourcePolygons = clonePrototypeTerrainPolygons(polygons, label);
+            const records = buildPrototypeSavedGroundTileRecords(groundTiles, map);
+            return sourcePolygons.filter((polygon, index) => {
+                const polygonType = polygon && typeof polygon.type === "string" ? polygon.type : "";
+                if (!polygonType) {
+                    throw new Error(`${label}[${index}] is missing terrain type`);
+                }
+                return records.some((record) => (
+                    record &&
+                    record.type === polygonType &&
+                    prototypeTerrainPolygonContainsPoint(polygon, record.point)
+                ));
+            });
         }
 
         function comparePrototypeTileCoordKeys(a, b) {
@@ -608,8 +744,11 @@
             asset.tileCoordKeys = Array.isArray(rawAsset.tileCoordKeys)
                 ? sortPrototypeTileCoordKeys(rawAsset.tileCoordKeys)
                 : sortPrototypeTileCoordKeys(asset.tileCoordKeys);
-            asset.groundTextureId = Number.isFinite(rawAsset.groundTextureId) ? Number(rawAsset.groundTextureId) : asset.groundTextureId;
             asset.groundTiles = normalizePrototypeGroundTiles(rawAsset.groundTiles, asset.tileCoordKeys, textureCount);
+            asset.terrainPolygons = clonePrototypeTerrainPolygons(
+                rawAsset.terrainPolygons,
+                `section ${asset.key} terrainPolygons`
+            );
             asset.floors = clonePrototypeFloorRecords(rawAsset.floors, asset.key);
             ensurePrototypeLevel0FloorRecord(asset, basis);
             asset.floorHoles = clonePrototypeFloorHoleRecords(rawAsset.floorHoles);
@@ -641,6 +780,7 @@
             clonePrototypeFloorHoleRecords,
             clonePrototypeFloorVoidRecords,
             clonePrototypeFloorTransitions,
+            clonePrototypeTerrainPolygons,
             createPrototypeImplicitGroundFloorFragment,
             comparePrototypeTileCoordKeys,
             ensurePrototypeLevel0FloorRecord,

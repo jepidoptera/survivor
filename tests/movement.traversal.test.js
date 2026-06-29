@@ -994,6 +994,38 @@ test("Character.cancelPathMovement clears traversal-step state", () => {
     assert.equal(actor.travelZ, 0);
 });
 
+test("hitbox movement treats water terrain polygons as impassable", () => {
+    const start = createNode(0, 0, { x: 0, y: 1, baseZ: 0 });
+    const map = Object.create(GameMap.prototype);
+    Object.assign(map, createMovementMap([start]));
+    map.terrainPolygons = [{
+        type: "water",
+        points: [
+            { x: 1, y: 0 },
+            { x: 2, y: 0 },
+            { x: 2, y: 2 },
+            { x: 1, y: 2 }
+        ]
+    }];
+
+    const actor = createCharacterHarness(Character, map, start, {
+        frameRate: 1,
+        speed: 2,
+        groundRadius: 0.2,
+        movementVector: { x: 1.2, y: 0 },
+        _closeCombatState: { phase: "test" },
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        groundPlaneHitbox: { type: "circle", x: start.x, y: start.y, radius: 0.2 },
+        visualHitbox: { type: "circle", x: start.x, y: start.y, radius: 0.2 }
+    });
+
+    assert.equal(actor.moveDirection({ x: 1, y: 0 }, { lockMovementVector: true }), true);
+    assert.ok(actor.x < 1, `actor should not enter water polygon, got x=${actor.x}`);
+    assert.ok(actor.x <= 0.82, `swept collision should stop near the water edge, got x=${actor.x}`);
+});
+
 test("Blodia.move uses traversal-step interpolation like Character.move", () => {
     const start = createNode(0, 0, { x: 0, y: 0, baseZ: 0 });
     const end = createNode(1, 0, { x: 2, y: 0, baseZ: 6 });
@@ -1911,7 +1943,7 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
     map.applyActorResolvedMovementSupport(actor, 0.5, 0);
     actor.x = 0.5;
     actor.y = 0;
-    assertApproxEqual(actor.z, 0, 0.0001);
+    assertApproxEqual(actor.z, 1, 0.0001);
     assert.equal(actor.currentLayer, 0);
     const firstStepTargetX = 0.5 + Math.hypot(3, 3) / 3;
     assert.equal(map.resolveActorStairMovementOccupancy(firstStepTargetX, 0, actor).allowed, true);
@@ -1921,7 +1953,7 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
     map.applyActorResolvedMovementSupport(actor, firstStepTargetX, 0);
     actor.x = firstStepSupport.point.x;
     actor.y = 0;
-    assertApproxEqual(actor.z, 1, 0.0001);
+    assertApproxEqual(actor.z, 2, 0.0001);
     assertApproxEqual(actor.x, 1, 0.0001);
     assert.equal(actor.currentLayer, 0);
     const stairSideSlide = map.resolveActorStairMovementOccupancy(actor.x, 0.75, actor);
@@ -2011,7 +2043,7 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
     map.applyActorResolvedMovementSupport(actor, 2.5, 0);
     actor.x = 2.5;
     actor.y = 0;
-    assertApproxEqual(actor.z, 2, 0.0001);
+    assertApproxEqual(actor.z, 3, 0.0001);
     assert.equal(actor.currentLayer, 0);
     assert.equal(map.resolveActorStairMovementOccupancy(3.5, 0, actor).allowed, true);
 
@@ -2597,21 +2629,25 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
     map.applyActorResolvedMovementSupport(wizardActor, 0.5, 0);
     wizardActor.x = 0.5;
     wizardActor.y = 0;
-    assertApproxEqual(wizardActor._stairSupport.baseZ, 0, 0.0001);
-    assertApproxEqual(wizardActor._stairSupport.localZ, 0, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.baseZ, 1, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.localZ, 1, 0.0001);
     assertApproxEqual(wizardActor._stairSupport.upDown, 0, 0.0001);
-    assertApproxEqual(wizardActor._stairSupport.continuousBaseZ, 0, 0.0001);
-    assertApproxEqual(wizardActor._stairSupport.continuousLocalZ, 0, 0.0001);
-    assertApproxEqual(wizardActor.z, 0, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.rampBaseZ, 0, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.rampLocalZ, 0, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.continuousBaseZ, 1, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.continuousLocalZ, 1, 0.0001);
+    assertApproxEqual(wizardActor.z, 1, 0.0001);
     assert.equal(wizardActor.currentLayerBaseZ, 0);
 
     wizardActor._pendingVectorMovementSupport = map.resolveActorStairMovementOccupancy(firstStepTargetX, 0, wizardActor).support;
     map.applyActorResolvedMovementSupport(wizardActor, firstStepTargetX, 0);
-    assertApproxEqual(wizardActor._stairSupport.baseZ, 1, 0.0001);
-    assertApproxEqual(wizardActor._stairSupport.localZ, 1, 0.0001);
-    assertApproxEqual(wizardActor._stairSupport.continuousBaseZ, 1, 0.0001);
-    assertApproxEqual(wizardActor._stairSupport.continuousLocalZ, 1, 0.0001);
-    assertApproxEqual(wizardActor.z, 1, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.baseZ, 2, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.localZ, 2, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.rampBaseZ, 1, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.rampLocalZ, 1, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.continuousBaseZ, 2, 0.0001);
+    assertApproxEqual(wizardActor._stairSupport.continuousLocalZ, 2, 0.0001);
+    assertApproxEqual(wizardActor.z, 2, 0.0001);
     assert.equal(wizardActor.currentLayerBaseZ, 0);
 });
 

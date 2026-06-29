@@ -89,6 +89,8 @@ test("RenderingCamera follows wizard stair support z between floor layers", () =
                 layer: 0,
                 baseZ: 0,
                 localZ: 1.5,
+                rampLocalZ: 0.875,
+                rampBaseZ: 0.875,
                 continuousLocalZ: 1.125,
                 continuousBaseZ: 1.125
             }
@@ -100,8 +102,8 @@ test("RenderingCamera follows wizard stair support z between floor layers", () =
         renderAlpha: 1
     });
 
-    assert.equal(camera.z, 1.125);
-    assert.equal(camera.prevZ, 1.125);
+    assert.equal(camera.z, 0.875);
+    assert.equal(camera.prevZ, 0.875);
 });
 
 test("RenderingCamera keeps stair follow z continuous when the active layer flips at the top", () => {
@@ -152,6 +154,8 @@ test("centerViewport follows wizard stair support z before the layer changes", (
             layer: 0,
             baseZ: 0,
             localZ: 1.5,
+            rampLocalZ: 0.875,
+            rampBaseZ: 0.875,
             continuousLocalZ: 1.125,
             continuousBaseZ: 1.125
         }
@@ -159,8 +163,8 @@ test("centerViewport follows wizard stair support z before the layer changes", (
 
     context.centerViewport(context.wizard, 0, 0);
 
-    assert.equal(context.viewport.z, 1.125);
-    assert.equal(context.viewport.prevZ, 1.125);
+    assert.equal(context.viewport.z, 0.875);
+    assert.equal(context.viewport.prevZ, 0.875);
 });
 
 test("centerViewport keeps stair follow z continuous at the upper endpoint", () => {

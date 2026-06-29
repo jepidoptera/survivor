@@ -7,7 +7,7 @@ const sectionWorldBuildings = require("../public/assets/javascript/prototypes/se
 
 function loadRenderingImpl(options = {}) {
     const context = {
-        console,
+        console: options.console || console,
         Math,
         Date,
         JSON,
@@ -1672,6 +1672,393 @@ test("wizard body layer uses shared 3d depth layer while hat remains an overlay"
     assert.match(source, /shadowProxy\.z = shadowLocalZ;/);
 });
 
+test("wizard body gets active interior floor depth bump when the active plan has no live items", () => {
+    const bodyMesh = { name: "wizardBodyMesh", visible: false, renderable: false, parent: null };
+    const shadowMesh = { name: "wizardShadowMesh", visible: false, renderable: false, parent: null };
+    const calls = [];
+    const RenderingImpl = loadRenderingImpl({
+        PIXI: {
+            Texture: {
+                WHITE: { id: "white" },
+                from(path) { return { path }; }
+            },
+            Sprite: class {
+                constructor(texture) {
+                    this.texture = texture;
+                    this.name = "";
+                    this.visible = true;
+                    this.renderable = true;
+                    this.alpha = 1;
+                    this.tint = 0xffffff;
+                    this.width = 0;
+                    this.height = 0;
+                    this.rotation = 0;
+                    this.parent = null;
+                    this.anchor = {
+                        x: 0,
+                        y: 0,
+                        set(x, y) {
+                            this.x = x;
+                            this.y = y;
+                        }
+                    };
+                    this.scale = { set() {} };
+                    this.transform = { scale: this.scale };
+                    this._anchor = this.anchor;
+                }
+            },
+            Graphics: class {},
+            State: class {},
+            BLEND_MODES: { NORMAL: 0 }
+        }
+    });
+    RenderingImpl.__testContext.StaticObject = function StaticObject() {};
+    RenderingImpl.__testContext.StaticObject.prototype.updateDepthBillboardMesh = function updateDepthBillboardMesh() {
+        const mesh = this.type === "wizardShadow" ? shadowMesh : bodyMesh;
+        calls.push({
+            target: this.type === "wizardShadow" ? "shadow" : "body",
+            depthBias: this._renderDepthBias,
+            depthFlattenZ: this._renderDepthFlattenZ === true,
+            z: this.z
+        });
+        return mesh;
+    };
+    RenderingImpl.__testContext.StaticObject.prototype.ensureDepthBillboardMesh = function ensureDepthBillboardMesh() {
+        return this.type === "wizardShadow" ? shadowMesh : bodyMesh;
+    };
+    RenderingImpl.__testContext.StaticObject.prototype.updateDepthBillboardUvsForTexture = function updateDepthBillboardUvsForTexture() {
+        return true;
+    };
+
+    const makeContainer = (name) => ({
+        name,
+        children: [],
+        sortableChildren: false,
+        sortDirty: false,
+        addChild(child) {
+            if (child.parent && child.parent !== this && typeof child.parent.removeChild === "function") {
+                child.parent.removeChild(child);
+            }
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+            return child;
+        },
+        removeChild(child) {
+            const index = this.children.indexOf(child);
+            if (index >= 0) this.children.splice(index, 1);
+            if (child.parent === this) child.parent = null;
+        },
+        setChildIndex(child, index) {
+            const current = this.children.indexOf(child);
+            if (current < 0) return;
+            this.children.splice(current, 1);
+            this.children.splice(Math.max(0, Math.min(index, this.children.length)), 0, child);
+        }
+    });
+
+    const renderer = new RenderingImpl();
+    renderer.camera = {
+        viewscale: 16,
+        xyratio: 1,
+        map: {},
+        worldToScreen(x, y, z = 0) {
+            return { x: (x * 16), y: (y * 16) - z };
+        }
+    };
+    renderer.layers = {
+        objects3d: makeContainer("objects3d"),
+        entities: makeContainer("entities"),
+        ui: makeContainer("ui")
+    };
+    renderer._wizardShadowTexture = { id: "shadow" };
+    renderer.addPickRenderItem = () => {};
+    renderer.shouldRenderBuildingInteriorDoorItem = () => false;
+    renderer.shouldRenderBuildingInteriorOverlayWall = () => false;
+    renderer.shouldRenderBuildingInteriorOverlayItem = () => true;
+    renderer.shouldRenderBuildingInteriorCharacter = () => false;
+    renderer.collectBuildingInteriorFloorRenderItems = () => [];
+
+    const region = {
+        id: "fragment:floor-active",
+        fragmentId: "floor-active",
+        level: 1,
+        polygon: {
+            outer: [
+                { x: 0, y: 0 },
+                { x: 4, y: 0 },
+                { x: 4, y: 4 },
+                { x: 0, y: 4 }
+            ],
+            holes: []
+        },
+        staticObjects: []
+    };
+    const cutawayState = {
+        active: true,
+        triggers: [{
+            building: {},
+            activeInteriorRegion: region,
+            renderCache: {
+                renderItems: [],
+                interiorRegions: [region]
+            }
+        }]
+    };
+    const hatGraphics = {
+        name: "wizardHat",
+        visible: true,
+        renderable: true,
+        zIndex: 0,
+        parent: null,
+        scale: { set() {} }
+    };
+    const wizard = {
+        x: 1,
+        y: 1,
+        z: 0,
+        prevX: 1,
+        prevY: 1,
+        currentLayer: 1,
+        currentLayerBaseZ: 3,
+        currentMovementSupport: { layer: 1, baseZ: 3 },
+        movementVector: { x: 0, y: 0 },
+        speed: 1,
+        animationSpeedMultiplier: 1,
+        lastDirectionRow: 0,
+        hatGraphics,
+        getInterpolatedPosition() {
+            return { x: 1, y: 1, z: 0 };
+        }
+    };
+
+    const emptyPlan = renderer.buildBuildingInteriorRenderPlan(
+        { map: {}, wizard },
+        cutawayState
+    );
+    assert.equal(emptyPlan.active, false);
+    assert.equal(renderer.shouldApplyBuildingInteriorActiveFloorDepthBumpToItem(wizard, 1, emptyPlan, {}), true);
+
+    renderer.renderWizard({
+        wizard,
+        wizardFrames: [{ id: "wizard-frame" }],
+        map: renderer.camera.map,
+        _renderingLayerCutawayState: cutawayState,
+        renderAlpha: 1,
+        renderNowMs: 0
+    });
+
+    assert.ok(Math.abs(calls.find(call => call.target === "body").depthBias - 32.27) < 1e-9);
+    assert.equal(calls.find(call => call.target === "shadow").depthBias, 32.02);
+    assert.equal(calls.find(call => call.target === "body").depthFlattenZ, true);
+    assert.equal(calls.find(call => call.target === "shadow").depthFlattenZ, false);
+    assert.equal(bodyMesh.parent, renderer.layers.objects3d);
+    assert.equal(shadowMesh.parent, renderer.layers.objects3d);
+    assert.equal(bodyMesh.zIndex, 2147483649);
+    assert.equal(shadowMesh.zIndex, 2147483648.999);
+    assert.equal(renderer.layers.objects3d.sortableChildren, true);
+    assert.equal(hatGraphics.parent, renderer.layers.ui);
+});
+
+test("wizard body gets active interior depth bump while on stair support", () => {
+    const bodyMesh = { name: "wizardBodyMesh", visible: false, renderable: false, parent: null };
+    const shadowMesh = { name: "wizardShadowMesh", visible: false, renderable: false, parent: null };
+    const calls = [];
+    const RenderingImpl = loadRenderingImpl({
+        PIXI: {
+            Texture: {
+                WHITE: { id: "white" },
+                from(path) { return { path }; }
+            },
+            Sprite: class {
+                constructor(texture) {
+                    this.texture = texture;
+                    this.name = "";
+                    this.visible = true;
+                    this.renderable = true;
+                    this.alpha = 1;
+                    this.tint = 0xffffff;
+                    this.width = 0;
+                    this.height = 0;
+                    this.rotation = 0;
+                    this.parent = null;
+                    this.anchor = {
+                        x: 0,
+                        y: 0,
+                        set(x, y) {
+                            this.x = x;
+                            this.y = y;
+                        }
+                    };
+                    this.scale = { set() {} };
+                    this.transform = { scale: this.scale };
+                    this._anchor = this.anchor;
+                }
+            },
+            Graphics: class {},
+            State: class {},
+            BLEND_MODES: { NORMAL: 0 }
+        }
+    });
+    RenderingImpl.__testContext.StaticObject = function StaticObject() {};
+    RenderingImpl.__testContext.StaticObject.prototype.updateDepthBillboardMesh = function updateDepthBillboardMesh() {
+        const mesh = this.type === "wizardShadow" ? shadowMesh : bodyMesh;
+        calls.push({
+            target: this.type === "wizardShadow" ? "shadow" : "body",
+            depthBias: this._renderDepthBias,
+            depthFlattenZ: this._renderDepthFlattenZ === true,
+            z: this.z
+        });
+        return mesh;
+    };
+    RenderingImpl.__testContext.StaticObject.prototype.ensureDepthBillboardMesh = function ensureDepthBillboardMesh() {
+        return this.type === "wizardShadow" ? shadowMesh : bodyMesh;
+    };
+    RenderingImpl.__testContext.StaticObject.prototype.updateDepthBillboardUvsForTexture = function updateDepthBillboardUvsForTexture() {
+        return true;
+    };
+
+    const makeContainer = (name) => ({
+        name,
+        children: [],
+        sortableChildren: false,
+        sortDirty: false,
+        addChild(child) {
+            if (child.parent && child.parent !== this && typeof child.parent.removeChild === "function") {
+                child.parent.removeChild(child);
+            }
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+            return child;
+        },
+        removeChild(child) {
+            const index = this.children.indexOf(child);
+            if (index >= 0) this.children.splice(index, 1);
+            if (child.parent === this) child.parent = null;
+        },
+        setChildIndex(child, index) {
+            const current = this.children.indexOf(child);
+            if (current < 0) return;
+            this.children.splice(current, 1);
+            this.children.splice(Math.max(0, Math.min(index, this.children.length)), 0, child);
+        }
+    });
+
+    const renderer = new RenderingImpl();
+    renderer.camera = {
+        viewscale: 16,
+        xyratio: 1,
+        map: {
+            stairsById: new Map([[
+                "stairs-1",
+                {
+                    id: "stairs-1",
+                    stairKind: "treadPath",
+                    lowerZ: 3,
+                    higherZ: 4,
+                    stepCount: 4
+                }
+            ]])
+        },
+        worldToScreen(x, y, z = 0) {
+            return { x: (x * 16), y: (y * 16) - z };
+        }
+    };
+    renderer.layers = {
+        objects3d: makeContainer("objects3d"),
+        entities: makeContainer("entities"),
+        ui: makeContainer("ui")
+    };
+    renderer._wizardShadowTexture = { id: "shadow" };
+    renderer.addPickRenderItem = () => {};
+    renderer.shouldRenderBuildingInteriorDoorItem = () => false;
+    renderer.shouldRenderBuildingInteriorOverlayWall = () => false;
+    renderer.shouldRenderBuildingInteriorOverlayItem = () => true;
+    renderer.shouldRenderBuildingInteriorCharacter = () => false;
+    renderer.collectBuildingInteriorFloorRenderItems = () => [];
+
+    const region = {
+        id: "fragment:upper-floor-active",
+        fragmentId: "upper-floor-active",
+        level: 2,
+        polygon: {
+            outer: [
+                { x: 10, y: 10 },
+                { x: 14, y: 10 },
+                { x: 14, y: 14 },
+                { x: 10, y: 14 }
+            ],
+            holes: []
+        },
+        staticObjects: []
+    };
+    const cutawayState = {
+        active: true,
+        triggers: [{
+            building: {},
+            activeInteriorRegion: region,
+            renderCache: {
+                renderItems: [],
+                interiorRegions: [region]
+            }
+        }]
+    };
+    const wizard = {
+        x: 1,
+        y: 1,
+        z: 0.8,
+        prevX: 1,
+        prevY: 1,
+        currentLayer: 1,
+        currentLayerBaseZ: 3,
+        currentMovementSupport: {
+            type: "stair",
+            layer: 1,
+            baseZ: 3,
+            stairId: "stairs-1",
+            stairKind: "treadPath",
+            treadIndex: 0,
+            localZ: 0.25,
+            continuousLocalZ: 0
+        },
+        movementVector: { x: 0, y: 0 },
+        speed: 1,
+        animationSpeedMultiplier: 1,
+        lastDirectionRow: 0,
+        hatGraphics: {
+            name: "wizardHat",
+            visible: true,
+            renderable: true,
+            zIndex: 0,
+            parent: null,
+            scale: { set() {} }
+        },
+        getInterpolatedPosition() {
+            return { x: 1, y: 1, z: 0 };
+        }
+    };
+
+    const emptyPlan = renderer.buildBuildingInteriorRenderPlan(
+        { map: {}, wizard },
+        cutawayState
+    );
+    assert.equal(emptyPlan.active, false);
+    assert.equal(renderer.shouldApplyBuildingInteriorActiveFloorDepthBumpToItem(wizard, 1, emptyPlan, {}), false);
+
+    renderer.renderWizard({
+        wizard,
+        wizardFrames: [{ id: "wizard-frame" }],
+        map: renderer.camera.map,
+        _renderingLayerCutawayState: cutawayState,
+        renderAlpha: 1,
+        renderNowMs: 0
+    });
+
+    assert.ok(Math.abs(calls.find(call => call.target === "body").depthBias - 32.27) < 1e-9);
+    assert.equal(calls.find(call => call.target === "body").depthFlattenZ, true);
+    assert.equal(calls.find(call => call.target === "body").z, 0);
+    assert.equal(bodyMesh.zIndex, 2147483649);
+});
+
 test("building interior foreground promotion moves display object temporarily and restores it", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -2110,6 +2497,151 @@ test("floor visual mesh updates when a non-sampled vertex moves", () => {
     assert.notEqual(secondEntry.signature, firstEntry.signature);
 });
 
+test("terrain fade clipping failures render an approximation with diagnostic geometry", () => {
+    class FakeBuffer {
+        constructor(data) {
+            this.data = data;
+            this.updateCount = 0;
+        }
+        update() {
+            this.updateCount += 1;
+        }
+    }
+    class FakeGeometry {
+        constructor() {
+            this.buffers = new Map();
+            this.index = null;
+        }
+        addAttribute(name, data) {
+            this.buffers.set(name, new FakeBuffer(data));
+            return this;
+        }
+        addIndex(data) {
+            this.index = new FakeBuffer(data);
+            return this;
+        }
+        getBuffer(name) {
+            return this.buffers.get(name) || null;
+        }
+    }
+    class FakeContainer {
+        constructor() {
+            this.children = [];
+            this.position = { set() {} };
+            this.scale = { set() {} };
+        }
+        addChild(child) {
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+        }
+        addChildAt(child) {
+            this.addChild(child);
+        }
+        removeChild(child) {
+            const index = this.children.indexOf(child);
+            if (index >= 0) this.children.splice(index, 1);
+            if (child.parent === this) child.parent = null;
+        }
+    }
+    class FakeMesh {
+        constructor(geometry, shader) {
+            this.geometry = geometry;
+            this.shader = shader;
+            this.parent = null;
+            this.visible = false;
+            this.position = { set() {} };
+            this.scale = { set() {} };
+        }
+        destroy() {}
+    }
+    const fakePixi = {
+        Container: FakeContainer,
+        Geometry: FakeGeometry,
+        Mesh: FakeMesh,
+        Shader: { from: (_vs, _fs, uniforms) => ({ uniforms }) },
+        State: class {},
+        Texture: {
+            WHITE: { id: "white" },
+            from: (path) => ({ id: path, baseTexture: {} })
+        },
+        utils: {
+            earcut(vertices) {
+                const count = Math.floor(vertices.length / 2);
+                const indices = [];
+                for (let i = 1; i < count - 1; i++) indices.push(0, i, i + 1);
+                return indices;
+            }
+        }
+    };
+    const warnings = [];
+    const RenderingImpl = loadRenderingImpl({
+        PIXI: fakePixi,
+        app: { screen: { width: 800, height: 600 } },
+        polygonClipping: {
+            intersection() {
+                throw new Error("test fade clip failed");
+            }
+        },
+        console: {
+            ...console,
+            warn(...args) {
+                warnings.push(args);
+            }
+        }
+    });
+    const renderer = new RenderingImpl();
+    renderer.layers = { depthObjects: new FakeContainer() };
+    renderer.camera = { x: 0, y: 0, z: 0, viewscale: 1, xyratio: 1 };
+    renderer.collectFloorVisualEntries = () => [{
+        key: "fragment:section:0,0:terrain:water:0:0:0",
+        level: 0,
+        baseZ: 0,
+        outer: [
+            { x: 0, y: 0 },
+            { x: 4, y: 0 },
+            { x: 4, y: 4 },
+            { x: 0, y: 4 }
+        ],
+        holes: [],
+        texture: null,
+        textureBounds: null,
+        textureRepeat: { x: 1, y: 1 },
+        texturePath: "/assets/images/water.png",
+        tint: 0xffffff,
+        alpha: 1,
+        depthBias: 0.001,
+        isHoleOverlay: false,
+        isAnimatedWater: true,
+        terrainType: "water",
+        edgeFadeWidth: 0.333,
+        edgeFadeClipRings: [[
+            { x: 0, y: 0 },
+            { x: 3, y: 0 },
+            { x: 3, y: 3 },
+            { x: 0, y: 3 }
+        ]],
+        edgeFadeDiagnosticContext: {
+            terrainType: "water",
+            sectionKey: "0,0",
+            groupIndex: 0,
+            polygonIndex: 0,
+            clippedPieceIndex: 0
+        }
+    }];
+
+    assert.doesNotThrow(() => renderer.renderFloorVisualPolygons({}));
+    const entry = renderer.floorVisualMeshByKey.get("fragment:section:0,0:terrain:water:0:0:0");
+    assert.ok(entry);
+    assert.ok(entry.triangulation.vertexCount > 4);
+    assert.ok(warnings.length > 0);
+    assert.equal(warnings[0][0], "[terrain fade clip approximation]");
+    assert.equal(warnings[0][1].terrainType, "water");
+    assert.equal(warnings[0][1].sectionKey, "0,0");
+    assert.equal(warnings[0][1].approximation, "unclipped fade band");
+    assert.equal(Array.isArray(warnings[0][1].bandOuter), true);
+    assert.equal(Array.isArray(warnings[0][1].clipRings), true);
+});
+
 test("interior presentation foreground promotes spell and selection overlays", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -2164,23 +2696,23 @@ test("interior presentation foreground promotes spell and selection overlays", (
     const originalTintZ = tintedDisplay.zIndex;
     const promoted = renderer.promoteInteriorPresentationForeground({ wizard });
 
-    assert.equal(promoted, 5);
+    assert.equal(promoted, 4);
     assert.equal(projectileSprite.parent, ui);
     assert.equal(projectileParticles.parent, ui);
     assert.equal(highlightGraphics.parent, ui);
-    assert.equal(wizardBody.parent, ui);
+    assert.equal(wizardBody.parent, entities);
     assert.equal(wizardHat.parent, ui);
     assert.equal(tintedDisplay.parent, originalTintParent);
     assert.equal(hiddenHighlight.parent, ui);
     assert.equal(projectileSprite.zIndex, 2147483650);
     assert.equal(highlightGraphics.zIndex, 2147483650);
-    assert.equal(wizardBody.zIndex, 2147483650);
+    assert.equal(wizardBody.zIndex, 0);
     assert.equal(wizardHat.zIndex, 2147483651);
     assert.equal(tintedDisplay.zIndex, originalTintZ);
     assert.equal(hiddenHighlight.zIndex, 0);
 });
 
-test("interior presentation keeps wizard hat above body when body is promoted later", () => {
+test("interior presentation promotes wizard hat without promoting body", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
     const makeContainer = () => ({
@@ -2218,12 +2750,11 @@ test("interior presentation keeps wizard hat above body when body is promoted la
         }
     });
 
-    assert.equal(promoted, 2);
-    assert.equal(wizardBody.parent, ui);
+    assert.equal(promoted, 1);
+    assert.equal(wizardBody.parent, entities);
     assert.equal(wizardHat.parent, ui);
-    assert.equal(wizardBody.zIndex, 2147483650);
+    assert.equal(wizardBody.zIndex, 0);
     assert.equal(wizardHat.zIndex, 2147483651);
-    assert.equal(wizardHat.zIndex > wizardBody.zIndex, true);
 });
 
 test("place object center snap guide promotes with render context", () => {
@@ -7256,7 +7787,7 @@ test("straight stairs build a full 3d mesh with treads, risers, and sides", () =
     assert.equal(Math.max(...zValues), 3);
 });
 
-test("tread path stairs render a floor-height entry tread and final upper riser", () => {
+test("tread path stairs render a raised entry tread through the upper floor", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
 
@@ -7286,7 +7817,7 @@ test("tread path stairs render a floor-height entry tread and final upper riser"
         const vertexStart = faceIndex * 4 * 3;
         treadZValues.push(geometry.positions[vertexStart + 2]);
     }
-    assert.deepEqual(treadZValues.map(z => Number(z.toFixed(6))), [0, 1, 2]);
+    assert.deepEqual(treadZValues.map(z => Number(z.toFixed(6))), [1, 2, 3]);
     assert.equal(Math.max(...Array.from(geometry.positions).filter((_, index) => index % 3 === 2)), 3);
 });
 
@@ -7320,6 +7851,94 @@ test("straight stair records are not collected as floor visual polygons", () => 
 
     assert.equal(Array.isArray(entries), true);
     assert.equal(entries.length, 0);
+});
+
+test("road path render collection uses active runtime records without node scanning", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.camera = { x: 0, y: 0, z: 0, width: 20, height: 20 };
+    const roadPath = {
+        type: "roadPath",
+        traversalLayer: 0,
+        generatedGeometry: {
+            points: [{ x: 2, y: 2 }, { x: 10, y: 2 }],
+            outline: [
+                { x: 2, y: 0 },
+                { x: 10, y: 0 },
+                { x: 10, y: 4 },
+                { x: 2, y: 4 }
+            ]
+        }
+    };
+    const map = {
+        floorsById: new Map(),
+        objects: [],
+        _prototypeObjectState: {
+            activeRuntimeObjectsByRecordId: new Map([[42, roadPath]])
+        }
+    };
+
+    const result = renderer.collectRoadPathRenderObjects({
+        map,
+        camera: renderer.camera,
+        viewport: { width: 20, height: 20 }
+    }, new Set());
+
+    assert.equal(result.visibleRoadPathObjects.has(roadPath), true);
+    assert.equal(result.continuityRoadPathObjects.has(roadPath), true);
+    assert.equal(result.considered, 1);
+});
+
+test("level 0 terrain polygon floor visuals use active section assets without floor fragments", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.camera = { x: 0, y: 0, z: 0, width: 20, height: 20 };
+    const asset = {
+        key: "0,0",
+        sectionPolygon: [
+            { x: 0, y: 0 },
+            { x: 5, y: 0 },
+            { x: 5, y: 5 },
+            { x: 0, y: 5 }
+        ],
+        terrainPolygons: [{
+            type: "water",
+            points: [
+                { x: -2, y: 2 },
+                { x: 8, y: 2 },
+                { x: 8, y: 8 },
+                { x: -2, y: 8 }
+            ]
+        }]
+    };
+    const map = {
+        floorsById: new Map(),
+        hexWidth: 1 / 0.866,
+        hexHeight: 1,
+        getGroundPolygonMaterialPathForType: type => `/assets/images/${type}.png`,
+        getGroundPolygonMaterialScaleForType: () => 1,
+        _prototypeSectionState: {
+            activeSectionKeys: new Set(["0,0"]),
+            sectionAssetsByKey: new Map([["0,0", asset]])
+        }
+    };
+
+    const entries = renderer.collectFloorVisualEntries({
+        map,
+        camera: renderer.camera,
+        viewport: { width: 20, height: 20 }
+    });
+
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].isTerrainPolygon, true);
+    assert.equal(entries[0].terrainType, "water");
+    assert.match(entries[0].key, /^fragment:section:0,0:terrain:/);
+    assert.equal(entries[0].outer.every(point => (
+        point.x >= -0.0001 &&
+        point.x <= 5.0001 &&
+        point.y >= -0.0001 &&
+        point.y <= 5.0001
+    )), true);
 });
 
 test("building cutaway-rendered floor fragments are not collected as floor visual polygons", () => {

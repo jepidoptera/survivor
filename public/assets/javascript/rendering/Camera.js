@@ -105,7 +105,11 @@
                 }
                 let wizardCameraZ = wizardBaseZ;
                 if (support && support.type === "stair") {
-                    if (Number.isFinite(support.continuousLocalZ)) {
+                    if (Number.isFinite(support.rampLocalZ)) {
+                        wizardCameraZ = wizardBaseZ + Number(support.rampLocalZ);
+                    } else if (Number.isFinite(support.rampBaseZ)) {
+                        wizardCameraZ = Number(support.rampBaseZ);
+                    } else if (Number.isFinite(support.continuousLocalZ)) {
                         wizardCameraZ = wizardBaseZ + Number(support.continuousLocalZ);
                     } else if (Number.isFinite(support.continuousBaseZ)) {
                         wizardCameraZ = Number(support.continuousBaseZ);

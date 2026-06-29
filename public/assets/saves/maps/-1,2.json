@@ -7374,7 +7374,6 @@
     "201,397",
     "199,398"
   ],
-  "groundTextureId": 0,
   "groundTiles": {
     "198,300": 0,
     "199,300": 0,
@@ -14728,6 +14727,7 @@
     "201,397": 11,
     "199,398": 2
   },
+  "terrainPolygons": [],
   "floors": [
     {
       "fragmentId": "section:-1,2:ground",

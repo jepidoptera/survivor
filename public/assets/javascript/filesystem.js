@@ -331,64 +331,381 @@ if (typeof globalThis !== "undefined") {
     globalThis.getLazyTreeRecordsForMinimap = getLazyTreeRecordsForMinimap;
 }
 
-function encodeGroundTiles(mapRef) {
-    if (!mapRef || !mapRef.nodes) return null;
-    let out = "";
-    const values = [];
-    let requiresNumberGrid = false;
-    for (let y = 0; y < mapRef.height; y++) {
-        for (let x = 0; x < mapRef.width; x++) {
-            const node = mapRef.nodes[x] && mapRef.nodes[x][y] ? mapRef.nodes[x][y] : null;
-            const textureId = node && Number.isFinite(node.groundTextureId) ? node.groundTextureId : 0;
-            const normalized = Math.max(0, Math.floor(Number(textureId) || 0));
-            values.push(normalized);
-            if (normalized > 35) requiresNumberGrid = true;
-            out += Math.max(0, Math.min(35, normalized)).toString(36);
+function cloneTerrainPolygons(polygons, label = "terrainPolygons") {
+    if (!Array.isArray(polygons)) return [];
+    const clonePointLoop = (points, pointLabel) => {
+        if (!Array.isArray(points)) return [];
+        return points.map((point, pointIndex) => {
+            const x = Number(point && point.x);
+            const y = Number(point && point.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                throw new Error(`${pointLabel}[${pointIndex}] must be finite`);
+            }
+            return { x, y };
+        });
+    };
+    return polygons.map((polygon, index) => {
+        const type = polygon && typeof polygon.type === "string" && polygon.type.length > 0
+            ? polygon.type
+            : "";
+        if (!type) {
+            throw new Error(`${label}[${index}] is missing terrain type`);
+        }
+        const points = clonePointLoop(polygon.points, `${label}[${index}].points`);
+        if (points.length < 3) {
+            throw new Error(`${label}[${index}] must contain at least three points`);
+        }
+        const holes = Array.isArray(polygon.holes)
+            ? polygon.holes.map((hole, holeIndex) => {
+                const holePoints = clonePointLoop(hole, `${label}[${index}].holes[${holeIndex}]`);
+                if (holePoints.length < 3) {
+                    throw new Error(`${label}[${index}].holes[${holeIndex}] must contain at least three points`);
+                }
+                return holePoints;
+            })
+            : [];
+        return holes.length > 0 ? { type, points, holes } : { type, points };
+    });
+}
+
+function exportMapTerrainPolygons(mapRef) {
+    if (!mapRef) return [];
+    // Terrain polygons are live authored geometry now. Saving must preserve them
+    // exactly; the old node-bake/rebuild path is intentionally inactive here.
+    return cloneTerrainPolygons(mapRef.terrainPolygons);
+}
+
+function getNodeGroundTileCoordKeyForSave(node, fallbackX = null, fallbackY = null) {
+    const x = Number.isFinite(Number(node && node.xindex))
+        ? Math.round(Number(node.xindex))
+        : (Number.isFinite(Number(fallbackX)) ? Math.round(Number(fallbackX)) : NaN);
+    const y = Number.isFinite(Number(node && node.yindex))
+        ? Math.round(Number(node.yindex))
+        : (Number.isFinite(Number(fallbackY)) ? Math.round(Number(fallbackY)) : NaN);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return "";
+    return `${x},${y}`;
+}
+
+function parseGroundTileCoordKey(coordKey, label = "groundTiles") {
+    if (typeof coordKey !== "string" || coordKey.length === 0) {
+        throw new Error(`${label} contains an invalid tile coordinate key`);
+    }
+    const parts = coordKey.split(",");
+    if (parts.length !== 2) {
+        throw new Error(`${label} tile coordinate "${coordKey}" must be x,y`);
+    }
+    const x = Number(parts[0]);
+    const y = Number(parts[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        throw new Error(`${label} tile coordinate "${coordKey}" must be finite`);
+    }
+    return { x: Math.round(x), y: Math.round(y) };
+}
+
+function normalizeGroundTileTextureIdForSave(rawValue, label) {
+    const textureId = Math.floor(Number(rawValue));
+    if (!Number.isFinite(textureId) || textureId < 0) {
+        throw new Error(`${label} must be a finite non-negative terrain texture id`);
+    }
+    return textureId;
+}
+
+function cloneGroundTiles(groundTiles, label = "groundTiles") {
+    if (!groundTiles || typeof groundTiles !== "object") return {};
+    const cloned = {};
+    Object.keys(groundTiles).forEach((coordKey) => {
+        parseGroundTileCoordKey(coordKey, label);
+        cloned[coordKey] = normalizeGroundTileTextureIdForSave(groundTiles[coordKey], `${label}.${coordKey}`);
+    });
+    return cloned;
+}
+
+function exportGroundTilesFromNodes(nodes, label = "groundTiles") {
+    const groundTiles = {};
+    if (!Array.isArray(nodes)) return groundTiles;
+    for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
+        if (!node || node._prototypeVoid === true) continue;
+        const coordKey = getNodeGroundTileCoordKeyForSave(node);
+        if (!coordKey) {
+            throw new Error(`${label} node ${i} is missing terrain tile coordinates`);
+        }
+        groundTiles[coordKey] = normalizeGroundTileTextureIdForSave(node.groundTextureId, `${label}.${coordKey}`);
+    }
+    return groundTiles;
+}
+
+function exportMapGroundTiles(mapRef) {
+    const groundTiles = {};
+    if (!mapRef || !Array.isArray(mapRef.nodes)) return groundTiles;
+    for (let x = 0; x < mapRef.nodes.length; x++) {
+        const column = mapRef.nodes[x];
+        if (!Array.isArray(column)) continue;
+        for (let y = 0; y < column.length; y++) {
+            const node = column[y];
+            if (!node || node._prototypeVoid === true) continue;
+            const coordKey = getNodeGroundTileCoordKeyForSave(node, x, y);
+            if (!coordKey) {
+                throw new Error(`groundTiles node ${x},${y} is missing terrain tile coordinates`);
+            }
+            groundTiles[coordKey] = normalizeGroundTileTextureIdForSave(node.groundTextureId, `groundTiles.${coordKey}`);
         }
     }
-    if (requiresNumberGrid) {
-        return {
-            encoding: "number-grid-v2",
-            width: mapRef.width,
-            height: mapRef.height,
-            data: values
-        };
+    return groundTiles;
+}
+
+function exportGroundTilesForPrototypeSection(mapRef, asset, sectionKey) {
+    if (!asset || typeof asset !== "object") return {};
+    const tileCoordKeys = Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys : [];
+    const output = {};
+    const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
+    const sectionNodes = state && state.nodesBySectionKey instanceof Map
+        ? (state.nodesBySectionKey.get(sectionKey) || null)
+        : null;
+    const sectionTileKeys = new Set(tileCoordKeys);
+    if (Array.isArray(sectionNodes)) {
+        const nodeTiles = exportGroundTilesFromNodes(sectionNodes, `section ${sectionKey} groundTiles`);
+        Object.keys(nodeTiles).forEach((coordKey) => {
+            if (sectionTileKeys.size === 0 || sectionTileKeys.has(coordKey)) {
+                output[coordKey] = nodeTiles[coordKey];
+            }
+        });
+    }
+
+    const assetGroundTiles = (asset.groundTiles && typeof asset.groundTiles === "object") ? asset.groundTiles : null;
+    for (let i = 0; i < tileCoordKeys.length; i++) {
+        const coordKey = tileCoordKeys[i];
+        if (typeof coordKey !== "string" || coordKey.length === 0) continue;
+        parseGroundTileCoordKey(coordKey, `section ${sectionKey} groundTiles`);
+        if (Object.prototype.hasOwnProperty.call(output, coordKey)) continue;
+        if (assetGroundTiles && Object.prototype.hasOwnProperty.call(assetGroundTiles, coordKey)) {
+            output[coordKey] = normalizeGroundTileTextureIdForSave(
+                assetGroundTiles[coordKey],
+                `section ${sectionKey} groundTiles.${coordKey}`
+            );
+            continue;
+        }
+        if (Number.isFinite(Number(asset.groundTextureId))) {
+            output[coordKey] = normalizeGroundTileTextureIdForSave(
+                asset.groundTextureId,
+                `section ${sectionKey} groundTextureId`
+            );
+            continue;
+        }
+        throw new Error(`Cannot save terrain tile membership for section ${sectionKey} tile ${coordKey}.`);
+    }
+    return output;
+}
+
+function getMapNodeForGroundTileCoord(mapRef, x, y) {
+    if (!mapRef) return null;
+    if (typeof mapRef.getGroundTerrainNodeByCoord === "function") {
+        const node = mapRef.getGroundTerrainNodeByCoord(x, y);
+        if (node) return node;
+    }
+    if (!Array.isArray(mapRef.nodes)) return null;
+    return mapRef.nodes[x] && mapRef.nodes[x][y] ? mapRef.nodes[x][y] : null;
+}
+
+function getWorldPointForGroundTileCoord(mapRef, x, y) {
+    const node = getMapNodeForGroundTileCoord(mapRef, x, y);
+    const nodeX = Number(node && node.x);
+    const nodeY = Number(node && node.y);
+    if (Number.isFinite(nodeX) && Number.isFinite(nodeY)) {
+        return { x: nodeX, y: nodeY };
     }
     return {
-        encoding: "base36-char-grid",
-        width: mapRef.width,
-        height: mapRef.height,
-        data: out
+        x: x * 0.866,
+        y: y + (x % 2 === 0 ? 0.5 : 0)
     };
 }
 
-function decodeGroundTiles(mapRef, encoded) {
-    if (!mapRef || !encoded || typeof encoded !== "object") {
-        return false;
+function getGroundTerrainTypeForTextureIdForLoad(mapRef, textureId, label) {
+    const id = normalizeGroundTileTextureIdForSave(textureId, label);
+    if (mapRef && typeof mapRef.getGroundTerrainDef === "function") {
+        const def = mapRef.getGroundTerrainDef(id);
+        if (!def || typeof def.name !== "string" || def.name.length === 0) {
+            throw new Error(`${label} resolved to a ground terrain definition without a name`);
+        }
+        return def.name;
     }
-    if (encoded.width !== mapRef.width || encoded.height !== mapRef.height) {
-        return false;
+    if (id >= 0 && id < 52) return "grass";
+    if (id === 52) return "desert";
+    if (id === 53) return "water";
+    if (id === 54) return "mud";
+    throw new Error(`${label} cannot resolve terrain type without map.getGroundTerrainDef`);
+}
+
+function applyEncodedGroundTilesToMapNodes(mapRef, encoded) {
+    if (!mapRef || !encoded || typeof encoded !== "object") return 0;
+    const width = Math.floor(Number(encoded.width));
+    const height = Math.floor(Number(encoded.height));
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 0 || height < 0) {
+        throw new Error("encoded groundTiles must include finite width and height");
     }
-    const expectedLen = mapRef.width * mapRef.height;
+    if (Number.isFinite(Number(mapRef.width)) && width !== Math.floor(Number(mapRef.width))) {
+        throw new Error("encoded groundTiles width does not match map width");
+    }
+    if (Number.isFinite(Number(mapRef.height)) && height !== Math.floor(Number(mapRef.height))) {
+        throw new Error("encoded groundTiles height does not match map height");
+    }
+    const expectedLen = width * height;
     const isNumberGrid = encoded.encoding === "number-grid-v2" && Array.isArray(encoded.data);
     const isBase36Grid = encoded.encoding === "base36-char-grid" && typeof encoded.data === "string";
-    if (!isNumberGrid && !isBase36Grid) return false;
-    if (encoded.data.length < expectedLen) return false;
+    if (!isNumberGrid && !isBase36Grid) {
+        throw new Error(`unsupported groundTiles encoding "${String(encoded.encoding || "")}"`);
+    }
+    if (encoded.data.length < expectedLen) {
+        throw new Error("encoded groundTiles data is shorter than width * height");
+    }
 
-    let i = 0;
-    for (let y = 0; y < mapRef.height; y++) {
-        for (let x = 0; x < mapRef.width; x++) {
-            const node = mapRef.nodes[x] && mapRef.nodes[x][y] ? mapRef.nodes[x][y] : null;
-            if (!node) {
-                i += 1;
-                continue;
+    let applied = 0;
+    let dataIndex = 0;
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const rawValue = isNumberGrid ? encoded.data[dataIndex] : parseInt(encoded.data[dataIndex], 36);
+            const textureId = normalizeGroundTileTextureIdForSave(rawValue, `groundTiles.${x},${y}`);
+            const node = getMapNodeForGroundTileCoord(mapRef, x, y);
+            if (node) {
+                node.groundTextureId = textureId;
+                applied += 1;
             }
-            const v = isNumberGrid ? Number(encoded.data[i]) : parseInt(encoded.data[i], 36);
-            node.groundTextureId = Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0;
-            i += 1;
+            dataIndex += 1;
         }
     }
+    return applied;
+}
+
+function collectEncodedGroundTileRecordsForTerrainLoad(mapRef, encoded) {
+    if (!encoded || typeof encoded !== "object") return [];
+    const width = Math.floor(Number(encoded.width));
+    const height = Math.floor(Number(encoded.height));
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 0 || height < 0) {
+        throw new Error("encoded groundTiles must include finite width and height");
+    }
+    const expectedLen = width * height;
+    const isNumberGrid = encoded.encoding === "number-grid-v2" && Array.isArray(encoded.data);
+    const isBase36Grid = encoded.encoding === "base36-char-grid" && typeof encoded.data === "string";
+    if (!isNumberGrid && !isBase36Grid) {
+        throw new Error(`unsupported groundTiles encoding "${String(encoded.encoding || "")}"`);
+    }
+    if (encoded.data.length < expectedLen) {
+        throw new Error("encoded groundTiles data is shorter than width * height");
+    }
+    const records = [];
+    let dataIndex = 0;
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const rawValue = isNumberGrid ? encoded.data[dataIndex] : parseInt(encoded.data[dataIndex], 36);
+            const label = `groundTiles.${x},${y}`;
+            const textureId = normalizeGroundTileTextureIdForSave(rawValue, label);
+            records.push({
+                coordKey: `${x},${y}`,
+                textureId,
+                type: getGroundTerrainTypeForTextureIdForLoad(mapRef, textureId, label),
+                point: getWorldPointForGroundTileCoord(mapRef, x, y)
+            });
+            dataIndex += 1;
+        }
+    }
+    return records;
+}
+
+function collectSavedGroundTileRecordsForTerrainLoad(mapRef, groundTiles) {
+    if (!groundTiles || typeof groundTiles !== "object") return [];
+    if (groundTiles.encoding === "number-grid-v2" || groundTiles.encoding === "base36-char-grid") {
+        return collectEncodedGroundTileRecordsForTerrainLoad(mapRef, groundTiles);
+    }
+    return Object.keys(groundTiles).map((coordKey) => {
+        const coord = parseGroundTileCoordKey(coordKey, "groundTiles");
+        const textureId = normalizeGroundTileTextureIdForSave(groundTiles[coordKey], `groundTiles.${coordKey}`);
+        return {
+            coordKey,
+            textureId,
+            type: getGroundTerrainTypeForTextureIdForLoad(mapRef, textureId, `groundTiles.${coordKey}`),
+            point: getWorldPointForGroundTileCoord(mapRef, coord.x, coord.y)
+        };
+    });
+}
+
+function terrainPointOnSegment(point, a, b, eps = 1e-7) {
+    const px = Number(point && point.x);
+    const py = Number(point && point.y);
+    const ax = Number(a && a.x);
+    const ay = Number(a && a.y);
+    const bx = Number(b && b.x);
+    const by = Number(b && b.y);
+    if (![px, py, ax, ay, bx, by].every(Number.isFinite)) return false;
+    const cross = (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+    if (Math.abs(cross) > eps) return false;
+    const dot = (px - ax) * (px - bx) + (py - ay) * (py - by);
+    return dot <= eps;
+}
+
+function terrainPointInLoop(point, loop) {
+    if (!Array.isArray(loop) || loop.length < 3) return false;
+    const x = Number(point && point.x);
+    const y = Number(point && point.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    let inside = false;
+    for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+        const a = loop[j];
+        const b = loop[i];
+        if (terrainPointOnSegment(point, a, b)) return true;
+        const ax = Number(a && a.x);
+        const ay = Number(a && a.y);
+        const bx = Number(b && b.x);
+        const by = Number(b && b.y);
+        if (![ax, ay, bx, by].every(Number.isFinite)) continue;
+        if ((ay > y) !== (by > y)) {
+            const intersectX = ((bx - ax) * (y - ay)) / (by - ay) + ax;
+            if (x < intersectX) inside = !inside;
+        }
+    }
+    return inside;
+}
+
+function terrainPolygonContainsSavedTilePoint(polygon, point) {
+    if (!polygon || !terrainPointInLoop(point, polygon.points)) return false;
+    const holes = Array.isArray(polygon.holes) ? polygon.holes : [];
+    for (let i = 0; i < holes.length; i++) {
+        if (terrainPointInLoop(point, holes[i])) return false;
+    }
     return true;
+}
+
+function filterTerrainPolygonsBySavedGroundTiles(polygons, savedTileRecords, label = "terrainPolygons") {
+    const sourcePolygons = Array.isArray(polygons) ? polygons : [];
+    const records = Array.isArray(savedTileRecords) ? savedTileRecords : [];
+    return sourcePolygons.filter((polygon, index) => {
+        const polygonType = polygon && typeof polygon.type === "string" ? polygon.type : "";
+        if (!polygonType) {
+            throw new Error(`${label}[${index}] is missing terrain type`);
+        }
+        return records.some((record) => (
+            record &&
+            record.type === polygonType &&
+            terrainPolygonContainsSavedTilePoint(polygon, record.point)
+        ));
+    });
+}
+
+function applySavedGroundTilesToMapNodes(mapRef, groundTiles) {
+    if (!groundTiles || typeof groundTiles !== "object") return 0;
+    if (!mapRef) return 0;
+    if (groundTiles.encoding === "number-grid-v2" || groundTiles.encoding === "base36-char-grid") {
+        return applyEncodedGroundTilesToMapNodes(mapRef, groundTiles);
+    }
+    let applied = 0;
+    Object.keys(groundTiles).forEach((coordKey) => {
+        const coord = parseGroundTileCoordKey(coordKey, "groundTiles");
+        const textureId = normalizeGroundTileTextureIdForSave(groundTiles[coordKey], `groundTiles.${coordKey}`);
+        const node = getMapNodeForGroundTileCoord(mapRef, coord.x, coord.y);
+        if (!node) return;
+        node.groundTextureId = textureId;
+        applied += 1;
+    });
+    return applied;
 }
 
 function collectNodeSourcesForSave(mapRef, options = {}) {
@@ -2022,7 +2339,8 @@ function saveGameState(options = {}) {
             mazeMode: getSavedLosMazeModeValue()
         },
         animals: [],
-        groundTiles: encodeGroundTiles(map),
+        groundTiles: exportMapGroundTiles(map),
+        terrainPolygons: exportMapTerrainPolygons(map),
         clearanceMap: (typeof map.serializeClearance === "function")
             ? map.serializeClearance()
             : null,
@@ -2079,17 +2397,11 @@ function saveGameState(options = {}) {
                     throw new Error(`Cannot save unhydrated section ${sectionKey}.`);
                 }
 
-                const sectionNodes = state.nodesBySectionKey instanceof Map
-                    ? (state.nodesBySectionKey.get(sectionKey) || [])
-                    : [];
-                const groundTiles = {};
-                for (let n = 0; n < sectionNodes.length; n++) {
-                    const node = sectionNodes[n];
-                    if (!node) continue;
-                    groundTiles[`${node.xindex},${node.yindex}`] = Number.isFinite(node.groundTextureId)
-                        ? Number(node.groundTextureId)
-                        : 0;
-                }
+                // Terrain polygons are not rederived during save. The painter is
+                // responsible for local contour edits when terrain changes.
+                const terrainPolygons = cloneTerrainPolygons(asset.terrainPolygons, `section ${sectionKey} terrainPolygons`);
+                const groundTiles = exportGroundTilesForPrototypeSection(map, asset, sectionKey);
+                asset.groundTiles = cloneGroundTiles(groundTiles, `section ${sectionKey} groundTiles`);
 
                 sections.push({
                     id: asset.id,
@@ -2099,8 +2411,8 @@ function saveGameState(options = {}) {
                     centerOffset: asset.centerOffset ? { x: Number(asset.centerOffset.x) || 0, y: Number(asset.centerOffset.y) || 0 } : { x: 0, y: 0 },
                     neighborKeys: Array.isArray(asset.neighborKeys) ? asset.neighborKeys.slice() : [],
                     tileCoordKeys: Array.isArray(asset.tileCoordKeys) ? asset.tileCoordKeys.slice() : [],
-                    groundTextureId: Number.isFinite(asset.groundTextureId) ? Number(asset.groundTextureId) : 0,
-                    groundTiles,
+                    groundTiles: cloneGroundTiles(groundTiles, `section ${sectionKey} groundTiles`),
+                    terrainPolygons: cloneTerrainPolygons(terrainPolygons, `section ${sectionKey} terrainPolygons`),
                     walls: Array.isArray(asset.walls) ? asset.walls.map((wall) => ({ ...wall })) : [],
                     objects: objectSaveMap && objectSaveMap.objectsBySectionKey instanceof Map
                         ? (objectSaveMap.objectsBySectionKey.get(sectionKey) || [])
@@ -2518,6 +2830,8 @@ function getLoadedWizardCameraFollowZ(wizardRef) {
         throw new Error(`loaded wizard camera follow for layer ${layer} requires support baseZ or currentLayerBaseZ`);
     }
     if (support && support.type === "stair") {
+        if (Number.isFinite(Number(support.rampLocalZ))) return baseZ + Number(support.rampLocalZ);
+        if (Number.isFinite(Number(support.rampBaseZ))) return Number(support.rampBaseZ);
         if (Number.isFinite(Number(support.continuousLocalZ))) return baseZ + Number(support.continuousLocalZ);
         if (Number.isFinite(Number(support.continuousBaseZ))) return Number(support.continuousBaseZ);
         if (Number.isFinite(Number(support.localZ))) return baseZ + Number(support.localZ);
@@ -3268,8 +3582,14 @@ function loadGameState(saveData) {
             wizard.restoreSavedMovementSupport({ deferIfMissing: true });
         }
 
-        if (saveData.groundTiles) {
-            decodeGroundTiles(map, saveData.groundTiles);
+        applySavedGroundTilesToMapNodes(map, saveData.groundTiles);
+
+        if (Array.isArray(saveData.terrainPolygons)) {
+            if (typeof map.normalizeGroundTerrainPolygons !== "function") {
+                throw new Error("loading terrain polygons requires map.normalizeGroundTerrainPolygons");
+            }
+            const terrainPolygons = cloneTerrainPolygons(saveData.terrainPolygons);
+            map.terrainPolygons = map.normalizeGroundTerrainPolygons(terrainPolygons);
         }
         resetLoadedLevel0GroundRenderCaches("loadGameState");
         const _lt5 = performance.now();

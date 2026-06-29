@@ -285,6 +285,7 @@ class Wizard extends Character {
         this.showEditorPanel = true;
         this.editorPlacementActive = false;
         this.selectedEditorCategory = "doors";
+        this.selectedTerrainType = "grass";
         this.name = 'you';
         this.groundRadius = 0.3;
         this.visualRadius = 0.5; // Hitbox radius in hex units
@@ -1951,6 +1952,8 @@ class Wizard extends Character {
             "leftRight",
             "baseZ",
             "localZ",
+            "rampBaseZ",
+            "rampLocalZ",
             "continuousBaseZ",
             "continuousLocalZ"
         ];
@@ -2242,6 +2245,7 @@ class Wizard extends Character {
             activeAuras: Array.isArray(this.activeAuras) ? this.activeAuras.slice() : (this.activeAura ? [this.activeAura] : []),
             unlockedMagic: Array.isArray(this.unlockedMagic) ? this.unlockedMagic.slice() : [],
             selectedFlooringTexture: this.selectedFlooringTexture,
+            selectedTerrainType: this.selectedTerrainType,
             selectedTreeTextureVariant: this.selectedTreeTextureVariant,
             selectedPlaceableCategory: this.selectedPlaceableCategory,
             selectedPlaceableTexturePath: this.selectedPlaceableTexturePath,
@@ -2430,6 +2434,11 @@ class Wizard extends Character {
         }
         this.unlockedMagic = Array.isArray(data.unlockedMagic) ? data.unlockedMagic.slice() : [];
         if (data.selectedFlooringTexture !== undefined) this.selectedFlooringTexture = data.selectedFlooringTexture;
+        if (data.selectedTerrainType !== undefined) {
+            this.selectedTerrainType = (typeof data.selectedTerrainType === "string")
+                ? data.selectedTerrainType.trim().toLowerCase()
+                : "grass";
+        }
         if (data.selectedTreeTextureVariant !== undefined) this.selectedTreeTextureVariant = data.selectedTreeTextureVariant;
         if (data.selectedPlaceableCategory !== undefined) this.selectedPlaceableCategory = data.selectedPlaceableCategory;
         if (data.selectedPlaceableTexturePath !== undefined) this.selectedPlaceableTexturePath = normalizeTexturePath(data.selectedPlaceableTexturePath);

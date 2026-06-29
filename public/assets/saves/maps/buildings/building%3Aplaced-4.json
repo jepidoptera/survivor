@@ -3508,7 +3508,7 @@
   "powerups": [],
   "triggers": [],
   "loadState": "interior",
-  "contentVersion": 727,
+  "contentVersion": 730,
   "movementBlockedEdges": [
     {
       "id": "building:placed-4:movement-edge:0",
