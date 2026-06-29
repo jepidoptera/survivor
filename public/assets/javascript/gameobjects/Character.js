@@ -1234,6 +1234,40 @@ class Character {
         const nearbyCharacters = options.includeCharacterBlockers === true
             ? this.collectNearbyBlockingCharacters(newX, newY, radius, options)
             : [];
+        let nearbyBridgeRoads = [];
+        if (
+            this.map &&
+            typeof this.map.collectGroundBridgeRoadsInBounds === "function" &&
+            this.getCurrentMovementLayer(options) === 0
+        ) {
+            const resolvedRadius = Math.max(0, Number(radius) || 0);
+            nearbyBridgeRoads = this.map.collectGroundBridgeRoadsInBounds({
+                minX: Math.min(Number(this.x) || 0, Number(newX) || 0) - resolvedRadius,
+                minY: Math.min(Number(this.y) || 0, Number(newY) || 0) - resolvedRadius,
+                maxX: Math.max(Number(this.x) || 0, Number(newX) || 0) + resolvedRadius,
+                maxY: Math.max(Number(this.y) || 0, Number(newY) || 0) + resolvedRadius
+            });
+        }
+        let nearbyBridgeBarrierSegments = [];
+        if (
+            nearbyBridgeRoads.length > 0 &&
+            this.map &&
+            typeof this.map.getGroundBridgeMovementBarrierSegments === "function"
+        ) {
+            nearbyBridgeBarrierSegments = this.map.getGroundBridgeMovementBarrierSegments(
+                this,
+                Number(this.x) || 0,
+                Number(this.y) || 0,
+                Number(newX) || 0,
+                Number(newY) || 0,
+                Math.max(0, Number(radius) || 0),
+                {
+                    ...options,
+                    actor: this,
+                    bridgeRoads: nearbyBridgeRoads
+                }
+            );
+        }
         let nearbyTerrainPolygons = [];
         if (
             this.map &&
@@ -1269,6 +1303,11 @@ class Character {
                 sourceKey: entry && entry.sourceKey ? entry.sourceKey : "",
                 index: Number.isInteger(entry && entry.index) ? entry.index : null
             })),
+            nearbyBridgeBlockers: nearbyBridgeRoads.map(entry => ({
+                type: entry && entry.road && entry.road.type ? entry.road.type : "",
+                scriptingName: entry && entry.road && entry.road.scriptingName ? entry.road.scriptingName : ""
+            })),
+            nearbyBridgeBarrierSegments: nearbyBridgeBarrierSegments.length,
             staticCollisions: [],
             dynamicCharacterInteractions: [],
             dynamicResolutionIterations: 0
@@ -1277,6 +1316,8 @@ class Character {
             nearbyObjects,
             nearbyCharacters,
             nearbyTerrainPolygons,
+            nearbyBridgeRoads,
+            nearbyBridgeBarrierSegments,
             forceTouchedObjects
         };
     }
@@ -1482,6 +1523,12 @@ class Character {
         const nearbyTerrainPolygons = Array.isArray(movementContext.nearbyTerrainPolygons)
             ? movementContext.nearbyTerrainPolygons
             : [];
+        const nearbyBridgeRoads = Array.isArray(movementContext.nearbyBridgeRoads)
+            ? movementContext.nearbyBridgeRoads
+            : [];
+        const nearbyBridgeBarrierSegments = Array.isArray(movementContext.nearbyBridgeBarrierSegments)
+            ? movementContext.nearbyBridgeBarrierSegments
+            : [];
         let collided = false;
         const staticCollisionLog = (this._hitboxCollisionDebug && Array.isArray(this._hitboxCollisionDebug.staticCollisions))
             ? this._hitboxCollisionDebug.staticCollisions
@@ -1579,8 +1626,96 @@ class Character {
             });
             return { pushX, pushY, pushLen };
         };
+        const resolveBridgeCollision = (hitbox) => {
+            if (
+                nearbyBridgeRoads.length === 0 ||
+                !this.map ||
+                typeof this.map.resolveGroundBridgeHitboxCollision !== "function"
+            ) {
+                return null;
+            }
+            return this.map.resolveGroundBridgeHitboxCollision(hitbox, {
+                ...options,
+                actor: this,
+                bridgeRoads: nearbyBridgeRoads
+            });
+        };
+        const addBridgeCollision = (collision, iteration, sampleX, sampleY) => {
+            if (!collision) return { pushX: 0, pushY: 0, pushLen: 0 };
+            const pushX = Number(collision.pushX) || 0;
+            const pushY = Number(collision.pushY) || 0;
+            const pushLen = Math.hypot(pushX, pushY);
+            if (!(pushLen > 0)) return { pushX: 0, pushY: 0, pushLen: 0 };
+            staticCollisionLog.push({
+                label: `bridge:${collision.bridgeMode || "edge"}`,
+                iteration,
+                sampleX,
+                sampleY,
+                pushX,
+                pushY,
+                overlap: pushLen
+            });
+            return { pushX, pushY, pushLen };
+        };
+        const resolveBridgeMovementSegmentCollision = (fromX, fromY, toX, toY) => {
+            if (
+                nearbyBridgeBarrierSegments.length === 0 ||
+                !this.map ||
+                typeof this.map.resolveGroundBridgeMovementSegmentCollision !== "function"
+            ) {
+                return null;
+            }
+            return this.map.resolveGroundBridgeMovementSegmentCollision(
+                fromX,
+                fromY,
+                toX,
+                toY,
+                movementRadius,
+                {
+                    ...options,
+                    actor: this,
+                    bridgeRoads: nearbyBridgeRoads,
+                    bridgeBarrierSegments: nearbyBridgeBarrierSegments
+                }
+            );
+        };
+        const returnBridgeMovementSegmentCollision = (collision) => {
+            if (!collision) return null;
+            const pushX = Number(collision.pushX) || 0;
+            const pushY = Number(collision.pushY) || 0;
+            const pushLen = Math.hypot(pushX, pushY);
+            staticCollisionLog.push({
+                label: `bridge:${collision.bridgeMode || "segment"}`,
+                iteration: "segment",
+                sampleX: Number(collision.x),
+                sampleY: Number(collision.y),
+                pushX,
+                pushY,
+                overlap: pushLen
+            });
+            const normalX = Number.isFinite(Number(collision.normalX))
+                ? Number(collision.normalX)
+                : (pushLen > 0 ? pushX / pushLen : 0);
+            const normalY = Number.isFinite(Number(collision.normalY))
+                ? Number(collision.normalY)
+                : (pushLen > 0 ? pushY / pushLen : 0);
+            if (this.movementVector && typeof this.movementVector === "object") {
+                const vectorX = Number(this.movementVector.x) || 0;
+                const vectorY = Number(this.movementVector.y) || 0;
+                const normalComponent = vectorX * normalX + vectorY * normalY;
+                if (normalComponent < 0) {
+                    this.movementVector.x = vectorX - normalX * normalComponent;
+                    this.movementVector.y = vectorY - normalY * normalComponent;
+                }
+            }
+            return {
+                x: Number.isFinite(Number(collision.x)) ? Number(collision.x) : this.x,
+                y: Number.isFinite(Number(collision.y)) ? Number(collision.y) : this.y,
+                collided: true
+            };
+        };
         const isStaticCollisionAt = (x, y) => {
-            if (!nearbyObjects.length && !nearbyTerrainPolygons.length) return false;
+            if (!nearbyObjects.length && !nearbyTerrainPolygons.length && !nearbyBridgeRoads.length) return false;
             const hitbox = this._movementStartHitbox || { type: "circle", x, y, radius: movementRadius };
             hitbox.x = x;
             hitbox.y = y;
@@ -1589,10 +1724,11 @@ class Character {
             for (const obj of nearbyObjects) {
                 if (resolveCollision(obj, hitbox)) return true;
             }
+            if (resolveBridgeCollision(hitbox)) return true;
             return !!resolveTerrainCollision(hitbox);
         };
         const findSweptCollision = (fromX, fromY, toX, toY) => {
-            if (!nearbyObjects.length && !nearbyTerrainPolygons.length) return null;
+            if (!nearbyObjects.length && !nearbyTerrainPolygons.length && !nearbyBridgeRoads.length) return null;
             const dx = toX - fromX;
             const dy = toY - fromY;
             const distance = Math.hypot(dx, dy);
@@ -1649,6 +1785,18 @@ class Character {
                     totalPushX += terrainCollision.pushX;
                     totalPushY += terrainCollision.pushY;
                     maxPushLen = Math.max(maxPushLen, terrainCollision.pushLen);
+                }
+                const bridgeCollision = addBridgeCollision(
+                    resolveBridgeCollision(sweepHitbox),
+                    "sweep",
+                    sweepHitbox.x,
+                    sweepHitbox.y
+                );
+                if (bridgeCollision.pushLen > 0) {
+                    hasCollision = true;
+                    totalPushX += bridgeCollision.pushX;
+                    totalPushY += bridgeCollision.pushY;
+                    maxPushLen = Math.max(maxPushLen, bridgeCollision.pushLen);
                 }
 
                 if (hasCollision) {
@@ -1710,6 +1858,13 @@ class Character {
                 totalPushY += terrainCollision.pushY;
                 maxPushLen = Math.max(maxPushLen, terrainCollision.pushLen);
             }
+            const bridgeCollision = addBridgeCollision(resolveBridgeCollision(testHitbox), iteration, testX, testY);
+            if (bridgeCollision.pushLen > 0) {
+                hasCollision = true;
+                totalPushX += bridgeCollision.pushX;
+                totalPushY += bridgeCollision.pushY;
+                maxPushLen = Math.max(maxPushLen, bridgeCollision.pushLen);
+            }
             const boundaryPush = this._getFloorFragmentBoundaryPush(testX, testY, movementRadius);
             if (boundaryPush) {
                 hasCollision = true;
@@ -1719,6 +1874,9 @@ class Character {
             }
 
             if (!hasCollision) {
+                const bridgeSegmentCollision = resolveBridgeMovementSegmentCollision(this.x, this.y, testX, testY);
+                const bridgeSegmentResolution = returnBridgeMovementSegmentCollision(bridgeSegmentCollision);
+                if (bridgeSegmentResolution) return bridgeSegmentResolution;
                 if (!isStaticCollisionAt(this.x, this.y)) {
                     const sweptCollision = findSweptCollision(this.x, this.y, testX, testY);
                     if (sweptCollision) {
@@ -1829,6 +1987,12 @@ class Character {
             totalPushX += terrainCollisionFinal.pushX;
             totalPushY += terrainCollisionFinal.pushY;
             maxPushLen = Math.max(maxPushLen, terrainCollisionFinal.pushLen);
+        }
+        const bridgeCollisionFinal = addBridgeCollision(resolveBridgeCollision(testHitbox), "final", testX, testY);
+        if (bridgeCollisionFinal.pushLen > 0) {
+            totalPushX += bridgeCollisionFinal.pushX;
+            totalPushY += bridgeCollisionFinal.pushY;
+            maxPushLen = Math.max(maxPushLen, bridgeCollisionFinal.pushLen);
         }
         const boundaryPushFinal = this._getFloorFragmentBoundaryPush(testX, testY, movementRadius);
         if (boundaryPushFinal) {
@@ -1982,6 +2146,9 @@ class Character {
         const position = this._setVectorMovementPositionRaw(targetX, targetY);
         if (this.map && typeof this.map.applyActorResolvedMovementSupport === "function") {
             this.map.applyActorResolvedMovementSupport(this, position.wrappedX, position.wrappedY, options);
+        }
+        if (this.map && typeof this.map.applyActorBridgeMovementState === "function") {
+            this.map.applyActorBridgeMovementState(this, position.wrappedX, position.wrappedY, options);
         }
         this.onVectorMovementApplied({
             previousX: this.prevX,

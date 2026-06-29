@@ -1,5 +1,9 @@
 const WIZARD_GAME_MODE_GOD = "god";
 const WIZARD_GAME_MODE_ADVENTURE = "adventure";
+const WIZARD_WATER_MOVEMENT_DEPTH_SLOPE = 2 / 3;
+const WIZARD_WATER_MAX_DEPTH_UNITS = 2 / 3;
+const WIZARD_WATER_FULL_SUBMERGED_DEPTH_UNITS = 2 / 3;
+const WIZARD_FULLY_SUBMERGED_SPEED_MULTIPLIER = 1 / 3;
 
 const WIZARD_SHIELD_DEPTH_NEAR_METRIC = -128;
 const WIZARD_SHIELD_DEPTH_FAR_METRIC = 256;
@@ -917,13 +921,45 @@ class Wizard extends Character {
         return false;
     }
 
-    getVectorMovementEnvironmentSpeedMultiplier(_options = {}) {
+    getWaterMovementSpeedMultiplier(options = {}) {
+        if (!this.map || this.isJumping === true) return 1;
+        const localZ = Number.isFinite(Number(this.z)) ? Number(this.z) : 0;
+        if (localZ > 0.05) return 1;
+        const movementLayer = typeof this.getCurrentMovementLayer === "function"
+            ? this.getCurrentMovementLayer(options)
+            : (Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0);
+        if (movementLayer !== 0) return 1;
+        if (
+            typeof this.map.isActorOnGroundBridge === "function" &&
+            this.map.isActorOnGroundBridge(this, this.x, this.y)
+        ) {
+            return 1;
+        }
+        if (typeof this.map.getGroundTerrainWaterImmersionAtPoint !== "function") return 1;
+        const immersion = this.map.getGroundTerrainWaterImmersionAtPoint(this.x, this.y, {
+            slope: WIZARD_WATER_MOVEMENT_DEPTH_SLOPE,
+            maxDepth: WIZARD_WATER_MAX_DEPTH_UNITS,
+            traversalLayer: movementLayer
+        });
+        if (!immersion || immersion.inWater !== true) return 1;
+        const submergedDepth = Number.isFinite(Number(immersion.submergedDepth))
+            ? Math.max(0, Number(immersion.submergedDepth))
+            : 0;
+        const fullDepth = Number.isFinite(Number(this.waterFullSubmergedDepthUnits))
+            ? Math.max(1e-6, Number(this.waterFullSubmergedDepthUnits))
+            : WIZARD_WATER_FULL_SUBMERGED_DEPTH_UNITS;
+        const submergedRatio = Math.max(0, Math.min(1, submergedDepth / fullDepth));
+        return 1 - submergedRatio * (1 - WIZARD_FULLY_SUBMERGED_SPEED_MULTIPLIER);
+    }
+
+    getVectorMovementEnvironmentSpeedMultiplier(options = {}) {
         const activeAuras = Array.isArray(this.activeAuras)
             ? this.activeAuras
             : (typeof this.activeAura === "string" ? [this.activeAura] : []);
         const auraSpeedMultiplier = activeAuras.includes("speed") ? 2 : 1;
         const roadSpeedMultiplier = this.isOnRoad() ? this.roadSpeedMultiplier : 1;
-        return auraSpeedMultiplier * roadSpeedMultiplier;
+        const waterSpeedMultiplier = this.getWaterMovementSpeedMultiplier(options);
+        return auraSpeedMultiplier * roadSpeedMultiplier * waterSpeedMultiplier;
     }
 
     heal(amount) {
@@ -1419,12 +1455,55 @@ class Wizard extends Character {
             movementPerfRecord("wizard.prepareContext.stairBlockerFilter", movementSectionStartMs);
         }
 
+        let nearbyBridgeRoads = [];
+        let nearbyBridgeBarrierSegments = [];
+        if (
+            wizardLayer === 0 &&
+            this.map &&
+            typeof this.map.collectGroundBridgeRoadsInBounds === "function"
+        ) {
+            const currentX = Number.isFinite(Number(this.x)) ? Number(this.x) : newX;
+            const currentY = Number.isFinite(Number(this.y)) ? Number(this.y) : newY;
+            const resolvedRadius = Math.max(0, Number(radius) || 0);
+            const queryBounds = {
+                minX: Math.min(currentX, newX) - resolvedRadius,
+                minY: Math.min(currentY, newY) - resolvedRadius,
+                maxX: Math.max(currentX, newX) + resolvedRadius,
+                maxY: Math.max(currentY, newY) + resolvedRadius
+            };
+            movementSectionStartMs = movementPerfNow();
+            nearbyBridgeRoads = this.map.collectGroundBridgeRoadsInBounds(queryBounds);
+            movementPerfRecord("wizard.prepareContext.bridgeRoadCollect", movementSectionStartMs);
+            if (
+                nearbyBridgeRoads.length > 0 &&
+                typeof this.map.getGroundBridgeMovementBarrierSegments === "function"
+            ) {
+                movementSectionStartMs = movementPerfNow();
+                nearbyBridgeBarrierSegments = this.map.getGroundBridgeMovementBarrierSegments(
+                    this,
+                    currentX,
+                    currentY,
+                    newX,
+                    newY,
+                    resolvedRadius,
+                    {
+                        ...options,
+                        actor: this,
+                        bridgeRoads: nearbyBridgeRoads
+                    }
+                );
+                movementPerfRecord("wizard.prepareContext.bridgeBarrierCollect", movementSectionStartMs);
+            }
+        }
+
         movementPerfRecord("wizard.prepareContext.total", movementTotalStartMs);
         return {
             nearbyObjects,
             nearbyCharacters: options.includeCharacterBlockers === true
                 ? this.collectNearbyBlockingCharacters(newX, newY, radius, options)
                 : [],
+            nearbyBridgeRoads,
+            nearbyBridgeBarrierSegments,
             nearbyDoors,
             forceTouchedObjects,
             isPointInDoorHitboxFn

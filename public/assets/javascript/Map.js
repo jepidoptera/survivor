@@ -57,20 +57,23 @@ function pointOnSegment2D(px, py, ax, ay, bx, by, eps = 1e-7) {
 }
 
 function getPointSegmentDistanceSq2D(px, py, ax, ay, bx, by) {
+    const closest = getClosestPointOnSegment2D(px, py, ax, ay, bx, by);
+    const dx = px - closest.x;
+    const dy = py - closest.y;
+    return dx * dx + dy * dy;
+}
+
+function getClosestPointOnSegment2D(px, py, ax, ay, bx, by) {
     const abx = bx - ax;
     const aby = by - ay;
     const lenSq = abx * abx + aby * aby;
     if (!(lenSq > 1e-12)) {
-        const dx = px - ax;
-        const dy = py - ay;
-        return dx * dx + dy * dy;
+        return { x: ax, y: ay, t: 0 };
     }
     const t = Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / lenSq));
     const cx = ax + abx * t;
     const cy = ay + aby * t;
-    const dx = px - cx;
-    const dy = py - cy;
-    return dx * dx + dy * dy;
+    return { x: cx, y: cy, t };
 }
 
 function getPointPolygonBoundaryDistanceSq2D(px, py, points) {
@@ -1047,6 +1050,8 @@ class GameMap {
         this.pathfindingSnapshotVersion = 1;
         this.groundTerrainDefs = GROUND_TERRAIN_DEFS_WITH_OFFSETS.map(cloneGroundTerrainDefForUi);
         this.terrainPolygons = [];
+        this._groundBridgeBarrierCacheVersion = 1;
+        this._groundBridgeBlockingEdgeCache = new WeakMap();
         this.groundPalette = GROUND_TERRAIN_TEXTURE_NAMES.slice();
         this.groundTexturePaths = GROUND_TERRAIN_TEXTURE_PATHS.slice();
         this.groundTextures = this.groundPalette.map(() => PIXI.Texture.WHITE);
@@ -10288,6 +10293,35 @@ class GameMap {
         return segments.join("|");
     }
 
+    getGroundTerrainGeneratedPolygonSignature(polygon) {
+        if (!polygon || typeof polygon.type !== "string" || polygon.type.length === 0) return "";
+        const outerSignature = this.getGroundTerrainRepairRingSignature(polygon.points);
+        if (!outerSignature) return "";
+        const holeSignatures = (Array.isArray(polygon.holes) ? polygon.holes : [])
+            .map(hole => this.getGroundTerrainRepairRingSignature(hole))
+            .filter(Boolean)
+            .sort();
+        return `${polygon.type}:${outerSignature}:${holeSignatures.join("#")}`;
+    }
+
+    markGroundTerrainPolygonsGenerated(polygons) {
+        if (!(this._groundTerrainGeneratedPolygonSignatures instanceof Set)) {
+            this._groundTerrainGeneratedPolygonSignatures = new Set();
+        }
+        const source = Array.isArray(polygons) ? polygons : [];
+        for (let i = 0; i < source.length; i++) {
+            const signature = this.getGroundTerrainGeneratedPolygonSignature(source[i]);
+            if (signature) this._groundTerrainGeneratedPolygonSignatures.add(signature);
+        }
+        return polygons;
+    }
+
+    groundTerrainPolygonHasGeneratedSignature(polygon) {
+        if (!(this._groundTerrainGeneratedPolygonSignatures instanceof Set)) return false;
+        const signature = this.getGroundTerrainGeneratedPolygonSignature(polygon);
+        return !!signature && this._groundTerrainGeneratedPolygonSignatures.has(signature);
+    }
+
     snapGroundTerrainPointToAffectedHexCorner(point, affectedNodes) {
         const x = Number(point && point.x);
         const y = Number(point && point.y);
@@ -10705,6 +10739,671 @@ class GameMap {
             if (pointInPolygon2D(x, y, holes[h])) return false;
         }
         return true;
+    }
+
+    isGroundTerrainWaterAtPoint(x, y) {
+        const px = Number(x);
+        const py = Number(y);
+        if (!Number.isFinite(px) || !Number.isFinite(py)) {
+            throw new Error("water terrain point query requires a finite point");
+        }
+        const candidates = this.collectGroundTerrainCollisionPolygons({
+            minX: px,
+            minY: py,
+            maxX: px,
+            maxY: py
+        });
+        for (let i = 0; i < candidates.length; i++) {
+            const entry = candidates[i];
+            const polygon = entry && entry.polygon ? entry.polygon : null;
+            if (!polygon || entry.terrainType !== "water") continue;
+            if (this.terrainPolygonContainsPoint(polygon, px, py)) return true;
+        }
+        return false;
+    }
+
+    getGroundTerrainWaterShoreDistanceSqForRing(px, py, points, sampleDistance = 0.0001) {
+        if (!Array.isArray(points) || points.length < 3) return Infinity;
+        const probeDistance = Number.isFinite(Number(sampleDistance))
+            ? Math.max(1e-7, Math.abs(Number(sampleDistance)))
+            : 0.0001;
+        let best = Infinity;
+        for (let i = 0; i < points.length; i++) {
+            const a = points[i];
+            const b = points[(i + 1) % points.length];
+            const ax = Number(a && a.x);
+            const ay = Number(a && a.y);
+            const bx = Number(b && b.x);
+            const by = Number(b && b.y);
+            if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) continue;
+            const dx = bx - ax;
+            const dy = by - ay;
+            const len = Math.hypot(dx, dy);
+            if (!(len > 1e-12)) continue;
+            const closest = getClosestPointOnSegment2D(px, py, ax, ay, bx, by);
+            const nx = -dy / len;
+            const ny = dx / len;
+            const sideAIsWater = this.isGroundTerrainWaterAtPoint(
+                closest.x + (nx * probeDistance),
+                closest.y + (ny * probeDistance)
+            );
+            const sideBIsWater = this.isGroundTerrainWaterAtPoint(
+                closest.x - (nx * probeDistance),
+                closest.y - (ny * probeDistance)
+            );
+            if (sideAIsWater && sideBIsWater) continue;
+            const distSq = getPointSegmentDistanceSq2D(px, py, ax, ay, bx, by);
+            if (distSq < best) best = distSq;
+        }
+        return best;
+    }
+
+    getGroundTerrainWaterShoreDistanceSqForPolygon(px, py, polygon, options = {}) {
+        if (!polygon || !Array.isArray(polygon.points) || polygon.points.length < 3) return Infinity;
+        const sampleDistance = Number.isFinite(Number(options && options.sampleDistance))
+            ? Number(options.sampleDistance)
+            : 0.0001;
+        let best = this.getGroundTerrainWaterShoreDistanceSqForRing(px, py, polygon.points, sampleDistance);
+        const holes = Array.isArray(polygon.holes) ? polygon.holes : [];
+        for (let h = 0; h < holes.length; h++) {
+            best = Math.min(best, this.getGroundTerrainWaterShoreDistanceSqForRing(px, py, holes[h], sampleDistance));
+        }
+        return best;
+    }
+
+    getGroundBridgeRoadPolygon(road) {
+        if (!road || road.gone || road.vanishing) return null;
+        const type = typeof road.type === "string" ? road.type : "";
+        if (type !== "road" && type !== "roadPath") return null;
+        const layer = Number.isFinite(road.traversalLayer)
+            ? Math.round(Number(road.traversalLayer))
+            : (Number.isFinite(road.level) ? Math.round(Number(road.level)) : 0);
+        if (layer !== 0) return null;
+        const sourcePoints = Array.isArray(road.outlinePolygon)
+            ? road.outlinePolygon
+            : (road.groundPlaneHitbox && Array.isArray(road.groundPlaneHitbox.points)
+                ? road.groundPlaneHitbox.points
+                : (road.visualHitbox && Array.isArray(road.visualHitbox.points) ? road.visualHitbox.points : null));
+        if (!Array.isArray(sourcePoints) || sourcePoints.length < 3) return null;
+        const points = [];
+        for (let i = 0; i < sourcePoints.length; i++) {
+            const x = Number(sourcePoints[i] && sourcePoints[i].x);
+            const y = Number(sourcePoints[i] && sourcePoints[i].y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+            points.push({ x, y });
+        }
+        return points;
+    }
+
+    getGroundBridgeRoadBounds(road) {
+        const polygon = this.getGroundBridgeRoadPolygon(road);
+        return polygon ? getPolygonBounds2D(polygon) : null;
+    }
+
+    invalidateGroundBridgeBarrierCache() {
+        this._groundBridgeBarrierCacheVersion = (Number(this._groundBridgeBarrierCacheVersion) || 0) + 1;
+        this._groundBridgeBlockingEdgeCache = new WeakMap();
+    }
+
+    getGroundBridgePolygonSignature(polygon) {
+        const points = Array.isArray(polygon) ? polygon : [];
+        return points.map(point => {
+            const x = Number(point && point.x);
+            const y = Number(point && point.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return "bad";
+            return `${Math.round(x * 10000)}:${Math.round(y * 10000)}`;
+        }).join("|");
+    }
+
+    getGroundBridgeBlockingEdgeSegmentsForRoad(road, polygon = null, options = {}) {
+        const roadRef = road && typeof road === "object" ? road : null;
+        const bridgePolygon = Array.isArray(polygon) ? polygon : this.getGroundBridgeRoadPolygon(roadRef);
+        if (!bridgePolygon || bridgePolygon.length < 3) return [];
+        const minDepth = Number.isFinite(Number(options && options.minSubmergedDepth))
+            ? Math.max(0, Number(options.minSubmergedDepth))
+            : 0.25;
+        const sampleDistance = Number.isFinite(Number(options && options.sampleDistance))
+            ? Math.max(1e-5, Math.abs(Number(options.sampleDistance)))
+            : 0.02;
+        const maxSegmentLength = Number.isFinite(Number(options && options.maxSegmentLength))
+            ? Math.max(0.05, Math.abs(Number(options.maxSegmentLength)))
+            : 0.25;
+        const version = Number(this._groundBridgeBarrierCacheVersion) || 0;
+        const polygonSignature = this.getGroundBridgePolygonSignature(bridgePolygon);
+        const cacheKey = `${version}:${minDepth}:${sampleDistance}:${maxSegmentLength}:${polygonSignature}`;
+        if (roadRef) {
+            if (!(this._groundBridgeBlockingEdgeCache instanceof WeakMap)) {
+                this._groundBridgeBlockingEdgeCache = new WeakMap();
+            }
+            const cached = this._groundBridgeBlockingEdgeCache.get(roadRef);
+            if (cached && cached.key === cacheKey && Array.isArray(cached.segments)) {
+                return cached.segments;
+            }
+        }
+        const segments = this.getGroundBridgeBlockingEdgeSegmentsForPolygon(bridgePolygon, {
+            minSubmergedDepth: minDepth,
+            sampleDistance,
+            maxSegmentLength
+        });
+        if (roadRef) {
+            this._groundBridgeBlockingEdgeCache.set(roadRef, { key: cacheKey, segments });
+        }
+        return segments;
+    }
+
+    collectGroundBridgeRoadsInBounds(bounds = null) {
+        const queryBounds = bounds && typeof bounds === "object" ? bounds : null;
+        if (queryBounds) {
+            for (const key of ["minX", "minY", "maxX", "maxY"]) {
+                if (!Number.isFinite(Number(queryBounds[key]))) {
+                    throw new Error("bridge road bounds must be finite");
+                }
+            }
+        }
+        const out = [];
+        const seen = new Set();
+        const addRoad = (road) => {
+            if (!road || seen.has(road)) return;
+            const polygon = this.getGroundBridgeRoadPolygon(road);
+            if (!polygon) return;
+            const roadBounds = getPolygonBounds2D(polygon);
+            if (!roadBounds) return;
+            if (queryBounds && !polygonBoundsOverlap2D(queryBounds, roadBounds)) return;
+            seen.add(road);
+            out.push({ road, polygon, bounds: roadBounds });
+        };
+        const objectState = this._prototypeObjectState || null;
+        if (objectState && objectState.activeRuntimeObjectsByRecordId instanceof Map) {
+            for (const road of objectState.activeRuntimeObjectsByRecordId.values()) addRoad(road);
+        }
+        if (Array.isArray(objectState && objectState.activeRuntimeObjects)) {
+            for (let i = 0; i < objectState.activeRuntimeObjects.length; i++) addRoad(objectState.activeRuntimeObjects[i]);
+        }
+        if (Array.isArray(this.objects)) {
+            for (let i = 0; i < this.objects.length; i++) addRoad(this.objects[i]);
+        }
+        if (out.length === 0 && Array.isArray(this.nodes)) {
+            for (let x = 0; x < this.nodes.length; x++) {
+                const column = this.nodes[x];
+                if (!Array.isArray(column)) continue;
+                for (let y = 0; y < column.length; y++) {
+                    const node = column[y];
+                    const objects = Array.isArray(node && node.objects) ? node.objects : [];
+                    for (let i = 0; i < objects.length; i++) addRoad(objects[i]);
+                }
+            }
+        }
+        return out;
+    }
+
+    collectGroundBridgeRoadsAtPoint(x, y, roads = null) {
+        const px = Number(x);
+        const py = Number(y);
+        if (!Number.isFinite(px) || !Number.isFinite(py)) {
+            throw new Error("bridge road point query requires a finite point");
+        }
+        const candidates = Array.isArray(roads)
+            ? roads
+            : this.collectGroundBridgeRoadsInBounds({ minX: px, minY: py, maxX: px, maxY: py });
+        const out = [];
+        for (let i = 0; i < candidates.length; i++) {
+            const entry = candidates[i];
+            const road = entry && entry.road ? entry.road : entry;
+            const polygon = entry && Array.isArray(entry.polygon)
+                ? entry.polygon
+                : this.getGroundBridgeRoadPolygon(road);
+            if (!polygon || polygon.length < 3) continue;
+            if (pointInPolygon2D(px, py, polygon)) out.push({ road, polygon });
+        }
+        return out;
+    }
+
+    getGroundBridgeRoadAtPoint(x, y, roads = null) {
+        const matches = this.collectGroundBridgeRoadsAtPoint(x, y, roads);
+        for (let i = 0; i < matches.length; i++) {
+            if (this.isGroundTerrainWaterAtPoint(x, y)) return matches[i];
+        }
+        return null;
+    }
+
+    getGroundBridgeSubmergedDepthAtPoint(x, y) {
+        const immersion = this.getGroundTerrainWaterImmersionAtPoint(x, y);
+        return immersion && immersion.inWater === true && Number.isFinite(Number(immersion.submergedDepth))
+            ? Math.max(0, Number(immersion.submergedDepth))
+            : 0;
+    }
+
+    getActorBridgeMovementState(actor = null, x = null, y = null, options = {}) {
+        const px = Number.isFinite(Number(x)) ? Number(x) : Number(actor && actor.x);
+        const py = Number.isFinite(Number(y)) ? Number(y) : Number(actor && actor.y);
+        if (!Number.isFinite(px) || !Number.isFinite(py)) return null;
+        const layer = Number.isFinite(actor && actor.currentLayer)
+            ? Math.round(Number(actor.currentLayer))
+            : (Number.isFinite(actor && actor.traversalLayer) ? Math.round(Number(actor.traversalLayer)) : 0);
+        if (layer !== 0) return null;
+        const bridge = this.getGroundBridgeRoadAtPoint(px, py, options && options.bridgeRoads);
+        if (!bridge) return null;
+        const submergedDepth = this.getGroundBridgeSubmergedDepthAtPoint(px, py);
+        const previous = actor && actor._bridgeMovementState && actor._bridgeMovementState.onBridge === true
+            ? actor._bridgeMovementState
+            : null;
+        const climbDepth = Number.isFinite(Number(options && options.maxClimbSubmergedDepth))
+            ? Math.max(0, Number(options.maxClimbSubmergedDepth))
+            : 0.25;
+        if (!previous && submergedDepth > climbDepth) return null;
+        return {
+            onBridge: true,
+            road: bridge.road,
+            roadType: typeof (bridge.road && bridge.road.type) === "string" ? bridge.road.type : "",
+            submergedDepth,
+            maxClimbSubmergedDepth: climbDepth
+        };
+    }
+
+    applyActorBridgeMovementState(actor, x = null, y = null, options = {}) {
+        if (!actor || typeof actor !== "object") return null;
+        const state = this.getActorBridgeMovementState(actor, x, y, options);
+        actor._bridgeMovementState = state;
+        return state;
+    }
+
+    isActorOnGroundBridge(actor = null, x = null, y = null) {
+        if (!actor || !actor._bridgeMovementState || actor._bridgeMovementState.onBridge !== true) return false;
+        const px = Number.isFinite(Number(x)) ? Number(x) : Number(actor.x);
+        const py = Number.isFinite(Number(y)) ? Number(y) : Number(actor.y);
+        if (!Number.isFinite(px) || !Number.isFinite(py)) return false;
+        const bridge = this.getGroundBridgeRoadAtPoint(px, py);
+        return !!bridge;
+    }
+
+    getGroundBridgeBlockingEdgeSegmentsForPolygon(polygon, options = {}) {
+        if (!Array.isArray(polygon) || polygon.length < 3) return [];
+        const minDepth = Number.isFinite(Number(options && options.minSubmergedDepth))
+            ? Math.max(0, Number(options.minSubmergedDepth))
+            : 0.25;
+        const sampleDistance = Number.isFinite(Number(options && options.sampleDistance))
+            ? Math.max(1e-5, Math.abs(Number(options.sampleDistance)))
+            : 0.02;
+        const maxSegmentLength = Number.isFinite(Number(options && options.maxSegmentLength))
+            ? Math.max(0.05, Math.abs(Number(options.maxSegmentLength)))
+            : 0.25;
+        const out = [];
+        for (let i = 0; i < polygon.length; i++) {
+            const a = polygon[i];
+            const b = polygon[(i + 1) % polygon.length];
+            const ax = Number(a && a.x);
+            const ay = Number(a && a.y);
+            const bx = Number(b && b.x);
+            const by = Number(b && b.y);
+            if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) continue;
+            const dx = bx - ax;
+            const dy = by - ay;
+            const len = Math.hypot(dx, dy);
+            if (!(len > 1e-9)) continue;
+            const nx = -dy / len;
+            const ny = dx / len;
+            const steps = Math.max(1, Math.ceil(len / maxSegmentLength));
+            for (let s = 0; s < steps; s++) {
+                const t0 = s / steps;
+                const t1 = (s + 1) / steps;
+                const tm = (t0 + t1) * 0.5;
+                const mx = ax + dx * tm;
+                const my = ay + dy * tm;
+                const sideAX = mx + nx * sampleDistance;
+                const sideAY = my + ny * sampleDistance;
+                const sideBX = mx - nx * sampleDistance;
+                const sideBY = my - ny * sampleDistance;
+                const sideAInsideRoad = pointInPolygon2D(sideAX, sideAY, polygon);
+                const sideBInsideRoad = pointInPolygon2D(sideBX, sideBY, polygon);
+                if (sideAInsideRoad === sideBInsideRoad) continue;
+                const outsideX = sideAInsideRoad ? sideBX : sideAX;
+                const outsideY = sideAInsideRoad ? sideBY : sideAY;
+                const immersion = this.getGroundTerrainWaterImmersionAtPoint(outsideX, outsideY);
+                const submergedDepth = immersion && immersion.inWater === true && Number.isFinite(Number(immersion.submergedDepth))
+                    ? Math.max(0, Number(immersion.submergedDepth))
+                    : 0;
+                if (submergedDepth + 1e-9 < minDepth) continue;
+                const insideNormalX = sideAInsideRoad ? nx : -nx;
+                const insideNormalY = sideAInsideRoad ? ny : -ny;
+                out.push({
+                    ax: ax + dx * t0,
+                    ay: ay + dy * t0,
+                    bx: ax + dx * t1,
+                    by: ay + dy * t1,
+                    insideNormalX,
+                    insideNormalY,
+                    submergedDepth
+                });
+            }
+        }
+        return out;
+    }
+
+    getGroundBridgeBarrierPushForSegments(hitbox, segments, mode = "swimming") {
+        const cx = Number(hitbox && hitbox.x);
+        const cy = Number(hitbox && hitbox.y);
+        const radius = Number(hitbox && hitbox.radius);
+        if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(radius) || radius < 0) {
+            throw new Error("bridge boundary collision requires a finite circle hitbox");
+        }
+        const source = Array.isArray(segments) ? segments : [];
+        let best = null;
+        for (let i = 0; i < source.length; i++) {
+            const segment = source[i];
+            const ax = Number(segment && segment.ax);
+            const ay = Number(segment && segment.ay);
+            const bx = Number(segment && segment.bx);
+            const by = Number(segment && segment.by);
+            if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) continue;
+            const closest = getClosestPointOnSegment2D(cx, cy, ax, ay, bx, by);
+            const closestDx = cx - closest.x;
+            const closestDy = cy - closest.y;
+            const closestDistSq = (closestDx * closestDx) + (closestDy * closestDy);
+            if (closestDistSq > (radius * radius) + 1e-9) continue;
+            const insideNormalX = Number(segment.insideNormalX);
+            const insideNormalY = Number(segment.insideNormalY);
+            const normalLen = Math.hypot(insideNormalX, insideNormalY);
+            if (!(normalLen > 1e-9)) continue;
+            const nx = mode === "onBridge" ? insideNormalX / normalLen : -insideNormalX / normalLen;
+            const ny = mode === "onBridge" ? insideNormalY / normalLen : -insideNormalY / normalLen;
+            const signedDistance = ((cx - closest.x) * nx) + ((cy - closest.y) * ny);
+            const pushDistance = radius - signedDistance;
+            if (!(pushDistance > 1e-6)) continue;
+            const score = pushDistance;
+            if (!best || score > best.score) {
+                best = {
+                    score,
+                    pushX: nx * pushDistance,
+                    pushY: ny * pushDistance,
+                    submergedDepth: Number.isFinite(Number(segment.submergedDepth)) ? Number(segment.submergedDepth) : 0
+                };
+            }
+        }
+        return best ? {
+            pushX: best.pushX,
+            pushY: best.pushY,
+            submergedDepth: best.submergedDepth
+        } : null;
+    }
+
+    resolveGroundBridgeHitboxCollision(hitbox, options = {}) {
+        const cx = Number(hitbox && hitbox.x);
+        const cy = Number(hitbox && hitbox.y);
+        const radius = Number(hitbox && hitbox.radius);
+        if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(radius) || radius < 0) {
+            throw new Error("bridge collision requires a finite circle hitbox");
+        }
+        const actor = options && options.actor ? options.actor : null;
+        const actorOnBridge = !!(actor && actor._bridgeMovementState && actor._bridgeMovementState.onBridge === true);
+        const roads = Array.isArray(options && options.bridgeRoads)
+            ? options.bridgeRoads
+            : this.collectGroundBridgeRoadsInBounds({
+                minX: cx - radius,
+                minY: cy - radius,
+                maxX: cx + radius,
+                maxY: cy + radius
+            });
+        if (roads.length === 0) return null;
+        const climbDepth = Number.isFinite(Number(options && options.maxClimbSubmergedDepth))
+            ? Math.max(0, Number(options.maxClimbSubmergedDepth))
+            : 0.25;
+        if (actorOnBridge) {
+            if (actor && actor.isJumping === true) return null;
+            const stateRoad = actor._bridgeMovementState.road || null;
+            for (let i = 0; i < roads.length; i++) {
+                const entry = roads[i];
+                const road = entry && entry.road ? entry.road : entry;
+                if (stateRoad && road !== stateRoad) continue;
+                const polygon = entry && Array.isArray(entry.polygon)
+                    ? entry.polygon
+                    : this.getGroundBridgeRoadPolygon(road);
+                const segments = this.getGroundBridgeBlockingEdgeSegmentsForRoad(road, polygon, {
+                    minSubmergedDepth: climbDepth
+                });
+                const push = this.getGroundBridgeBarrierPushForSegments(hitbox, segments, "onBridge");
+                if (push) return { ...push, bridge: road, bridgeMode: "onBridge" };
+            }
+            return null;
+        }
+
+        const immersion = this.getGroundTerrainWaterImmersionAtPoint(cx, cy);
+        if (!immersion || immersion.inWater !== true) return null;
+        const submergedDepth = Number.isFinite(Number(immersion.submergedDepth))
+            ? Math.max(0, Number(immersion.submergedDepth))
+            : 0;
+        if (submergedDepth <= climbDepth) return null;
+
+        for (let i = 0; i < roads.length; i++) {
+            const entry = roads[i];
+            const road = entry && entry.road ? entry.road : entry;
+            const polygon = entry && Array.isArray(entry.polygon)
+                ? entry.polygon
+                : this.getGroundBridgeRoadPolygon(road);
+            if (!polygon || polygon.length < 3) continue;
+            const segments = this.getGroundBridgeBlockingEdgeSegmentsForRoad(road, polygon, {
+                minSubmergedDepth: climbDepth
+            });
+            const collision = this.getGroundBridgeBarrierPushForSegments(hitbox, segments, "swimming");
+            if (collision) return { ...collision, bridge: road, bridgeMode: "swimming" };
+        }
+        return null;
+    }
+
+    getGroundBridgeBarrierMovementMode(actor = null, x = null, y = null, options = {}) {
+        const px = Number.isFinite(Number(x)) ? Number(x) : Number(actor && actor.x);
+        const py = Number.isFinite(Number(y)) ? Number(y) : Number(actor && actor.y);
+        if (!Number.isFinite(px) || !Number.isFinite(py)) {
+            throw new Error("bridge barrier movement mode requires a finite point");
+        }
+        const layer = Number.isFinite(actor && actor.currentLayer)
+            ? Math.round(Number(actor.currentLayer))
+            : (Number.isFinite(actor && actor.traversalLayer) ? Math.round(Number(actor.traversalLayer)) : 0);
+        if (layer !== 0) return null;
+        const climbDepth = Number.isFinite(Number(options && options.maxClimbSubmergedDepth))
+            ? Math.max(0, Number(options.maxClimbSubmergedDepth))
+            : 0.25;
+        if (actor && actor._bridgeMovementState && actor._bridgeMovementState.onBridge === true) {
+            return actor.isJumping === true ? null : "onBridge";
+        }
+        if (actor && actor.isJumping !== true && this.getGroundBridgeRoadAtPoint(px, py, options && options.bridgeRoads)) {
+            return "onBridge";
+        }
+        const immersion = this.getGroundTerrainWaterImmersionAtPoint(px, py);
+        if (!immersion || immersion.inWater !== true) return null;
+        const submergedDepth = Number.isFinite(Number(immersion.submergedDepth))
+            ? Math.max(0, Number(immersion.submergedDepth))
+            : 0;
+        return submergedDepth > climbDepth ? "swimming" : null;
+    }
+
+    getGroundBridgeMovementBarrierSegments(actor = null, fromX = null, fromY = null, toX = null, toY = null, radius = 0, options = {}) {
+        const startX = Number(fromX);
+        const startY = Number(fromY);
+        const endX = Number(toX);
+        const endY = Number(toY);
+        const resolvedRadius = Math.max(0, Number(radius) || 0);
+        if (!Number.isFinite(startX) || !Number.isFinite(startY) || !Number.isFinite(endX) || !Number.isFinite(endY)) {
+            throw new Error("bridge barrier segment query requires finite movement points");
+        }
+        const bridgeMode = this.getGroundBridgeBarrierMovementMode(actor, startX, startY, options);
+        if (!bridgeMode) return [];
+        const climbDepth = Number.isFinite(Number(options && options.maxClimbSubmergedDepth))
+            ? Math.max(0, Number(options.maxClimbSubmergedDepth))
+            : 0.25;
+        const roads = Array.isArray(options && options.bridgeRoads)
+            ? options.bridgeRoads
+            : this.collectGroundBridgeRoadsInBounds({
+                minX: Math.min(startX, endX) - resolvedRadius,
+                minY: Math.min(startY, endY) - resolvedRadius,
+                maxX: Math.max(startX, endX) + resolvedRadius,
+                maxY: Math.max(startY, endY) + resolvedRadius
+            });
+        if (roads.length === 0) return [];
+        const actorBridgeRoad = bridgeMode === "onBridge" && actor && actor._bridgeMovementState
+            ? actor._bridgeMovementState.road || null
+            : null;
+        const out = [];
+        for (let i = 0; i < roads.length; i++) {
+            const entry = roads[i];
+            const road = entry && entry.road ? entry.road : entry;
+            if (actorBridgeRoad && road !== actorBridgeRoad) continue;
+            const polygon = entry && Array.isArray(entry.polygon)
+                ? entry.polygon
+                : this.getGroundBridgeRoadPolygon(road);
+            if (!polygon || polygon.length < 3) continue;
+            const segments = this.getGroundBridgeBlockingEdgeSegmentsForRoad(road, polygon, {
+                minSubmergedDepth: climbDepth
+            });
+            for (let j = 0; j < segments.length; j++) {
+                out.push({
+                    ...segments[j],
+                    bridge: road,
+                    bridgeMode
+                });
+            }
+        }
+        return out;
+    }
+
+    resolveGroundBridgeMovementSegmentCollision(fromX, fromY, toX, toY, radius = 0, options = {}) {
+        const startX = Number(fromX);
+        const startY = Number(fromY);
+        const endX = Number(toX);
+        const endY = Number(toY);
+        const resolvedRadius = Math.max(0, Number(radius) || 0);
+        if (!Number.isFinite(startX) || !Number.isFinite(startY) || !Number.isFinite(endX) || !Number.isFinite(endY)) {
+            throw new Error("bridge barrier movement collision requires finite movement points");
+        }
+        const moveX = endX - startX;
+        const moveY = endY - startY;
+        const moveLen = Math.hypot(moveX, moveY);
+        if (!(moveLen > 1e-9)) return null;
+        const actor = options && options.actor ? options.actor : null;
+        const segments = Array.isArray(options && options.bridgeBarrierSegments)
+            ? options.bridgeBarrierSegments
+            : this.getGroundBridgeMovementBarrierSegments(actor, startX, startY, endX, endY, resolvedRadius, options);
+        if (segments.length === 0) return null;
+        let best = null;
+        const eps = 1e-7;
+        for (let i = 0; i < segments.length; i++) {
+            const segment = segments[i];
+            const ax = Number(segment && segment.ax);
+            const ay = Number(segment && segment.ay);
+            const bx = Number(segment && segment.bx);
+            const by = Number(segment && segment.by);
+            const insideNormalX = Number(segment && segment.insideNormalX);
+            const insideNormalY = Number(segment && segment.insideNormalY);
+            if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by) ||
+                !Number.isFinite(insideNormalX) || !Number.isFinite(insideNormalY)) {
+                continue;
+            }
+            const edgeX = bx - ax;
+            const edgeY = by - ay;
+            const denom = moveX * edgeY - moveY * edgeX;
+            if (Math.abs(denom) <= eps) continue;
+            const relX = ax - startX;
+            const relY = ay - startY;
+            const t = (relX * edgeY - relY * edgeX) / denom;
+            const u = (relX * moveY - relY * moveX) / denom;
+            if (t < -eps || t > 1 + eps || u < -eps || u > 1 + eps) continue;
+
+            const fromSide = (startX - ax) * insideNormalX + (startY - ay) * insideNormalY;
+            const toSide = (endX - ax) * insideNormalX + (endY - ay) * insideNormalY;
+            const mode = segment.bridgeMode === "onBridge" ? "onBridge" : "swimming";
+            const crossesBlockedSide = mode === "onBridge"
+                ? fromSide >= -eps && toSide < -eps
+                : fromSide <= eps && toSide > eps;
+            if (!crossesBlockedSide) continue;
+            if (best && t >= best.t) continue;
+            const normalX = mode === "onBridge" ? insideNormalX : -insideNormalX;
+            const normalY = mode === "onBridge" ? insideNormalY : -insideNormalY;
+            const normalLen = Math.hypot(normalX, normalY);
+            if (!(normalLen > 1e-9)) continue;
+            const backoff = Math.max(0.005, Math.min(0.03, Math.max(resolvedRadius, 0.1) * 0.15));
+            const safeT = Math.max(0, Math.min(1, t - backoff / moveLen));
+            best = {
+                t,
+                x: startX + moveX * safeT,
+                y: startY + moveY * safeT,
+                normalX: normalX / normalLen,
+                normalY: normalY / normalLen,
+                bridge: segment.bridge || null,
+                bridgeMode: mode
+            };
+        }
+        if (!best) return null;
+        return {
+            x: best.x,
+            y: best.y,
+            pushX: best.normalX * Math.max(0.05, Math.min(0.15, resolvedRadius || 0.05)),
+            pushY: best.normalY * Math.max(0.05, Math.min(0.15, resolvedRadius || 0.05)),
+            normalX: best.normalX,
+            normalY: best.normalY,
+            hasNormal: true,
+            bridge: best.bridge,
+            bridgeMode: best.bridgeMode
+        };
+    }
+
+    getGroundTerrainWaterImmersionAtPoint(x, y, options = {}) {
+        const px = Number(x);
+        const py = Number(y);
+        if (!Number.isFinite(px) || !Number.isFinite(py)) {
+            throw new Error("water immersion query requires a finite point");
+        }
+        const rawTraversalLayer = Number(options && options.traversalLayer);
+        const traversalLayer = Number.isFinite(rawTraversalLayer)
+            ? Math.round(rawTraversalLayer)
+            : 0;
+        const defaultSlope = Number.isFinite(Number(options && options.slope))
+            ? Math.max(0, Number(options.slope))
+            : (2 / 3);
+        const defaultMaxDepth = Number.isFinite(Number(options && options.maxDepth))
+            ? Math.max(0, Number(options.maxDepth))
+            : (2 / 3);
+        if (traversalLayer !== 0) {
+            return { inWater: false, distanceToShore: 0, submergedDepth: 0, slope: defaultSlope, maxDepth: defaultMaxDepth };
+        }
+        const candidates = this.collectGroundTerrainCollisionPolygons({
+            minX: px,
+            minY: py,
+            maxX: px,
+            maxY: py
+        });
+        let bestDistanceSq = Infinity;
+        let bestPolygon = null;
+        for (let i = 0; i < candidates.length; i++) {
+            const entry = candidates[i];
+            const polygon = entry && entry.polygon ? entry.polygon : null;
+            if (!polygon || entry.terrainType !== "water") continue;
+            if (!this.terrainPolygonContainsPoint(polygon, px, py)) continue;
+            const distanceSq = this.getGroundTerrainWaterShoreDistanceSqForPolygon(px, py, polygon);
+            if (distanceSq < bestDistanceSq) {
+                bestDistanceSq = distanceSq;
+                bestPolygon = polygon;
+            }
+        }
+        if (!bestPolygon) {
+            return { inWater: false, distanceToShore: 0, submergedDepth: 0, slope: defaultSlope, maxDepth: defaultMaxDepth };
+        }
+        if (!Number.isFinite(bestDistanceSq)) bestDistanceSq = 0;
+        const distanceToShore = Math.sqrt(Math.max(0, bestDistanceSq));
+        const polygonSlope = Number.isFinite(Number(bestPolygon.depthSlope))
+            ? Number(bestPolygon.depthSlope)
+            : (Number.isFinite(Number(bestPolygon.waterDepthSlope)) ? Number(bestPolygon.waterDepthSlope) : defaultSlope);
+        const polygonMaxDepth = Number.isFinite(Number(bestPolygon.maxDepth))
+            ? Number(bestPolygon.maxDepth)
+            : (Number.isFinite(Number(bestPolygon.waterMaxDepth)) ? Number(bestPolygon.waterMaxDepth) : defaultMaxDepth);
+        const slope = Math.max(0, polygonSlope);
+        const maxDepth = Math.max(0, polygonMaxDepth);
+        return {
+            inWater: true,
+            distanceToShore,
+            submergedDepth: Math.min(maxDepth, distanceToShore * slope),
+            slope,
+            maxDepth,
+            polygon: bestPolygon
+        };
     }
 
     collectGroundTerrainSectionContinuitySourceNodes(sectionKey) {
@@ -11230,6 +11929,7 @@ class GameMap {
             const replacements = resultPolygonsByType.get(type) || [];
             const typeRecords = participatingRecords.filter(record => record.polygon.type === type);
             if (typeRecords.length === 0) {
+                this.markGroundTerrainPolygonsGenerated(replacements);
                 patchedPolygonsByType.set(type, replacements);
                 continue;
             }
@@ -11239,6 +11939,50 @@ class GameMap {
                 suppressPriorityInversion: nextType === "grass" &&
                     this.getGroundTerrainEditPriority(nextType) > this.getGroundTerrainEditPriority(type)
             };
+            const typeRecordsAreGenerated = typeRecords.every(record => (
+                this.groundTerrainPolygonHasGeneratedSignature(record.polygon)
+            ));
+            if (typeRecordsAreGenerated) {
+                const seedNodes = patchNodes.filter(patchNode => (
+                    patchNode &&
+                    patchNode._prototypeVoid !== true &&
+                    this.getGroundTerrainTypeForNode(patchNode) === type
+                ));
+                const componentNodes = this.collectGroundTerrainConnectedComponentNodesForType(type, seedNodes);
+                const rebuiltPolygons = componentNodes.length > 0
+                    ? this.buildGroundTerrainPolygonsFromNodes(componentNodes)
+                    : [];
+                patchedPolygonsByType.set(type, rebuiltPolygons);
+                debugRawReplacementSegments.push(...this.collectGroundTerrainDebugPolygonSegments(rebuiltPolygons));
+                continue;
+            }
+            if (typeRecords.length > 1) {
+                const repairedReplacements = this.getGroundTerrainAffectedReplacementPolygonsForType(
+                    type,
+                    replacements,
+                    affectedNodeKeys,
+                    vertexSlotsByPointKey,
+                    affectedNodes,
+                    repairOptions
+                );
+                patchedPolygonsByType.set(
+                    type,
+                    Array.isArray(repairedReplacements && repairedReplacements.polygons)
+                        ? repairedReplacements.polygons
+                        : []
+                );
+                debugRawReplacementSegments.push(...(
+                    Array.isArray(repairedReplacements && repairedReplacements.rawReplacementSegments)
+                        ? repairedReplacements.rawReplacementSegments
+                        : []
+                ));
+                debugReplacementSegments.push(...(
+                    Array.isArray(repairedReplacements && repairedReplacements.replacementSegments)
+                        ? repairedReplacements.replacementSegments
+                        : []
+                ));
+                continue;
+            }
             for (let i = 0; i < typeRecords.length; i++) {
                 const repaired = this.repairGroundTerrainPolygonVertices(
                     typeRecords[i].polygon,
@@ -11348,6 +12092,7 @@ class GameMap {
                 rawReplacementSegments: debugRawReplacementSegments,
                 modifiedSegments
             });
+            this.invalidateGroundBridgeBarrierCache();
         } else {
             const nextPolygons = records
                 .filter(record => !record.participating)
@@ -11370,6 +12115,7 @@ class GameMap {
                 rawReplacementSegments: debugRawReplacementSegments,
                 modifiedSegments
             });
+            this.invalidateGroundBridgeBarrierCache();
         }
         return true;
     }
@@ -11418,6 +12164,39 @@ class GameMap {
             groups.push(group);
         }
         return groups;
+    }
+
+    collectGroundTerrainConnectedComponentNodesForType(type, seedNodes, options = {}) {
+        this.getGroundTerrainTextureIdForType(type);
+        const sourceSeeds = Array.isArray(seedNodes) ? seedNodes : [];
+        const sectionKey = options && typeof options.sectionKey === "string" ? options.sectionKey : "";
+        const dirs = [1, 3, 5, 7, 9, 11];
+        const nodes = [];
+        const visited = new Set();
+        const queue = [];
+        const enqueue = (candidate) => {
+            if (!candidate || candidate._prototypeVoid === true) return;
+            if (this.getGroundTerrainTypeForNode(candidate) !== type) return;
+            if (sectionKey) {
+                const candidateSectionKey = typeof candidate._prototypeSectionKey === "string" && candidate._prototypeSectionKey.length > 0
+                    ? candidate._prototypeSectionKey
+                    : (typeof candidate.ownerSectionKey === "string" ? candidate.ownerSectionKey : "");
+                if (candidateSectionKey !== sectionKey) return;
+            }
+            const key = this.getGroundTerrainNodeKey(candidate);
+            if (visited.has(key)) return;
+            visited.add(key);
+            queue.push(candidate);
+        };
+        for (let i = 0; i < sourceSeeds.length; i++) enqueue(sourceSeeds[i]);
+        for (let q = 0; q < queue.length; q++) {
+            const node = queue[q];
+            nodes.push(node);
+            for (let d = 0; d < dirs.length; d++) {
+                enqueue(this.getGroundTerrainNeighborNodeForDirection(node, dirs[d]));
+            }
+        }
+        return nodes;
     }
 
     buildGroundTerrainPolygonsFromNodes(nodes, options = {}) {
@@ -11477,7 +12256,7 @@ class GameMap {
                 out.push(holes.length > 0 ? { type: group.type, points, holes } : { type: group.type, points });
             }
         }
-        return out;
+        return this.markGroundTerrainPolygonsGenerated(out);
     }
 
     rebuildGroundTerrainPolygonsForSection(sectionKey) {
@@ -11488,6 +12267,7 @@ class GameMap {
         const polygons = this.buildGroundTerrainPolygonsForSection(sectionKey);
         asset.terrainPolygons = polygons;
         asset._level0GroundSurfaceVersion = (Number(asset._level0GroundSurfaceVersion) || 0) + 1;
+        this.invalidateGroundBridgeBarrierCache();
         return polygons;
     }
 
@@ -11505,6 +12285,7 @@ class GameMap {
         const polygons = this.buildGroundTerrainPolygonsFromNodes(nodes);
         this.terrainPolygons = polygons;
         this._level0GroundSurfaceVersion = (Number(this._level0GroundSurfaceVersion) || 0) + 1;
+        this.invalidateGroundBridgeBarrierCache();
         return polygons;
     }
 

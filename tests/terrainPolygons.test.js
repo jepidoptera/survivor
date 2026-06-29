@@ -663,6 +663,419 @@ test("water line on grass matches the water left by a desert negative of the sam
     );
 });
 
+test("water line painted into an existing body matches the same line painted outward", () => {
+    const initialWaterCoords = [
+        [18, 13], [18, 14], [18, 15], [18, 16],
+        [19, 12], [19, 13], [19, 14], [19, 15], [19, 16],
+        [20, 12], [20, 13], [20, 14], [20, 15], [20, 16],
+        [21, 12], [21, 13], [21, 14], [21, 15], [21, 16],
+        [22, 12], [22, 13], [22, 14], [22, 15]
+    ];
+    const lineCoords = [
+        [19, 17], [19, 18], [20, 18], [19, 19], [19, 20],
+        [20, 20], [20, 21], [20, 22], [21, 23], [20, 23],
+        [20, 24], [21, 25], [22, 25], [21, 26]
+    ];
+    const makeMap = () => {
+        const map = createTerrainPatchMap(36, 30);
+        const waterId = map.getGroundTerrainTextureIdForType("water", 0, 0);
+        const initialWaterNodes = [];
+        for (const [x, y] of initialWaterCoords) {
+            const node = map.nodes[x][y];
+            node.groundTextureId = waterId;
+            initialWaterNodes.push(node);
+        }
+        map.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes(initialWaterNodes);
+        return map;
+    };
+    const paintLine = (map, coords) => {
+        for (const [x, y] of coords) {
+            const node = map.nodes[x][y];
+            if (map.getGroundTerrainTypeForNode(node) !== "water") {
+                assert.equal(map.replaceGroundTerrainPolygonPatch(node, "water"), true);
+            }
+        }
+    };
+    const outwardMap = makeMap();
+    const inwardMap = makeMap();
+
+    paintLine(outwardMap, lineCoords);
+    paintLine(inwardMap, lineCoords.slice().reverse());
+
+    assert.deepEqual(
+        canonicalTerrainPolygonsForType(inwardMap, inwardMap.terrainPolygons, "water"),
+        canonicalTerrainPolygonsForType(outwardMap, outwardMap.terrainPolygons, "water")
+    );
+});
+
+test("water line cut across the middle matches painting the separated segments", () => {
+    const waterLineCoords = [
+        [8, 14], [9, 14], [10, 14], [11, 14],
+        [12, 14], [13, 14], [14, 14], [15, 14],
+        [16, 14], [17, 14], [18, 14], [19, 14],
+        [20, 14], [21, 14], [22, 14], [23, 14]
+    ];
+    const cutCoords = [
+        [14, 13], [15, 13],
+        [14, 14], [15, 14], [16, 14],
+        [15, 15], [16, 15]
+    ];
+    const cutCoordKeys = new NativeSet(cutCoords.map(([x, y]) => `${x},${y}`));
+    const paintCoords = (map, coords, terrainType) => {
+        for (const [x, y] of coords) {
+            const node = map.nodes[x][y];
+            if (map.getGroundTerrainTypeForNode(node) !== terrainType) {
+                assert.equal(map.replaceGroundTerrainPolygonPatch(node, terrainType), true);
+            }
+        }
+    };
+    const cutMap = createTerrainPatchMap(32, 28);
+    const separatedMap = createTerrainPatchMap(32, 28);
+
+    paintCoords(cutMap, waterLineCoords, "water");
+    paintCoords(cutMap, cutCoords, "grass");
+    paintCoords(
+        separatedMap,
+        waterLineCoords.filter(([x, y]) => !cutCoordKeys.has(`${x},${y}`)),
+        "water"
+    );
+
+    assert.deepEqual(
+        canonicalTerrainPolygonsForType(cutMap, cutMap.terrainPolygons, "water"),
+        canonicalTerrainPolygonsForType(separatedMap, separatedMap.terrainPolygons, "water")
+    );
+    assert.equal(cutMap.terrainPolygons.filter(polygon => polygon.type === "water").length, 2);
+    assert.equal(separatedMap.terrainPolygons.filter(polygon => polygon.type === "water").length, 2);
+});
+
+test("section water line cut across the middle matches painting separated segments", () => {
+    const makeSectionMap = () => {
+        const map = createTerrainPatchMap(32, 28);
+        const sectionKey = "0,0";
+        const sectionNodes = [];
+        for (let x = 0; x < map.width; x++) {
+            for (let y = 0; y < map.height; y++) {
+                const node = map.nodes[x][y];
+                node._prototypeSectionKey = sectionKey;
+                sectionNodes.push(node);
+            }
+        }
+        const asset = {
+            key: sectionKey,
+            tileCoordKeys: sectionNodes.map(node => `${node.xindex},${node.yindex}`),
+            groundTiles: {},
+            terrainPolygons: [],
+            sectionPolygon: getSectionPolygonForNodes(map, sectionNodes),
+            _level0GroundSurfaceVersion: 0
+        };
+        map._prototypeSectionState = {
+            nodesBySectionKey: new NativeMap([[sectionKey, sectionNodes]]),
+            sectionAssetsByKey: new NativeMap([[sectionKey, asset]])
+        };
+        map.getPrototypeSectionAsset = (key) => map._prototypeSectionState.sectionAssetsByKey.get(key) || null;
+        return { map, asset, sectionKey };
+    };
+    const paintCoords = (fixture, coords, terrainType) => {
+        for (const [x, y] of coords) {
+            const node = fixture.map.nodes[x][y];
+            if (fixture.map.getGroundTerrainTypeForNode(node) !== terrainType) {
+                assert.equal(fixture.map.replaceGroundTerrainPolygonPatch(node, terrainType, {
+                    asset: fixture.asset,
+                    sectionKey: fixture.sectionKey
+                }), true);
+            }
+        }
+    };
+    const waterLineCoords = [
+        [8, 14], [9, 14], [10, 14], [11, 14],
+        [12, 14], [13, 14], [14, 14], [15, 14],
+        [16, 14], [17, 14], [18, 14], [19, 14],
+        [20, 14], [21, 14], [22, 14], [23, 14]
+    ];
+    const cutCoords = [
+        [14, 13], [15, 13],
+        [14, 14], [15, 14], [16, 14],
+        [15, 15], [16, 15]
+    ];
+    const cutCoordKeys = new NativeSet(cutCoords.map(([x, y]) => `${x},${y}`));
+    const cutFixture = makeSectionMap();
+    const separatedFixture = makeSectionMap();
+
+    paintCoords(cutFixture, waterLineCoords, "water");
+    paintCoords(cutFixture, cutCoords, "grass");
+    paintCoords(
+        separatedFixture,
+        waterLineCoords.filter(([x, y]) => !cutCoordKeys.has(`${x},${y}`)),
+        "water"
+    );
+
+    assert.deepEqual(
+        canonicalTerrainPolygonsForType(cutFixture.map, cutFixture.asset.terrainPolygons, "water"),
+        canonicalTerrainPolygonsForType(separatedFixture.map, separatedFixture.asset.terrainPolygons, "water")
+    );
+    assert.equal(cutFixture.asset.terrainPolygons.filter(polygon => polygon.type === "water").length, 2);
+    assert.equal(separatedFixture.asset.terrainPolygons.filter(polygon => polygon.type === "water").length, 2);
+});
+
+test("water immersion query reports shore distance and slope depth", () => {
+    const map = createTerrainPatchMap(16, 16);
+    const waterNodes = [];
+    for (let x = 5; x <= 9; x++) {
+        for (let y = 5; y <= 9; y++) {
+            const node = map.nodes[x][y];
+            node.groundTextureId = map.getGroundTerrainTextureIdForType("water", x, y);
+            waterNodes.push(node);
+        }
+    }
+    map.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes(waterNodes);
+    const center = map.nodes[7][7];
+    const centerImmersion = map.getGroundTerrainWaterImmersionAtPoint(center.x, center.y, {
+        slope: 0.25,
+        maxDepth: 10
+    });
+
+    assert.equal(centerImmersion.inWater, true);
+    assert.ok(centerImmersion.distanceToShore > 0);
+    assert.equal(centerImmersion.submergedDepth, centerImmersion.distanceToShore * 0.25);
+    assert.equal(centerImmersion.maxDepth, 10);
+
+    const defaultImmersion = map.getGroundTerrainWaterImmersionAtPoint(center.x, center.y);
+    assert.equal(defaultImmersion.slope, 2 / 3);
+    assert.equal(defaultImmersion.maxDepth, 2 / 3);
+    assert.equal(defaultImmersion.submergedDepth, Math.min(2 / 3, defaultImmersion.distanceToShore * (2 / 3)));
+
+    const grass = map.getGroundTerrainWaterImmersionAtPoint(map.nodes[2][2].x, map.nodes[2][2].y);
+    assert.equal(grass.inWater, false);
+    assert.equal(grass.distanceToShore, 0);
+    assert.equal(grass.submergedDepth, 0);
+    assert.equal(grass.slope, 2 / 3);
+    assert.equal(grass.maxDepth, 2 / 3);
+
+    const upperLayer = map.getGroundTerrainWaterImmersionAtPoint(center.x, center.y, { traversalLayer: 1 });
+    assert.equal(upperLayer.inWater, false);
+
+    const rectangularWaterMap = createTerrainPatchMap(8, 8);
+    rectangularWaterMap.terrainPolygons = [{
+        type: "water",
+        points: [
+            { x: 0, y: 0 },
+            { x: 4, y: 0 },
+            { x: 4, y: 4 },
+            { x: 0, y: 4 }
+        ]
+    }];
+    const oneMeterImmersion = rectangularWaterMap.getGroundTerrainWaterImmersionAtPoint(1, 1);
+    assert.equal(oneMeterImmersion.distanceToShore, 1);
+    assert.equal(oneMeterImmersion.submergedDepth, 2 / 3);
+});
+
+test("water immersion ignores section boundary when water continues across it", () => {
+    const rect = (minX, minY, maxX, maxY) => ({
+        type: "water",
+        points: [
+            { x: minX, y: minY },
+            { x: maxX, y: minY },
+            { x: maxX, y: maxY },
+            { x: minX, y: maxY }
+        ]
+    });
+    const makeMap = (includeRightSection) => {
+        const map = createTerrainPatchMap(4, 4);
+        map.terrainPolygons = [];
+        const leftAsset = {
+            key: "left",
+            terrainPolygons: [rect(0, 0, 1, 1)]
+        };
+        const entries = [["left", leftAsset]];
+        if (includeRightSection) {
+            entries.push(["right", {
+                key: "right",
+                terrainPolygons: [rect(1, 0, 2, 1)]
+            }]);
+        }
+        map._prototypeSectionState = {
+            sectionAssetsByKey: new NativeMap(entries),
+            loadedSectionAssetKeys: new NativeSet(entries.map(([key]) => key))
+        };
+        return map;
+    };
+
+    const seamPointX = 0.95;
+    const seamPointY = 0.5;
+    const leftOnly = makeMap(false).getGroundTerrainWaterImmersionAtPoint(seamPointX, seamPointY);
+    const continuous = makeMap(true).getGroundTerrainWaterImmersionAtPoint(seamPointX, seamPointY);
+
+    assert.equal(leftOnly.inWater, true);
+    assert.ok(Math.abs(leftOnly.distanceToShore - 0.05) < 1e-6);
+    assert.equal(continuous.inWater, true);
+    assert.ok(
+        Math.abs(continuous.distanceToShore - 0.5) < 1e-6,
+        `expected nearest true shore to be 0.5, got ${continuous.distanceToShore}`
+    );
+});
+
+test("road over water acts as bridge collision depending on swim depth and jump state", () => {
+    const map = createTerrainPatchMap(12, 12);
+    map.terrainPolygons = [{
+        type: "water",
+        points: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 }
+        ]
+    }];
+    const bridgeRoad = {
+        type: "roadPath",
+        outlinePolygon: [
+            { x: 4, y: 0 },
+            { x: 6, y: 0 },
+            { x: 6, y: 10 },
+            { x: 4, y: 10 }
+        ]
+    };
+    map.objects = [bridgeRoad];
+
+    const deepSwimmer = { currentLayer: 0, _bridgeMovementState: null };
+    const deepCollision = map.resolveGroundBridgeHitboxCollision(
+        { type: "circle", x: 3.95, y: 5, radius: 0.2 },
+        { actor: deepSwimmer }
+    );
+    assert.ok(deepCollision, "deep water swimmer should collide with bridge edge");
+    assert.ok(deepCollision.pushX < 0, "deep water swimmer should be pushed away from the bridge");
+
+    const shallowRoad = {
+        type: "roadPath",
+        outlinePolygon: [
+            { x: 0.4, y: 0 },
+            { x: 1.4, y: 0 },
+            { x: 1.4, y: 10 },
+            { x: 0.4, y: 10 }
+        ]
+    };
+    map.terrainPolygons[0].maxDepth = 0.2;
+    if (typeof map.invalidateGroundBridgeBarrierCache === "function") map.invalidateGroundBridgeBarrierCache();
+    map.objects = [shallowRoad];
+    const shallowCollision = map.resolveGroundBridgeHitboxCollision(
+        { type: "circle", x: 0.35, y: 5, radius: 0.2 },
+        { actor: { currentLayer: 0 } }
+    );
+    assert.equal(shallowCollision, null);
+
+    const shallowActor = { currentLayer: 0 };
+    const shallowState = map.applyActorBridgeMovementState(shallowActor, 0.5, 5);
+    assert.equal(shallowState && shallowState.onBridge, true);
+
+    delete map.terrainPolygons[0].maxDepth;
+    if (typeof map.invalidateGroundBridgeBarrierCache === "function") map.invalidateGroundBridgeBarrierCache();
+    map.objects = [bridgeRoad];
+    const bridgeWalker = {
+        currentLayer: 0,
+        _bridgeMovementState: { onBridge: true, road: bridgeRoad }
+    };
+    const edgeCollision = map.resolveGroundBridgeHitboxCollision(
+        { type: "circle", x: 4.1, y: 5, radius: 0.25 },
+        { actor: bridgeWalker }
+    );
+    assert.ok(edgeCollision, "bridge walker should collide with bridge edge");
+    assert.ok(edgeCollision.pushX > 0, "bridge walker should be pushed back onto the bridge");
+
+    const walkedOffCollision = map.resolveGroundBridgeHitboxCollision(
+        { type: "circle", x: 3.95, y: 5, radius: 0.25 },
+        { actor: bridgeWalker }
+    );
+    assert.ok(walkedOffCollision, "bridge walker should be blocked after stepping over a bridge edge");
+    assert.ok(walkedOffCollision.pushX > 0, "bridge walker past the edge should be pushed back onto the bridge");
+
+    const walkedAcrossSegmentCollision = map.resolveGroundBridgeMovementSegmentCollision(
+        4.5,
+        5,
+        3.5,
+        5,
+        0.25,
+        { actor: bridgeWalker }
+    );
+    assert.ok(walkedAcrossSegmentCollision, "bridge walker should be blocked when crossing a bridge edge segment");
+    assert.ok(walkedAcrossSegmentCollision.normalX > 0, "bridge walker crossing should be pushed back toward the bridge");
+
+    const roadWalkerWithoutCachedState = { currentLayer: 0 };
+    const roadPointSegmentCollision = map.resolveGroundBridgeMovementSegmentCollision(
+        4.5,
+        5,
+        3.5,
+        5,
+        0.25,
+        { actor: roadWalkerWithoutCachedState }
+    );
+    assert.ok(roadPointSegmentCollision, "road point over water should still be treated as bridge-side movement");
+    assert.ok(roadPointSegmentCollision.normalX > 0, "road point crossing should be pushed back toward the bridge");
+
+    const swamAcrossSegmentCollision = map.resolveGroundBridgeMovementSegmentCollision(
+        3.5,
+        5,
+        4.5,
+        5,
+        0.25,
+        { actor: deepSwimmer }
+    );
+    assert.ok(swamAcrossSegmentCollision, "deep water swimmer should be blocked when crossing onto a bridge segment");
+    assert.ok(swamAcrossSegmentCollision.normalX < 0, "deep swimmer crossing should be pushed back into the water");
+
+    bridgeWalker.isJumping = true;
+    const jumpCollision = map.resolveGroundBridgeHitboxCollision(
+        { type: "circle", x: 4.1, y: 5, radius: 0.25 },
+        { actor: bridgeWalker }
+    );
+    assert.equal(jumpCollision, null);
+    const jumpedAcrossSegmentCollision = map.resolveGroundBridgeMovementSegmentCollision(
+        4.5,
+        5,
+        3.5,
+        5,
+        0.25,
+        { actor: bridgeWalker }
+    );
+    assert.equal(jumpedAcrossSegmentCollision, null);
+});
+
+test("road path bridge collision uses section runtime road path registry", () => {
+    const map = createTerrainPatchMap(12, 12);
+    map.terrainPolygons = [{
+        type: "water",
+        points: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 }
+        ]
+    }];
+    map.objects = [];
+    const runtimeRoadPath = {
+        type: "roadPath",
+        _prototypeRuntimeRecord: true,
+        outlinePolygon: [
+            { x: 4, y: 0 },
+            { x: 6, y: 0 },
+            { x: 6, y: 10 },
+            { x: 4, y: 10 }
+        ]
+    };
+    map._prototypeObjectState = {
+        activeRuntimeObjectsByRecordId: new NativeMap([[42, runtimeRoadPath]]),
+        activeRuntimeObjects: [runtimeRoadPath]
+    };
+
+    const roads = map.collectGroundBridgeRoadsInBounds({ minX: 3.7, minY: 4, maxX: 4.2, maxY: 6 });
+    assert.equal(roads.length, 1);
+    assert.equal(roads[0].road, runtimeRoadPath);
+
+    const collision = map.resolveGroundBridgeHitboxCollision(
+        { type: "circle", x: 3.95, y: 5, radius: 0.2 },
+        { actor: { currentLayer: 0 } }
+    );
+    assert.ok(collision, "deep-water swimmer should collide with section runtime roadPath bridge");
+});
+
 test("terrain replacement path smoothing lets base grass take priority over water", () => {
     const map = createTerrainPatchMap();
     const center = map.nodes[4][4];
