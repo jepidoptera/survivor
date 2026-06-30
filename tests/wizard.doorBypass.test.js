@@ -808,6 +808,33 @@ test("wizard load normalizes stale generated outdoor ground fragment as ground s
     assert.equal(warnings.length, 0);
 });
 
+test("wizard load initializes bridge state for restored ground position", () => {
+    const bridgeRoad = { type: "roadPath" };
+    const loadedWizard = createMinimalLoadWizard({
+        applyActorBridgeMovementState(actor, x, y, options = {}) {
+            assert.equal(x, 4.5);
+            assert.equal(y, 5);
+            assert.equal(options.allowExistingBridgePosition, true);
+            actor._bridgeMovementState = { onBridge: true, road: bridgeRoad };
+            return actor._bridgeMovementState;
+        }
+    });
+
+    loadedWizard.loadJson({
+        x: 4.5,
+        y: 5,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        viewport: { x: 0, y: 0 }
+    });
+
+    assert.equal(loadedWizard.hasPendingSavedMovementSupport(), false);
+    assert.equal(loadedWizard._bridgeMovementState && loadedWizard._bridgeMovementState.onBridge, true);
+    assert.equal(loadedWizard._bridgeMovementState.road, bridgeRoad);
+});
+
 test("wizard load rejects missing viewport dimensions before camera restore", () => {
     const previousViewport = wizardVmContext.viewport;
     wizardVmContext.viewport = { x: 0, y: 0, width: NaN, height: 100 };

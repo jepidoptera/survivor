@@ -1121,6 +1121,15 @@ test("road over water acts as bridge collision depending on swim depth and jump 
     delete map.terrainPolygons[0].maxDepth;
     if (typeof map.invalidateGroundBridgeBarrierCache === "function") map.invalidateGroundBridgeBarrierCache();
     map.objects = [bridgeRoad];
+    const deepActor = { currentLayer: 0 };
+    const deepState = map.applyActorBridgeMovementState(deepActor, 4.5, 5);
+    assert.equal(deepState, null, "normal movement should not climb onto a deep-water bridge from swimming");
+    const restoredDeepActor = { currentLayer: 0 };
+    const restoredDeepState = map.applyActorBridgeMovementState(restoredDeepActor, 4.5, 5, {
+        allowExistingBridgePosition: true
+    });
+    assert.equal(restoredDeepState && restoredDeepState.onBridge, true, "load restore should keep an actor standing on a deep-water bridge");
+
     const bridgeWalker = {
         currentLayer: 0,
         _bridgeMovementState: { onBridge: true, road: bridgeRoad }

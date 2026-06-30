@@ -6019,6 +6019,21 @@ jQuery(() => {
         }
     }
 
+    function isSpellMenuPointerTarget(target) {
+        return !!(
+            target &&
+            typeof target.closest === "function" &&
+            target.closest("#spellMenu, #selectedSpell")
+        );
+    }
+
+    $(document).on("mousedown.spellMenuDismiss touchstart.spellMenuDismiss", event => {
+        if ($("#spellMenu").hasClass("hidden")) return;
+        if (isSpellMenuPointerTarget(event.target)) return;
+        $("#spellMenu").addClass("hidden");
+        clearSpellMenuKeyboardFocus();
+    });
+
     $("#selectedSpell").click(() => {
         if (!wizard || $("#spellSelector").hasClass("hidden")) return;
         const wasHidden = $("#spellMenu").hasClass('hidden');

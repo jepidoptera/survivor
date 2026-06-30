@@ -11069,10 +11069,11 @@ class GameMap {
         const previous = actor && actor._bridgeMovementState && actor._bridgeMovementState.onBridge === true
             ? actor._bridgeMovementState
             : null;
+        const allowExistingBridgePosition = options && options.allowExistingBridgePosition === true;
         const climbDepth = Number.isFinite(Number(options && options.maxClimbSubmergedDepth))
             ? Math.max(0, Number(options.maxClimbSubmergedDepth))
             : 0.25;
-        if (!previous && submergedDepth > climbDepth) return null;
+        if (!previous && !allowExistingBridgePosition && submergedDepth > climbDepth) return null;
         return {
             onBridge: true,
             road: bridge.road,

@@ -176,7 +176,10 @@
         }
       },
       "gravitateRadius": 0,
-      "gravitateSpeed": 0
+      "gravitateSpeed": 0,
+      "script": {
+        "playerTouches": "wizard.skillpoints += 1"
+      }
     },
     {
       "id": "spellbook2",
@@ -230,7 +233,10 @@
         }
       },
       "gravitateRadius": 0,
-      "gravitateSpeed": 0
+      "gravitateSpeed": 0,
+      "script": {
+        "playerTouches": "wizard.skillpoints += 1"
+      }
     },
     {
       "id": "wingboots",

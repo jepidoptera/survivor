@@ -6,7 +6,7 @@ let debugMode = false; // Toggle all debug graphics (hitboxes, grid, animal mark
 if (typeof globalThis !== "undefined") {
     globalThis.debugMode = debugMode;
 }
-let showTerrainPaintDiagnostics = false; // White/pink/yellow terrain edit outlines.
+let showTerrainPaintDiagnostics = true; // Terrain-colored polygon outlines plus pink/yellow terrain edit diagnostics.
 if (typeof globalThis !== "undefined") {
     globalThis.debugTerrainPolygonDiagnostics = showTerrainPaintDiagnostics;
 }

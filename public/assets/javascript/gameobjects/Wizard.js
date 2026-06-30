@@ -272,6 +272,7 @@ class Wizard extends Character {
         this.gameMode = WIZARD_GAME_MODE_GOD;
         this._adventureRespawnPending = false;
         this.unlockedMagic = [];
+        this.skillpoints = 0;
         this.difficulty = 2;
         this.magicRegenPerSecond = 8 - this.difficulty;
         this.activeAura = null;
@@ -2236,6 +2237,12 @@ class Wizard extends Character {
         if (!applied || applied.type !== support.type) {
             throw new Error("wizard save restored to invalid movement support");
         }
+        if (this.map && typeof this.map.applyActorBridgeMovementState === "function") {
+            this.map.applyActorBridgeMovementState(this, resolvedX, resolvedY, {
+                ...options,
+                allowExistingBridgePosition: true
+            });
+        }
         this.z = savedLocalZ;
         this._pendingSavedFloorMovementSupport = null;
         this.prevX = this.x;
@@ -2323,6 +2330,10 @@ class Wizard extends Character {
             activeAura: this.activeAura || null,
             activeAuras: Array.isArray(this.activeAuras) ? this.activeAuras.slice() : (this.activeAura ? [this.activeAura] : []),
             unlockedMagic: Array.isArray(this.unlockedMagic) ? this.unlockedMagic.slice() : [],
+            skillpoints: Number.isFinite(this.skillpoints) ? Math.max(0, Math.floor(Number(this.skillpoints))) : 0,
+            spellLevels: (this.spellLevels && typeof this.spellLevels === "object" && !Array.isArray(this.spellLevels))
+                ? { ...this.spellLevels }
+                : {},
             selectedFlooringTexture: this.selectedFlooringTexture,
             selectedTerrainType: this.selectedTerrainType,
             selectedTreeTextureVariant: this.selectedTreeTextureVariant,
@@ -2512,6 +2523,16 @@ class Wizard extends Character {
             this.activeAuras = (typeof data.activeAura === "string" && data.activeAura.length > 0) ? [data.activeAura] : [];
         }
         this.unlockedMagic = Array.isArray(data.unlockedMagic) ? data.unlockedMagic.slice() : [];
+        if (Number.isFinite(data.skillpoints)) {
+            this.skillpoints = Math.max(0, Math.floor(Number(data.skillpoints)));
+        } else if (!Number.isFinite(this.skillpoints)) {
+            this.skillpoints = 0;
+        }
+        if (data.spellLevels && typeof data.spellLevels === "object" && !Array.isArray(data.spellLevels)) {
+            this.spellLevels = { ...data.spellLevels };
+        } else if (!this.spellLevels || typeof this.spellLevels !== "object" || Array.isArray(this.spellLevels)) {
+            this.spellLevels = {};
+        }
         if (data.selectedFlooringTexture !== undefined) this.selectedFlooringTexture = data.selectedFlooringTexture;
         if (data.selectedTerrainType !== undefined) {
             this.selectedTerrainType = (typeof data.selectedTerrainType === "string")
