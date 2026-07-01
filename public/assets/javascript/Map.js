@@ -8928,8 +8928,10 @@ class GameMap {
         const groupPriority = this.getGroundTerrainEditPriority(groupType);
         let groupCount = 0;
         let higherPriorityNeighbor = false;
+        const terrainTypes = new Set();
         for (const slotKey of slots) {
             const slotType = this.getGroundTerrainTypeForSlotKey(slotKey, nodesByKey);
+            terrainTypes.add(slotType);
             if (slotType === groupType) {
                 groupCount += 1;
                 continue;
@@ -8941,13 +8943,20 @@ class GameMap {
         return {
             groupCount,
             nonGroupCount: 3 - groupCount,
-            higherPriorityNeighbor
+            higherPriorityNeighbor,
+            distinctTerrainTypeCount: terrainTypes.size
         };
     }
 
     getGroundTerrainBoundaryKeepNonGroupCount(type, slots, nodesByKey = null, options = {}) {
         const stats = this.getGroundTerrainBoundarySlotStats(type, slots, nodesByKey);
         const normalKeepNonGroupCount = options && options.isHole === true ? 1 : 2;
+        if (stats.distinctTerrainTypeCount >= 3 && stats.groupCount === 1) {
+            return {
+                ...stats,
+                keepNonGroupCount: 2
+            };
+        }
         return {
             ...stats,
             keepNonGroupCount: stats.higherPriorityNeighbor &&
@@ -10291,6 +10300,19 @@ class GameMap {
         return segments.join("|");
     }
 
+    getGroundTerrainRawRingSegmentSignature(points) {
+        const ring = this.simplifyGroundTerrainPolygonPoints(points);
+        if (ring.length < 3) return "";
+        const segments = [];
+        for (let i = 0; i < ring.length; i++) {
+            const a = this.getGroundTerrainRepairPointKey(ring[i]);
+            const b = this.getGroundTerrainRepairPointKey(ring[(i + 1) % ring.length]);
+            segments.push(a < b ? `${a}:${b}` : `${b}:${a}`);
+        }
+        segments.sort();
+        return segments.join("|");
+    }
+
     getGroundTerrainGeneratedPolygonSignature(polygon) {
         if (!polygon || typeof polygon.type !== "string" || polygon.type.length === 0) return "";
         const outerSignature = this.getGroundTerrainRepairRingSignature(polygon.points);
@@ -10786,6 +10808,80 @@ class GameMap {
             rawReplacementSegments,
             replacementSegments
         };
+    }
+
+    groundTerrainRingBoundaryContainsPoint(points, point, eps = this.getGroundTerrainVertexRepairEpsilon()) {
+        const ring = this.simplifyGroundTerrainPolygonPoints(points);
+        if (ring.length < 2) return false;
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+        const epsSq = eps * eps;
+        for (let i = 0; i < ring.length; i++) {
+            const a = ring[i];
+            const b = ring[(i + 1) % ring.length];
+            if (getPointSegmentDistanceSq2D(x, y, a.x, a.y, b.x, b.y) <= epsSq) return true;
+        }
+        return false;
+    }
+
+    groundTerrainRingContainsOrTouchesPoint(points, point) {
+        const ring = this.simplifyGroundTerrainPolygonPoints(points);
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        if (ring.length < 3 || !Number.isFinite(x) || !Number.isFinite(y)) return false;
+        return pointInPolygon2D(x, y, ring) || this.groundTerrainRingBoundaryContainsPoint(ring, { x, y });
+    }
+
+    groundTerrainRingContainsOrTouchesRing(container, contained) {
+        const source = this.simplifyGroundTerrainPolygonPoints(contained);
+        if (source.length < 3) return false;
+        for (let i = 0; i < source.length; i++) {
+            if (!this.groundTerrainRingContainsOrTouchesPoint(container, source[i])) return false;
+        }
+        return true;
+    }
+
+    canonicalizeGroundTerrainNestedPolygonBoundaries(polygons) {
+        const source = Array.isArray(polygons) ? polygons : [];
+        if (source.length < 2) return source;
+        const out = source.map(polygon => {
+            const points = this.simplifyGroundTerrainPolygonPoints(polygon && polygon.points);
+            if (!polygon || typeof polygon.type !== "string" || polygon.type.length === 0 || points.length < 3) {
+                return polygon;
+            }
+            const holes = Array.isArray(polygon.holes)
+                ? polygon.holes.map(hole => this.simplifyGroundTerrainPolygonPoints(hole))
+                : [];
+            return holes.length > 0
+                ? { type: polygon.type, points, holes }
+                : { type: polygon.type, points };
+        });
+        for (let p = 0; p < out.length; p++) {
+            const polygon = out[p];
+            const holes = Array.isArray(polygon && polygon.holes) ? polygon.holes : [];
+            if (!polygon || holes.length === 0) continue;
+            const nextHoles = [];
+            for (let h = 0; h < holes.length; h++) {
+                const hole = holes[h];
+                const matches = [];
+                for (let c = 0; c < out.length; c++) {
+                    if (c === p) continue;
+                    const candidate = out[c];
+                    if (!candidate || candidate.type === polygon.type) continue;
+                    if (!this.groundTerrainRingContainsOrTouchesRing(hole, candidate.points)) continue;
+                    matches.push(candidate);
+                }
+                if (matches.length > 1) {
+                    throw new Error(`terrain local patch found multiple inner polygons for ${polygon.type} hole`);
+                }
+                nextHoles.push(matches.length === 1
+                    ? matches[0].points.map(point => ({ x: Number(point.x), y: Number(point.y) }))
+                    : hole);
+            }
+            out[p] = { type: polygon.type, points: polygon.points, holes: nextHoles };
+        }
+        return out;
     }
 
     collectGroundTerrainPolygonRepairSourceNodes(options = {}) {
@@ -11958,11 +12054,16 @@ class GameMap {
                     polygon.type === nextType ||
                     polygon.type === currentType
                 ) && polygonTouchesTerrainPatchType(polygon, polygon.type);
+                const localBoundaryParticipating = !centerParticipating &&
+                    typeof polygon.type === "string" &&
+                    polygon.type !== "grass" &&
+                    this.groundTerrainPolygonTouchesAnyPatchHex(polygon, patchNodes) &&
+                    polygonTouchesTerrainPatchType(polygon, polygon.type);
                 records.push({
                     source,
                     sourceIndex: p,
                     polygon,
-                    participating: centerParticipating || sameTerrainPatchParticipating
+                    participating: centerParticipating || sameTerrainPatchParticipating || localBoundaryParticipating
                 });
             }
         }
@@ -12120,6 +12221,32 @@ class GameMap {
                 polygons.push(replacement);
             }
             patchedPolygonsByType.set(type, polygons);
+        }
+        const patchedPolygonsForCanonicalization = [];
+        for (const [, polygons] of patchedPolygonsByType.entries()) {
+            if (Array.isArray(polygons)) patchedPolygonsForCanonicalization.push(...polygons);
+        }
+        const patchedPolygonsForCanonicalizationCount = patchedPolygonsForCanonicalization.length;
+        for (let i = 0; i < records.length; i++) {
+            const record = records[i];
+            if (!record || record.participating) continue;
+            if (!this.groundTerrainPolygonTouchesAnyPatchHex(record.polygon, patchNodes)) continue;
+            patchedPolygonsForCanonicalization.push(record.polygon);
+        }
+        const canonicalPatchedPolygons = this.canonicalizeGroundTerrainNestedPolygonBoundaries(
+            patchedPolygonsForCanonicalization
+        ).slice(0, patchedPolygonsForCanonicalizationCount);
+        const canonicalPatchedPolygonsByType = new Map();
+        for (let i = 0; i < canonicalPatchedPolygons.length; i++) {
+            const polygon = canonicalPatchedPolygons[i];
+            if (!polygon || typeof polygon.type !== "string" || polygon.type.length === 0) continue;
+            if (!canonicalPatchedPolygonsByType.has(polygon.type)) {
+                canonicalPatchedPolygonsByType.set(polygon.type, []);
+            }
+            canonicalPatchedPolygonsByType.get(polygon.type).push(polygon);
+        }
+        for (const type of patchedPolygonsByType.keys()) {
+            patchedPolygonsByType.set(type, canonicalPatchedPolygonsByType.get(type) || []);
         }
         if (sectionKey || asset) {
             const sourceByKey = new Map(sources.map(source => [source.key, source]));
@@ -12299,7 +12426,7 @@ class GameMap {
             throw new Error("terrain polygon generation requires polygon clipping union");
         }
         const groups = this.collectGroundTerrainPolygonGroups(nodes, options);
-        const out = [];
+        const records = [];
         for (let g = 0; g < groups.length; g++) {
             const group = groups[g];
             const requiredSectionKey = typeof (options && options.requiredSectionKey) === "string"
@@ -12335,20 +12462,57 @@ class GameMap {
                 if (points.length < 3) {
                     throw new Error(`terrain polygon for ${group.type} produced fewer than three points`);
                 }
-                const holes = [];
+                const rawHoles = [];
                 for (let h = 1; h < polygon.length; h++) {
-                    const holePoints = this.smoothGroundTerrainPolygonPoints(
-                        clipRingToPolygonPoints2D(polygon[h], "terrain polygon hole ring"),
-                        group,
+                    rawHoles.push(clipRingToPolygonPoints2D(polygon[h], "terrain polygon hole ring"));
+                }
+                records.push({
+                    type: group.type,
+                    group,
+                    rawPoints: clipRingToPolygonPoints2D(polygon[0], "terrain polygon ring"),
+                    points,
+                    rawHoles
+                });
+            }
+        }
+        const recordsByRawOuterSignature = new Map();
+        for (let i = 0; i < records.length; i++) {
+            const signature = this.getGroundTerrainRawRingSegmentSignature(records[i].rawPoints);
+            if (!signature) continue;
+            let matchingRecords = recordsByRawOuterSignature.get(signature);
+            if (!matchingRecords) {
+                matchingRecords = [];
+                recordsByRawOuterSignature.set(signature, matchingRecords);
+            }
+            matchingRecords.push(records[i]);
+        }
+        const out = [];
+        for (let r = 0; r < records.length; r++) {
+            const record = records[r];
+            const holes = [];
+            for (let h = 0; h < record.rawHoles.length; h++) {
+                const rawHole = record.rawHoles[h];
+                const signature = this.getGroundTerrainRawRingSegmentSignature(rawHole);
+                const matchingRecords = (recordsByRawOuterSignature.get(signature) || [])
+                    .filter(candidate => candidate !== record && candidate.type !== record.type);
+                if (matchingRecords.length > 1) {
+                    throw new Error(`terrain polygon for ${record.type} found multiple matching inner boundaries for a hole`);
+                }
+                const holePoints = matchingRecords.length === 1
+                    ? matchingRecords[0].points
+                    : this.smoothGroundTerrainPolygonPoints(
+                        rawHole,
+                        record.group,
                         { isHole: true }
                     );
-                    if (holePoints.length < 3) {
-                        throw new Error(`terrain polygon for ${group.type} produced a hole with fewer than three points`);
-                    }
-                    holes.push(holePoints);
+                if (holePoints.length < 3) {
+                    throw new Error(`terrain polygon for ${record.type} produced a hole with fewer than three points`);
                 }
-                out.push(holes.length > 0 ? { type: group.type, points, holes } : { type: group.type, points });
+                holes.push(holePoints);
             }
+            out.push(holes.length > 0
+                ? { type: record.type, points: record.points, holes }
+                : { type: record.type, points: record.points });
         }
         return this.markGroundTerrainPolygonsGenerated(out);
     }

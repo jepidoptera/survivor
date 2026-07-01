@@ -68,11 +68,12 @@
     const LOS_SHADOW_DEPTH_BIAS_UNITS = GROUND_SHADOW_DEPTH_BIAS_UNITS;
     const WIZARD_SHADOW_DEPTH_BIAS_UNITS = GROUND_SHADOW_DEPTH_BIAS_UNITS;
     const WIZARD_HAT_LIFT_UNITS = 0.15;
-    const WIZARD_BODY_LOWER_UNITS = 0.25;
+    const WIZARD_BODY_VISUAL_LOWER_UNITS = 0.25;
+    const WIZARD_BODY_GROUND_DEPTH_BIAS_UNITS = 0.1;
     const WIZARD_WATER_DEPTH_SLOPE = 2 / 3;
     const WIZARD_WATER_MAX_DEPTH_UNITS = 2 / 3;
     const WIZARD_WATER_MIN_VISIBLE_BODY_RATIO = 1 / 3;
-    const BUILDING_INTERIOR_WIZARD_BODY_DEPTH_LIFT_UNITS = WIZARD_BODY_LOWER_UNITS + 0.02;
+    const BUILDING_INTERIOR_WIZARD_BODY_DEPTH_LIFT_UNITS = WIZARD_BODY_VISUAL_LOWER_UNITS + 0.02;
     const FLOOR_VISUAL_DEPTH_VS = `
 precision highp float;
 attribute vec2 aVertexPosition;
@@ -1377,6 +1378,10 @@ void main(void) {
             Number(wizard?.movementVector?.x) || 0,
             Number(wizard?.movementVector?.y) || 0
         );
+        const activeAuras = Array.isArray(wizard.activeAuras)
+            ? wizard.activeAuras
+            : (typeof wizard.activeAura === "string" ? [wizard.activeAura] : []);
+        const speedAuraAnimationMultiplier = activeAuras.includes("speed") ? 0.5 : 1;
         const wizardDead = !!wizard.dead;
         const isVisuallyMoving = !wizardDead && (!!wizard.moving || visualSpeed > 0.02);
         const rowIndex = Number.isInteger(wizard.lastDirectionRow)
@@ -1396,7 +1401,7 @@ void main(void) {
                 ? wizard.animationSpeedMultiplier
                 : 1;
             const simTicks = (nowMs / 1000) * simFrameRate;
-            const animFrame = Math.floor(simTicks * animSpeed * speedRatio / 2) % 8;
+            const animFrame = Math.floor(simTicks * animSpeed * speedAuraAnimationMultiplier * speedRatio / 2) % 8;
             const effectiveAnimFrame = wizard.isMovingBackward ? (7 - animFrame) : animFrame;
             frameIndex = rowIndex * 9 + 1 + effectiveAnimFrame;
         }
@@ -1602,6 +1607,7 @@ void main(void) {
             this.floorVisualTextureConfigCache = null;
             this.floorVisualTextureConfigPromise = null;
             this.floorVisualDepthState = null;
+            this.grassDepthRenderer = null;
             this.roadPathDepthState = null;
             this.stairRenderObjectById = new Map();
             this.stairMeshById = new Map();
@@ -9191,6 +9197,10 @@ void main(void) {
                 : (global.LOSVisualSettings || null);
             if (!settings || typeof settings !== "object") return fallback;
             return Object.prototype.hasOwnProperty.call(settings, key) ? settings[key] : fallback;
+        }
+
+        getLosNearRevealRadius() {
+            return LOS_NEAR_REVEAL_RADIUS;
         }
 
         isLosMazeModeEnabled() {
@@ -18424,6 +18434,7 @@ void main(void) {
                 Math.max(FLOOR_LEVEL0_CHUNK_CACHE_LIMIT * 4, visibleKeys.size * 2)
             );
             const trimMs = _pnow ? (_pnow() - trimStartMs) : 0;
+            this.renderGrassDepthEffect(ctx, entries);
             this.renderTerrainPolygonDiagnosticOverlay(ctx, entries);
             this.setFrameMetric("floorVisualPolygons", rendered);
             this.setFrameMetric("floorVisualMeshesCreated", meshesCreated);
@@ -18475,6 +18486,58 @@ void main(void) {
                 return;
             }
             debugRenderer.render(this, ctx, entries);
+        }
+
+        renderGrassDepthEffect(ctx, entries) {
+            const api = global.RenderingGrassBlades;
+            const requested = global.renderingGrassBladesEnabled === true || global.renderingGrassDepthEnabled === true;
+            if (requested && (!api || typeof api.Renderer !== "function")) {
+                throw new Error("grass blade effect is enabled but RenderingGrassBlades module is missing");
+            }
+            const enabled = !!(api && typeof api.isEnabled === "function" && api.isEnabled());
+            if (!enabled) {
+                if (this.grassDepthRenderer && typeof this.grassDepthRenderer.hide === "function") {
+                    this.grassDepthRenderer.hide();
+                }
+                this.setFrameMetric("grassDepthRendered", 0);
+                this.setFrameMetric("grassDepthRoots", 0);
+                this.setFrameMetric("grassDepthMs", 0);
+                this.setFrameMetric("grassDepthMaskMs", 0);
+                this.setFrameMetric("grassDepthMaskRebuilt", 0);
+                this.setFrameMetric("grassDepthLosShadow", 0);
+                this.setFrameMetric("grassDepthWizardShadow", 0);
+                this.setFrameMetric("grassDepthLayers", 0);
+                this.setFrameMetric("grassDepthChunks", 0);
+                this.setFrameMetric("grassDepthChunksBuilt", 0);
+                this.setFrameMetric("grassDepthChunksPending", 0);
+                this.setFrameMetric("grassDepthBlades", 0);
+                return false;
+            }
+            if (!this.grassDepthRenderer) {
+                this.grassDepthRenderer = new api.Renderer();
+            }
+            const perfNow = this.currentFrameMetrics &&
+                typeof performance !== "undefined" &&
+                performance &&
+                typeof performance.now === "function"
+                ? performance.now.bind(performance)
+                : null;
+            const startMs = perfNow ? perfNow() : 0;
+            const result = this.grassDepthRenderer.render(this, ctx, entries);
+            const elapsedMs = perfNow ? (perfNow() - startMs) : 0;
+            this.setFrameMetric("grassDepthRendered", Number(result && result.rendered) || 0);
+            this.setFrameMetric("grassDepthRoots", Number(result && result.roots) || 0);
+            this.setFrameMetric("grassDepthMs", elapsedMs);
+            this.setFrameMetric("grassDepthMaskMs", Number(result && result.maskMs) || 0);
+            this.setFrameMetric("grassDepthMaskRebuilt", Number(result && result.maskRebuilt) || 0);
+            this.setFrameMetric("grassDepthLosShadow", Number(result && result.losShadow) || 0);
+            this.setFrameMetric("grassDepthWizardShadow", Number(result && result.wizardShadow) || 0);
+            this.setFrameMetric("grassDepthLayers", Number(result && result.layers) || 0);
+            this.setFrameMetric("grassDepthChunks", Number(result && result.chunks) || 0);
+            this.setFrameMetric("grassDepthChunksBuilt", Number(result && result.chunksBuilt) || 0);
+            this.setFrameMetric("grassDepthChunksPending", Number(result && result.chunksPending) || 0);
+            this.setFrameMetric("grassDepthBlades", Number(result && result.blades) || 0);
+            return !!(result && result.rendered);
         }
 
         renderRoadsAndFloors(ctx, visibleNodes) {
@@ -20456,7 +20519,7 @@ void main(void) {
             ) ? BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS : 0;
             const wizardBodyDepthBump = wizardActiveFloorDepthBump > 0
                 ? wizardActiveFloorDepthBump + BUILDING_INTERIOR_WIZARD_BODY_DEPTH_LIFT_UNITS
-                : 0;
+                : WIZARD_BODY_GROUND_DEPTH_BIAS_UNITS;
             const pGround = this.camera.worldToScreen(renderPos.x, renderPos.y, wizardLayerBaseZ);
             const interpolatedJumpHeight = Number.isFinite(renderPos.z) ? renderPos.z : 0;
             let stairSurfaceLocalZ = NaN;
@@ -20512,7 +20575,7 @@ void main(void) {
                 wizardBodyFullWorldHeight
             );
             const wizardBodyVisibleRatio = deathAnimationActive ? 1 : wizardWaterRenderState.visibleRatio;
-            const wizardWaterLowerBodyScreenPx = WIZARD_BODY_LOWER_UNITS * this.camera.viewscale * this.camera.xyratio;
+            const wizardWaterLowerBodyScreenPx = WIZARD_BODY_VISUAL_LOWER_UNITS * this.camera.viewscale * this.camera.xyratio;
             wizardSprite.texture = deathAnimationActive
                 ? wizardBodySourceTexture
                 : this.getWizardWaterCroppedTexture(wizardBodySourceTexture, wizardBodyVisibleRatio);
@@ -20594,7 +20657,7 @@ void main(void) {
                 const savedZ = wizard.z;
                 wizard.x = renderPos.x;
                 wizard.y = renderPos.y;
-                wizard.z = wizardVisualLocalZ - WIZARD_BODY_LOWER_UNITS;
+                wizard.z = wizardVisualLocalZ - WIZARD_BODY_VISUAL_LOWER_UNITS;
                 wizardDepthMesh = staticProto.updateDepthBillboardMesh.call(wizard, ctx, this.camera, {
                     alphaCutoff: TREE_ALPHA_CUTOFF,
                     mazeMode: false,

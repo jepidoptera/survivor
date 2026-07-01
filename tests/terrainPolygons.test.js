@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const polygonClipping = require("polygon-clipping");
 
 function loadGameMap() {
     const context = {
@@ -69,6 +70,22 @@ function testBoundsOverlap(a, b) {
     return !(a.maxX < b.minX || b.maxX < a.minX || a.maxY < b.minY || b.maxY < a.minY);
 }
 
+function testPointInPolygon(x, y, points) {
+    const ring = Array.isArray(points) ? points : [];
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const xi = Number(ring[i] && ring[i].x);
+        const yi = Number(ring[i] && ring[i].y);
+        const xj = Number(ring[j] && ring[j].x);
+        const yj = Number(ring[j] && ring[j].y);
+        if (![xi, yi, xj, yj].every(Number.isFinite)) continue;
+        if (((yi > y) !== (yj > y)) && x < (((xj - xi) * (y - yi)) / (yj - yi)) + xi) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
 function testPointSegmentDistanceSq(px, py, ax, ay, bx, by) {
     const abx = bx - ax;
     const aby = by - ay;
@@ -97,6 +114,69 @@ function testRingCoversPointBoundary(points, x, y, eps = 1e-6) {
     return false;
 }
 
+function testSegmentsProperlyIntersect(a, b, c, d) {
+    if (!a || !b || !c || !d) return false;
+    const ax = Number(a.x);
+    const ay = Number(a.y);
+    const bx = Number(b.x);
+    const by = Number(b.y);
+    const cx = Number(c.x);
+    const cy = Number(c.y);
+    const dx = Number(d.x);
+    const dy = Number(d.y);
+    if (![ax, ay, bx, by, cx, cy, dx, dy].every(Number.isFinite)) return false;
+    const orient = (px, py, qx, qy, rx, ry) => ((qx - px) * (ry - py)) - ((qy - py) * (rx - px));
+    const o1 = orient(ax, ay, bx, by, cx, cy);
+    const o2 = orient(ax, ay, bx, by, dx, dy);
+    const o3 = orient(cx, cy, dx, dy, ax, ay);
+    const o4 = orient(cx, cy, dx, dy, bx, by);
+    return o1 * o2 < -1e-9 && o3 * o4 < -1e-9;
+}
+
+function collectTestTerrainPolygonSegments(polygons) {
+    const out = [];
+    const source = Array.isArray(polygons) ? polygons : [];
+    for (let p = 0; p < source.length; p++) {
+        const polygon = source[p];
+        if (!polygon) continue;
+        const rings = [polygon.points].concat(Array.isArray(polygon.holes) ? polygon.holes : []);
+        for (let r = 0; r < rings.length; r++) {
+            const ring = Array.isArray(rings[r]) ? rings[r] : [];
+            for (let i = 0; i < ring.length; i++) {
+                out.push({
+                    polygonIndex: p,
+                    ringIndex: r,
+                    pointIndex: i,
+                    ringLength: ring.length,
+                    type: polygon.type,
+                    a: ring[i],
+                    b: ring[(i + 1) % ring.length]
+                });
+            }
+        }
+    }
+    return out;
+}
+
+function testSegmentsAreAdjacent(a, b) {
+    if (!a || !b || a.polygonIndex !== b.polygonIndex || a.ringIndex !== b.ringIndex) return false;
+    const diff = Math.abs(a.pointIndex - b.pointIndex);
+    return diff === 1 || diff === Math.max(0, a.ringLength - 1);
+}
+
+function assertTerrainPolygonsHaveNoProperSegmentCrossings(polygons, label) {
+    const segments = collectTestTerrainPolygonSegments(polygons);
+    const crossings = [];
+    for (let a = 0; a < segments.length; a++) {
+        for (let b = a + 1; b < segments.length; b++) {
+            if (testSegmentsAreAdjacent(segments[a], segments[b])) continue;
+            if (!testSegmentsProperlyIntersect(segments[a].a, segments[a].b, segments[b].a, segments[b].b)) continue;
+            crossings.push(`${segments[a].type}[${segments[a].polygonIndex}:${segments[a].pointIndex}] x ${segments[b].type}[${segments[b].polygonIndex}:${segments[b].pointIndex}]`);
+        }
+    }
+    assert.deepEqual(crossings, [], label);
+}
+
 function testTerrainPolygonCoversPoint(map, polygon, x, y) {
     return map.terrainPolygonContainsPoint(polygon, x, y) ||
         testRingCoversPointBoundary(polygon && polygon.points, x, y) ||
@@ -117,6 +197,15 @@ function getSectionPolygonForNodes(map, nodes) {
         { x: bounds.maxX + 0.001, y: bounds.maxY + 0.001 },
         { x: bounds.minX - 0.001, y: bounds.maxY + 0.001 }
     ];
+}
+
+function clipTestTerrainPolygonToSection(map, polygon, sectionPolygon) {
+    const polygonGeometry = map.groundTerrainPolygonToClipGeometry(polygon);
+    const sectionGeometry = [[sectionPolygon.map(point => [Number(point.x), Number(point.y)])]];
+    return map.groundTerrainClipGeometryToPolygons(
+        polygon.type,
+        polygonClipping.intersection(polygonGeometry, sectionGeometry)
+    );
 }
 
 function canonicalTerrainRingKey(map, points) {
@@ -152,6 +241,91 @@ function canonicalTerrainPolygonsForType(map, polygons, type) {
             if (a.points > b.points) return 1;
             return JSON.stringify(a.holes).localeCompare(JSON.stringify(b.holes));
         });
+}
+
+function canonicalTerrainRingSegmentKeys(map, points) {
+    const ring = map.simplifyGroundTerrainPolygonPoints(points);
+    const out = [];
+    for (let i = 0; i < ring.length; i++) {
+        const a = map.getGroundTerrainRepairPointKey(ring[i]);
+        const b = map.getGroundTerrainRepairPointKey(ring[(i + 1) % ring.length]);
+        out.push(a < b ? `${a}:${b}` : `${b}:${a}`);
+    }
+    out.sort();
+    return out;
+}
+
+function assertNestedTerrainPolygonsShareBoundary(map, outerType, innerType, label) {
+    const outerPolygons = map.terrainPolygons.filter(polygon => polygon.type === outerType);
+    const innerPolygons = map.terrainPolygons.filter(polygon => polygon.type === innerType);
+    assert.equal(outerPolygons.length, 1, `${label}: expected one outer polygon`);
+    assert.equal(innerPolygons.length, 1, `${label}: expected one inner polygon`);
+    const outer = outerPolygons[0];
+    const inner = innerPolygons[0];
+    assert.equal(Array.isArray(outer.holes), true, `${label}: expected outer holes`);
+    assert.equal(outer.holes.length, 1, `${label}: expected one outer hole`);
+    assert.deepEqual(
+        canonicalTerrainRingSegmentKeys(map, outer.holes[0]),
+        canonicalTerrainRingSegmentKeys(map, inner.points),
+        `${label}: hole boundary does not match inner boundary`
+    );
+}
+
+function terrainRingHasPointKey(map, points, pointKey) {
+    return map.simplifyGroundTerrainPolygonPoints(points)
+        .some(point => map.getGroundTerrainRepairPointKey(point) === pointKey);
+}
+
+const LIVE_NESTED_OUTER_COORDS = (() => {
+    const coords = [];
+    const rows = {
+        4: [7, 10],
+        5: [5, 11],
+        6: [4, 11],
+        7: [4, 12],
+        8: [4, 13],
+        9: [5, 12],
+        10: [6, 11],
+        11: [8, 10]
+    };
+    for (const [yText, range] of Object.entries(rows)) {
+        const y = Number(yText);
+        for (let x = range[0]; x <= range[1]; x++) {
+            coords.push([x, y]);
+        }
+    }
+    return coords;
+})();
+
+const LIVE_NESTED_INNER_COORDS = [
+    [8, 6], [9, 6],
+    [7, 7], [8, 7], [10, 7],
+    [7, 8], [9, 8], [10, 8],
+    [8, 9], [9, 9]
+];
+
+function getInteriorThreeHexJunction(map, x = 8, y = 8) {
+    const node = map.nodes[x] && map.nodes[x][y];
+    assert.ok(node, "three-way terrain fixture requires an interior node");
+    const slotMap = map.buildGroundTerrainVertexSlotMap({ nodes: [node] });
+    const corners = map.getGroundTerrainHexCorners(node);
+    for (const corner of corners) {
+        const pointKey = map.getGroundTerrainPointKey(corner);
+        const slots = slotMap.get(pointKey);
+        if (!(slots instanceof NativeSet) || slots.size !== 3) continue;
+        const nodes = Array.from(slots).map(slotKey => {
+            const [sx, sy] = String(slotKey).split(",").map(Number);
+            return map.nodes[sx] && map.nodes[sx][sy];
+        }).filter(Boolean);
+        if (nodes.length === 3) {
+            return {
+                point: corner,
+                pointKey: map.getGroundTerrainRepairPointKey(corner),
+                nodes
+            };
+        }
+    }
+    assert.fail("three-way terrain fixture could not find an interior shared vertex");
 }
 
 function getTerrainPathNodes(map, startX, startY, directions) {
@@ -568,6 +742,194 @@ test("terrain local patch removes a hole when an island connects to shore", () =
     assert.equal(map.terrainPolygonContainsPoint(polygon, map.nodes[5][5].x, map.nodes[5][5].y), false);
     assert.equal(map.terrainPolygonContainsPoint(polygon, map.nodes[4][5].x, map.nodes[4][5].y), false);
     assert.equal(map.terrainPolygonContainsPoint(polygon, map.nodes[3][5].x, map.nodes[3][5].y), false);
+});
+
+test("nested terrain polygons keep outer holes contiguous with inner polygon boundaries for every type pair", () => {
+    const terrainTypes = ["water", "mud", "grass", "desert"];
+    const failures = [];
+
+    for (const outerType of terrainTypes) {
+        for (const innerType of terrainTypes) {
+            if (outerType === innerType) continue;
+            try {
+                const map = createTerrainPatchMap(14, 12);
+                const nodes = [];
+                const innerCoordKeys = new NativeSet();
+                const backgroundType = terrainTypes.find(type => type !== outerType && type !== innerType);
+                for (let x = 5; x <= 8; x++) {
+                    for (let y = 5; y <= 6; y++) {
+                        innerCoordKeys.add(`${x},${y}`);
+                    }
+                }
+                const backgroundId = map.getGroundTerrainTextureIdForType(backgroundType, 0, 0);
+                const outerId = map.getGroundTerrainTextureIdForType(outerType, 0, 0);
+                const innerId = map.getGroundTerrainTextureIdForType(innerType, 0, 0);
+                for (let x = 0; x < map.width; x++) {
+                    for (let y = 0; y < map.height; y++) {
+                        map.nodes[x][y].groundTextureId = backgroundId;
+                    }
+                }
+                for (let x = 2; x <= 11; x++) {
+                    for (let y = 2; y <= 9; y++) {
+                        const node = map.nodes[x][y];
+                        if (innerCoordKeys.has(`${x},${y}`)) {
+                            node.groundTextureId = innerId;
+                        } else {
+                            node.groundTextureId = outerId;
+                        }
+                        nodes.push(node);
+                    }
+                }
+
+                map.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes(nodes, { includeGrass: true });
+                const outerPolygons = map.terrainPolygons.filter(polygon => polygon.type === outerType);
+                const innerPolygons = map.terrainPolygons.filter(polygon => polygon.type === innerType);
+                if (outerPolygons.length !== 1 || innerPolygons.length !== 1) {
+                    failures.push(`${innerType} inside ${outerType}: expected one outer and one inner polygon`);
+                    continue;
+                }
+
+                const outer = outerPolygons[0];
+                const inner = innerPolygons[0];
+                if (!Array.isArray(outer.holes) || outer.holes.length !== 1) {
+                    failures.push(`${innerType} inside ${outerType}: expected one outer hole`);
+                    continue;
+                }
+                const holeSegments = canonicalTerrainRingSegmentKeys(map, outer.holes[0]);
+                const innerSegments = canonicalTerrainRingSegmentKeys(map, inner.points);
+                if (JSON.stringify(holeSegments) !== JSON.stringify(innerSegments)) {
+                    failures.push(`${innerType} inside ${outerType}: hole boundary does not match inner boundary`);
+                }
+            } catch (err) {
+                failures.push(`${innerType} inside ${outerType}: ${err && err.message ? err.message : err}`);
+            }
+        }
+    }
+
+    assert.deepEqual(failures, []);
+});
+
+test("local terrain edits keep compact nested polygon holes contiguous with inner boundaries", () => {
+    const terrainTypes = ["water", "mud", "desert"];
+    const failures = [];
+
+    for (const outerType of terrainTypes) {
+        for (const innerType of terrainTypes) {
+            if (outerType === innerType) continue;
+            try {
+                const map = createTerrainPatchMap(18, 16);
+                const grassId = map.getGroundTerrainTextureIdForType("grass", 0, 0);
+                for (let x = 0; x < map.width; x++) {
+                    for (let y = 0; y < map.height; y++) {
+                        map.nodes[x][y].groundTextureId = grassId;
+                    }
+                }
+
+                const outerId = map.getGroundTerrainTextureIdForType(outerType, 0, 0);
+                const outerNodes = LIVE_NESTED_OUTER_COORDS.map(([x, y]) => {
+                    const node = map.nodes[x][y];
+                    node.groundTextureId = outerId;
+                    return node;
+                });
+                map.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes(outerNodes);
+
+                for (const [x, y] of LIVE_NESTED_INNER_COORDS) {
+                    const node = map.nodes[x][y];
+                    if (map.getGroundTerrainTypeForNode(node) !== innerType) {
+                        assert.equal(map.replaceGroundTerrainPolygonPatch(node, innerType), true);
+                    }
+                }
+
+                const outerPolygons = map.terrainPolygons.filter(polygon => polygon.type === outerType);
+                const innerPolygons = map.terrainPolygons.filter(polygon => polygon.type === innerType);
+                if (outerPolygons.length !== 1 || innerPolygons.length !== 1) {
+                    failures.push(`${innerType} inside ${outerType}: expected one outer and one inner polygon`);
+                    continue;
+                }
+
+                const outer = outerPolygons[0];
+                const inner = innerPolygons[0];
+                if (!Array.isArray(outer.holes) || outer.holes.length !== 1) {
+                    failures.push(`${innerType} inside ${outerType}: expected one outer hole`);
+                    continue;
+                }
+                const holeSegments = canonicalTerrainRingSegmentKeys(map, outer.holes[0]);
+                const innerSegments = canonicalTerrainRingSegmentKeys(map, inner.points);
+                if (JSON.stringify(holeSegments) !== JSON.stringify(innerSegments)) {
+                    failures.push(`${innerType} inside ${outerType}: hole boundary does not match inner boundary`);
+                }
+            } catch (err) {
+                failures.push(`${innerType} inside ${outerType}: ${err && err.message ? err.message : err}`);
+            }
+        }
+    }
+
+    assert.deepEqual(failures, []);
+});
+
+test("local terrain edits keep nested boundaries contiguous when the outer ring closes last", () => {
+    const terrainTypes = ["water", "mud", "desert"];
+    const failures = [];
+    const innerCoordKeys = new NativeSet(LIVE_NESTED_INNER_COORDS.map(([x, y]) => `${x},${y}`));
+    const ringCoords = LIVE_NESTED_OUTER_COORDS.filter(([x, y]) => !innerCoordKeys.has(`${x},${y}`));
+
+    for (const outerType of terrainTypes) {
+        for (const innerType of terrainTypes) {
+            if (outerType === innerType) continue;
+            try {
+                const map = createTerrainPatchMap(18, 16);
+                for (const [x, y] of LIVE_NESTED_INNER_COORDS) {
+                    assert.equal(map.replaceGroundTerrainPolygonPatch(map.nodes[x][y], innerType), true);
+                }
+                for (const [x, y] of ringCoords) {
+                    assert.equal(map.replaceGroundTerrainPolygonPatch(map.nodes[x][y], outerType), true);
+                }
+                assertNestedTerrainPolygonsShareBoundary(
+                    map,
+                    outerType,
+                    innerType,
+                    `${innerType} inside ${outerType}`
+                );
+            } catch (err) {
+                failures.push(`${innerType} inside ${outerType}: ${err && err.message ? err.message : err}`);
+            }
+        }
+    }
+
+    assert.deepEqual(failures, []);
+});
+
+test("local terrain edits keep three terrain polygons meeting at the shared vertex in any edit order", () => {
+    const terrainTypes = ["water", "mud", "desert"];
+    const editOrders = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0]
+    ];
+
+    for (const order of editOrders) {
+        const map = createTerrainPatchMap(18, 16);
+        const fixture = getInteriorThreeHexJunction(map);
+        for (const index of order) {
+            assert.equal(
+                map.replaceGroundTerrainPolygonPatch(fixture.nodes[index], terrainTypes[index]),
+                true,
+                `edit order ${order.join(",")} should paint ${terrainTypes[index]}`
+            );
+        }
+        for (let i = 0; i < terrainTypes.length; i++) {
+            const type = terrainTypes[i];
+            const polygons = map.terrainPolygons.filter(polygon => polygon.type === type);
+            assert.equal(polygons.length, 1, `edit order ${order.join(",")}: expected one ${type} polygon`);
+            assert.ok(
+                terrainRingHasPointKey(map, polygons[0].points, fixture.pointKey),
+                `edit order ${order.join(",")}: expected ${type} polygon to include the shared vertex`
+            );
+        }
+    }
 });
 
 test("terrain local patch keeps a polygon when several holes are closed", () => {

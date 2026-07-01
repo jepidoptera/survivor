@@ -296,9 +296,6 @@ class Wizard extends Character {
         this.visualRadius = 0.5; // Hitbox radius in hex units
         this.occlusionRadius = 1.0; // Radius for occlusion checks in hex units
         this.animationSpeedMultiplier = 0.475; // Animation speed multiplier (1.0 = normal, 0.5 = half speed, 2.0 = double speed)
-        this.maxTurnSpeedDegPerSec = 180;
-        this.zeroTurnDistanceUnits = wizardMouseTurnZeroDistanceUnits;
-        this.fullTurnSpeedDistanceUnits = wizardMouseTurnFullDistanceUnits;
         
         // Movement acceleration via vector interpolation
         this.acceleration = 50; // Rate of acceleration in units/second²
@@ -665,18 +662,7 @@ class Wizard extends Character {
     get interpolatedZ() {
         return this.getInterpolatedPosition().z;
     }
-    getTurnStrengthFromAimVector(targetX, targetY) {
-        const zeroDistance = Number.isFinite(this.zeroTurnDistanceUnits)
-            ? Math.max(0, this.zeroTurnDistanceUnits)
-            : 1;
-        const fullDistance = Number.isFinite(this.fullTurnSpeedDistanceUnits)
-            ? Math.max(zeroDistance + 1e-6, this.fullTurnSpeedDistanceUnits)
-            : 5;
-        const distance = Math.hypot(Number(targetX) || 0, Number(targetY) || 0);
-        if (distance <= zeroDistance) return 0;
-        return Math.max(0, Math.min(1, (distance - zeroDistance) / (fullDistance - zeroDistance)));
-    }
-    turnToward(targetX, targetY, turnStrength = 1) {
+    turnToward(targetX, targetY) {
         if (typeof this.isFrozen === "function" && this.isFrozen()) return;
         // Calculate vector from wizard to target (in world coordinates)
         const normalizeDeg = (deg) => {
@@ -685,46 +671,16 @@ class Wizard extends Character {
             while (out > 180) out -= 360;
             return out;
         };
-        const facingAngleDegByDirectionIndex = [180, -150, -120, -90, -60, -30, 0, 30, 60, 90, 120, 150];
-
         // Calculate angle in radians, then convert to degrees.
         const angle = Math.atan2(targetY, targetX);
         const angleInDegrees = normalizeDeg(angle * 180 / Math.PI);
-        const nowMs = (Number.isFinite(renderNowMs) && renderNowMs > 0)
+        this.smoothedFacingAngleDeg = angleInDegrees;
+        this._lastTurnTowardMs = (Number.isFinite(renderNowMs) && renderNowMs > 0)
             ? renderNowMs
-            : performance.now();
-
-        // Smooth facing angle before quantizing to 12 sprite directions.
-        // This prevents tiny aim oscillations from causing visible pose jitter.
-        if (!Number.isFinite(this.smoothedFacingAngleDeg)) {
-            const currentRow = Number.isInteger(this.lastDirectionRow)
-                ? this.lastDirectionRow
-                : ((Number.isInteger(this.directionIndex) && this.directionIndex >= 0)
-                    ? ((this.directionIndex + wizardDirectionRowOffset + 12) % 12)
-                    : 0);
-            const directionIndex = ((currentRow - wizardDirectionRowOffset) % 12 + 12) % 12;
-            const currentFacing = facingAngleDegByDirectionIndex[directionIndex];
-            this.smoothedFacingAngleDeg = Number.isFinite(currentFacing)
-                ? normalizeDeg(currentFacing)
-                : angleInDegrees;
-            this._lastTurnTowardMs = nowMs;
-        } else if (!Number.isFinite(this._lastTurnTowardMs)) {
-            this._lastTurnTowardMs = nowMs;
-        } else {
-            const dtSecRaw = (nowMs - this._lastTurnTowardMs) / 1000;
-            const dtSec = Math.max(1 / 240, Math.min(0.25, Number.isFinite(dtSecRaw) ? dtSecRaw : 0));
-            this._lastTurnTowardMs = nowMs;
-            const delta = normalizeDeg(angleInDegrees - this.smoothedFacingAngleDeg);
-            const smoothing = this.moving ? 0.38 : 0.28;
-            const desiredStep = delta * smoothing;
-            const clampedStrength = Number.isFinite(turnStrength)
-                ? Math.max(0, Math.min(1, turnStrength))
-                : 1;
-            const maxStep = Math.max(0, Number(this.maxTurnSpeedDegPerSec) || 0) * clampedStrength * dtSec;
-            const clampedStep = Math.max(-maxStep, Math.min(maxStep, desiredStep));
-            this.smoothedFacingAngleDeg = normalizeDeg(this.smoothedFacingAngleDeg + clampedStep);
-        }
-        const facingDeg = this.smoothedFacingAngleDeg;
+            : (typeof performance !== "undefined" && performance && typeof performance.now === "function"
+                ? performance.now()
+                : Date.now());
+        const facingDeg = angleInDegrees;
         
         // 12 sprite directions with their center angles
         // East = 0°, going counterclockwise

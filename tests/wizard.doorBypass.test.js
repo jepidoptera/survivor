@@ -48,8 +48,7 @@ function loadWizardClass() {
         renderNowMs: 0,
         showPerfReadout: false,
         wizardFrames: Array.from({ length: 36 }, (_, index) => ({ frame: index })),
-        wizardMouseTurnZeroDistanceUnits: 1,
-        wizardMouseTurnFullDistanceUnits: 10,
+        wizardDirectionRowOffset: 0,
         setTimeout: () => 1,
         clearTimeout() {},
         setInterval: () => 1,
@@ -900,6 +899,54 @@ test("wizard renderer keeps dead wizard on standing frame", () => {
     wizard.moving = true;
 
     assert.equal(Rendering.getWizardBodyFrameIndex(wizard, { renderNowMs: 1000, frameRate: 60 }), 9);
+});
+
+test("wizard speed aura halves run animation speed", () => {
+    const baseWizard = {
+        movementVector: { x: 2, y: 0 },
+        moving: true,
+        dead: false,
+        hp: 100,
+        lastDirectionRow: 0,
+        isJumping: false,
+        isMovingBackward: false,
+        animationSpeedMultiplier: 1,
+        speed: 2,
+        activeAuras: []
+    };
+    const speedAuraWizard = {
+        ...baseWizard,
+        movementVector: { x: 4, y: 0 },
+        activeAuras: ["speed"]
+    };
+    const noSlowdownWizard = {
+        ...baseWizard,
+        movementVector: { x: 4, y: 0 },
+        activeAuras: []
+    };
+    const ctx = { renderNowMs: 1000, frameRate: 60 };
+
+    assert.equal(
+        Rendering.getWizardBodyFrameIndex(speedAuraWizard, ctx),
+        Rendering.getWizardBodyFrameIndex(baseWizard, ctx)
+    );
+    assert.notEqual(
+        Rendering.getWizardBodyFrameIndex(noSlowdownWizard, ctx),
+        Rendering.getWizardBodyFrameIndex(baseWizard, ctx)
+    );
+});
+
+test("wizard turnToward snaps facing directly to target vector", () => {
+    const wizard = Object.create(Wizard.prototype);
+    wizard.smoothedFacingAngleDeg = 180;
+    wizard.lastDirectionRow = 0;
+    wizard.moving = false;
+    wizard.isFrozen = () => false;
+
+    wizard.turnToward(1, 0, 0);
+
+    assert.equal(wizard.smoothedFacingAngleDeg, 0);
+    assert.equal(wizard.lastDirectionRow, 6);
 });
 
 test("wizard water render state crops from feet while keeping head visible", () => {
