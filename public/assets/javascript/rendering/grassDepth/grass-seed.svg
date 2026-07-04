@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="0 0 640 640">
+  <rect width="640" height="640" fill="#000"/>
+  <defs>
+    <g id="grass-seed-cell" fill="#fff">
+      <rect x="6" y="8" width="1" height="1" opacity="0.86"/>
+      <rect x="18" y="4" width="1" height="1" opacity="0.72"/>
+      <rect x="33" y="10" width="1" height="1" opacity="0.92"/>
+      <rect x="50" y="6" width="1" height="1" opacity="0.78"/>
+      <rect x="58" y="17" width="1" height="1" opacity="0.66"/>
+      <rect x="11" y="22" width="1" height="1" opacity="0.95"/>
+      <rect x="26" y="19" width="1" height="1" opacity="0.74"/>
+      <rect x="42" y="26" width="1" height="1" opacity="0.88"/>
+      <rect x="2" y="36" width="1" height="1" opacity="0.70"/>
+      <rect x="20" y="34" width="1" height="1" opacity="0.90"/>
+      <rect x="36" y="40" width="1" height="1" opacity="0.76"/>
+      <rect x="54" y="35" width="1" height="1" opacity="0.92"/>
+      <rect x="14" y="53" width="1" height="1" opacity="0.84"/>
+      <rect x="30" y="56" width="1" height="1" opacity="0.68"/>
+      <rect x="46" y="50" width="1" height="1" opacity="0.96"/>
+      <rect x="61" y="59" width="1" height="1" opacity="0.74"/>
+      <rect x="4" y="25" width="1" height="1" opacity="0.82"/>
+      <rect x="15" y="13" width="1" height="1" opacity="0.76"/>
+      <rect x="25" y="6" width="1" height="1" opacity="0.94"/>
+      <rect x="39" y="17" width="1" height="1" opacity="0.70"/>
+      <rect x="53" y="25" width="1" height="1" opacity="0.88"/>
+      <rect x="8" y="47" width="1" height="1" opacity="0.72"/>
+      <rect x="23" y="27" width="1" height="1" opacity="0.86"/>
+      <rect x="34" y="31" width="1" height="1" opacity="0.78"/>
+      <rect x="48" y="42" width="1" height="1" opacity="0.90"/>
+      <rect x="59" y="4" width="1" height="1" opacity="0.80"/>
+      <rect x="3" y="58" width="1" height="1" opacity="0.92"/>
+      <rect x="18" y="44" width="1" height="1" opacity="0.66"/>
+      <rect x="29" y="48" width="1" height="1" opacity="0.84"/>
+      <rect x="43" y="57" width="1" height="1" opacity="0.74"/>
+      <rect x="56" y="50" width="1" height="1" opacity="0.96"/>
+      <rect x="62" y="31" width="1" height="1" opacity="0.68"/>
+      <rect x="1" y="7" width="1" height="1" opacity="0.74"/>
+      <rect x="9" y="15" width="1" height="1" opacity="0.90"/>
+      <rect x="16" y="30" width="1" height="1" opacity="0.70"/>
+      <rect x="23" y="12" width="1" height="1" opacity="0.82"/>
+      <rect x="31" y="2" width="1" height="1" opacity="0.78"/>
+      <rect x="38" y="7" width="1" height="1" opacity="0.94"/>
+      <rect x="45" y="14" width="1" height="1" opacity="0.66"/>
+      <rect x="52" y="1" width="1" height="1" opacity="0.86"/>
+      <rect x="60" y="10" width="1" height="1" opacity="0.72"/>
+      <rect x="6" y="33" width="1" height="1" opacity="0.88"/>
+      <rect x="13" y="40" width="1" height="1" opacity="0.76"/>
+      <rect x="21" y="51" width="1" height="1" opacity="0.92"/>
+      <rect x="28" y="24" width="1" height="1" opacity="0.68"/>
+      <rect x="35" y="20" width="1" height="1" opacity="0.84"/>
+      <rect x="41" y="37" width="1" height="1" opacity="0.96"/>
+      <rect x="50" y="30" width="1" height="1" opacity="0.80"/>
+      <rect x="57" y="39" width="1" height="1" opacity="0.70"/>
+      <rect x="5" y="52" width="1" height="1" opacity="0.94"/>
+      <rect x="12" y="4" width="1" height="1" opacity="0.68"/>
+      <rect x="19" y="59" width="1" height="1" opacity="0.86"/>
+      <rect x="27" y="37" width="1" height="1" opacity="0.72"/>
+      <rect x="32" y="61" width="1" height="1" opacity="0.90"/>
+      <rect x="40" y="44" width="1" height="1" opacity="0.78"/>
+      <rect x="47" y="22" width="1" height="1" opacity="0.92"/>
+      <rect x="55" y="57" width="1" height="1" opacity="0.76"/>
+      <rect x="62" y="20" width="1" height="1" opacity="0.84"/>
+      <rect x="0" y="44" width="1" height="1" opacity="0.66"/>
+      <rect x="10" y="61" width="1" height="1" opacity="0.88"/>
+      <rect x="24" y="31" width="1" height="1" opacity="0.80"/>
+      <rect x="37" y="53" width="1" height="1" opacity="0.74"/>
+      <rect x="49" y="61" width="1" height="1" opacity="0.96"/>
+      <rect x="61" y="45" width="1" height="1" opacity="0.82"/>
+    </g>
+  </defs>
+  <g>
+    <use href="#grass-seed-cell" transform="translate(0 0) rotate(0 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(64 0) rotate(9 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(128 0) rotate(18 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(192 0) rotate(27 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(256 0) rotate(36 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(320 0) rotate(45 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(384 0) rotate(54 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(448 0) rotate(63 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(512 0) rotate(72 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(576 0) rotate(81 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(0 64) rotate(13 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(64 64) rotate(22 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(128 64) rotate(31 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(192 64) rotate(40 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(256 64) rotate(49 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(320 64) rotate(58 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(384 64) rotate(67 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(448 64) rotate(76 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(512 64) rotate(85 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(576 64) rotate(94 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(0 128) rotate(26 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(64 128) rotate(35 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(128 128) rotate(44 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(192 128) rotate(53 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(256 128) rotate(62 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(320 128) rotate(71 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(384 128) rotate(80 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(448 128) rotate(89 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(512 128) rotate(98 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(576 128) rotate(107 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(0 192) rotate(39 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(64 192) rotate(48 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(128 192) rotate(57 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(192 192) rotate(66 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(256 192) rotate(75 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(320 192) rotate(84 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(384 192) rotate(93 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(448 192) rotate(102 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(512 192) rotate(111 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(576 192) rotate(120 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(0 256) rotate(52 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(64 256) rotate(61 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(128 256) rotate(70 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(192 256) rotate(79 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(256 256) rotate(88 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(320 256) rotate(97 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(384 256) rotate(106 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(448 256) rotate(115 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(512 256) rotate(124 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(576 256) rotate(133 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(0 320) rotate(65 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(64 320) rotate(74 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(128 320) rotate(83 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(192 320) rotate(92 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(256 320) rotate(101 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(320 320) rotate(110 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(384 320) rotate(119 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(448 320) rotate(128 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(512 320) rotate(137 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(576 320) rotate(146 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(0 384) rotate(78 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(64 384) rotate(87 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(128 384) rotate(96 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(192 384) rotate(105 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(256 384) rotate(114 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(320 384) rotate(123 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(384 384) rotate(132 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(448 384) rotate(141 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(512 384) rotate(150 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(576 384) rotate(159 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(0 448) rotate(91 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(64 448) rotate(100 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(128 448) rotate(109 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(192 448) rotate(118 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(256 448) rotate(127 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(320 448) rotate(136 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(384 448) rotate(145 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(448 448) rotate(154 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(512 448) rotate(163 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(576 448) rotate(172 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(0 512) rotate(104 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(64 512) rotate(113 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(128 512) rotate(122 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(192 512) rotate(131 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(256 512) rotate(140 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(320 512) rotate(149 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(384 512) rotate(158 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(448 512) rotate(167 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(512 512) rotate(176 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(576 512) rotate(185 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(0 576) rotate(117 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(64 576) rotate(126 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(128 576) rotate(135 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(192 576) rotate(144 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(256 576) rotate(153 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(320 576) rotate(162 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(384 576) rotate(171 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(448 576) rotate(180 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(512 576) rotate(189 32 32)"/>
+    <use href="#grass-seed-cell" transform="translate(576 576) rotate(198 32 32)"/>
+  </g>
+</svg>

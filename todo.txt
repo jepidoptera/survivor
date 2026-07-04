@@ -34,7 +34,18 @@ X ice ball trails snow and explodes on impact
 X god mode/ adventure mode
 X treasures in the maze
 X choose spells from menu on startup
+  spell upgrade path
    -fireball
+    level 1:
+     .5x speed
+     2x mana cost
+     1/2 damage
+
+    level 7:
+     2x speed
+     1/2 mana cost
+     5x damage
+     
    -iceball
    -health
    -teleport
@@ -46,7 +57,16 @@ X choose spells from menu on startup
    -omnivision
    /imps? squirrels?
     phase through walls
-    move
+   /move
+    flying:
+     level 1: swimming
+     level 2: walking on water
+     level 3: super jump
+     level 4: gravity cushion
+     level 5: falling with style
+     level 6: gliding
+     level 7: flying
+
 
 X invisibility aura
 X shield spell
@@ -150,6 +170,7 @@ X save generated building-owned floor nodes in building files so startup can reu
   npcs can't cross fragments
   powerups come back once you leave the area
 / delete legacy top-level saveData.staticObjects path; section-world saves should have one object persistence source, not duplicate old/prototype payloads (remove legacy loading capability, don't need it)
+
 
 
 

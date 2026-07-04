@@ -3185,6 +3185,18 @@ function shouldSkipRoadAndFloorTileObjectLoad() {
     return typeof globalThis !== "undefined" && globalThis.SKIP_ROAD_AND_FLOOR_TILE_OBJECT_LOAD !== false;
 }
 
+function refreshLoadedWizardBridgeMovementState() {
+    if (!wizard || !map || typeof map.applyActorBridgeMovementState !== "function") return null;
+    const x = Number(wizard.x);
+    const y = Number(wizard.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        throw new Error("loaded wizard bridge movement restore requires a finite wizard position");
+    }
+    return map.applyActorBridgeMovementState(wizard, x, y, {
+        allowExistingBridgePosition: true
+    });
+}
+
 function isRoadOrFloorTileObjectRecord(record) {
     if (!record || typeof record !== "object") return false;
     const type = typeof record.type === "string" ? record.type.trim().toLowerCase() : "";
@@ -3598,6 +3610,7 @@ function loadGameState(saveData) {
         if (!shouldSkipRoadAndFloorTileObjectLoad()) {
             hydrateVisibleLazyRoads({ maxPerFrame: 192, paddingWorld: 12 });
         }
+        refreshLoadedWizardBridgeMovementState();
         hydrateVisibleLazyTrees({ maxPerFrame: 256, paddingWorld: 12 });
 
         // Repair any stale blocking counters from older runtime versions.

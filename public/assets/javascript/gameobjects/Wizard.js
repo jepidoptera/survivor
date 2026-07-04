@@ -1,5 +1,9 @@
 const WIZARD_GAME_MODE_GOD = "god";
 const WIZARD_GAME_MODE_ADVENTURE = "adventure";
+const WIZARD_WATER_MOVEMENT_DEPTH_SLOPE = 2 / 3;
+const WIZARD_WATER_MAX_DEPTH_UNITS = 2 / 3;
+const WIZARD_WATER_FULL_SUBMERGED_DEPTH_UNITS = 2 / 3;
+const WIZARD_FULLY_SUBMERGED_SPEED_MULTIPLIER = 1 / 3;
 
 const WIZARD_SHIELD_DEPTH_NEAR_METRIC = -128;
 const WIZARD_SHIELD_DEPTH_FAR_METRIC = 256;
@@ -268,6 +272,7 @@ class Wizard extends Character {
         this.gameMode = WIZARD_GAME_MODE_GOD;
         this._adventureRespawnPending = false;
         this.unlockedMagic = [];
+        this.skillpoints = 0;
         this.difficulty = 2;
         this.magicRegenPerSecond = 8 - this.difficulty;
         this.activeAura = null;
@@ -291,9 +296,6 @@ class Wizard extends Character {
         this.visualRadius = 0.5; // Hitbox radius in hex units
         this.occlusionRadius = 1.0; // Radius for occlusion checks in hex units
         this.animationSpeedMultiplier = 0.475; // Animation speed multiplier (1.0 = normal, 0.5 = half speed, 2.0 = double speed)
-        this.maxTurnSpeedDegPerSec = 180;
-        this.zeroTurnDistanceUnits = wizardMouseTurnZeroDistanceUnits;
-        this.fullTurnSpeedDistanceUnits = wizardMouseTurnFullDistanceUnits;
         
         // Movement acceleration via vector interpolation
         this.acceleration = 50; // Rate of acceleration in units/second²
@@ -660,18 +662,7 @@ class Wizard extends Character {
     get interpolatedZ() {
         return this.getInterpolatedPosition().z;
     }
-    getTurnStrengthFromAimVector(targetX, targetY) {
-        const zeroDistance = Number.isFinite(this.zeroTurnDistanceUnits)
-            ? Math.max(0, this.zeroTurnDistanceUnits)
-            : 1;
-        const fullDistance = Number.isFinite(this.fullTurnSpeedDistanceUnits)
-            ? Math.max(zeroDistance + 1e-6, this.fullTurnSpeedDistanceUnits)
-            : 5;
-        const distance = Math.hypot(Number(targetX) || 0, Number(targetY) || 0);
-        if (distance <= zeroDistance) return 0;
-        return Math.max(0, Math.min(1, (distance - zeroDistance) / (fullDistance - zeroDistance)));
-    }
-    turnToward(targetX, targetY, turnStrength = 1) {
+    turnToward(targetX, targetY) {
         if (typeof this.isFrozen === "function" && this.isFrozen()) return;
         // Calculate vector from wizard to target (in world coordinates)
         const normalizeDeg = (deg) => {
@@ -680,46 +671,16 @@ class Wizard extends Character {
             while (out > 180) out -= 360;
             return out;
         };
-        const facingAngleDegByDirectionIndex = [180, -150, -120, -90, -60, -30, 0, 30, 60, 90, 120, 150];
-
         // Calculate angle in radians, then convert to degrees.
         const angle = Math.atan2(targetY, targetX);
         const angleInDegrees = normalizeDeg(angle * 180 / Math.PI);
-        const nowMs = (Number.isFinite(renderNowMs) && renderNowMs > 0)
+        this.smoothedFacingAngleDeg = angleInDegrees;
+        this._lastTurnTowardMs = (Number.isFinite(renderNowMs) && renderNowMs > 0)
             ? renderNowMs
-            : performance.now();
-
-        // Smooth facing angle before quantizing to 12 sprite directions.
-        // This prevents tiny aim oscillations from causing visible pose jitter.
-        if (!Number.isFinite(this.smoothedFacingAngleDeg)) {
-            const currentRow = Number.isInteger(this.lastDirectionRow)
-                ? this.lastDirectionRow
-                : ((Number.isInteger(this.directionIndex) && this.directionIndex >= 0)
-                    ? ((this.directionIndex + wizardDirectionRowOffset + 12) % 12)
-                    : 0);
-            const directionIndex = ((currentRow - wizardDirectionRowOffset) % 12 + 12) % 12;
-            const currentFacing = facingAngleDegByDirectionIndex[directionIndex];
-            this.smoothedFacingAngleDeg = Number.isFinite(currentFacing)
-                ? normalizeDeg(currentFacing)
-                : angleInDegrees;
-            this._lastTurnTowardMs = nowMs;
-        } else if (!Number.isFinite(this._lastTurnTowardMs)) {
-            this._lastTurnTowardMs = nowMs;
-        } else {
-            const dtSecRaw = (nowMs - this._lastTurnTowardMs) / 1000;
-            const dtSec = Math.max(1 / 240, Math.min(0.25, Number.isFinite(dtSecRaw) ? dtSecRaw : 0));
-            this._lastTurnTowardMs = nowMs;
-            const delta = normalizeDeg(angleInDegrees - this.smoothedFacingAngleDeg);
-            const smoothing = this.moving ? 0.38 : 0.28;
-            const desiredStep = delta * smoothing;
-            const clampedStrength = Number.isFinite(turnStrength)
-                ? Math.max(0, Math.min(1, turnStrength))
-                : 1;
-            const maxStep = Math.max(0, Number(this.maxTurnSpeedDegPerSec) || 0) * clampedStrength * dtSec;
-            const clampedStep = Math.max(-maxStep, Math.min(maxStep, desiredStep));
-            this.smoothedFacingAngleDeg = normalizeDeg(this.smoothedFacingAngleDeg + clampedStep);
-        }
-        const facingDeg = this.smoothedFacingAngleDeg;
+            : (typeof performance !== "undefined" && performance && typeof performance.now === "function"
+                ? performance.now()
+                : Date.now());
+        const facingDeg = angleInDegrees;
         
         // 12 sprite directions with their center angles
         // East = 0°, going counterclockwise
@@ -917,13 +878,45 @@ class Wizard extends Character {
         return false;
     }
 
-    getVectorMovementEnvironmentSpeedMultiplier(_options = {}) {
+    getWaterMovementSpeedMultiplier(options = {}) {
+        if (!this.map || this.isJumping === true) return 1;
+        const localZ = Number.isFinite(Number(this.z)) ? Number(this.z) : 0;
+        if (localZ > 0.05) return 1;
+        const movementLayer = typeof this.getCurrentMovementLayer === "function"
+            ? this.getCurrentMovementLayer(options)
+            : (Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0);
+        if (movementLayer !== 0) return 1;
+        if (
+            typeof this.map.isActorOnGroundBridge === "function" &&
+            this.map.isActorOnGroundBridge(this, this.x, this.y)
+        ) {
+            return 1;
+        }
+        if (typeof this.map.getGroundTerrainWaterImmersionAtPoint !== "function") return 1;
+        const immersion = this.map.getGroundTerrainWaterImmersionAtPoint(this.x, this.y, {
+            slope: WIZARD_WATER_MOVEMENT_DEPTH_SLOPE,
+            maxDepth: WIZARD_WATER_MAX_DEPTH_UNITS,
+            traversalLayer: movementLayer
+        });
+        if (!immersion || immersion.inWater !== true) return 1;
+        const submergedDepth = Number.isFinite(Number(immersion.submergedDepth))
+            ? Math.max(0, Number(immersion.submergedDepth))
+            : 0;
+        const fullDepth = Number.isFinite(Number(this.waterFullSubmergedDepthUnits))
+            ? Math.max(1e-6, Number(this.waterFullSubmergedDepthUnits))
+            : WIZARD_WATER_FULL_SUBMERGED_DEPTH_UNITS;
+        const submergedRatio = Math.max(0, Math.min(1, submergedDepth / fullDepth));
+        return 1 - submergedRatio * (1 - WIZARD_FULLY_SUBMERGED_SPEED_MULTIPLIER);
+    }
+
+    getVectorMovementEnvironmentSpeedMultiplier(options = {}) {
         const activeAuras = Array.isArray(this.activeAuras)
             ? this.activeAuras
             : (typeof this.activeAura === "string" ? [this.activeAura] : []);
         const auraSpeedMultiplier = activeAuras.includes("speed") ? 2 : 1;
         const roadSpeedMultiplier = this.isOnRoad() ? this.roadSpeedMultiplier : 1;
-        return auraSpeedMultiplier * roadSpeedMultiplier;
+        const waterSpeedMultiplier = this.getWaterMovementSpeedMultiplier(options);
+        return auraSpeedMultiplier * roadSpeedMultiplier * waterSpeedMultiplier;
     }
 
     heal(amount) {
@@ -1419,12 +1412,55 @@ class Wizard extends Character {
             movementPerfRecord("wizard.prepareContext.stairBlockerFilter", movementSectionStartMs);
         }
 
+        let nearbyBridgeRoads = [];
+        let nearbyBridgeBarrierSegments = [];
+        if (
+            wizardLayer === 0 &&
+            this.map &&
+            typeof this.map.collectGroundBridgeRoadsInBounds === "function"
+        ) {
+            const currentX = Number.isFinite(Number(this.x)) ? Number(this.x) : newX;
+            const currentY = Number.isFinite(Number(this.y)) ? Number(this.y) : newY;
+            const resolvedRadius = Math.max(0, Number(radius) || 0);
+            const queryBounds = {
+                minX: Math.min(currentX, newX) - resolvedRadius,
+                minY: Math.min(currentY, newY) - resolvedRadius,
+                maxX: Math.max(currentX, newX) + resolvedRadius,
+                maxY: Math.max(currentY, newY) + resolvedRadius
+            };
+            movementSectionStartMs = movementPerfNow();
+            nearbyBridgeRoads = this.map.collectGroundBridgeRoadsInBounds(queryBounds);
+            movementPerfRecord("wizard.prepareContext.bridgeRoadCollect", movementSectionStartMs);
+            if (
+                nearbyBridgeRoads.length > 0 &&
+                typeof this.map.getGroundBridgeMovementBarrierSegments === "function"
+            ) {
+                movementSectionStartMs = movementPerfNow();
+                nearbyBridgeBarrierSegments = this.map.getGroundBridgeMovementBarrierSegments(
+                    this,
+                    currentX,
+                    currentY,
+                    newX,
+                    newY,
+                    resolvedRadius,
+                    {
+                        ...options,
+                        actor: this,
+                        bridgeRoads: nearbyBridgeRoads
+                    }
+                );
+                movementPerfRecord("wizard.prepareContext.bridgeBarrierCollect", movementSectionStartMs);
+            }
+        }
+
         movementPerfRecord("wizard.prepareContext.total", movementTotalStartMs);
         return {
             nearbyObjects,
             nearbyCharacters: options.includeCharacterBlockers === true
                 ? this.collectNearbyBlockingCharacters(newX, newY, radius, options)
                 : [],
+            nearbyBridgeRoads,
+            nearbyBridgeBarrierSegments,
             nearbyDoors,
             forceTouchedObjects,
             isPointInDoorHitboxFn
@@ -2157,6 +2193,12 @@ class Wizard extends Character {
         if (!applied || applied.type !== support.type) {
             throw new Error("wizard save restored to invalid movement support");
         }
+        if (this.map && typeof this.map.applyActorBridgeMovementState === "function") {
+            this.map.applyActorBridgeMovementState(this, resolvedX, resolvedY, {
+                ...options,
+                allowExistingBridgePosition: true
+            });
+        }
         this.z = savedLocalZ;
         this._pendingSavedFloorMovementSupport = null;
         this.prevX = this.x;
@@ -2244,6 +2286,10 @@ class Wizard extends Character {
             activeAura: this.activeAura || null,
             activeAuras: Array.isArray(this.activeAuras) ? this.activeAuras.slice() : (this.activeAura ? [this.activeAura] : []),
             unlockedMagic: Array.isArray(this.unlockedMagic) ? this.unlockedMagic.slice() : [],
+            skillpoints: Number.isFinite(this.skillpoints) ? Math.max(0, Math.floor(Number(this.skillpoints))) : 0,
+            spellLevels: (this.spellLevels && typeof this.spellLevels === "object" && !Array.isArray(this.spellLevels))
+                ? { ...this.spellLevels }
+                : {},
             selectedFlooringTexture: this.selectedFlooringTexture,
             selectedTerrainType: this.selectedTerrainType,
             selectedTreeTextureVariant: this.selectedTreeTextureVariant,
@@ -2433,6 +2479,16 @@ class Wizard extends Character {
             this.activeAuras = (typeof data.activeAura === "string" && data.activeAura.length > 0) ? [data.activeAura] : [];
         }
         this.unlockedMagic = Array.isArray(data.unlockedMagic) ? data.unlockedMagic.slice() : [];
+        if (Number.isFinite(data.skillpoints)) {
+            this.skillpoints = Math.max(0, Math.floor(Number(data.skillpoints)));
+        } else if (!Number.isFinite(this.skillpoints)) {
+            this.skillpoints = 0;
+        }
+        if (data.spellLevels && typeof data.spellLevels === "object" && !Array.isArray(data.spellLevels)) {
+            this.spellLevels = { ...data.spellLevels };
+        } else if (!this.spellLevels || typeof this.spellLevels !== "object" || Array.isArray(this.spellLevels)) {
+            this.spellLevels = {};
+        }
         if (data.selectedFlooringTexture !== undefined) this.selectedFlooringTexture = data.selectedFlooringTexture;
         if (data.selectedTerrainType !== undefined) {
             this.selectedTerrainType = (typeof data.selectedTerrainType === "string")

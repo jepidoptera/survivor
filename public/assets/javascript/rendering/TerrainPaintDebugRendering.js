@@ -15,6 +15,21 @@
         return !!(global && global.debugTerrainPolygonDiagnostics === true);
     }
 
+    function getTerrainOutlineColor(terrainType) {
+        switch (terrainType) {
+            case "water":
+                return 0xffffff;
+            case "mud":
+                return 0xffa500;
+            case "grass":
+                return 0x00ff00;
+            case "desert":
+                return 0xffff00;
+            default:
+                return 0xffffff;
+        }
+    }
+
     function clear(renderer) {
         if (!renderer || !renderer.terrainPolygonDiagnosticGraphics) return;
         renderer.terrainPolygonDiagnosticGraphics.clear();
@@ -112,8 +127,9 @@
         for (let i = 0; i < terrainEntries.length; i++) {
             const entry = terrainEntries[i];
             const entryBaseZ = Number.isFinite(entry.baseZ) ? Number(entry.baseZ) : baseZ;
+            const lineColor = getTerrainOutlineColor(entry.terrainType);
             if (drawRing(renderer, g, entry.outer, entryBaseZ, {
-                lineColor: 0xffffff,
+                lineColor,
                 lineAlpha: 0.98,
                 lineWidth: 2
             })) {
@@ -122,7 +138,7 @@
             const holes = Array.isArray(entry.holes) ? entry.holes : [];
             for (let h = 0; h < holes.length; h++) {
                 if (drawRing(renderer, g, holes[h], entryBaseZ, {
-                    lineColor: 0xffffff,
+                    lineColor,
                     lineAlpha: 0.82,
                     lineWidth: 2
                 })) {
@@ -162,6 +178,7 @@
         clear,
         drawRing,
         drawSegment,
+        getTerrainOutlineColor,
         render
     };
 })(typeof globalThis !== "undefined" ? globalThis : window);

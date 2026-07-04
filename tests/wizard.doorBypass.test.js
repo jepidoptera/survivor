@@ -48,8 +48,7 @@ function loadWizardClass() {
         renderNowMs: 0,
         showPerfReadout: false,
         wizardFrames: Array.from({ length: 36 }, (_, index) => ({ frame: index })),
-        wizardMouseTurnZeroDistanceUnits: 1,
-        wizardMouseTurnFullDistanceUnits: 10,
+        wizardDirectionRowOffset: 0,
         setTimeout: () => 1,
         clearTimeout() {},
         setInterval: () => 1,
@@ -808,6 +807,33 @@ test("wizard load normalizes stale generated outdoor ground fragment as ground s
     assert.equal(warnings.length, 0);
 });
 
+test("wizard load initializes bridge state for restored ground position", () => {
+    const bridgeRoad = { type: "roadPath" };
+    const loadedWizard = createMinimalLoadWizard({
+        applyActorBridgeMovementState(actor, x, y, options = {}) {
+            assert.equal(x, 4.5);
+            assert.equal(y, 5);
+            assert.equal(options.allowExistingBridgePosition, true);
+            actor._bridgeMovementState = { onBridge: true, road: bridgeRoad };
+            return actor._bridgeMovementState;
+        }
+    });
+
+    loadedWizard.loadJson({
+        x: 4.5,
+        y: 5,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        viewport: { x: 0, y: 0 }
+    });
+
+    assert.equal(loadedWizard.hasPendingSavedMovementSupport(), false);
+    assert.equal(loadedWizard._bridgeMovementState && loadedWizard._bridgeMovementState.onBridge, true);
+    assert.equal(loadedWizard._bridgeMovementState.road, bridgeRoad);
+});
+
 test("wizard load rejects missing viewport dimensions before camera restore", () => {
     const previousViewport = wizardVmContext.viewport;
     wizardVmContext.viewport = { x: 0, y: 0, width: NaN, height: 100 };
@@ -875,6 +901,139 @@ test("wizard renderer keeps dead wizard on standing frame", () => {
     assert.equal(Rendering.getWizardBodyFrameIndex(wizard, { renderNowMs: 1000, frameRate: 60 }), 9);
 });
 
+test("wizard speed aura halves run animation speed", () => {
+    const baseWizard = {
+        movementVector: { x: 2, y: 0 },
+        moving: true,
+        dead: false,
+        hp: 100,
+        lastDirectionRow: 0,
+        isJumping: false,
+        isMovingBackward: false,
+        animationSpeedMultiplier: 1,
+        speed: 2,
+        activeAuras: []
+    };
+    const speedAuraWizard = {
+        ...baseWizard,
+        movementVector: { x: 4, y: 0 },
+        activeAuras: ["speed"]
+    };
+    const noSlowdownWizard = {
+        ...baseWizard,
+        movementVector: { x: 4, y: 0 },
+        activeAuras: []
+    };
+    const ctx = { renderNowMs: 1000, frameRate: 60 };
+
+    assert.equal(
+        Rendering.getWizardBodyFrameIndex(speedAuraWizard, ctx),
+        Rendering.getWizardBodyFrameIndex(baseWizard, ctx)
+    );
+    assert.notEqual(
+        Rendering.getWizardBodyFrameIndex(noSlowdownWizard, ctx),
+        Rendering.getWizardBodyFrameIndex(baseWizard, ctx)
+    );
+});
+
+test("wizard turnToward snaps facing directly to target vector", () => {
+    const wizard = Object.create(Wizard.prototype);
+    wizard.smoothedFacingAngleDeg = 180;
+    wizard.lastDirectionRow = 0;
+    wizard.moving = false;
+    wizard.isFrozen = () => false;
+
+    wizard.turnToward(1, 0, 0);
+
+    assert.equal(wizard.smoothedFacingAngleDeg, 0);
+    assert.equal(wizard.lastDirectionRow, 6);
+});
+
+test("wizard water render state crops from feet while keeping head visible", () => {
+    const assertNearlyEqual = (actual, expected) => {
+        assert.ok(Math.abs(actual - expected) < 1e-12, `expected ${expected}, got ${actual}`);
+    };
+    const shallow = Rendering.getWizardWaterBodyRenderState({
+        inWater: true,
+        distanceToShore: 1,
+        submergedDepth: 0.25
+    }, 1, 96);
+
+    assert.equal(shallow.inWater, true);
+    assert.equal(shallow.hiddenRatio, 0.25);
+    assert.equal(shallow.visibleRatio, 0.75);
+    assert.equal(shallow.hiddenScreenPx, 24);
+
+    const deep = Rendering.getWizardWaterBodyRenderState({
+        inWater: true,
+        distanceToShore: 12,
+        submergedDepth: 3
+    }, 1, 96);
+
+    assertNearlyEqual(deep.hiddenRatio, 2 / 3);
+    assertNearlyEqual(deep.visibleRatio, 1 / 3);
+    assert.equal(deep.hiddenScreenPx, 64);
+
+    const dry = Rendering.getWizardWaterBodyRenderState({ inWater: false }, 1, 96);
+    assert.equal(dry.inWater, false);
+    assert.equal(dry.visibleRatio, 1);
+    assert.equal(dry.hiddenScreenPx, 0);
+
+    const airborne = Rendering.getWizardWaterBodyRenderState(null, 1, 96);
+    assert.equal(airborne.inWater, false);
+    assert.equal(airborne.distanceToShore, 0);
+    assert.equal(airborne.visibleRatio, 1);
+});
+
+test("wizard water movement speed interpolates from dry to fully submerged", () => {
+    const assertNearlyEqual = (actual, expected) => {
+        assert.ok(Math.abs(actual - expected) < 1e-12, `expected ${expected}, got ${actual}`);
+    };
+    let immersion = { inWater: false, submergedDepth: 0 };
+    let onBridge = false;
+    const wizard = Object.create(Wizard.prototype);
+    Object.assign(wizard, {
+        x: 2,
+        y: 3,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        activeAuras: [],
+        roadSpeedMultiplier: 1.3,
+        isJumping: false,
+        isOnRoad() { return false; },
+        map: {
+            isActorOnGroundBridge() { return onBridge; },
+            getGroundTerrainWaterImmersionAtPoint(x, y, options = {}) {
+                assert.equal(x, 2);
+                assert.equal(y, 3);
+                assert.equal(options.slope, 2 / 3);
+                assert.equal(options.maxDepth, 2 / 3);
+                assert.equal(options.traversalLayer, 0);
+                return immersion;
+            }
+        }
+    });
+
+    assert.equal(wizard.getWaterMovementSpeedMultiplier(), 1);
+
+    immersion = { inWater: true, submergedDepth: 1 / 3 };
+    assertNearlyEqual(wizard.getWaterMovementSpeedMultiplier(), 2 / 3);
+
+    immersion = { inWater: true, submergedDepth: 2 / 3 };
+    assertNearlyEqual(wizard.getWaterMovementSpeedMultiplier(), 1 / 3);
+
+    immersion = { inWater: true, submergedDepth: 1 };
+    assertNearlyEqual(wizard.getWaterMovementSpeedMultiplier(), 1 / 3);
+
+    onBridge = true;
+    assert.equal(wizard.getWaterMovementSpeedMultiplier(), 1);
+
+    onBridge = false;
+    wizard.isJumping = true;
+    assert.equal(wizard.getWaterMovementSpeedMultiplier(), 1);
+});
+
 test("wizard can enter a thin mounted door opening before the center reaches the wall plane", () => {
     const wallHitbox = new PolygonHitbox([
         { x: -6, y: -0.22 },
@@ -913,4 +1072,83 @@ test("wizard can enter a thin mounted door opening before the center reaches the
     const bypass = wizard.canBypassVectorMovementCollisions(0, -0.6, 0, -0.25, 0.3, context, {});
 
     assert.equal(bypass, true);
+});
+
+test("wizard vector movement context blocks bridge barrier segment crossings", () => {
+    const node = { xindex: 0, yindex: 0, x: 4.5, y: 5, traversalLayer: 0, objects: [], neighbors: [] };
+    const bridgeRoad = { type: "roadPath" };
+    const bridgeSegment = {
+        ax: 4,
+        ay: 0,
+        bx: 4,
+        by: 10,
+        insideNormalX: 1,
+        insideNormalY: 0,
+        bridge: bridgeRoad,
+        bridgeMode: "onBridge"
+    };
+    const map = {
+        width: 1,
+        height: 1,
+        nodes: [[node]],
+        worldToNode() { return node; },
+        getNodesInIndexWindow() { return [node]; },
+        wrapWorldX(value) { return value; },
+        wrapWorldY(value) { return value; },
+        collectGroundBridgeRoadsInBounds() {
+            return [{ road: bridgeRoad, polygon: [{ x: 4, y: 0 }, { x: 6, y: 0 }, { x: 6, y: 10 }, { x: 4, y: 10 }] }];
+        },
+        getGroundBridgeMovementBarrierSegments() {
+            return [bridgeSegment];
+        },
+        resolveGroundBridgeHitboxCollision() {
+            return null;
+        },
+        resolveGroundBridgeMovementSegmentCollision(fromX, fromY, toX, toY, radius, options = {}) {
+            assert.equal(fromX, 4.5);
+            assert.equal(fromY, 5);
+            assert.equal(toX, 3.5);
+            assert.equal(toY, 5);
+            assert.equal(radius, 0.25);
+            assert.equal(Array.isArray(options.bridgeBarrierSegments), true);
+            assert.equal(options.bridgeBarrierSegments.length, 1);
+            return {
+                x: 4.03,
+                y: 5,
+                pushX: 0.05,
+                pushY: 0,
+                normalX: 1,
+                normalY: 0,
+                hasNormal: true,
+                bridge: bridgeRoad,
+                bridgeMode: "onBridge"
+            };
+        }
+    };
+    const wizard = Object.create(Wizard.prototype);
+    Object.assign(wizard, {
+        map,
+        node,
+        x: 4.5,
+        y: 5,
+        z: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        groundRadius: 0.25,
+        movementVector: { x: -1, y: 0 },
+        frameRate: 1,
+        _bridgeMovementState: { onBridge: true, road: bridgeRoad },
+        updateHitboxes() {}
+    });
+
+    const context = wizard.prepareVectorMovementContext(3.5, 5, 0.25, {});
+    assert.equal(context.nearbyBridgeRoads.length, 1);
+    assert.equal(context.nearbyBridgeBarrierSegments.length, 1);
+
+    const resolved = wizard._resolveStaticVectorMovementCandidate(3.5, 5, 0.25, context, {});
+    assert.equal(resolved.collided, true);
+    assert.equal(resolved.x, 4.03);
+    assert.equal(resolved.y, 5);
+    assert.equal(wizard.movementVector.x, 0);
 });

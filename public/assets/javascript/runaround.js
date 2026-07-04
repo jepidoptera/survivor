@@ -9,8 +9,6 @@ let renderNowMs = 0;
 let simulationTimeScale = 1;
 const renderMaxFps = 0; // 0 = uncapped (vsync-limited)
 const wizardDirectionRowOffset = 0; // 0 when row 0 faces left. Adjust to align sprite sheet rows.
-const wizardMouseTurnZeroDistanceUnits = 1;
-const wizardMouseTurnFullDistanceUnits = 3;
 
 let viewport = {width: 0, height: 0, innerWindow: {width: 0, height: 0}, x: 488, y: 494, z: 0, prevX: 488, prevY: 494, prevZ: 0}
 let renderAlpha = 1;
@@ -5020,8 +5018,7 @@ jQuery(() => {
                 const faceX = aim.x;
                 const faceY = aim.y;
                 if (Math.hypot(faceX, faceY) > 1e-6) {
-                    const turnStrength = wizard.getTurnStrengthFromAimVector(faceX, faceY);
-                    wizard.turnToward(faceX, faceY, turnStrength);
+                    wizard.turnToward(faceX, faceY);
                 }
             }
             facingMs = performance.now() - facingStartMs;
@@ -5043,7 +5040,6 @@ jQuery(() => {
                 x: forwardAim.x,
                 y: forwardAim.y
             };
-            const forwardTurnStrength = wizard.getTurnStrengthFromAimVector(forwardVector.x, forwardVector.y);
             const movingForward = !!keysPressed['w'];
             const movingBackward = !!keysPressed['s'];
             if (wizard.isJumping) {
@@ -5059,8 +5055,7 @@ jQuery(() => {
                 moveOptions = {
                     speedMultiplier: 1,
                     animateBackward: false,
-                    facingVector: forwardVector,
-                    facingTurnStrength: forwardTurnStrength
+                    facingVector: forwardVector
                 };
                 wizard.path = [];
                 wizard.nextNode = null;
@@ -5072,8 +5067,7 @@ jQuery(() => {
                 moveOptions = {
                     speedMultiplier: wizard.backwardSpeedMultiplier,
                     animateBackward: true,
-                    facingVector: forwardVector,
-                    facingTurnStrength: forwardTurnStrength
+                    facingVector: forwardVector
                 };
                 wizard.path = [];
                 wizard.nextNode = null;
@@ -6018,6 +6012,21 @@ jQuery(() => {
             $("#editorMenu").addClass("hidden");
         }
     }
+
+    function isSpellMenuPointerTarget(target) {
+        return !!(
+            target &&
+            typeof target.closest === "function" &&
+            target.closest("#spellMenu, #selectedSpell")
+        );
+    }
+
+    $(document).on("mousedown.spellMenuDismiss touchstart.spellMenuDismiss", event => {
+        if ($("#spellMenu").hasClass("hidden")) return;
+        if (isSpellMenuPointerTarget(event.target)) return;
+        $("#spellMenu").addClass("hidden");
+        clearSpellMenuKeyboardFocus();
+    });
 
     $("#selectedSpell").click(() => {
         if (!wizard || $("#spellSelector").hasClass("hidden")) return;

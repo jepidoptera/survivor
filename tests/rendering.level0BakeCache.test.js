@@ -1662,6 +1662,9 @@ test("wizard body layer uses shared 3d depth layer while hat remains an overlay"
         path.join(__dirname, "../public/assets/javascript/rendering/Rendering.js"),
         "utf8"
     );
+    assert.match(source, /const WIZARD_BODY_VISUAL_LOWER_UNITS = 0\.25;/);
+    assert.match(source, /const WIZARD_BODY_GROUND_DEPTH_BIAS_UNITS = 0\.1;/);
+    assert.match(source, /: WIZARD_BODY_GROUND_DEPTH_BIAS_UNITS;/);
     assert.match(source, /const overlayContainer = \(this\.layers && \(this\.layers\.entities \|\| this\.layers\.characters \|\| this\.layers\.depthObjects\)\) \|\| null;/);
     assert.match(source, /keepWizardShieldInCharacterLayer\(wizard\.shieldGraphics\)/);
     assert.doesNotMatch(source, /keepWizardShieldInCharacterLayer\(hat\)/);
@@ -1760,7 +1763,11 @@ test("wizard body gets active interior floor depth bump when the active plan has
     renderer.camera = {
         viewscale: 16,
         xyratio: 1,
-        map: {},
+        map: {
+            getGroundTerrainWaterImmersionAtPoint() {
+                return { inWater: false, distanceToShore: 0, submergedDepth: 0 };
+            }
+        },
         worldToScreen(x, y, z = 0) {
             return { x: (x * 16), y: (y * 16) - z };
         }
@@ -1848,9 +1855,10 @@ test("wizard body gets active interior floor depth bump when the active plan has
     });
 
     assert.ok(Math.abs(calls.find(call => call.target === "body").depthBias - 32.27) < 1e-9);
-    assert.equal(calls.find(call => call.target === "shadow").depthBias, 32.02);
+    assert.equal(calls.find(call => call.target === "shadow").depthBias, 32.04);
     assert.equal(calls.find(call => call.target === "body").depthFlattenZ, true);
     assert.equal(calls.find(call => call.target === "shadow").depthFlattenZ, false);
+    assert.equal(calls.find(call => call.target === "body").z, -0.25);
     assert.equal(bodyMesh.parent, renderer.layers.objects3d);
     assert.equal(shadowMesh.parent, renderer.layers.objects3d);
     assert.equal(bodyMesh.zIndex, 2147483649);

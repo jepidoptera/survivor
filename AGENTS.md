@@ -15,3 +15,7 @@ When fading complex rendered scene content, avoid overlapping two partial-alpha 
 Treat movement as polygon-first. The world is essentially a polygon-based game with a hex grid layered over it as an optimization and pathfinding structure.
 
 The wizard should stay in hitbox/geometry movement all the time for maximum movement fidelity and should not depend on hex-node occupancy for walking validity. NPCs should mostly stay on the hex grid for cheaper pathing and simulation, switching into hitbox/geometry movement only when they need close-range fidelity, such as melee engagement.
+
+## WebGL Testing
+
+Do not spend time trying to verify WebGL rendering with headless Playwright/Chromium in this environment. It repeatedly fails before Pixi initializes with "WebGL unsupported in this browser", even with SwiftShader flags. For shader and Pixi-rendering changes, use static checks, targeted unit tests, and browser-facing diagnostics or metrics; ask for a real-browser visual check when visual confirmation is required.

@@ -76,16 +76,16 @@ test("performance instrumentation stays off by default and exposes re-enable hel
     assert.match(helpText, /DebugView\.setPerfInstrumentationEnabled\(true\)/);
 });
 
-test("terrain paint diagnostic outlines stay off by default", () => {
+test("terrain paint diagnostic outlines stay on by default", () => {
     const context = loadDebugContext();
 
-    assert.equal(context.debugTerrainPolygonDiagnostics, false);
-    assert.equal(context.DebugView.settings.showTerrainPaintDiagnostics, false);
-
-    assert.equal(context.DebugView.setTerrainPaintDiagnosticsVisible(true), true);
     assert.equal(context.debugTerrainPolygonDiagnostics, true);
-    assert.equal(context.DebugView.toggleTerrainPaintDiagnostics(), false);
+    assert.equal(context.DebugView.settings.showTerrainPaintDiagnostics, true);
+
+    assert.equal(context.DebugView.setTerrainPaintDiagnosticsVisible(false), false);
     assert.equal(context.debugTerrainPolygonDiagnostics, false);
+    assert.equal(context.DebugView.toggleTerrainPaintDiagnostics(), true);
+    assert.equal(context.debugTerrainPolygonDiagnostics, true);
 });
 
 test("debug hitbox projection keeps character z absolute on floor layers", () => {

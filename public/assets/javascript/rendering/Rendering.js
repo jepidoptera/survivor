@@ -40,6 +40,7 @@
     const FLOOR_VISUAL_DEPTH_FAR_METRIC = 256;
     const FLOOR_VISUAL_DEPTH_BIAS_UNITS = 0.001;
     const ROAD_PATH_DEPTH_BIAS_UNITS = FLOOR_VISUAL_DEPTH_BIAS_UNITS + 0.035;
+    const GROUND_SHADOW_DEPTH_BIAS_UNITS = ROAD_PATH_DEPTH_BIAS_UNITS + 0.004;
     const FLOOR_VISUAL_HOLE_DEPTH_BIAS_UNITS = 0.02;
     const FLOOR_BELOW_CURRENT_DARKNESS_MULTIPLIER = 0.8;
     const BUILDING_CUTAWAY_GHOST_ALPHA = 0.1;
@@ -64,11 +65,15 @@
     const BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS = 32;
     const BUILDING_INTERIOR_LOWER_FLOOR_LIGHT_FACTOR = 0.62;
     const BUILDING_INTERIOR_WIZARD_HAT_Z = BUILDING_INTERIOR_FOREGROUND_Z + 1;
-    const LOS_SHADOW_DEPTH_BIAS_UNITS = 0.004;
-    const WIZARD_SHADOW_DEPTH_BIAS_UNITS = 0.02;
+    const LOS_SHADOW_DEPTH_BIAS_UNITS = GROUND_SHADOW_DEPTH_BIAS_UNITS;
+    const WIZARD_SHADOW_DEPTH_BIAS_UNITS = GROUND_SHADOW_DEPTH_BIAS_UNITS;
     const WIZARD_HAT_LIFT_UNITS = 0.15;
-    const WIZARD_BODY_LOWER_UNITS = 0.25;
-    const BUILDING_INTERIOR_WIZARD_BODY_DEPTH_LIFT_UNITS = WIZARD_BODY_LOWER_UNITS + 0.02;
+    const WIZARD_BODY_VISUAL_LOWER_UNITS = 0.25;
+    const WIZARD_BODY_GROUND_DEPTH_BIAS_UNITS = 0.1;
+    const WIZARD_WATER_DEPTH_SLOPE = 2 / 3;
+    const WIZARD_WATER_MAX_DEPTH_UNITS = 2 / 3;
+    const WIZARD_WATER_MIN_VISIBLE_BODY_RATIO = 1 / 3;
+    const BUILDING_INTERIOR_WIZARD_BODY_DEPTH_LIFT_UNITS = WIZARD_BODY_VISUAL_LOWER_UNITS + 0.02;
     const FLOOR_VISUAL_DEPTH_VS = `
 precision highp float;
 attribute vec2 aVertexPosition;
@@ -1373,6 +1378,10 @@ void main(void) {
             Number(wizard?.movementVector?.x) || 0,
             Number(wizard?.movementVector?.y) || 0
         );
+        const activeAuras = Array.isArray(wizard.activeAuras)
+            ? wizard.activeAuras
+            : (typeof wizard.activeAura === "string" ? [wizard.activeAura] : []);
+        const speedAuraAnimationMultiplier = activeAuras.includes("speed") ? 0.5 : 1;
         const wizardDead = !!wizard.dead;
         const isVisuallyMoving = !wizardDead && (!!wizard.moving || visualSpeed > 0.02);
         const rowIndex = Number.isInteger(wizard.lastDirectionRow)
@@ -1392,12 +1401,38 @@ void main(void) {
                 ? wizard.animationSpeedMultiplier
                 : 1;
             const simTicks = (nowMs / 1000) * simFrameRate;
-            const animFrame = Math.floor(simTicks * animSpeed * speedRatio / 2) % 8;
+            const animFrame = Math.floor(simTicks * animSpeed * speedAuraAnimationMultiplier * speedRatio / 2) % 8;
             const effectiveAnimFrame = wizard.isMovingBackward ? (7 - animFrame) : animFrame;
             frameIndex = rowIndex * 9 + 1 + effectiveAnimFrame;
         }
 
         return frameIndex;
+    }
+
+    function getWizardWaterBodyRenderState(immersion = null, bodyWorldHeight = 1, viewscale = 1) {
+        const inWater = !!(immersion && immersion.inWater === true);
+        const submergedDepth = inWater && Number.isFinite(Number(immersion.submergedDepth))
+            ? Math.max(0, Number(immersion.submergedDepth))
+            : 0;
+        const heightWorld = Number.isFinite(Number(bodyWorldHeight))
+            ? Math.max(1e-6, Math.abs(Number(bodyWorldHeight)))
+            : 1;
+        const maxHiddenRatio = Math.max(0, Math.min(1, 1 - WIZARD_WATER_MIN_VISIBLE_BODY_RATIO));
+        const hiddenRatio = inWater
+            ? Math.max(0, Math.min(maxHiddenRatio, submergedDepth / heightWorld))
+            : 0;
+        const visibleRatio = Math.max(WIZARD_WATER_MIN_VISIBLE_BODY_RATIO, 1 - hiddenRatio);
+        const screenHeight = Number.isFinite(Number(viewscale)) ? Math.max(0, Math.abs(Number(viewscale))) : 0;
+        return {
+            inWater,
+            visibleRatio,
+            hiddenRatio,
+            hiddenScreenPx: hiddenRatio * screenHeight,
+            submergedDepth,
+            distanceToShore: immersion && Number.isFinite(Number(immersion.distanceToShore))
+                ? Math.max(0, Number(immersion.distanceToShore))
+                : 0
+        };
     }
 
     function buildPixiDisplayObjectCrashSignature(summary) {
@@ -1499,6 +1534,7 @@ void main(void) {
             this.wizardGhostSprite = null;
             this.wizardShadowSprite = null;
             this.wizardShadowProxy = null;
+            this.wizardWaterCroppedTextureCache = new WeakMap();
             this.placeObjectPreviewSprite = null;
             this.placeObjectPreviewTexturePath = "";
             this.placeObjectPreviewDisplayObject = null;
@@ -1571,6 +1607,7 @@ void main(void) {
             this.floorVisualTextureConfigCache = null;
             this.floorVisualTextureConfigPromise = null;
             this.floorVisualDepthState = null;
+            this.grassDepthRenderer = null;
             this.roadPathDepthState = null;
             this.stairRenderObjectById = new Map();
             this.stairMeshById = new Map();
@@ -2341,6 +2378,101 @@ void main(void) {
             return Number.isFinite(surfaceZ)
                 ? surfaceZ - baseZ
                 : (Number.isFinite(Number(support.localZ)) ? Number(support.localZ) : fallback);
+        }
+
+        getWizardWaterImmersionState(mapRef = null, renderPos = null, wizardLayer = 0, wizard = null) {
+            const dryState = {
+                inWater: false,
+                distanceToShore: 0,
+                submergedDepth: 0,
+                slope: WIZARD_WATER_DEPTH_SLOPE,
+                maxDepth: WIZARD_WATER_MAX_DEPTH_UNITS
+            };
+            if (!mapRef) return dryState;
+            if (typeof mapRef.getGroundTerrainWaterImmersionAtPoint !== "function") {
+                throw new Error("wizard water rendering requires map water immersion query");
+            }
+            if (!renderPos || !Number.isFinite(renderPos.x) || !Number.isFinite(renderPos.y)) {
+                throw new Error("wizard water rendering requires a finite render position");
+            }
+            const layer = Number.isFinite(Number(wizardLayer)) ? Math.round(Number(wizardLayer)) : 0;
+            if (layer !== 0) return dryState;
+            if (
+                wizard &&
+                typeof mapRef.isActorOnGroundBridge === "function" &&
+                mapRef.isActorOnGroundBridge(wizard, renderPos.x, renderPos.y)
+            ) {
+                return dryState;
+            }
+            const immersion = mapRef.getGroundTerrainWaterImmersionAtPoint(renderPos.x, renderPos.y, {
+                slope: WIZARD_WATER_DEPTH_SLOPE,
+                maxDepth: WIZARD_WATER_MAX_DEPTH_UNITS,
+                traversalLayer: layer
+            });
+            if (!immersion || immersion.inWater !== true) return dryState;
+            return immersion;
+        }
+
+        getWizardWaterBodyRenderState(immersion = null, bodyWorldHeight = 1) {
+            return getWizardWaterBodyRenderState(
+                immersion,
+                bodyWorldHeight,
+                this.camera && Number.isFinite(this.camera.viewscale) ? this.camera.viewscale : 1
+            );
+        }
+
+        getWizardWaterCroppedTexture(sourceTexture, visibleRatio = 1) {
+            const originalTexture = sourceTexture && sourceTexture._wizardWaterSourceTexture
+                ? sourceTexture._wizardWaterSourceTexture
+                : sourceTexture;
+            const ratio = Number.isFinite(Number(visibleRatio))
+                ? Math.max(WIZARD_WATER_MIN_VISIBLE_BODY_RATIO, Math.min(1, Number(visibleRatio)))
+                : 1;
+            if (ratio >= 0.999) return originalTexture;
+            if (
+                typeof PIXI === "undefined" ||
+                !PIXI ||
+                typeof PIXI.Texture !== "function" ||
+                typeof PIXI.Rectangle !== "function"
+            ) {
+                throw new Error("wizard water immersion requires Pixi texture frame support");
+            }
+            if (!originalTexture || !originalTexture.baseTexture) {
+                throw new Error("wizard water immersion requires a source body texture");
+            }
+            const baseTexture = originalTexture.baseTexture;
+            const baseW = Number(baseTexture.realWidth || baseTexture.width || 0);
+            const baseH = Number(baseTexture.realHeight || baseTexture.height || 0);
+            const frame = originalTexture.frame || originalTexture.orig || null;
+            const frameX = Number(frame && frame.x);
+            const frameY = Number(frame && frame.y);
+            const frameW = Number(frame && frame.width);
+            const frameH = Number(frame && frame.height);
+            if (!(baseW > 0) || !(baseH > 0) || !(frameW > 0) || !(frameH > 0)) {
+                throw new Error("wizard water immersion requires a loaded body texture frame");
+            }
+            const cache = this.wizardWaterCroppedTextureCache instanceof WeakMap
+                ? this.wizardWaterCroppedTextureCache
+                : (this.wizardWaterCroppedTextureCache = new WeakMap());
+            let byRatio = cache.get(originalTexture);
+            if (!byRatio) {
+                byRatio = new Map();
+                cache.set(originalTexture, byRatio);
+            }
+            const key = ratio.toFixed(3);
+            const cached = byRatio.get(key);
+            if (cached && cached.baseTexture === baseTexture) return cached;
+            const croppedHeight = Math.max(1, Math.min(frameH, frameH * ratio));
+            const croppedFrame = new PIXI.Rectangle(
+                Number.isFinite(frameX) ? frameX : 0,
+                Number.isFinite(frameY) ? frameY : 0,
+                frameW,
+                croppedHeight
+            );
+            const croppedTexture = new PIXI.Texture(baseTexture, croppedFrame);
+            croppedTexture._wizardWaterSourceTexture = originalTexture;
+            byRatio.set(key, croppedTexture);
+            return croppedTexture;
         }
 
         projectWorldPointToCutawayPlane(x, y, z = 0) {
@@ -9065,6 +9197,10 @@ void main(void) {
                 : (global.LOSVisualSettings || null);
             if (!settings || typeof settings !== "object") return fallback;
             return Object.prototype.hasOwnProperty.call(settings, key) ? settings[key] : fallback;
+        }
+
+        getLosNearRevealRadius() {
+            return LOS_NEAR_REVEAL_RADIUS;
         }
 
         isLosMazeModeEnabled() {
@@ -18298,6 +18434,7 @@ void main(void) {
                 Math.max(FLOOR_LEVEL0_CHUNK_CACHE_LIMIT * 4, visibleKeys.size * 2)
             );
             const trimMs = _pnow ? (_pnow() - trimStartMs) : 0;
+            this.renderGrassDepthEffect(ctx, entries);
             this.renderTerrainPolygonDiagnosticOverlay(ctx, entries);
             this.setFrameMetric("floorVisualPolygons", rendered);
             this.setFrameMetric("floorVisualMeshesCreated", meshesCreated);
@@ -18349,6 +18486,58 @@ void main(void) {
                 return;
             }
             debugRenderer.render(this, ctx, entries);
+        }
+
+        renderGrassDepthEffect(ctx, entries) {
+            const api = global.RenderingGrassBlades;
+            const requested = global.renderingGrassBladesEnabled === true || global.renderingGrassDepthEnabled === true;
+            if (requested && (!api || typeof api.Renderer !== "function")) {
+                throw new Error("grass blade effect is enabled but RenderingGrassBlades module is missing");
+            }
+            const enabled = !!(api && typeof api.isEnabled === "function" && api.isEnabled());
+            if (!enabled) {
+                if (this.grassDepthRenderer && typeof this.grassDepthRenderer.hide === "function") {
+                    this.grassDepthRenderer.hide();
+                }
+                this.setFrameMetric("grassDepthRendered", 0);
+                this.setFrameMetric("grassDepthRoots", 0);
+                this.setFrameMetric("grassDepthMs", 0);
+                this.setFrameMetric("grassDepthMaskMs", 0);
+                this.setFrameMetric("grassDepthMaskRebuilt", 0);
+                this.setFrameMetric("grassDepthLosShadow", 0);
+                this.setFrameMetric("grassDepthWizardShadow", 0);
+                this.setFrameMetric("grassDepthLayers", 0);
+                this.setFrameMetric("grassDepthChunks", 0);
+                this.setFrameMetric("grassDepthChunksBuilt", 0);
+                this.setFrameMetric("grassDepthChunksPending", 0);
+                this.setFrameMetric("grassDepthBlades", 0);
+                return false;
+            }
+            if (!this.grassDepthRenderer) {
+                this.grassDepthRenderer = new api.Renderer();
+            }
+            const perfNow = this.currentFrameMetrics &&
+                typeof performance !== "undefined" &&
+                performance &&
+                typeof performance.now === "function"
+                ? performance.now.bind(performance)
+                : null;
+            const startMs = perfNow ? perfNow() : 0;
+            const result = this.grassDepthRenderer.render(this, ctx, entries);
+            const elapsedMs = perfNow ? (perfNow() - startMs) : 0;
+            this.setFrameMetric("grassDepthRendered", Number(result && result.rendered) || 0);
+            this.setFrameMetric("grassDepthRoots", Number(result && result.roots) || 0);
+            this.setFrameMetric("grassDepthMs", elapsedMs);
+            this.setFrameMetric("grassDepthMaskMs", Number(result && result.maskMs) || 0);
+            this.setFrameMetric("grassDepthMaskRebuilt", Number(result && result.maskRebuilt) || 0);
+            this.setFrameMetric("grassDepthLosShadow", Number(result && result.losShadow) || 0);
+            this.setFrameMetric("grassDepthWizardShadow", Number(result && result.wizardShadow) || 0);
+            this.setFrameMetric("grassDepthLayers", Number(result && result.layers) || 0);
+            this.setFrameMetric("grassDepthChunks", Number(result && result.chunks) || 0);
+            this.setFrameMetric("grassDepthChunksBuilt", Number(result && result.chunksBuilt) || 0);
+            this.setFrameMetric("grassDepthChunksPending", Number(result && result.chunksPending) || 0);
+            this.setFrameMetric("grassDepthBlades", Number(result && result.blades) || 0);
+            return !!(result && result.rendered);
         }
 
         renderRoadsAndFloors(ctx, visibleNodes) {
@@ -20281,6 +20470,7 @@ void main(void) {
                     }
                 }
             }
+            const wizardBodySourceTexture = wizardSprite.texture || PIXI.Texture.WHITE;
 
             const invisibilityActive = this.isInvisibilityActive(wizard);
             const wizardAlpha = invisibilityActive ? 0.45 : 1;
@@ -20329,7 +20519,7 @@ void main(void) {
             ) ? BUILDING_INTERIOR_ACTIVE_FLOOR_DEPTH_BUMP_UNITS : 0;
             const wizardBodyDepthBump = wizardActiveFloorDepthBump > 0
                 ? wizardActiveFloorDepthBump + BUILDING_INTERIOR_WIZARD_BODY_DEPTH_LIFT_UNITS
-                : 0;
+                : WIZARD_BODY_GROUND_DEPTH_BIAS_UNITS;
             const pGround = this.camera.worldToScreen(renderPos.x, renderPos.y, wizardLayerBaseZ);
             const interpolatedJumpHeight = Number.isFinite(renderPos.z) ? renderPos.z : 0;
             let stairSurfaceLocalZ = NaN;
@@ -20375,9 +20565,24 @@ void main(void) {
                 ? wizard.getAdventureDeathAnimationProgress(renderNowMs)
                 : 0;
             const ghostSprite = this.ensureWizardGhostSprite();
+            const wizardBodyFullWorldHeight = 1 / Math.max(1e-6, Math.abs(Number(this.camera.xyratio) || 1));
+            const wizardAirborneForWater = wizard.isJumping === true || wizardVisualLocalZ > 0.05;
+            const wizardWaterImmersion = deathAnimationActive || wizardAirborneForWater
+                ? null
+                : this.getWizardWaterImmersionState(mapRef, renderPos, wizardLayer, wizard);
+            const wizardWaterRenderState = this.getWizardWaterBodyRenderState(
+                wizardWaterImmersion,
+                wizardBodyFullWorldHeight
+            );
+            const wizardBodyVisibleRatio = deathAnimationActive ? 1 : wizardWaterRenderState.visibleRatio;
+            const wizardWaterLowerBodyScreenPx = WIZARD_BODY_VISUAL_LOWER_UNITS * this.camera.viewscale * this.camera.xyratio;
+            wizardSprite.texture = deathAnimationActive
+                ? wizardBodySourceTexture
+                : this.getWizardWaterCroppedTexture(wizardBodySourceTexture, wizardBodyVisibleRatio);
+            wizardSprite.anchor.set(0.5, deathAnimationActive ? 0.5 : 0.75);
 
             wizardSprite.width = this.camera.viewscale;
-            wizardSprite.height = this.camera.viewscale;
+            wizardSprite.height = this.camera.viewscale * wizardBodyVisibleRatio;
             wizardSprite.visible = false;
             if (Object.prototype.hasOwnProperty.call(wizardSprite, "renderable")) {
                 wizardSprite.renderable = false;
@@ -20452,7 +20657,7 @@ void main(void) {
                 const savedZ = wizard.z;
                 wizard.x = renderPos.x;
                 wizard.y = renderPos.y;
-                wizard.z = wizardVisualLocalZ - WIZARD_BODY_LOWER_UNITS;
+                wizard.z = wizardVisualLocalZ - WIZARD_BODY_VISUAL_LOWER_UNITS;
                 wizardDepthMesh = staticProto.updateDepthBillboardMesh.call(wizard, ctx, this.camera, {
                     alphaCutoff: TREE_ALPHA_CUTOFF,
                     mazeMode: false,
@@ -20488,7 +20693,12 @@ void main(void) {
             }
 
             const shadowProxy = this.ensureWizardShadowProxy();
-            if (!deathAnimationActive && shadowProxy && typeof shadowProxy.updateDepthBillboardMesh === "function") {
+            if (
+                !deathAnimationActive &&
+                !wizardWaterRenderState.inWater &&
+                shadowProxy &&
+                typeof shadowProxy.updateDepthBillboardMesh === "function"
+            ) {
                 shadowProxy._renderLayerBaseZ = wizardLayerBaseZ;
                 shadowProxy._renderDepthBias = WIZARD_SHADOW_DEPTH_BIAS_UNITS + wizardActiveFloorDepthBump;
                 shadowProxy.map = wizard.map || global.map || null;
@@ -20574,7 +20784,33 @@ void main(void) {
                     hat.x = pGround.x;
                     const hatYOffset = (Number.isFinite(wizard.hatRenderYOffsetUnits) ? wizard.hatRenderYOffsetUnits : 0)
                         * this.camera.viewscale * this.camera.xyratio;
-                    hat.y = pGround.y - jumpOffsetPx - hatYOffset - hatLiftPx;
+                    const baseHatY = pGround.y - jumpOffsetPx - hatYOffset - hatLiftPx;
+                    if (wizardWaterRenderState.inWater) {
+                        let renderedBodyTopY = NaN;
+                        const bodyWorldPositions = wizard._depthBillboardWorldPositions;
+                        if (bodyWorldPositions && bodyWorldPositions.length >= 12) {
+                            for (let i = 2; i < bodyWorldPositions.length; i += 3) {
+                                const sx = Number(bodyWorldPositions[i - 2]);
+                                const sy = Number(bodyWorldPositions[i - 1]);
+                                const sz = Number(bodyWorldPositions[i]);
+                                if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(sz)) continue;
+                                const projected = this.camera.worldToScreen(sx, sy, sz + wizardLayerBaseZ);
+                                if (!projected || !Number.isFinite(projected.y)) continue;
+                                renderedBodyTopY = Number.isFinite(renderedBodyTopY)
+                                    ? Math.min(renderedBodyTopY, projected.y)
+                                    : projected.y;
+                            }
+                        }
+                        if (!Number.isFinite(renderedBodyTopY)) {
+                            renderedBodyTopY = pGround.y - jumpOffsetPx + wizardWaterLowerBodyScreenPx
+                                - (this.camera.viewscale * wizardBodyVisibleRatio);
+                        }
+                        const dryBodyTopY = pGround.y - jumpOffsetPx + wizardWaterLowerBodyScreenPx
+                            - this.camera.viewscale;
+                        hat.y = renderedBodyTopY + (baseHatY - dryBodyTopY);
+                    } else {
+                        hat.y = baseHatY;
+                    }
                     hat.rotation = 0;
                 }
                 if (hat.scale && typeof hat.scale.set === "function") {
@@ -26285,6 +26521,9 @@ void main(void) {
     const renderingApi = {
         getWizardBodyFrameIndex(wizard, ctx = {}) {
             return getWizardBodyFrameIndex(wizard, ctx);
+        },
+        getWizardWaterBodyRenderState(immersion = null, bodyWorldHeight = 1, viewscale = 1) {
+            return getWizardWaterBodyRenderState(immersion, bodyWorldHeight, viewscale);
         },
         renderFrame(ctx) {
             if (!global.RenderingCamera || !global.RenderingLayers || typeof PIXI === "undefined") {

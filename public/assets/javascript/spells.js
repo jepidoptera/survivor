@@ -433,6 +433,17 @@ const SpellSystem = (() => {
         { name: "healing", icon: "/assets/images/thumbnails/cross.png", key: "H", magicPerSecond: 10 },
         { name: "invisibility", icon: "/assets/images/magic/invisible.png", key: "U", magicPerSecond: 12 }
     ];
+    const SPELL_LEVEL_DATA_URL = "/assets/data/spell-levels.json";
+    const SPELL_LEVEL_MIN = 0;
+    const SPELL_LEVEL_MAX = 7;
+    const SPELL_LEVEL_UNLOCK_NAME_BY_ID = {
+        iceball: "freeze",
+        squirrels: "attacksquirrel"
+    };
+    const SPELL_LEVEL_ID_BY_MAGIC_NAME = {
+        freeze: "iceball",
+        attacksquirrel: "squirrels"
+    };
 
     const MAGIC_TICK_MS = 50;
     const HEALING_AURA_EFFECT_MULTIPLIER = 2;
@@ -587,6 +598,10 @@ const SpellSystem = (() => {
     const buildingEditorSavePayloadFetchesByName = new Map();
     let editorMenuCategory = DEFAULT_PLACEABLE_CATEGORY;
     const textureAlphaMaskCache = new Map();
+    let spellLevelDefinitions = null;
+    let spellLevelFetchPromise = null;
+    let selectedSpellLevelId = "iceball";
+    let spellLevelPanelControlsBound = false;
 
     function normalizeFloorEditLevel(level) {
         const n = Number(level);
@@ -1142,6 +1157,339 @@ const SpellSystem = (() => {
         if (!wizardRef || !shouldFoldAurasIntoSpellList(wizardRef)) return false;
         normalizeActiveAuras(wizardRef);
         return false;
+    }
+
+    function clampSpellLevel(level) {
+        const n = Number(level);
+        if (!Number.isFinite(n)) return SPELL_LEVEL_MIN;
+        return Math.max(SPELL_LEVEL_MIN, Math.min(SPELL_LEVEL_MAX, Math.round(n)));
+    }
+
+    function normalizeSpellLevelDefinitions(payload) {
+        if (!payload || typeof payload !== "object" || !Array.isArray(payload.spells)) {
+            throw new Error("spell level data must contain a spells array");
+        }
+        const seen = new Set();
+        const spells = payload.spells.map((spell, index) => {
+            if (!spell || typeof spell !== "object") {
+                throw new Error(`spell level data entry ${index} is not an object`);
+            }
+            const id = typeof spell.id === "string" ? spell.id.trim().toLowerCase() : "";
+            if (!id) throw new Error(`spell level data entry ${index} is missing id`);
+            if (seen.has(id)) throw new Error(`duplicate spell level id: ${id}`);
+            seen.add(id);
+            if (!Array.isArray(spell.levels) || spell.levels.length !== SPELL_LEVEL_MAX) {
+                throw new Error(`spell level data for ${id} must contain exactly ${SPELL_LEVEL_MAX} levels`);
+            }
+            const levels = spell.levels.map((levelEntry, levelIndex) => {
+                if (!levelEntry || typeof levelEntry !== "object") {
+                    throw new Error(`spell level ${id}.${levelIndex + 1} is not an object`);
+                }
+                const level = clampSpellLevel(levelEntry.level);
+                if (level !== levelIndex + 1) {
+                    throw new Error(`spell level ${id}.${levelIndex + 1} has mismatched level ${levelEntry.level}`);
+                }
+                if (typeof levelEntry.headline !== "string" || !levelEntry.headline.trim()) {
+                    throw new Error(`spell level ${id}.${level} is missing headline`);
+                }
+                return { ...levelEntry, level };
+            });
+            return {
+                ...spell,
+                id,
+                displayName: (typeof spell.displayName === "string" && spell.displayName.trim()) ? spell.displayName.trim() : id,
+                icon: (typeof spell.icon === "string" && spell.icon.trim()) ? spell.icon.trim() : getMagicIconPath(id),
+                levels
+            };
+        });
+        return spells;
+    }
+
+    function fetchSpellLevelDefinitions() {
+        if (spellLevelDefinitions) return Promise.resolve(spellLevelDefinitions);
+        if (spellLevelFetchPromise) return spellLevelFetchPromise;
+        if (typeof fetch !== "function") {
+            throw new Error("spell level interface requires fetch");
+        }
+        spellLevelFetchPromise = fetch(SPELL_LEVEL_DATA_URL)
+            .then(response => {
+                if (!response || !response.ok) {
+                    const status = response ? `${response.status} ${response.statusText || ""}`.trim() : "no response";
+                    throw new Error(`failed to load spell level data: ${status}`);
+                }
+                return response.json();
+            })
+            .then(payload => {
+                spellLevelDefinitions = normalizeSpellLevelDefinitions(payload);
+                return spellLevelDefinitions;
+            })
+            .catch(error => {
+                spellLevelFetchPromise = null;
+                console.error("[spell levels]", error);
+                throw error;
+            });
+        return spellLevelFetchPromise;
+    }
+
+    function normalizeWizardSpellLevels(wizardRef) {
+        if (!wizardRef) return {};
+        if (!wizardRef.spellLevels || typeof wizardRef.spellLevels !== "object" || Array.isArray(wizardRef.spellLevels)) {
+            wizardRef.spellLevels = {};
+        }
+        Object.keys(wizardRef.spellLevels).forEach(spellId => {
+            wizardRef.spellLevels[spellId] = clampSpellLevel(wizardRef.spellLevels[spellId]);
+        });
+        return wizardRef.spellLevels;
+    }
+
+    function getWizardSkillPoints(wizardRef) {
+        if (!wizardRef) return 0;
+        const raw = Number(wizardRef.skillpoints);
+        const normalized = Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+        wizardRef.skillpoints = normalized;
+        return normalized;
+    }
+
+    function setWizardSkillPoints(wizardRef, value) {
+        if (!wizardRef) return 0;
+        const raw = Number(value);
+        const normalized = Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+        wizardRef.skillpoints = normalized;
+        refreshSpellLevelPanel(wizardRef);
+        return normalized;
+    }
+
+    function getMagicNameForSpellLevelId(spellId) {
+        if (typeof spellId !== "string") return "";
+        const id = spellId.trim().toLowerCase();
+        return SPELL_LEVEL_UNLOCK_NAME_BY_ID[id] || id;
+    }
+
+    function getSpellLevelIdForMagicName(magicName) {
+        if (typeof magicName !== "string") return "";
+        const normalizedName = magicName.trim().toLowerCase();
+        return SPELL_LEVEL_ID_BY_MAGIC_NAME[normalizedName] || normalizedName;
+    }
+
+    function getWizardSpellLevel(wizardRef, spellId) {
+        if (!wizardRef || typeof spellId !== "string") return 0;
+        const id = spellId.trim().toLowerCase();
+        const spellLevels = normalizeWizardSpellLevels(wizardRef);
+        if (Object.prototype.hasOwnProperty.call(spellLevels, id)) {
+            return clampSpellLevel(spellLevels[id]);
+        }
+        const magicName = getMagicNameForSpellLevelId(id);
+        if (!isKnownMagicName(magicName)) return 0;
+        if (isSpellUnlocked(wizardRef, magicName) || isAuraUnlocked(wizardRef, magicName)) {
+            return 1;
+        }
+        return 0;
+    }
+
+    function setWizardSpellLevel(wizardRef, spellId, level) {
+        if (!wizardRef || typeof spellId !== "string") return 0;
+        const id = spellId.trim().toLowerCase();
+        if (!id) return 0;
+        const nextLevel = clampSpellLevel(level);
+        const spellLevels = normalizeWizardSpellLevels(wizardRef);
+        spellLevels[id] = nextLevel;
+        const magicName = getMagicNameForSpellLevelId(id);
+        if (nextLevel > 0 && isKnownMagicName(magicName)) {
+            grantMagicUnlock(wizardRef, magicName);
+        }
+        syncWizardUnlockState(wizardRef);
+        refreshSpellLevelPanel(wizardRef);
+        return nextLevel;
+    }
+
+    function levelUpWizardSpell(wizardRef, spellId) {
+        const currentLevel = getWizardSpellLevel(wizardRef, spellId);
+        if (currentLevel >= SPELL_LEVEL_MAX) return currentLevel;
+        const skillPoints = getWizardSkillPoints(wizardRef);
+        if (skillPoints <= 0) {
+            refreshSpellLevelPanel(wizardRef);
+            return currentLevel;
+        }
+        wizardRef.skillpoints = skillPoints - 1;
+        return setWizardSpellLevel(wizardRef, spellId, currentLevel + 1);
+    }
+
+    function getSelectedSpellLevelDefinition() {
+        if (!Array.isArray(spellLevelDefinitions) || spellLevelDefinitions.length === 0) return null;
+        const selected = spellLevelDefinitions.find(spell => spell.id === selectedSpellLevelId);
+        return selected || spellLevelDefinitions[0];
+    }
+
+    function appendSpellLevelStats($container, levelData) {
+        const stats = [
+            ["manaCost", "Mana cost"],
+            ["costPerSecond", "Cost per second"],
+            ["damage", "Damage"],
+            ["range", "Range"],
+            ["castDelay", "Cast delay"],
+            ["projectileSpeed", "Projectile speed"],
+            ["duration", "Duration"]
+        ].filter(([key]) => {
+            if (!Object.prototype.hasOwnProperty.call(levelData, key)) return false;
+            const value = levelData[key];
+            if (value === null || typeof value === "undefined") return false;
+            return typeof value !== "string" || value.trim().length > 0;
+        });
+        if (stats.length === 0) return;
+        const $stats = $("<div>").addClass("spellLevelStats");
+        stats.forEach(([key, label]) => {
+            $stats.append($("<div>").addClass("spellLevelStat").text(`${label}: ${levelData[key]}`));
+        });
+        $container.append($stats);
+    }
+
+    function appendSpellLevelInfo($container, label, levelData) {
+        $container.append($("<div>").addClass("spellLevelCurrentText").text(label));
+        if (!levelData) return;
+        $container.append($("<div>").addClass("spellLevelHeadline").text(levelData.headline));
+        if (typeof levelData.subtitle === "string" && levelData.subtitle.length > 0) {
+            $container.append($("<div>").addClass("spellLevelSubtitle").text(levelData.subtitle));
+        }
+        appendSpellLevelStats($container, levelData);
+    }
+
+    function renderSpellLevelLoading(message) {
+        const $header = $("#spellLevelHeader");
+        const $list = $("#spellLevelList");
+        const $details = $("#spellLevelDetails");
+        if (!$header.length || !$list.length || !$details.length) {
+            throw new Error("missing spell level panel DOM");
+        }
+        const wizardRef = (typeof globalThis !== "undefined" && globalThis.wizard)
+            ? globalThis.wizard
+            : null;
+        $header.text(`skill points ${getWizardSkillPoints(wizardRef)}`);
+        $list.empty();
+        $details.empty().css("display", "flex").append(
+            $("<div>").addClass("spellLevelMastered").text(message)
+        );
+    }
+
+    function renderSpellLevelPanel(wizardRef) {
+        const $selector = $("#spellLevelSelector");
+        const $header = $("#spellLevelHeader");
+        const $list = $("#spellLevelList");
+        const $details = $("#spellLevelDetails");
+        if (!$selector.length || !$header.length || !$list.length || !$details.length) {
+            throw new Error("missing spell level panel DOM");
+        }
+        const skillPoints = getWizardSkillPoints(wizardRef);
+        $header.text(`skill points ${skillPoints}`);
+        if (!Array.isArray(spellLevelDefinitions)) {
+            renderSpellLevelLoading("Loading spell levels...");
+            return;
+        }
+        if (spellLevelDefinitions.length === 0) {
+            throw new Error("spell level data contains no spells");
+        }
+        if (!spellLevelDefinitions.some(spell => spell.id === selectedSpellLevelId)) {
+            selectedSpellLevelId = spellLevelDefinitions[0].id;
+        }
+
+        $list.empty();
+        spellLevelDefinitions.forEach(spell => {
+            const level = getWizardSpellLevel(wizardRef, spell.id);
+            const $item = $("<div>")
+                .addClass("spellLevelListItem")
+                .toggleClass("selected", spell.id === selectedSpellLevelId)
+                .attr("data-spell-level-id", spell.id)
+                .on("click", () => {
+                    selectedSpellLevelId = spell.id;
+                    renderSpellLevelPanel(wizardRef);
+                });
+            $item.append($("<div>").addClass("spellLevelListIcon").css("background-image", `url('${spell.icon}')`));
+            const $text = $("<div>").addClass("spellLevelListText");
+            $text.append($("<div>").addClass("spellLevelListName").text(spell.displayName));
+            $text.append($("<div>").addClass("spellLevelListLevel").text(`Level ${level}`));
+            $item.append($text);
+            $list.append($item);
+        });
+
+        const selected = getSelectedSpellLevelDefinition();
+        const currentLevel = getWizardSpellLevel(wizardRef, selected.id);
+        const currentData = currentLevel > 0 ? selected.levels[currentLevel - 1] : null;
+        const nextData = currentLevel < SPELL_LEVEL_MAX ? selected.levels[currentLevel] : null;
+        $details.empty().css("display", "");
+        const $current = $("<div>").addClass("spellLevelSection");
+        appendSpellLevelInfo($current, `current level: ${currentLevel}`, currentData);
+        const $divider = $("<div>").addClass("spellLevelDivider");
+        if (currentLevel < SPELL_LEVEL_MAX) {
+            const $button = $("<button>")
+                .attr("type", "button")
+                .addClass("spellLevelUpButton")
+                .prop("disabled", skillPoints <= 0)
+                .text("level up")
+                .on("click", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (getWizardSkillPoints(wizardRef) <= 0) {
+                        refreshSpellLevelPanel(wizardRef);
+                        return;
+                    }
+                    levelUpWizardSpell(wizardRef, selected.id);
+                });
+            $divider.append($button);
+        }
+        const $next = $("<div>").addClass("spellLevelSection");
+        if (currentLevel >= SPELL_LEVEL_MAX) {
+            $next.append($("<div>").addClass("spellLevelMastered").text("You have mastered this spell."));
+        } else {
+            appendSpellLevelInfo($next, `next level: ${currentLevel + 1}`, nextData);
+        }
+        $details.append($current, $divider, $next);
+    }
+
+    function refreshSpellLevelPanel(wizardRef) {
+        const panel = document.getElementById("spellLevelPanel");
+        if (!panel || panel.classList.contains("hidden")) return;
+        renderSpellLevelPanel(wizardRef);
+    }
+
+    function showSpellLevelPanel(wizardRef) {
+        if (!wizardRef) return;
+        const currentLevelId = getSpellLevelIdForMagicName(wizardRef.currentSpell || wizardRef.selectedSpellName || "");
+        if (currentLevelId) selectedSpellLevelId = currentLevelId;
+        $("#spellLevelPanel").removeClass("hidden");
+        renderSpellLevelLoading("Loading spell levels...");
+        fetchSpellLevelDefinitions()
+            .then(() => renderSpellLevelPanel(wizardRef))
+            .catch(error => {
+                renderSpellLevelLoading("Unable to load spell level data.");
+                console.error("[spell levels] unable to open panel", error);
+            });
+    }
+
+    function hideSpellLevelPanel() {
+        $("#spellLevelPanel").addClass("hidden");
+    }
+
+    function toggleSpellLevelPanel(wizardRef) {
+        if (!wizardRef) return;
+        const panel = document.getElementById("spellLevelPanel");
+        if (panel && !panel.classList.contains("hidden")) {
+            hideSpellLevelPanel();
+            return;
+        }
+        $("#spellMenu").addClass("hidden");
+        $("#auraMenu").addClass("hidden");
+        $("#editorMenu").addClass("hidden");
+        showSpellLevelPanel(wizardRef);
+    }
+
+    function bindSpellLevelPanelControls(wizardRef) {
+        if (spellLevelPanelControlsBound) return;
+        spellLevelPanelControlsBound = true;
+        $("#selectedSpellLevel").on("click", () => {
+            toggleSpellLevelPanel(wizardRef || (typeof globalThis !== "undefined" ? globalThis.wizard : null));
+        });
+        $("#spellLevelPanel").on("click", event => {
+            event.stopPropagation();
+        });
     }
 
     function getActiveAuraMagicDrainPerSecond(wizardRef) {
@@ -11741,11 +12089,13 @@ const SpellSystem = (() => {
         if (!wizardRef) return;
         wizardRef.spells = buildSpellList(wizardRef);
         const $spellSelector = $("#spellSelector");
+        const $spellLevelSelector = $("#spellLevelSelector");
         const $selectedSpell = $("#selectedSpell");
         const $spellMenu = $("#spellMenu");
         const $spellGrid = $("#spellGrid");
         const showSpellSelector = shouldShowSpellSelector(wizardRef);
         $spellSelector.toggleClass("hidden", !showSpellSelector);
+        $spellLevelSelector.toggleClass("hidden", !showSpellSelector);
         if (!showSpellSelector) {
             $selectedSpell.empty().css({
                 "background-image": "",
@@ -11755,6 +12105,7 @@ const SpellSystem = (() => {
                 "overflow": ""
             });
             $spellMenu.addClass("hidden");
+            hideSpellLevelPanel();
             $spellGrid.empty();
             return;
         }
@@ -12234,6 +12585,9 @@ const SpellSystem = (() => {
         getSelectedRoofTextureRepeat(wizardRef);
         getUnlockedSpellNames(wizardRef);
         getUnlockedAuraNames(wizardRef);
+        getWizardSkillPoints(wizardRef);
+        normalizeWizardSpellLevels(wizardRef);
+        bindSpellLevelPanelControls(wizardRef);
         wizardRef.spells = buildSpellList(wizardRef);
         wizardRef.selectedSpellName = getSelectedSpellName(wizardRef);
         normalizeActiveAuras(wizardRef);
@@ -12459,6 +12813,15 @@ const SpellSystem = (() => {
         showEditorMenu,
         showEditorSubmenuForSelectedCategory,
         showPlaceableMenu,
+        showSpellLevelPanel,
+        hideSpellLevelPanel,
+        toggleSpellLevelPanel,
+        getWizardSpellLevel,
+        setWizardSpellLevel,
+        levelUpWizardSpell,
+        getWizardSkillPoints,
+        setWizardSkillPoints,
+        refreshSpellLevelPanel,
         paintTerrainAtWorldPoint,
         handleTerrainMenuHotkey,
         selectTerrainType,

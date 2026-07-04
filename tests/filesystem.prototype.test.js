@@ -1046,6 +1046,65 @@ test("loadGameState preserves authored terrain polygons independent of saved ter
     assert.deepEqual(map.terrainPolygons, [keptPolygon, stalePolygon]);
 });
 
+test("loadGameState refreshes wizard bridge state after terrain polygons are restored", () => {
+    const map = createRectMap();
+    map.terrainPolygons = [];
+    map.normalizeGroundTerrainPolygons = (polygons) => polygons;
+    let bridgeRefreshes = 0;
+    map.applyActorBridgeMovementState = (actor, x, y, options = {}) => {
+        bridgeRefreshes += 1;
+        assert.equal(actor, globalThis.wizard);
+        assert.equal(x, 4.5);
+        assert.equal(y, 5);
+        assert.equal(options.allowExistingBridgePosition, true);
+        assert.equal(map.terrainPolygons.length, 1);
+        assert.equal(map.terrainPolygons[0].type, "water");
+        actor._bridgeMovementState = { onBridge: true };
+        return actor._bridgeMovementState;
+    };
+
+    globalThis.map = map;
+    globalThis.wizard = {
+        x: 0,
+        y: 0,
+        loadJson(data) {
+            this.x = data.x;
+            this.y = data.y;
+        }
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.viewport = { x: 0, y: 0, width: 100, height: 100 };
+    globalThis.paused = false;
+    globalThis.projectiles = [];
+    globalThis.Road = { clearRuntimeCaches() {} };
+    globalThis.StaticObject = { loadJson() { return null; } };
+    globalThis.Animal = { loadJson() { return null; } };
+    globalThis.Powerup = { loadJson() { return null; } };
+
+    const loaded = filesystem.loadGameState({
+        wizard: { x: 4.5, y: 5 },
+        animals: [],
+        powerups: [],
+        staticObjects: [],
+        groundTiles: {},
+        terrainPolygons: [{
+            type: "water",
+            points: [
+                { x: 0, y: 0 },
+                { x: 10, y: 0 },
+                { x: 10, y: 10 },
+                { x: 0, y: 10 }
+            ]
+        }]
+    });
+
+    assert.equal(loaded, true);
+    assert.equal(bridgeRefreshes, 1);
+    assert.equal(globalThis.wizard._bridgeMovementState.onBridge, true);
+});
+
 test("loadGameState re-syncs prototype animals and powerups after loading section world", () => {
     const counters = {
         walls: 0,

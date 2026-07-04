@@ -128,7 +128,8 @@
         Object.freeze({ name: "difficulty", syntax: "player.difficulty=3", description: "set player difficulty from 1 to 3" }),
         Object.freeze({ name: "speed", syntax: "player.speed=3", description: "set player movement speed" }),
         Object.freeze({ name: "magicRegenPerSecond", syntax: "player.magicRegenPerSecond=12", description: "set player magic recharge per second" }),
-        Object.freeze({ name: "magicRechargeRate", syntax: "player.magicRechargeRate=12", description: "alias for magicRegenPerSecond" })
+        Object.freeze({ name: "magicRechargeRate", syntax: "player.magicRechargeRate=12", description: "alias for magicRegenPerSecond" }),
+        Object.freeze({ name: "skillpoints", syntax: "player.skillpoints += 1", description: "set player skill point currency" })
     ]);
     const GLOBAL_COMMAND_REGISTRY = Object.freeze([
         Object.freeze({ name: "transport", syntax: "transport(x, y)", description: "teleport the player" }),
@@ -5503,6 +5504,20 @@
             },
             magicRechargeRate(value, context) {
                 return assignmentImplementations.magicRegenPerSecond(value, context);
+            },
+            skillpoints(value, context) {
+                const target = context && context.target;
+                const nextSkillpoints = Number(value);
+                if (!target || !Number.isFinite(nextSkillpoints)) return false;
+                target.skillpoints = Math.max(0, Math.floor(nextSkillpoints));
+                if (
+                    typeof global.SpellSystem !== "undefined" &&
+                    global.SpellSystem &&
+                    typeof global.SpellSystem.refreshSpellLevelPanel === "function"
+                ) {
+                    global.SpellSystem.refreshSpellLevelPanel(target);
+                }
+                return true;
             },
             tint(value, context) {
                 const target = context && context.target;
