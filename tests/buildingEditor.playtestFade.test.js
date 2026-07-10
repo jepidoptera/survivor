@@ -134,6 +134,81 @@ test("building editor visible-through floors keep mounted openings opaque", asyn
     assert.equal(renderer.mountedObjectAlphaMultiplier({ category: "doors" }, placement, 1), 1);
 });
 
+test("building editor transparent front wall windows do not write depth", async () => {
+    const previousPixi = globalThis.PIXI;
+    try {
+        globalThis.PIXI = {
+            State: class {}
+        };
+        const { BuildingRenderer } = await loadRenderer();
+        const { renderer, lower } = createRenderer(BuildingRenderer);
+        const defaultState = {
+            depthTest: true,
+            depthMask: true,
+            blend: true,
+            culling: false
+        };
+        const buffers = {
+            aWorldPosition: { data: new Float32Array(12), update() {} },
+            aWorldNormal: { data: new Float32Array(12), update() {} },
+            aUvs: { data: new Float32Array(8), update() {} }
+        };
+        const mesh = {
+            state: defaultState,
+            _mountedObjectDefaultDepthState: defaultState,
+            shader: { uniforms: { uSampler: null } },
+            geometry: {
+                getBuffer(name) {
+                    return buffers[name] || null;
+                }
+            },
+            visible: false
+        };
+        const frontQuad = {
+            visibleFace: "front",
+            quadPoints: [
+                { x: 0, y: 0, z: 1 },
+                { x: 1, y: 0, z: 1 },
+                { x: 1, y: 0, z: 0 },
+                { x: 0, y: 0, z: 0 }
+            ]
+        };
+        const backQuad = { ...frontQuad, visibleFace: "back" };
+        const placement = {
+            floor: lower,
+            sectionNormalX: 0,
+            sectionNormalY: 1,
+            mountedWallFacingSign: 1
+        };
+        const source = {
+            id: 201,
+            category: "windows",
+            texturePath: "/assets/images/windows/window.png",
+            previewAlpha: 1
+        };
+        renderer.getSurfaceTexture = (texturePath) => ({ texturePath });
+        renderer.updateSurfaceMeshUniforms = () => {};
+        renderer.floorShadowLightFactor = () => 1;
+        renderer.mountedObjectWorldQuad = () => frontQuad;
+
+        assert.equal(renderer.updateMountedObjectMesh(mesh, source, placement, { alphaMultiplier: 0.1 }), true);
+        assert.notEqual(mesh.state, defaultState);
+        assert.equal(mesh.state.depthTest, true);
+        assert.equal(mesh.state.depthMask, false);
+        assert.equal(mesh.state.blend, true);
+
+        renderer.mountedObjectWorldQuad = () => backQuad;
+        assert.equal(renderer.updateMountedObjectMesh(mesh, source, placement, { alphaMultiplier: 0.1 }), true);
+        assert.equal(mesh.state, defaultState);
+    } finally {
+        if (typeof previousPixi === "undefined") {
+            delete globalThis.PIXI;
+        } else {
+            globalThis.PIXI = previousPixi;
+        }
+    }
+});
+
 test("building editor interior bitmap override resolves lower-floor mounted openings", async () => {
     const { BuildingRenderer } = await loadRenderer();
     const { renderer, lower, upper } = createRenderer(BuildingRenderer);

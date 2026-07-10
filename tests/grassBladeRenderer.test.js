@@ -68,7 +68,7 @@ test("grass blade renderer generates deterministic chunk meshes instead of a ful
     const source = fs.readFileSync(rendererPath, "utf8");
     assert.match(source, /CHUNK_SIZE_WORLD = 8/);
     assert.match(source, /CHUNK_BUILD_BUDGET_PER_FRAME = 3/);
-    assert.match(source, /BLADE_DENSITY_PER_WORLD = 144/);
+    assert.match(source, /BLADE_DENSITY_PER_WORLD = 36/);
     assert.match(source, /BLADE_HEIGHT_WORLD = 0\.252/);
     assert.match(source, /BLADE_SWAY_RADIANS = 5 \* Math\.PI \/ 180/);
     assert.match(source, /BLADE_SWAY_MIN_SPEED = 1\.1/);

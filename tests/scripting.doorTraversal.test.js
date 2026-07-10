@@ -5,6 +5,7 @@ const SCRIPTING_MODULE_PATH = require.resolve("../public/assets/javascript/spell
 
 const GLOBAL_KEYS = [
     "Scripting",
+    "FloorSupport",
     "gameObject",
     "gameObjectState",
     "namedGameObjects"
@@ -122,6 +123,115 @@ test("object playerTouches does not fire across floor fragments", () => {
         y: 0,
         traversalLayer: 1,
         fragmentId: "floor:room-b",
+        map: null,
+        _scriptTouchedObjectsById: new Map()
+    };
+
+    scripting.processObjectTouchEvents(
+        wizard,
+        [{ obj: statue, hitbox }],
+        0
+    );
+
+    assert.equal(events.length, 0);
+});
+
+test("object playerTouches fires for matching upper-floor membership", () => {
+    globalThis.FloorSupport = require("../public/assets/javascript/shared/FloorSupport.js");
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerTouches", (payload) => {
+        events.push(payload);
+    });
+
+    const objectMembership = {
+        ownerType: "building",
+        ownerId: "building:house-a",
+        floorId: "floor-1",
+        level: 1
+    };
+    const statue = {
+        type: "placedObject",
+        category: "furniture",
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "stale-runtime-fragment",
+        _floorMembership: objectMembership,
+        gone: false,
+        script: {
+            playerTouches: "healPlayer(1)"
+        }
+    };
+    const hitbox = createRectHitbox(-1, -1, 1, 1);
+    statue.groundPlaneHitbox = hitbox;
+
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "building:house-a:floor:floor-1",
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:house-a",
+            floorId: "floor-1",
+            level: 1
+        },
+        map: null,
+        _scriptTouchedObjectsById: new Map()
+    };
+
+    scripting.processObjectTouchEvents(
+        wizard,
+        [{ obj: statue, hitbox }],
+        0
+    );
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0].target, statue);
+    assert.equal(events[0].eventName, "playerTouches");
+});
+
+test("object playerTouches does not fire across upper-floor membership", () => {
+    globalThis.FloorSupport = require("../public/assets/javascript/shared/FloorSupport.js");
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerTouches", (payload) => {
+        events.push(payload);
+    });
+
+    const statue = {
+        type: "placedObject",
+        category: "furniture",
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "building:house-a:floor:floor-2",
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:house-a",
+            floorId: "floor-2",
+            level: 1
+        },
+        gone: false,
+        script: {
+            playerTouches: "healPlayer(1)"
+        }
+    };
+    const hitbox = createRectHitbox(-1, -1, 1, 1);
+    statue.groundPlaneHitbox = hitbox;
+
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "building:house-a:floor:floor-1",
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:house-a",
+            floorId: "floor-1",
+            level: 1
+        },
         map: null,
         _scriptTouchedObjectsById: new Map()
     };

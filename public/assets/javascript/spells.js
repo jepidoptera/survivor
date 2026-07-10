@@ -18,6 +18,7 @@ let spellKeyBindings = {
 let editorKeyBindings = {
     "B": "wall",
     "R": "buildroad",
+    "T": "terrainedit",
     "M": "moveobject",
     "N": "nodeinspector"
 };
@@ -6666,6 +6667,53 @@ const SpellSystem = (() => {
     const collisionTargetsScratch = [];
     const _touchScriptObjectsByArray = new WeakMap();
 
+    function getTouchScriptObjectsForRuntimeObjects(runtimeScriptObjects, mapRef = null) {
+        if (!Array.isArray(runtimeScriptObjects)) return [];
+        const mapRegistryVersion = mapRef && Number.isFinite(Number(mapRef._gameObjectRegistryVersion))
+            ? Number(mapRef._gameObjectRegistryVersion)
+            : null;
+        const floorObjectVersion = mapRef && Number.isFinite(Number(mapRef._floorObjectNodeCacheVersion))
+            ? Number(mapRef._floorObjectNodeCacheVersion)
+            : null;
+        const hasVersionKey = mapRegistryVersion !== null || floorObjectVersion !== null;
+        const cached = _touchScriptObjectsByArray.get(runtimeScriptObjects) || null;
+        if (
+            hasVersionKey &&
+            cached &&
+            cached.registryVersion === mapRegistryVersion &&
+            cached.floorObjectVersion === floorObjectVersion &&
+            cached.length === runtimeScriptObjects.length &&
+            Array.isArray(cached.objects)
+        ) {
+            return cached.objects;
+        }
+
+        const touchScriptObjects = [];
+        for (let i = 0; i < runtimeScriptObjects.length; i++) {
+            const obj = runtimeScriptObjects[i];
+            if (!obj) continue;
+            if (obj.type === "triggerArea" || obj.isTriggerArea === true) continue;
+            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+            if (!hitbox) continue;
+            const hasTouchScript = (
+                (typeof globalThis !== "undefined" && globalThis.Scripting && typeof globalThis.Scripting.hasEventScriptForTarget === "function")
+                    ? (globalThis.Scripting.hasEventScriptForTarget(obj, "playerTouches") || globalThis.Scripting.hasEventScriptForTarget(obj, "playerUntouches"))
+                    : false
+            );
+            if (!hasTouchScript) continue;
+            touchScriptObjects.push(obj);
+        }
+        if (hasVersionKey) {
+            _touchScriptObjectsByArray.set(runtimeScriptObjects, {
+                registryVersion: mapRegistryVersion,
+                floorObjectVersion,
+                length: runtimeScriptObjects.length,
+                objects: touchScriptObjects
+            });
+        }
+        return touchScriptObjects;
+    }
+
     function getNearbyObjects(mapRef, hitbox, outArray = null, options = {}) {
         if (!mapRef || !hitbox || typeof hitbox.getBounds !== "function") return [];
         const bounds = hitbox.getBounds();
@@ -6887,25 +6935,7 @@ const SpellSystem = (() => {
         const runtimeScriptObjects = (wizardRef.map && typeof wizardRef.map.getGameObjects === "function")
             ? (wizardRef.map.getGameObjects({ refresh: false }) || [])
             : [];
-        let touchScriptObjects = _touchScriptObjectsByArray.get(runtimeScriptObjects);
-        if (!touchScriptObjects) {
-            touchScriptObjects = [];
-            for (let i = 0; i < runtimeScriptObjects.length; i++) {
-                const obj = runtimeScriptObjects[i];
-                if (!obj) continue;
-                if (obj.type === "triggerArea" || obj.isTriggerArea === true) continue;
-                const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
-                if (!hitbox) continue;
-                const hasTouchScript = (
-                    (typeof globalThis !== "undefined" && globalThis.Scripting && typeof globalThis.Scripting.hasEventScriptForTarget === "function")
-                        ? (globalThis.Scripting.hasEventScriptForTarget(obj, "playerTouches") || globalThis.Scripting.hasEventScriptForTarget(obj, "playerUntouches"))
-                        : false
-                );
-                if (!hasTouchScript) continue;
-                touchScriptObjects.push(obj);
-            }
-            _touchScriptObjectsByArray.set(runtimeScriptObjects, touchScriptObjects);
-        }
+        const touchScriptObjects = getTouchScriptObjectsForRuntimeObjects(runtimeScriptObjects, wizardRef.map || null);
         for (let i = 0; i < touchScriptObjects.length; i++) {
             const obj = touchScriptObjects[i];
             if (!obj || obj === wizardRef || obj.gone || obj.vanishing) continue;
@@ -7834,27 +7864,6 @@ const SpellSystem = (() => {
         return { screenX, screenY };
     }
 
-    function replaceGroundTerrainPolygonPatch(mapRef, node, terrainType) {
-        const sectionKey = node && typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0
-            ? node._prototypeSectionKey
-            : (node && typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
-        if (!mapRef) return;
-        if (!sectionKey || typeof mapRef.getPrototypeSectionAsset !== "function") {
-            if (typeof mapRef.replaceGroundTerrainPolygonPatch !== "function") {
-                throw new Error("terrain editor requires map.replaceGroundTerrainPolygonPatch for non-section terrain painting");
-            }
-            return mapRef.replaceGroundTerrainPolygonPatch(node, terrainType);
-        }
-        const asset = mapRef.getPrototypeSectionAsset(sectionKey);
-        if (!asset) {
-            throw new Error(`terrain editor could not find prototype section asset for ${sectionKey}`);
-        }
-        if (typeof mapRef.replaceGroundTerrainPolygonPatch !== "function") {
-            throw new Error("terrain editor requires map.replaceGroundTerrainPolygonPatch");
-        }
-        return mapRef.replaceGroundTerrainPolygonPatch(node, terrainType, { asset, sectionKey });
-    }
-
     function paintTerrainAtWorldPoint(wizardRef, worldX, worldY) {
         const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
         if (!mapRef || typeof mapRef.worldToNode !== "function") {
@@ -7866,20 +7875,139 @@ const SpellSystem = (() => {
             return false;
         }
         const terrainType = getSelectedTerrainType(wizardRef);
-        const changed = replaceGroundTerrainPolygonPatch(mapRef, node, terrainType);
+        const sectionKey = node && typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0
+            ? node._prototypeSectionKey
+            : (node && typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
+        let changed = false;
+        if (!sectionKey || typeof mapRef.getPrototypeSectionAsset !== "function") {
+            if (typeof mapRef.replaceGroundTerrainPolygonPatch !== "function") {
+                throw new Error("terrain editor requires map.replaceGroundTerrainPolygonPatch for non-section terrain painting");
+            }
+            changed = mapRef.replaceGroundTerrainPolygonPatch(node, terrainType, { forceRepaintSameTerrain: true });
+        } else {
+            const asset = mapRef.getPrototypeSectionAsset(sectionKey);
+            if (!asset) {
+                throw new Error(`terrain editor could not find prototype section asset for ${sectionKey}`);
+            }
+            if (typeof mapRef.replaceGroundTerrainPolygonPatch !== "function") {
+                throw new Error("terrain editor requires map.replaceGroundTerrainPolygonPatch");
+            }
+            changed = mapRef.replaceGroundTerrainPolygonPatch(node, terrainType, { asset, sectionKey, forceRepaintSameTerrain: true });
+        }
         if (!changed) return false;
+        if (wizardRef) wizardRef._terrainEditMinimapDirty = true;
+        // Terrain paint edits live terrain polygons locally. Do not reset
+        // level-0 ground caches here without asking; doing so makes brush
+        // painting slow and hides the benefit of the local polygon patch.
+        return true;
+    }
+
+    function getTerrainPaintNodeKey(node, terrainType) {
+        if (!node) return "";
+        const sectionKey = typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0
+            ? node._prototypeSectionKey
+            : (typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
+        const x = Number.isFinite(Number(node.xindex)) ? Number(node.xindex) : Number(node.x);
+        const y = Number.isFinite(Number(node.yindex)) ? Number(node.yindex) : Number(node.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error("terrain editor auto paint requires finite tile coordinates");
+        }
+        return `${sectionKey}:${Math.round(x)},${Math.round(y)}:${terrainType}`;
+    }
+
+    function autoPaintTerrainAtWorldPoint(wizardRef, worldX, worldY) {
+        if (!wizardRef || wizardRef.currentSpell !== "terrainedit") {
+            resetTerrainAutoPaint(wizardRef);
+            return false;
+        }
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) {
+            resetTerrainAutoPaint(wizardRef);
+            return false;
+        }
+        const mapRef = wizardRef.map || null;
+        if (!mapRef || typeof mapRef.worldToNode !== "function") {
+            throw new Error("terrain editor requires map.worldToNode");
+        }
+        const node = mapRef.worldToNode(worldX, worldY);
+        if (!node) {
+            wizardRef._terrainEditLastAutoPaintTileKey = "";
+            return false;
+        }
+        const terrainType = getSelectedTerrainType(wizardRef);
+        const tileKey = getTerrainPaintNodeKey(node, terrainType);
+        if (wizardRef._terrainEditLastAutoPaintTileKey === tileKey) return false;
+        wizardRef._terrainEditLastAutoPaintTileKey = tileKey;
+        return paintTerrainAtWorldPoint(wizardRef, worldX, worldY);
+    }
+
+    function resetTerrainAutoPaint(wizardRef) {
+        if (wizardRef) wizardRef._terrainEditLastAutoPaintTileKey = "";
+    }
+
+    function finishTerrainAutoPaint(wizardRef) {
+        resetTerrainAutoPaint(wizardRef);
+        if (!wizardRef || wizardRef._terrainEditMinimapDirty !== true) return false;
+        wizardRef._terrainEditMinimapDirty = false;
+        if (typeof globalThis !== "undefined" && typeof globalThis.invalidateMinimap === "function") {
+            globalThis.invalidateMinimap();
+            return true;
+        }
+        return false;
+    }
+
+    function assignTerrainPolygonTilesAtWorldPoint(wizardRef, worldX, worldY) {
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
+        if (!mapRef || typeof mapRef.worldToNode !== "function") {
+            throw new Error("terrain editor requires map.worldToNode");
+        }
+        if (typeof mapRef.assignGroundTerrainTilesFullyInsidePolygonAtPoint !== "function") {
+            throw new Error("terrain editor requires map.assignGroundTerrainTilesFullyInsidePolygonAtPoint");
+        }
+        const node = mapRef.worldToNode(worldX, worldY);
+        if (!node) {
+            message("No terrain polygon here.");
+            return false;
+        }
+        const selectedTerrainType = getSelectedTerrainType(wizardRef);
+        const sectionKey = node && typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0
+            ? node._prototypeSectionKey
+            : (node && typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
+        const asset = sectionKey && typeof mapRef.getPrototypeSectionAsset === "function"
+            ? mapRef.getPrototypeSectionAsset(sectionKey)
+            : null;
+        const polygons = asset && Array.isArray(asset.terrainPolygons)
+            ? asset.terrainPolygons
+            : (Array.isArray(mapRef.terrainPolygons) ? mapRef.terrainPolygons : []);
+        const terrainType = typeof mapRef.getGroundTerrainPolygonTypeAtPoint === "function"
+            ? mapRef.getGroundTerrainPolygonTypeAtPoint(worldX, worldY, polygons)
+            : "grass";
+        const target = { terrainType };
+        if (!target.terrainType || target.terrainType === "grass") {
+            message("No terrain polygon here.");
+            return false;
+        }
+        if (target.terrainType !== selectedTerrainType) {
+            message(`Select ${target.terrainType} to sync this terrain polygon.`);
+            return false;
+        }
+        const result = mapRef.assignGroundTerrainTilesFullyInsidePolygonAtPoint(worldX, worldY, {
+            asset,
+            sectionKey,
+            polygons
+        });
+        if (!result || result.foundPolygon !== true) {
+            message("No terrain polygon here.");
+            return false;
+        }
         if (typeof globalThis !== "undefined") {
             if (typeof globalThis.invalidateMinimap === "function") {
                 globalThis.invalidateMinimap();
             }
-            // Terrain paint edits live terrain polygons locally. Do not reset
-            // level-0 ground caches here without asking; doing so makes brush
-            // painting slow and hides the benefit of the local polygon patch.
             if (typeof globalThis.presentGameFrame === "function") {
                 globalThis.presentGameFrame();
             }
         }
-        return true;
+        return result.assignedCount > 0 || result.changedCount > 0;
     }
 
     function isVisibleFloorInteriorViewActive(wizardRef, mapRef) {
@@ -10138,7 +10266,11 @@ const SpellSystem = (() => {
         }
 
         if (wizardRef.currentSpell === "terrainedit") {
-            paintTerrainAtWorldPoint(wizardRef, worldX, worldY);
+            if (Number(castOptions.clickCount) >= 2) {
+                assignTerrainPolygonTilesAtWorldPoint(wizardRef, worldX, worldY);
+            } else {
+                paintTerrainAtWorldPoint(wizardRef, worldX, worldY);
+            }
             return;
         }
 
@@ -12823,6 +12955,10 @@ const SpellSystem = (() => {
         setWizardSkillPoints,
         refreshSpellLevelPanel,
         paintTerrainAtWorldPoint,
+        autoPaintTerrainAtWorldPoint,
+        resetTerrainAutoPaint,
+        finishTerrainAutoPaint,
+        assignTerrainPolygonTilesAtWorldPoint,
         handleTerrainMenuHotkey,
         selectTerrainType,
         refreshEditorSelector,

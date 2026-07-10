@@ -3381,6 +3381,7 @@ export class BuildingRenderer {
         this.lastGablePickEntries = [];
         this.floorTextureByPath = new Map();
         this.floorDepthState = null;
+        this.transparentMountedObjectDepthState = null;
         this.collapsedWallGeometryByFloorId = new Map();
         this.lastWallPickEntries = [];
         this.lastSurfacePickEntries = [];
@@ -3957,6 +3958,18 @@ export class BuildingRenderer {
         state.blend = true;
         state.culling = false;
         this.floorDepthState = state;
+        return state;
+    }
+
+    getTransparentMountedObjectDepthState() {
+        if (this.transparentMountedObjectDepthState) return this.transparentMountedObjectDepthState;
+        if (!PIXI.State) return null;
+        const state = new PIXI.State();
+        state.depthTest = true;
+        state.depthMask = false;
+        state.blend = true;
+        state.culling = false;
+        this.transparentMountedObjectDepthState = state;
         return state;
     }
 
@@ -8042,6 +8055,7 @@ export class BuildingRenderer {
             uSampler: texture
         });
         const mesh = new PIXI.Mesh(geometry, shader, this.getFloorDepthState() || undefined, PIXI.DRAW_MODES.TRIANGLES);
+        mesh._mountedObjectDefaultDepthState = mesh.state || null;
         mesh.interactive = false;
         mesh.visible = false;
         return mesh;
@@ -8113,6 +8127,14 @@ export class BuildingRenderer {
             textureFallback: source.category === "windows" ? "/assets/images/windows/window.png" : "/assets/images/doors/door5.png",
             lightFactor: this.floorShadowLightFactor(placement.floor)
         });
+        const category = (typeof source.category === "string") ? source.category.trim().toLowerCase() : "";
+        const isTransparentFrontWindow = category === "windows" && worldQuad.visibleFace === "front" && alpha < 0.999;
+        if (isTransparentFrontWindow) {
+            const transparentState = this.getTransparentMountedObjectDepthState();
+            if (transparentState) mesh.state = transparentState;
+        } else if (mesh._mountedObjectDefaultDepthState !== undefined) {
+            mesh.state = mesh._mountedObjectDefaultDepthState;
+        }
         mesh.visible = true;
         return true;
     }

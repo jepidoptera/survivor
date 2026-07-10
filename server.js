@@ -1,7 +1,31 @@
 const express = require('express');
 const bodyParser = require('body-parser');
+const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const {
+    buildCalculatedExample,
+    buildTrainingCalculator,
+    calculateVerticesForExample
+} = require('./scripts/calculate-terrain-bubble-vertices');
+const {
+    clipTerrainPolygonsToInnerSeven,
+    compareTerrainBubblePolygons
+} = require('./scripts/terrain-bubble-ruleset');
+const {
+    buildSuggestion: buildBinaryVertexSuggestion,
+    deserializeCandidateModel: deserializeBinaryVertexModel,
+    trainCandidateModel: trainBinaryVertexModel
+} = require('./scripts/terrain-bubble-binary-vertex-solver');
+const {
+    DEFAULT_MODEL: defaultIsoContourModel,
+    buildSuggestion: buildIsoContourSuggestion,
+    normalizeModel: normalizeIsoContourModel
+} = require('./scripts/terrain-bubble-iso-contour-solver');
+const {
+    annotateExamplesWithScore: annotateTerrainBubbleExamplesWithDeterministicScore,
+    buildSuggestion: buildDeterministicTerrainBubbleSuggestion
+} = require('./scripts/terrain-bubble-deterministic-solver');
 const app = express();
 
 // require ('firebase/database')
@@ -17,6 +41,57 @@ const sectionWorldJsonBodyLimit = '200mb';
 
 // Serve static files
 app.use('/vendor', express.static(path.join(__dirname, 'node_modules')));
+app.get('/terrain-bubble-lab', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.sendFile(path.join(__dirname, 'public', 'terrain-bubble-lab', 'index.html'));
+})
+app.get('/terrain-bubble-lab/:asset', (req, res, next) => {
+    const asset = String(req.params.asset || '');
+    if (!['index.html', 'main.js', 'styles.css'].includes(asset)) return next();
+    res.set('Cache-Control', 'no-store');
+    res.sendFile(path.join(__dirname, 'public', 'terrain-bubble-lab', asset));
+})
+app.get('/assets/javascript/terrain-bubble-deterministic-solver-runtime.js', (req, res) => {
+    const modulePaths = {
+        'terrain-bubble-ruleset': path.join(__dirname, 'scripts', 'terrain-bubble-ruleset.js'),
+        'terrain-bubble-deterministic-solver': path.join(__dirname, 'scripts', 'terrain-bubble-deterministic-solver.js')
+    };
+    let moduleSources;
+    try {
+        moduleSources = {
+            'terrain-bubble-ruleset': fs.readFileSync(modulePaths['terrain-bubble-ruleset'], 'utf8'),
+            'terrain-bubble-deterministic-solver': fs.readFileSync(modulePaths['terrain-bubble-deterministic-solver'], 'utf8')
+        };
+    } catch (error) {
+        return res.status(500).type('text/plain').send(`failed to load deterministic terrain solver: ${error.message}`);
+    }
+    res.set('Cache-Control', 'no-store');
+    res.type('application/javascript').send(`(function(root) {
+"use strict";
+const moduleSources = ${JSON.stringify(moduleSources)};
+const moduleCache = Object.create(null);
+function loadModule(id) {
+    if (moduleCache[id]) return moduleCache[id].exports;
+    const source = moduleSources[id];
+    if (typeof source !== "string") throw new Error("unknown terrain bubble module: " + id);
+    const module = { exports: {} };
+    moduleCache[id] = module;
+    const localRequire = function(specifier) {
+        if (specifier === "polygon-clipping") {
+            if (!root.polygonClipping) throw new Error("terrain bubble deterministic runtime requires polygon-clipping");
+            return root.polygonClipping;
+        }
+        if (specifier === "./terrain-bubble-ruleset") return loadModule("terrain-bubble-ruleset");
+        throw new Error("unsupported terrain bubble module dependency: " + specifier);
+    };
+    const execute = new Function("require", "module", "exports", source + "\\n//# sourceURL=" + id + ".js");
+    execute(localRequire, module, module.exports);
+    return module.exports;
+}
+root.TerrainBubbleDeterministicSolver = loadModule("terrain-bubble-deterministic-solver");
+})(typeof globalThis !== "undefined" ? globalThis : window);
+`);
+})
 app.use(express.static(__dirname + '/public'));
 app.use('/api/sectionworld', bodyParser.json({ limit: sectionWorldJsonBodyLimit }));
 app.use(bodyParser.urlencoded({ extended: false, limit: defaultJsonBodyLimit }));
@@ -69,6 +144,15 @@ const saveBackupsDir = path.join(__dirname, 'public', 'assets', 'saves', 'backup
 const sectionWorldSavesRoot = path.join(__dirname, 'public', 'assets', 'saves');
 const buildingEditorSavesDir = path.join(__dirname, 'public', 'assets', 'saves', 'building-editor');
 const debugCapturesDir = path.join(__dirname, 'public', 'assets', 'debug-captures');
+const terrainBubbleExamplesPath = path.join(__dirname, 'public', 'assets', 'data', 'terrain-bubble-examples.json');
+const terrainBubbleLearningErrorsPath = path.join(__dirname, 'docs', 'terrain-bubble-learning-errors.json');
+const terrainBubbleCalculatorModelPath = path.join(__dirname, 'docs', 'terrain-bubble-trained-calculator.json');
+const terrainBubbleBinaryVertexModelPath = path.join(__dirname, 'docs', 'terrain-bubble-trained-binary-vertex-model.json');
+const terrainBubbleIsoContourModelPath = path.join(__dirname, 'docs', 'terrain-bubble-trained-iso-contour-model.json');
+const annotateTerrainBubbleLearningErrorsScript = path.join(__dirname, 'scripts', 'annotate-terrain-bubble-learning-errors.js');
+let terrainBubbleVertexCalculatorCache = null;
+let terrainBubbleBinaryVertexModelCache = null;
+let terrainBubbleIsoContourModelCache = null;
 const sectionWorldBuildingDirName = 'buildings';
 const sectionWorldBuildingIndexFileName = 'index.json';
 
@@ -132,6 +216,349 @@ function isValidBuildingEditorPayload(payload) {
         Array.isArray(payload.wallSections) &&
         Array.isArray(payload.mountedWallObjects)
     );
+}
+
+const terrainBubbleTerrainTypes = new Set(['grass', 'water', 'mud', 'desert']);
+const terrainBubbleExpectedTileKeys = createTerrainBubbleExpectedTileKeys(2);
+
+function isPlainObject(value) {
+    return !!(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function isFiniteTerrainBubbleNumber(value) {
+    return Number.isFinite(Number(value));
+}
+
+function isValidTerrainBubbleId(rawId) {
+    const id = String(rawId === undefined || rawId === null ? '' : rawId).trim();
+    return !!(id && id.length <= 140 && /^[a-zA-Z0-9_.-]+$/.test(id));
+}
+
+function terrainBubbleCoordKey(tile) {
+    return `${Number(tile.q)},${Number(tile.r)}`;
+}
+
+function terrainBubbleAxialDistance(q, r) {
+    return Math.max(Math.abs(q), Math.abs(r), Math.abs(-q - r));
+}
+
+function createTerrainBubbleExpectedTileKeys(radius) {
+    const keys = new Set();
+    for (let q = -radius; q <= radius; q++) {
+        for (let r = -radius; r <= radius; r++) {
+            if (terrainBubbleAxialDistance(q, r) <= radius) keys.add(`${q},${r}`);
+        }
+    }
+    return keys;
+}
+
+function validateTerrainBubbleInput(input) {
+    if (!isPlainObject(input) || input.schema !== 'terrain-bubble-19-v1') {
+        return 'invalid-input';
+    }
+    if (!Array.isArray(input.tiles) || input.tiles.length !== terrainBubbleExpectedTileKeys.size) {
+        return 'invalid-input-tiles';
+    }
+
+    const tileKeys = new Set();
+    for (const tile of input.tiles) {
+        if (!isPlainObject(tile)) return 'invalid-input-tile';
+        if (!Number.isInteger(Number(tile.q)) || !Number.isInteger(Number(tile.r))) return 'invalid-input-coord';
+        if (!terrainBubbleTerrainTypes.has(tile.type)) return 'invalid-input-terrain';
+        const key = terrainBubbleCoordKey(tile);
+        if (!terrainBubbleExpectedTileKeys.has(key) || tileKeys.has(key)) return 'invalid-input-tile-set';
+        tileKeys.add(key);
+    }
+
+    return '';
+}
+
+function validateTerrainBubbleExample(payload) {
+    if (!isPlainObject(payload)) return 'invalid-payload';
+    if (payload.schema !== 'terrain-bubble-example-v1') return 'invalid-schema';
+    if (!isValidTerrainBubbleId(payload.id)) return 'invalid-id';
+    if (typeof payload.name !== 'string' || payload.name.trim().length === 0 || payload.name.length > 80) {
+        return 'invalid-name';
+    }
+    if (typeof payload.createdAt !== 'string' || !Number.isFinite(Date.parse(payload.createdAt))) {
+        return 'invalid-created-at';
+    }
+    const inputReason = validateTerrainBubbleInput(payload.input);
+    if (inputReason) return inputReason;
+
+    if (!isPlainObject(payload.output) || payload.output.schema !== 'terrain-bubble-output-v1') {
+        return 'invalid-output';
+    }
+    if (payload.output.fills !== 'inner-7') return 'invalid-output-fill';
+    if (!Array.isArray(payload.output.polygons)) return 'invalid-output-polygons';
+    for (const polygon of payload.output.polygons) {
+        if (!isPlainObject(polygon)) return 'invalid-output-polygon';
+        if (!terrainBubbleTerrainTypes.has(polygon.type)) return 'invalid-output-terrain';
+        if (!Array.isArray(polygon.points) || polygon.points.length < 3 || polygon.points.length > 200) {
+            return 'invalid-output-points';
+        }
+        for (const point of polygon.points) {
+            if (!isPlainObject(point) || !isFiniteTerrainBubbleNumber(point.x) || !isFiniteTerrainBubbleNumber(point.y)) {
+                return 'invalid-output-point';
+            }
+        }
+    }
+
+    return '';
+}
+
+function summarizeTerrainBubbleLearningError(library) {
+    const examples = Array.isArray(library && library.examples) ? library.examples : [];
+    let finiteCount = 0;
+    let missingCount = 0;
+    let totalDiffArea = 0;
+    for (const example of examples) {
+        const value = example &&
+            example.editor &&
+            example.editor.learningError &&
+            example.editor.learningError.totalDiffArea;
+        if (Number.isFinite(Number(value))) {
+            finiteCount++;
+            totalDiffArea += Number(value);
+        } else {
+            missingCount++;
+        }
+    }
+    return {
+        schema: 'terrain-bubble-learning-error-summary-v1',
+        exampleCount: examples.length,
+        finiteCount,
+        missingCount,
+        totalDiffArea: Math.round(totalDiffArea * 1000000) / 1000000
+    };
+}
+
+function readTerrainBubbleExampleLibrary() {
+    if (!fs.existsSync(terrainBubbleExamplesPath)) {
+        return { schema: 'terrain-bubble-examples-v1', examples: [] };
+    }
+    const raw = fs.readFileSync(terrainBubbleExamplesPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!isPlainObject(parsed) || parsed.schema !== 'terrain-bubble-examples-v1' || !Array.isArray(parsed.examples)) {
+        throw new Error('terrain bubble example library has invalid schema');
+    }
+    return parsed;
+}
+
+function buildTerrainBubbleVertexCalculator(examples) {
+    const editedExamples = examples.filter(example => example && example.editor && example.editor.edited);
+    if (editedExamples.length === 0) {
+        throw new Error('no edited terrain bubble examples for vertex calculator');
+    }
+    return {
+        editedExamples,
+        calculator: buildTrainingCalculator(editedExamples)
+    };
+}
+
+function readTerrainBubbleVertexCalculator() {
+    if (!fs.existsSync(terrainBubbleCalculatorModelPath)) {
+        throw new Error('missing trained terrain bubble calculator model; click Retrain first');
+    }
+    const stats = fs.statSync(terrainBubbleCalculatorModelPath);
+    if (
+        terrainBubbleVertexCalculatorCache &&
+        terrainBubbleVertexCalculatorCache.mtimeMs === stats.mtimeMs
+    ) {
+        return terrainBubbleVertexCalculatorCache.value;
+    }
+    const artifact = JSON.parse(fs.readFileSync(terrainBubbleCalculatorModelPath, 'utf8'));
+    if (!isPlainObject(artifact) || artifact.schema !== 'terrain-bubble-trained-calculator-artifact-v1') {
+        throw new Error('trained terrain bubble calculator model has invalid schema');
+    }
+    if (!isPlainObject(artifact.calculator)) {
+        throw new Error('trained terrain bubble calculator model is missing calculator');
+    }
+    const value = {
+        artifact,
+        calculator: artifact.calculator
+    };
+    terrainBubbleVertexCalculatorCache = {
+        mtimeMs: stats.mtimeMs,
+        value
+    };
+    return value;
+}
+
+function buildTerrainBubbleBinaryVertexModel(examples) {
+    const editedExamples = examples.filter(example => example && example.editor && example.editor.edited);
+    if (editedExamples.length === 0) {
+        throw new Error('no edited terrain bubble examples for binary vertex solver');
+    }
+    return {
+        editedExamples,
+        model: trainBinaryVertexModel(editedExamples)
+    };
+}
+
+function readTerrainBubbleBinaryVertexModel() {
+    if (!fs.existsSync(terrainBubbleBinaryVertexModelPath)) {
+        throw new Error('missing trained terrain bubble binary vertex model; click Retrain first');
+    }
+    const stats = fs.statSync(terrainBubbleBinaryVertexModelPath);
+    if (
+        terrainBubbleBinaryVertexModelCache &&
+        terrainBubbleBinaryVertexModelCache.mtimeMs === stats.mtimeMs
+    ) {
+        return terrainBubbleBinaryVertexModelCache.value;
+    }
+    const artifact = JSON.parse(fs.readFileSync(terrainBubbleBinaryVertexModelPath, 'utf8'));
+    if (!isPlainObject(artifact) || artifact.schema !== 'terrain-bubble-trained-binary-vertex-model-artifact-v1') {
+        throw new Error('trained terrain bubble binary vertex model has invalid schema');
+    }
+    const value = {
+        artifact,
+        model: deserializeBinaryVertexModel(artifact.model)
+    };
+    terrainBubbleBinaryVertexModelCache = {
+        mtimeMs: stats.mtimeMs,
+        value
+    };
+    return value;
+}
+
+function readTerrainBubbleIsoContourModel() {
+    if (!fs.existsSync(terrainBubbleIsoContourModelPath)) {
+        return {
+            artifact: null,
+            model: normalizeIsoContourModel(defaultIsoContourModel)
+        };
+    }
+    const stats = fs.statSync(terrainBubbleIsoContourModelPath);
+    if (
+        terrainBubbleIsoContourModelCache &&
+        terrainBubbleIsoContourModelCache.mtimeMs === stats.mtimeMs
+    ) {
+        return terrainBubbleIsoContourModelCache.value;
+    }
+    const artifact = JSON.parse(fs.readFileSync(terrainBubbleIsoContourModelPath, 'utf8'));
+    if (!isPlainObject(artifact) || artifact.schema !== 'terrain-bubble-trained-iso-contour-model-artifact-v1') {
+        throw new Error('trained terrain bubble iso-contour model has invalid schema');
+    }
+    if (!isPlainObject(artifact.model)) {
+        throw new Error('trained terrain bubble iso-contour model is missing model');
+    }
+    const value = {
+        artifact,
+        model: normalizeIsoContourModel(artifact.model, { requirePriorityBiasMode: true })
+    };
+    terrainBubbleIsoContourModelCache = {
+        mtimeMs: stats.mtimeMs,
+        value
+    };
+    return value;
+}
+
+function scoreTerrainBubbleExampleWithVertexCalculator(example) {
+    const { calculator } = readTerrainBubbleVertexCalculator();
+    const actual = calculateVerticesForExample(example, calculator);
+    const expected = clipTerrainPolygonsToInnerSeven(example.output.polygons || []);
+    const comparison = compareTerrainBubblePolygons(actual, expected);
+    return {
+        ...example,
+        editor: {
+            ...(example.editor || {}),
+            learningError: {
+                schema: 'terrain-bubble-learning-error-v1',
+                mode: 'vertex-calculator',
+                trainedExampleCount: calculator.trainedExampleCount,
+                excludedExampleCount: calculator.excludedExamples.length,
+                conflictCount: calculator.conflicts.length,
+                totalDiffArea: comparison.totalDiffArea,
+                rows: comparison.rows,
+                scoredAt: new Date().toISOString()
+            }
+        }
+    };
+}
+
+function buildTerrainBubbleLearningError(example, actualPolygons, mode, metadata = {}) {
+    const expected = clipTerrainPolygonsToInnerSeven(example.output.polygons || []);
+    const actual = clipTerrainPolygonsToInnerSeven(actualPolygons || []);
+    const comparison = compareTerrainBubblePolygons(actual, expected);
+    return {
+        ...example,
+        editor: {
+            ...(example.editor || {}),
+            learningError: {
+                schema: 'terrain-bubble-learning-error-v1',
+                mode,
+                ...metadata,
+                totalDiffArea: comparison.totalDiffArea,
+                rows: comparison.rows,
+                scoredAt: new Date().toISOString()
+            }
+        }
+    };
+}
+
+function scoreTerrainBubbleExampleWithSolver(example, solver) {
+    if (solver === 'calculator') {
+        return scoreTerrainBubbleExampleWithVertexCalculator(example);
+    }
+    if (solver === 'binary-vertex') {
+        const { model } = readTerrainBubbleBinaryVertexModel();
+        const suggestion = buildBinaryVertexSuggestion(example.input, model, {
+            id: `${example.id || 'saved'}-binary-vertex-score`,
+            name: `${example.name || 'saved'} binary vertex score`
+        });
+        return buildTerrainBubbleLearningError(example, suggestion.output.polygons, 'binary-vertex', {
+            trainedExampleCount: model.trainedExampleCount,
+            augmentedExampleCount: model.augmentedExampleCount,
+            featureCount: model.featureCount,
+            binaryObservations: model.binaryVertexModel.observationCount,
+            fuzzyGroupCount: model.binaryVertexModel.fuzzyGroupCount
+        });
+    }
+    if (solver === 'iso-contour') {
+        const { model } = readTerrainBubbleIsoContourModel();
+        const suggestion = buildIsoContourSuggestion(example.input, model, {
+            id: `${example.id || 'saved'}-iso-contour-score`,
+            name: `${example.name || 'saved'} iso-contour score`
+        });
+        return buildTerrainBubbleLearningError(example, suggestion.output.polygons, 'iso-contour', {
+            trainedExampleCount: model.trainedExampleCount,
+            priorityBiasMode: model.priorityBiasMode,
+            priorityBiasStep: model.priorityBiasStep,
+            quantizationSteps: model.quantizationSteps,
+            trainingError: model.trainingError
+        });
+    }
+    if (solver === 'deterministic') {
+        const suggestion = buildDeterministicTerrainBubbleSuggestion(example.input, {
+            id: `${example.id || 'saved'}-deterministic-score`,
+            name: `${example.name || 'saved'} deterministic score`
+        });
+        return buildTerrainBubbleLearningError(example, suggestion.output.polygons, 'deterministic-solver', {
+            priorityOrder: ['water', 'mud', 'grass', 'desert']
+        });
+    }
+    throw new Error(`invalid terrain bubble scoring solver ${solver}`);
+}
+
+function scoreTerrainBubbleExamplesWithDeterministicSolver() {
+    const library = readTerrainBubbleExampleLibrary();
+    const { library: scoredLibrary, report } = annotateTerrainBubbleExamplesWithDeterministicScore(library);
+    fs.mkdirSync(path.dirname(terrainBubbleExamplesPath), { recursive: true });
+    fs.writeFileSync(terrainBubbleExamplesPath, JSON.stringify(scoredLibrary, null, 2), 'utf8');
+    fs.mkdirSync(path.dirname(terrainBubbleLearningErrorsPath), { recursive: true });
+    fs.writeFileSync(terrainBubbleLearningErrorsPath, JSON.stringify({
+        schema: 'terrain-bubble-learning-errors-v1',
+        generatedAt: report.generatedAt,
+        operation: 'score-existing-examples',
+        solver: 'deterministic',
+        examplesPath: path.relative(__dirname, terrainBubbleExamplesPath),
+        exampleCount: scoredLibrary.examples.length,
+        scoredExampleCount: report.scoredExampleCount,
+        errorSummary: report.errorSummary,
+        rows: report.rows
+    }, null, 2), 'utf8');
+    return report;
 }
 
 function listBuildingEditorSaves() {
@@ -475,6 +902,229 @@ app.get('/api/savefile', (req, res) => {
     } catch (e) {
         console.error('Failed to read save file:', e);
         return res.status(500).json({ ok: false, reason: 'read-failed' });
+    }
+});
+
+app.get('/api/terrain-bubble-examples', (req, res) => {
+    try {
+        res.set('Cache-Control', 'no-store');
+        return res.json({ ok: true, data: readTerrainBubbleExampleLibrary() });
+    } catch (e) {
+        console.error('Failed to read terrain bubble examples:', e);
+        return res.status(500).json({ ok: false, reason: 'read-failed' });
+    }
+});
+
+app.post('/api/terrain-bubble-examples', (req, res) => {
+    try {
+        res.set('Cache-Control', 'no-store');
+        const payload = isPlainObject(req.body) && isPlainObject(req.body.example)
+            ? req.body.example
+            : req.body;
+        const solver = isPlainObject(req.body) && typeof req.body.solver === 'string'
+            ? req.body.solver
+            : 'calculator';
+        if (!['calculator', 'binary-vertex', 'iso-contour', 'deterministic'].includes(solver)) {
+            return res.status(400).json({ ok: false, reason: 'invalid-solver' });
+        }
+        const reason = validateTerrainBubbleExample(payload);
+        if (reason) {
+            return res.status(400).json({ ok: false, reason });
+        }
+
+        const scoredExample = scoreTerrainBubbleExampleWithSolver(payload, solver);
+        const library = readTerrainBubbleExampleLibrary();
+        const existingIndex = library.examples.findIndex(example => example.id === scoredExample.id);
+        const didUpdate = existingIndex >= 0;
+        if (didUpdate) {
+            library.examples[existingIndex] = scoredExample;
+        } else {
+            library.examples.push(scoredExample);
+        }
+        fs.mkdirSync(path.dirname(terrainBubbleExamplesPath), { recursive: true });
+        fs.writeFileSync(terrainBubbleExamplesPath, JSON.stringify(library, null, 2), 'utf8');
+        return res.json({
+            ok: true,
+            id: scoredExample.id,
+            path: '/assets/data/terrain-bubble-examples.json',
+            count: library.examples.length,
+            updated: didUpdate,
+            data: scoredExample
+        });
+    } catch (e) {
+        console.error('Failed to write terrain bubble example:', e);
+        return res.status(500).json({ ok: false, reason: 'write-failed' });
+    }
+});
+
+app.post('/api/terrain-bubble-examples/suggest', (req, res) => {
+    try {
+        res.set('Cache-Control', 'no-store');
+        const input = isPlainObject(req.body) && isPlainObject(req.body.input)
+            ? req.body.input
+            : req.body;
+        const solver = isPlainObject(req.body) && typeof req.body.solver === 'string'
+            ? req.body.solver
+            : 'calculator';
+        if (!['calculator', 'binary-vertex', 'iso-contour', 'deterministic'].includes(solver)) {
+            return res.status(400).json({ ok: false, reason: 'invalid-solver' });
+        }
+        const reason = validateTerrainBubbleInput(input);
+        if (reason) {
+            return res.status(400).json({ ok: false, reason });
+        }
+
+        if (solver === 'binary-vertex') {
+            const { artifact, model } = readTerrainBubbleBinaryVertexModel();
+            const suggestion = buildBinaryVertexSuggestion(input, model, {
+                id: 'current-binary-vertex-suggestion',
+                name: 'current binary vertex suggestion'
+            });
+            return res.json({
+                ok: true,
+                solver,
+                model: {
+                    schema: model.schema,
+                    trainedExampleCount: model.trainedExampleCount,
+                    augmentedExampleCount: model.augmentedExampleCount,
+                    featureCount: model.featureCount,
+                    binaryObservations: model.binaryVertexModel.observationCount,
+                    fuzzyGroupCount: model.binaryVertexModel.fuzzyGroupCount,
+                    generatedAt: artifact.generatedAt || null
+                },
+                data: suggestion
+            });
+        }
+
+        if (solver === 'iso-contour') {
+            const { artifact, model } = readTerrainBubbleIsoContourModel();
+            const suggestion = buildIsoContourSuggestion(input, model, {
+                id: 'current-iso-contour-suggestion',
+                name: 'current iso-contour suggestion'
+            });
+            return res.json({
+                ok: true,
+                solver,
+                model: {
+                    schema: model.schema,
+                    trainedExampleCount: model.trainedExampleCount,
+                    priorityBiasMode: model.priorityBiasMode,
+                    priorityBiasStep: model.priorityBiasStep,
+                    quantizationSteps: model.quantizationSteps,
+                    trainingError: model.trainingError,
+                    generatedAt: artifact && artifact.generatedAt || null
+                },
+                data: suggestion
+            });
+        }
+
+        if (solver === 'deterministic') {
+            const suggestion = buildDeterministicTerrainBubbleSuggestion(input, {
+                id: 'current-deterministic-suggestion',
+                name: 'current deterministic solver suggestion'
+            });
+            return res.json({
+                ok: true,
+                solver,
+                model: {
+                    schema: 'terrain-bubble-deterministic-solver-v1',
+                    priorityOrder: ['water', 'mud', 'grass', 'desert']
+                },
+                data: suggestion
+            });
+        }
+
+        const { artifact, calculator } = readTerrainBubbleVertexCalculator();
+        const suggestion = buildCalculatedExample(input, calculator, {
+            id: 'current-calculator-suggestion',
+            name: 'current calculator suggestion'
+        });
+        return res.json({
+            ok: true,
+            solver,
+            model: {
+                schema: calculator.schema,
+                trainedExampleCount: calculator.trainedExampleCount,
+                excludedExampleCount: calculator.excludedExamples.length,
+                conflictCount: calculator.conflicts.length,
+                generatedAt: artifact.generatedAt || null
+            },
+            data: suggestion
+        });
+    } catch (e) {
+        console.error('Failed to suggest terrain bubble polygons:', e);
+        if (e && /^no terrain bubble vertex recipe/.test(e.message || '')) {
+            return res.status(409).json({ ok: false, reason: 'missing-calculator-recipe', detail: e.message });
+        }
+        if (e && /^missing trained terrain bubble/.test(e.message || '')) {
+            return res.status(409).json({ ok: false, reason: 'missing-trained-model', detail: e.message });
+        }
+        return res.status(500).json({ ok: false, reason: 'suggest-failed' });
+    }
+});
+
+app.post('/api/terrain-bubble-examples/retrain', (req, res) => {
+    try {
+        res.set('Cache-Control', 'no-store');
+        const beforeErrorSummary = summarizeTerrainBubbleLearningError(readTerrainBubbleExampleLibrary());
+        const solver = isPlainObject(req.body) && typeof req.body.solver === 'string'
+            ? req.body.solver
+            : 'calculator';
+        if (solver === 'deterministic') {
+            const report = scoreTerrainBubbleExamplesWithDeterministicSolver();
+            const afterErrorSummary = summarizeTerrainBubbleLearningError(readTerrainBubbleExampleLibrary());
+            return res.json({
+                ok: true,
+                operation: 'score-existing-examples',
+                solver,
+                report,
+                beforeErrorSummary,
+                afterErrorSummary
+            });
+        }
+        if (!['calculator', 'binary-vertex', 'iso-contour'].includes(solver)) {
+            return res.status(400).json({ ok: false, reason: 'invalid-solver' });
+        }
+        execFile(process.execPath, [annotateTerrainBubbleLearningErrorsScript], {
+            cwd: __dirname,
+            timeout: 180000,
+            maxBuffer: 1024 * 1024 * 20
+        }, (error, stdout, stderr) => {
+            if (error) {
+                console.error('Terrain bubble scoring failed:', error, stderr || stdout);
+                return res.status(500).json({
+                    ok: false,
+                    reason: 'score-failed',
+                    detail: stderr || stdout || error.message
+                });
+            }
+            try {
+                terrainBubbleVertexCalculatorCache = null;
+                terrainBubbleBinaryVertexModelCache = null;
+                terrainBubbleIsoContourModelCache = null;
+                const report = JSON.parse(fs.readFileSync(terrainBubbleLearningErrorsPath, 'utf8'));
+                const afterErrorSummary = summarizeTerrainBubbleLearningError(readTerrainBubbleExampleLibrary());
+                return res.json({
+                    ok: true,
+                    operation: 'score-existing-examples',
+                    report,
+                    beforeErrorSummary,
+                    afterErrorSummary,
+                    modelArtifacts: {
+                        calculator: path.relative(__dirname, terrainBubbleCalculatorModelPath),
+                        binaryVertex: path.relative(__dirname, terrainBubbleBinaryVertexModelPath),
+                        isoContour: path.relative(__dirname, terrainBubbleIsoContourModelPath)
+                    },
+                    stdout
+                });
+            } catch (readError) {
+                console.error('Terrain bubble scoring report read failed:', readError);
+                return res.status(500).json({ ok: false, reason: 'report-read-failed' });
+            }
+        });
+    } catch (e) {
+        console.error('Failed to score terrain bubble examples:', e);
+        return res.status(500).json({ ok: false, reason: 'score-start-failed' });
     }
 });
 

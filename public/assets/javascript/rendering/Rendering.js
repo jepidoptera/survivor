@@ -1579,6 +1579,7 @@ void main(void) {
             this.buildingInteriorOverlayContainer = null;
             this.buildingInteriorOverlayFloorMeshes = new Map();
             this.buildingInteriorPresentationUiState = null;
+            this.buildingInteriorTransparentWindowDepthState = null;
             this.buildingInteriorDepthClearObject = null;
             this.buildingInteriorView = null;
             this._buildingInteriorForegroundPromotions = [];
@@ -8119,6 +8120,46 @@ void main(void) {
             return state;
         }
 
+        getBuildingInteriorTransparentWindowDepthState() {
+            if (this.buildingInteriorTransparentWindowDepthState) return this.buildingInteriorTransparentWindowDepthState;
+            if (typeof PIXI === "undefined" || !PIXI.State) return null;
+            const state = new PIXI.State();
+            state.depthTest = true;
+            state.depthMask = false;
+            state.blend = true;
+            state.culling = false;
+            this.buildingInteriorTransparentWindowDepthState = state;
+            return state;
+        }
+
+        isTransparentFrontMountedWindowDepthItem(item, forceMountedWallSide, alpha) {
+            if (!item) return false;
+            const category = (typeof item.category === "string") ? item.category.trim().toLowerCase() : "";
+            const type = (typeof item.type === "string") ? item.type.trim().toLowerCase() : "";
+            if (category !== "windows" && type !== "window") return false;
+            if (forceMountedWallSide !== "front") return false;
+            const normalizedAlpha = Number(alpha);
+            return Number.isFinite(normalizedAlpha) && normalizedAlpha < 0.999;
+        }
+
+        applyMountedWindowDepthState(mesh, item, forceMountedWallSide, alpha) {
+            if (!mesh) return false;
+            const shouldUseTransparentState = this.isTransparentFrontMountedWindowDepthItem(item, forceMountedWallSide, alpha);
+            if (!shouldUseTransparentState) {
+                if (mesh._buildingInteriorDefaultDepthState !== undefined) {
+                    mesh.state = mesh._buildingInteriorDefaultDepthState;
+                }
+                return false;
+            }
+            const state = this.getBuildingInteriorTransparentWindowDepthState();
+            if (!state) return false;
+            if (mesh._buildingInteriorDefaultDepthState === undefined) {
+                mesh._buildingInteriorDefaultDepthState = mesh.state || null;
+            }
+            mesh.state = state;
+            return true;
+        }
+
         getBuildingInteriorView() {
             if (this.buildingInteriorView) return this.buildingInteriorView;
             const InteriorViewCtor = global.RenderingBuildingInteriorView;
@@ -13206,6 +13247,7 @@ void main(void) {
                     : 1;
                 mesh.visible = true;
                 mesh.alpha = this.getScriptDisplayAlpha(item) * layerAlpha;
+                this.applyMountedWindowDepthState(mesh, item, forceMountedWallSide, mesh.alpha);
                 if (Object.prototype.hasOwnProperty.call(mesh, "renderable")) {
                     mesh.renderable = true;
                 }

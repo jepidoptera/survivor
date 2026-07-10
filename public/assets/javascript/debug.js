@@ -6,9 +6,47 @@ let debugMode = false; // Toggle all debug graphics (hitboxes, grid, animal mark
 if (typeof globalThis !== "undefined") {
     globalThis.debugMode = debugMode;
 }
-let showTerrainPaintDiagnostics = true; // Terrain-colored polygon outlines plus pink/yellow terrain edit diagnostics.
+const TERRAIN_POLYGON_OUTLINES_STORAGE_KEY = "survivor-terrain-polygon-outlines";
+
+function getDebugLocalStorage() {
+    if (typeof globalThis === "undefined") return null;
+    try {
+        return globalThis.localStorage || null;
+    } catch (err) {
+        return null;
+    }
+}
+
+function readStoredTerrainPolygonOutlinesVisible(defaultValue = true) {
+    const storage = getDebugLocalStorage();
+    if (!storage || typeof storage.getItem !== "function") return !!defaultValue;
+    let raw = null;
+    try {
+        raw = storage.getItem(TERRAIN_POLYGON_OUTLINES_STORAGE_KEY);
+    } catch (err) {
+        return !!defaultValue;
+    }
+    if (raw === "1" || raw === "true") return true;
+    if (raw === "0" || raw === "false") return false;
+    return !!defaultValue;
+}
+
+function writeStoredTerrainPolygonOutlinesVisible(enabled) {
+    const storage = getDebugLocalStorage();
+    if (!storage || typeof storage.setItem !== "function") return false;
+    try {
+        storage.setItem(TERRAIN_POLYGON_OUTLINES_STORAGE_KEY, enabled ? "1" : "0");
+        return true;
+    } catch (err) {
+        return false;
+    }
+}
+
+let showTerrainPaintDiagnostics = readStoredTerrainPolygonOutlinesVisible(true); // Terrain-colored polygon outlines.
+let showTerrainPaintRepairPaths = false; // Pink/yellow terrain edit repair-path diagnostics.
 if (typeof globalThis !== "undefined") {
     globalThis.debugTerrainPolygonDiagnostics = showTerrainPaintDiagnostics;
+    globalThis.debugTerrainPaintRepairPaths = showTerrainPaintRepairPaths;
 }
 const debugFreezePrototypeInteriorInvalidationFrame = false;
 if (typeof globalThis !== "undefined") {
@@ -868,12 +906,35 @@ function setLosDebugFillEnabled(enabled) {
     return losDebugFillEnabled;
 }
 
-function setTerrainPaintDiagnosticsVisible(enabled) {
+function setTerrainPaintDiagnosticsVisible(enabled, options = {}) {
     showTerrainPaintDiagnostics = !!enabled;
     if (typeof globalThis !== "undefined") {
         globalThis.debugTerrainPolygonDiagnostics = showTerrainPaintDiagnostics;
     }
+    if (!(options && options.skipPersist === true)) {
+        writeStoredTerrainPolygonOutlinesVisible(showTerrainPaintDiagnostics);
+    }
     return showTerrainPaintDiagnostics;
+}
+
+function setTerrainPaintRepairPathsVisible(enabled) {
+    showTerrainPaintRepairPaths = !!enabled;
+    if (typeof globalThis !== "undefined") {
+        globalThis.debugTerrainPaintRepairPaths = showTerrainPaintRepairPaths;
+    }
+    return showTerrainPaintRepairPaths;
+}
+
+function toggleTerrainPaintRepairPaths() {
+    return setTerrainPaintRepairPathsVisible(!showTerrainPaintRepairPaths);
+}
+
+function setTerrainPolygonOutlinesVisible(enabled) {
+    return setTerrainPaintDiagnosticsVisible(enabled);
+}
+
+function toggleTerrainPolygonOutlines() {
+    return setTerrainPolygonOutlinesVisible(!showTerrainPaintDiagnostics);
 }
 
 function setPickerScreenVisible(enabled) {
@@ -947,6 +1008,7 @@ class DebugViewSettings {
         });
         this._defineBooleanSetting("showLosFill", () => losDebugFillEnabled, value => setLosDebugFillEnabled(value));
         this._defineBooleanSetting("showTerrainPaintDiagnostics", () => showTerrainPaintDiagnostics, value => setTerrainPaintDiagnosticsVisible(value));
+        this._defineBooleanSetting("showTerrainPaintRepairPaths", () => showTerrainPaintRepairPaths, value => setTerrainPaintRepairPathsVisible(value));
         this._defineBooleanSetting("showPickerScreen", () => !!(typeof globalThis !== "undefined" && globalThis.renderingShowPickerScreen), value => setPickerScreenVisible(value));
         this._defineBooleanSetting("showSectionWorldSeams", () => getSectionWorldSeamsVisible(), value => setSectionWorldSeamsVisible(value));
         this._defineBooleanSetting("showSectionSeams", () => getSectionWorldSeamsVisible(), value => setSectionWorldSeamsVisible(value));
@@ -1099,6 +1161,20 @@ if (typeof globalThis !== "undefined") {
         toggleTerrainPaintDiagnostics: () => {
             debugViewSettings.showTerrainPaintDiagnostics = !debugViewSettings.showTerrainPaintDiagnostics;
             return debugViewSettings.showTerrainPaintDiagnostics;
+        },
+        setTerrainPaintRepairPathsVisible: visible => {
+            debugViewSettings.showTerrainPaintRepairPaths = !!visible;
+            return debugViewSettings.showTerrainPaintRepairPaths;
+        },
+        toggleTerrainPaintRepairPaths: () => {
+            debugViewSettings.showTerrainPaintRepairPaths = !debugViewSettings.showTerrainPaintRepairPaths;
+            return debugViewSettings.showTerrainPaintRepairPaths;
+        },
+        setTerrainPolygonOutlinesVisible: visible => setTerrainPolygonOutlinesVisible(visible),
+        toggleTerrainPolygonOutlines: () => toggleTerrainPolygonOutlines(),
+        terrainPolygonOutlines(visible) {
+            if (arguments.length === 0) return debugViewSettings.showTerrainPaintDiagnostics;
+            return setTerrainPolygonOutlinesVisible(visible);
         }
     };
     globalThis.DebugView = debugView;
@@ -1115,6 +1191,14 @@ if (typeof globalThis !== "undefined") {
     globalThis.setPerfInstrumentationEnabled = setPerfInstrumentationEnabled;
     globalThis.describePerfInstrumentation = describePerfInstrumentation;
     globalThis.setTerrainPaintDiagnosticsVisible = setTerrainPaintDiagnosticsVisible;
+    globalThis.setTerrainPaintRepairPathsVisible = setTerrainPaintRepairPathsVisible;
+    globalThis.toggleTerrainPaintRepairPaths = toggleTerrainPaintRepairPaths;
+    globalThis.setTerrainPolygonOutlinesVisible = setTerrainPolygonOutlinesVisible;
+    globalThis.toggleTerrainPolygonOutlines = toggleTerrainPolygonOutlines;
+    globalThis.terrainPolygonOutlines = function terrainPolygonOutlines(visible) {
+        if (arguments.length === 0) return debugViewSettings.showTerrainPaintDiagnostics;
+        return setTerrainPolygonOutlinesVisible(visible);
+    };
 }
 
 if (typeof globalThis !== "undefined" && typeof globalThis.setLosDebugFillEnabled !== "function") {

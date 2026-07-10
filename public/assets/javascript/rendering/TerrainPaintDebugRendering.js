@@ -11,8 +11,16 @@
         return out;
     }
 
-    function isEnabled() {
+    function outlinesEnabled() {
         return !!(global && global.debugTerrainPolygonDiagnostics === true);
+    }
+
+    function repairPathsEnabled() {
+        return !!(global && global.debugTerrainPaintRepairPaths === true);
+    }
+
+    function isEnabled() {
+        return outlinesEnabled() || repairPathsEnabled();
     }
 
     function getTerrainOutlineColor(terrainType) {
@@ -92,7 +100,9 @@
     }
 
     function render(renderer, ctx, entries) {
-        if (!isEnabled()) {
+        const drawOutlines = outlinesEnabled();
+        const drawRepairPaths = repairPathsEnabled();
+        if (!drawOutlines && !drawRepairPaths) {
             clear(renderer);
             return;
         }
@@ -115,7 +125,7 @@
         const edit = mapRef && mapRef._terrainPaintDebugLastEdit ? mapRef._terrainPaintDebugLastEdit : null;
         const sourceEntries = Array.isArray(entries) ? entries : [];
         const terrainEntries = sourceEntries.filter(entry => entry && entry.isTerrainPolygon === true);
-        if (!edit && terrainEntries.length === 0) {
+        if ((!drawRepairPaths || !edit) && (!drawOutlines || terrainEntries.length === 0)) {
             g.visible = false;
             return;
         }
@@ -124,50 +134,41 @@
         const baseZ = typeof renderer.getLayerBaseZForLevel === "function"
             ? renderer.getLayerBaseZForLevel(0)
             : 0;
-        for (let i = 0; i < terrainEntries.length; i++) {
-            const entry = terrainEntries[i];
-            const entryBaseZ = Number.isFinite(entry.baseZ) ? Number(entry.baseZ) : baseZ;
-            const lineColor = getTerrainOutlineColor(entry.terrainType);
-            if (drawRing(renderer, g, entry.outer, entryBaseZ, {
-                lineColor,
-                lineAlpha: 0.98,
-                lineWidth: 2
-            })) {
-                drawn += 1;
-            }
-            const holes = Array.isArray(entry.holes) ? entry.holes : [];
-            for (let h = 0; h < holes.length; h++) {
-                if (drawRing(renderer, g, holes[h], entryBaseZ, {
+        if (drawOutlines) {
+            for (let i = 0; i < terrainEntries.length; i++) {
+                const entry = terrainEntries[i];
+                const entryBaseZ = Number.isFinite(entry.baseZ) ? Number(entry.baseZ) : baseZ;
+                const lineColor = getTerrainOutlineColor(entry.terrainType);
+                if (drawRing(renderer, g, entry.outer, entryBaseZ, {
                     lineColor,
-                    lineAlpha: 0.82,
+                    lineAlpha: 0.98,
                     lineWidth: 2
                 })) {
                     drawn += 1;
                 }
+                const holes = Array.isArray(entry.holes) ? entry.holes : [];
+                for (let h = 0; h < holes.length; h++) {
+                    if (drawRing(renderer, g, holes[h], entryBaseZ, {
+                        lineColor,
+                        lineAlpha: 0.82,
+                        lineWidth: 2
+                    })) {
+                        drawn += 1;
+                    }
+                }
             }
         }
 
-        const rawReplacementSegments = Array.isArray(edit && edit.rawReplacementSegments)
-            ? edit.rawReplacementSegments
-            : [];
-        for (let i = 0; i < rawReplacementSegments.length; i++) {
-            if (drawSegment(renderer, g, rawReplacementSegments[i], baseZ, {
-                lineColor: 0xffea3a,
-                lineAlpha: 0.95,
-                lineWidth: 7
-            })) {
-                drawn += 1;
-            }
-        }
-
-        const modifiedSegments = Array.isArray(edit && edit.modifiedSegments) ? edit.modifiedSegments : [];
-        for (let i = 0; i < modifiedSegments.length; i++) {
-            if (drawSegment(renderer, g, modifiedSegments[i], baseZ, {
-                lineColor: 0xff4fca,
-                lineAlpha: 1,
-                lineWidth: 4
-            })) {
-                drawn += 1;
+        if (drawRepairPaths) {
+            const modifiedSegments = Array.isArray(edit && edit.modifiedSegments) ? edit.modifiedSegments : [];
+            for (let i = 0; i < modifiedSegments.length; i++) {
+                if (drawSegment(renderer, g, modifiedSegments[i], baseZ, {
+                    lineColor: 0xff4fca,
+                    lineAlpha: 1,
+                    lineWidth: 4
+                })) {
+                    drawn += 1;
+                }
             }
         }
         g.visible = drawn > 0;
@@ -175,6 +176,8 @@
 
     global.RenderingTerrainPaintDebugRenderer = {
         isEnabled,
+        outlinesEnabled,
+        repairPathsEnabled,
         clear,
         drawRing,
         drawSegment,

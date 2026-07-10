@@ -423,14 +423,44 @@
             return {
                 layer: null,
                 surfaceId: "",
-                fragmentId: ""
+                fragmentId: "",
+                floorMembership: null
             };
         }
 
         const node = (entity.node && typeof entity.node === "object") ? entity.node : null;
+        const mapRef = entity.map || global.map || null;
+        const floorSupportApi = (typeof globalThis !== "undefined" && globalThis.FloorSupport)
+            ? globalThis.FloorSupport
+            : null;
+        let floorMembership = null;
+        if (floorSupportApi && typeof floorSupportApi.getEntityFloorMembership === "function") {
+            floorMembership = floorSupportApi.getEntityFloorMembership(entity, { map: mapRef }) || null;
+        }
+        if (!floorMembership) {
+            const directMembership = entity._floorMembership && typeof entity._floorMembership === "object"
+                ? entity._floorMembership
+                : (entity.floorMembership && typeof entity.floorMembership === "object" ? entity.floorMembership : null);
+            if (
+                directMembership &&
+                typeof directMembership.ownerType === "string" &&
+                typeof directMembership.ownerId === "string" &&
+                typeof directMembership.floorId === "string" &&
+                directMembership.ownerType.length > 0 &&
+                directMembership.ownerId.length > 0 &&
+                directMembership.floorId.length > 0
+            ) {
+                floorMembership = {
+                    ownerType: directMembership.ownerType,
+                    ownerId: directMembership.ownerId,
+                    floorId: directMembership.floorId
+                };
+            }
+        }
         const layerCandidates = [
             entity.traversalLayer,
             entity.currentLayer,
+            floorMembership && floorMembership.level,
             entity.level,
             node && node.traversalLayer,
             node && node.level
@@ -453,8 +483,24 @@
         return {
             layer,
             surfaceId,
-            fragmentId
+            fragmentId,
+            floorMembership
         };
+    }
+
+    function floorMembershipsMatch(leftMembership, rightMembership) {
+        if (!leftMembership || !rightMembership) return false;
+        const floorSupportApi = (typeof globalThis !== "undefined" && globalThis.FloorSupport)
+            ? globalThis.FloorSupport
+            : null;
+        if (floorSupportApi && typeof floorSupportApi.floorMembershipMatches === "function") {
+            return floorSupportApi.floorMembershipMatches(leftMembership, rightMembership);
+        }
+        return (
+            leftMembership.ownerType === rightMembership.ownerType &&
+            leftMembership.ownerId === rightMembership.ownerId &&
+            leftMembership.floorId === rightMembership.floorId
+        );
     }
 
     function isOnSameFloorFragment(actor, target) {
@@ -467,6 +513,10 @@
             actorContext.layer !== targetContext.layer
         ) {
             return false;
+        }
+
+        if (actorContext.floorMembership && targetContext.floorMembership) {
+            return floorMembershipsMatch(actorContext.floorMembership, targetContext.floorMembership);
         }
 
         // Only enforce fragment/surface matching when BOTH sides have an id.

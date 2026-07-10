@@ -563,6 +563,37 @@ test("building exterior bitmap rendering uses vertical texture anchor", () => {
     assert.equal(removedPlacementId, "building:placed-1");
 });
 
+test("transparent front mounted windows in building interior do not write depth", () => {
+    const RenderingImpl = loadRenderingImpl({
+        PIXI: {
+            State: class {},
+            Graphics: class {}
+        }
+    });
+    const renderer = new RenderingImpl();
+    const defaultState = {
+        depthTest: true,
+        depthMask: true,
+        blend: false,
+        culling: false
+    };
+    const mesh = { state: defaultState };
+    const windowItem = { type: "window", category: "windows" };
+
+    assert.equal(renderer.applyMountedWindowDepthState(mesh, windowItem, "front", 0.1), true);
+    assert.notEqual(mesh.state, defaultState);
+    assert.equal(mesh.state.depthTest, true);
+    assert.equal(mesh.state.depthMask, false);
+    assert.equal(mesh.state.blend, true);
+    assert.equal(mesh.state.culling, false);
+
+    assert.equal(renderer.applyMountedWindowDepthState(mesh, windowItem, "back", 0.1), false);
+    assert.equal(mesh.state, defaultState);
+
+    assert.equal(renderer.applyMountedWindowDepthState(mesh, windowItem, "front", 1), false);
+    assert.equal(mesh.state, defaultState);
+});
+
 test("building interior bitmap rendering projects a visible ground mesh", () => {
     let updateThis = null;
     let updateOptions = null;
