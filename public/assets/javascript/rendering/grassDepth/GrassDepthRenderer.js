@@ -26,6 +26,7 @@
     const DEFAULT_WIZARD_SHADOW_FACTOR = 0.275;
     const WIZARD_SHADOW_CENTER_Y_OFFSET = 0.18;
     const WIZARD_SHADOW_RADIUS = 0.22;
+    const ROOT_MASK_OVERSCAN_SCALE = 1.5;
 
     function isWebgl2Renderer(renderer) {
         const gl = renderer && renderer.gl ? renderer.gl : null;
@@ -134,6 +135,7 @@
             this.rootMaskTexture = null;
             this.rootMaskSizeKey = "";
             this.rootMaskSignature = "";
+            this.rootMaskWindow = null;
             this.rootMaskGraphics = null;
             this.seedTexture = null;
             this.seedTextureFailed = false;
@@ -247,6 +249,8 @@
                 uRootMask: PIXI.Texture.WHITE,
                 uSeedTexture: PIXI.Texture.WHITE,
                 uScreenSize: new Float32Array([width, height]),
+                uRootMaskSize: new Float32Array([width, height]),
+                uRootMaskWorldOrigin: new Float32Array([0, 0]),
                 uCameraWorld: new Float32Array([0, 0]),
                 uSeedCameraWorld: new Float32Array([0, 0]),
                 uCameraZ: 0,
@@ -466,23 +470,21 @@
             return baseZ;
         }
 
-        drawScreenRing(graphics, rendererAdapter, ring, baseZ) {
-            const camera = rendererAdapter && rendererAdapter.camera ? rendererAdapter.camera : null;
-            if (!camera || typeof camera.worldToScreen !== "function") {
-                throw new Error("grass depth root mask requires RenderingCamera.worldToScreen");
+        drawMaskWindowRing(graphics, ring, maskWindow) {
+            if (!maskWindow) {
+                throw new Error("grass depth root mask requires a mask window");
             }
             const flat = [];
+            const scaleX = Math.max(0.0001, finiteNumber(maskWindow.viewscale, 1));
+            const scaleY = Math.max(0.0001, finiteNumber(maskWindow.viewscale, 1) * finiteNumber(maskWindow.xyratio, 1));
             for (let i = 0; i < ring.length; i++) {
                 const pt = ring[i];
-                const screen = camera.worldToScreen(pt.x, pt.y, baseZ);
-                if (
-                    !screen ||
-                    !Number.isFinite(screen.x) ||
-                    !Number.isFinite(screen.y)
-                ) {
+                const x = (finiteNumber(pt && pt.x, NaN) - maskWindow.originX) * scaleX;
+                const y = (finiteNumber(pt && pt.y, NaN) - maskWindow.originY) * scaleY;
+                if (!Number.isFinite(x) || !Number.isFinite(y)) {
                     throw new Error("grass depth root mask received a non-finite projected polygon point");
                 }
-                flat.push(screen.x, screen.y);
+                flat.push(x, y);
             }
             graphics.drawPolygon(flat);
         }
@@ -507,18 +509,83 @@
             return parts.join("|");
         }
 
-        buildRootMaskSignature(rendererAdapter, maskEntries, width, height, baseZ) {
+        createRootMaskWindow(rendererAdapter, width, height, baseZ) {
             const camera = rendererAdapter && rendererAdapter.camera ? rendererAdapter.camera : null;
-            if (!camera) {
-                throw new Error("grass depth root mask signature requires a rendering camera");
+            if (!camera) throw new Error("grass depth root mask requires a rendering camera");
+            const viewscale = Math.max(0.0001, finiteNumber(camera.viewscale, 1));
+            const xyratio = Math.max(0.0001, finiteNumber(camera.xyratio, 1));
+            const cameraX = finiteNumber(camera.x, 0);
+            const cameraY = finiteNumber(camera.y, 0);
+            const cameraZ = finiteNumber(camera.z, 0);
+            const screenWidth = Math.max(1, Math.round(width));
+            const screenHeight = Math.max(1, Math.round(height));
+            const maskWidth = Math.max(screenWidth, Math.ceil(screenWidth * ROOT_MASK_OVERSCAN_SCALE));
+            const maskHeight = Math.max(screenHeight, Math.ceil(screenHeight * ROOT_MASK_OVERSCAN_SCALE));
+            const marginX = (maskWidth - screenWidth) * 0.5;
+            const marginY = (maskHeight - screenHeight) * 0.5;
+            const camDz = finiteNumber(baseZ, 0) - cameraZ;
+            return {
+                screenWidth,
+                screenHeight,
+                width: maskWidth,
+                height: maskHeight,
+                originX: cameraX - marginX / viewscale,
+                originY: cameraY + camDz - marginY / (viewscale * xyratio),
+                viewscale,
+                xyratio,
+                cameraZ,
+                baseZ: finiteNumber(baseZ, 0)
+            };
+        }
+
+        rootMaskWindowContainsCameraView(maskWindow, rendererAdapter, width, height, baseZ) {
+            const camera = rendererAdapter && rendererAdapter.camera ? rendererAdapter.camera : null;
+            if (!maskWindow || !camera) return false;
+            const viewscale = Math.max(0.0001, finiteNumber(camera.viewscale, 1));
+            const xyratio = Math.max(0.0001, finiteNumber(camera.xyratio, 1));
+            const screenWidth = Math.max(1, Math.round(width));
+            const screenHeight = Math.max(1, Math.round(height));
+            if (maskWindow.screenWidth !== screenWidth || maskWindow.screenHeight !== screenHeight) return false;
+            if (Math.abs(maskWindow.viewscale - viewscale) > 0.000001) return false;
+            if (Math.abs(maskWindow.xyratio - xyratio) > 0.000001) return false;
+            const cameraZ = finiteNumber(camera.z, 0);
+            const resolvedBaseZ = finiteNumber(baseZ, 0);
+            if (Math.abs(maskWindow.cameraZ - cameraZ) > 0.000001) return false;
+            if (Math.abs(maskWindow.baseZ - resolvedBaseZ) > 0.000001) return false;
+            const camDz = resolvedBaseZ - cameraZ;
+            const viewLeft = finiteNumber(camera.x, 0);
+            const viewTop = finiteNumber(camera.y, 0) + camDz;
+            const viewRight = viewLeft + screenWidth / viewscale;
+            const viewBottom = viewTop + screenHeight / (viewscale * xyratio);
+            const maskRight = maskWindow.originX + maskWindow.width / viewscale;
+            const maskBottom = maskWindow.originY + maskWindow.height / (viewscale * xyratio);
+            const epsilon = 0.000001;
+            return (
+                viewLeft >= maskWindow.originX - epsilon &&
+                viewTop >= maskWindow.originY - epsilon &&
+                viewRight <= maskRight + epsilon &&
+                viewBottom <= maskBottom + epsilon
+            );
+        }
+
+        resolveRootMaskWindow(rendererAdapter, width, height, baseZ) {
+            if (this.rootMaskWindowContainsCameraView(this.rootMaskWindow, rendererAdapter, width, height, baseZ)) {
+                return this.rootMaskWindow;
             }
+            this.rootMaskWindow = this.createRootMaskWindow(rendererAdapter, width, height, baseZ);
+            this.rootMaskSignature = "";
+            return this.rootMaskWindow;
+        }
+
+        buildRootMaskSignature(rendererAdapter, maskEntries, width, height, baseZ, maskWindow = null) {
+            const resolvedWindow = maskWindow || this.resolveRootMaskWindow(rendererAdapter, width, height, baseZ);
             return [
-                `${Math.max(1, Math.round(width))}x${Math.max(1, Math.round(height))}`,
-                signatureNumber(camera.x),
-                signatureNumber(camera.y),
-                signatureNumber(camera.z),
-                signatureNumber(camera.viewscale),
-                signatureNumber(camera.xyratio),
+                `${Math.max(1, Math.round(resolvedWindow.width))}x${Math.max(1, Math.round(resolvedWindow.height))}`,
+                `${Math.max(1, Math.round(resolvedWindow.screenWidth))}x${Math.max(1, Math.round(resolvedWindow.screenHeight))}`,
+                signatureNumber(resolvedWindow.originX),
+                signatureNumber(resolvedWindow.originY),
+                signatureNumber(resolvedWindow.viewscale),
+                signatureNumber(resolvedWindow.xyratio),
                 signatureNumber(baseZ),
                 maskEntries.map(entry => this.rootMaskEntrySignature(entry)).join("~")
             ].join("::");
@@ -530,10 +597,11 @@
             if (!renderer || typeof renderer.render !== "function") {
                 throw new Error("grass depth root mask requires an app renderer");
             }
-            const texture = this.ensureRootMaskTexture(width, height);
-            const signature = this.buildRootMaskSignature(rendererAdapter, maskEntries, width, height, baseZ);
+            const maskWindow = this.resolveRootMaskWindow(rendererAdapter, width, height, baseZ);
+            const texture = this.ensureRootMaskTexture(maskWindow.width, maskWindow.height);
+            const signature = this.buildRootMaskSignature(rendererAdapter, maskEntries, width, height, baseZ, maskWindow);
             if (this.rootMaskSignature === signature) {
-                return { texture, rebuilt: false, maskMs: 0 };
+                return { texture, rebuilt: false, maskMs: 0, window: maskWindow };
             }
             const perfNow = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
                 ? performance.now.bind(performance)
@@ -542,7 +610,7 @@
             const graphics = this.ensureRootMaskGraphics();
             graphics.clear();
             graphics.beginFill(ROOT_MASK_CLEAR_COLOR, 0);
-            graphics.drawRect(0, 0, width, height);
+            graphics.drawRect(0, 0, maskWindow.width, maskWindow.height);
             graphics.endFill();
             const canDrawHoles = typeof graphics.beginHole === "function" && typeof graphics.endHole === "function";
             const drawEntries = (mode, color) => {
@@ -550,14 +618,14 @@
                 for (let i = 0; i < maskEntries.length; i++) {
                     const entry = maskEntries[i];
                     if (!entry || entry.mode !== mode) continue;
-                    this.drawScreenRing(graphics, rendererAdapter, entry.outer, baseZ);
+                    this.drawMaskWindowRing(graphics, entry.outer, maskWindow);
                     if (entry.holes.length > 0) {
                         if (!canDrawHoles) {
                             throw new Error("grass depth root mask requires PIXI.Graphics beginHole/endHole for holed grass polygons");
                         }
                         for (let h = 0; h < entry.holes.length; h++) {
                             graphics.beginHole();
-                            this.drawScreenRing(graphics, rendererAdapter, entry.holes[h], baseZ);
+                            this.drawMaskWindowRing(graphics, entry.holes[h], maskWindow);
                             graphics.endHole();
                         }
                     }
@@ -571,7 +639,8 @@
             return {
                 texture,
                 rebuilt: true,
-                maskMs: perfNow ? (perfNow() - startMs) : 0
+                maskMs: perfNow ? (perfNow() - startMs) : 0,
+                window: maskWindow
             };
         }
 
@@ -820,6 +889,10 @@
             if (!rootMask) {
                 throw new Error("grass depth root mask update did not return a texture");
             }
+            const rootMaskWindow = rootMaskResult && rootMaskResult.window ? rootMaskResult.window : null;
+            if (!rootMaskWindow) {
+                throw new Error("grass depth root mask update did not return a mask window");
+            }
             const container = this.ensureContainer(rendererAdapter);
             const meshes = this.ensureMeshes(width, height, renderer);
             if (!Array.isArray(meshes) || meshes.length !== GRASS_DEPTH_LAYER_CONFIGS.length) {
@@ -864,6 +937,10 @@
                 uniforms.uSeedTexture = seedTexture;
                 uniforms.uScreenSize[0] = width;
                 uniforms.uScreenSize[1] = height;
+                uniforms.uRootMaskSize[0] = rootMaskWindow.width;
+                uniforms.uRootMaskSize[1] = rootMaskWindow.height;
+                uniforms.uRootMaskWorldOrigin[0] = rootMaskWindow.originX;
+                uniforms.uRootMaskWorldOrigin[1] = rootMaskWindow.originY;
                 uniforms.uCameraWorld[0] = cameraX;
                 uniforms.uCameraWorld[1] = cameraY;
                 uniforms.uSeedCameraWorld[0] = snappedSeedCameraX;

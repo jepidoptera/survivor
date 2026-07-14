@@ -384,6 +384,9 @@ const SpellSystem = (() => {
         w: "water",
         m: "mud"
     };
+    const TERRAIN_BRUSH_RADIUS_MIN = 1;
+    const TERRAIN_BRUSH_RADIUS_MAX = 3;
+    const DEFAULT_TERRAIN_BRUSH_RADIUS = 1;
     const DEFAULT_ROOF_TEXTURE = "/assets/images/roofs/smallshingles.png";
     const DEFAULT_PLACEABLE_CATEGORY = "doors";
     const DEFAULT_PLACEABLE_BY_CATEGORY = {
@@ -2407,6 +2410,23 @@ const SpellSystem = (() => {
         return next;
     }
 
+    function getSelectedTerrainBrushRadius(wizardRef) {
+        const raw = Number(wizardRef && wizardRef.selectedTerrainBrushRadius);
+        if (!Number.isFinite(raw)) return DEFAULT_TERRAIN_BRUSH_RADIUS;
+        return Math.max(TERRAIN_BRUSH_RADIUS_MIN, Math.min(TERRAIN_BRUSH_RADIUS_MAX, Math.round(raw)));
+    }
+
+    function setSelectedTerrainBrushRadius(wizardRef, radius) {
+        if (!wizardRef) return DEFAULT_TERRAIN_BRUSH_RADIUS;
+        const raw = Number(radius);
+        if (!Number.isFinite(raw)) {
+            throw new Error("terrain brush radius must be finite");
+        }
+        const next = Math.max(TERRAIN_BRUSH_RADIUS_MIN, Math.min(TERRAIN_BRUSH_RADIUS_MAX, Math.round(raw)));
+        wizardRef.selectedTerrainBrushRadius = next;
+        return next;
+    }
+
     function getSelectedTerrainIcon(wizardRef) {
         const selected = getSelectedTerrainType(wizardRef);
         const def = TERRAIN_TOOL_DEFS.find(entry => entry.name === selected);
@@ -3475,6 +3495,7 @@ const SpellSystem = (() => {
             pointIndex: hit.pointIndex,
             originalPoints: points,
             lastValidPoints: points.map(point => ({ x: point.x, y: point.y })),
+            lastSnapTarget: null,
             map: mapRef,
             changed: false
         };
@@ -3498,7 +3519,16 @@ const SpellSystem = (() => {
             ? roadPath.pathPoints.map((point, index) => RoadPath.normalizePoint(point, `road path edit current point ${index}`))
             : [];
         if (points.length < 2 || pointIndex < 0 || pointIndex >= points.length) return false;
-        const nextPoint = getRoadPathEditPoint(wizardRef, worldX, worldY);
+        const snapTarget = (
+            pointIndex === 0 ||
+            pointIndex === points.length - 1
+        ) ? getRoadPathEndpointSnapTargetAt(wizardRef, worldX, worldY, {
+            excludeRoadPath: roadPath,
+            excludePointIndex: pointIndex
+        }) : null;
+        const nextPoint = snapTarget && snapTarget.point
+            ? wrapWorldPointForMap(mapRef, Number(snapTarget.point.x), Number(snapTarget.point.y))
+            : getRoadPathEditPoint(wizardRef, worldX, worldY);
         if (!nextPoint) return false;
         const nextPoints = points.map(point => ({ x: point.x, y: point.y }));
         nextPoints[pointIndex] = nextPoint;
@@ -3508,6 +3538,7 @@ const SpellSystem = (() => {
                 updateIndexedNodes: false
             });
             drag.lastValidPoints = nextPoints.map(point => ({ x: point.x, y: point.y }));
+            drag.lastSnapTarget = snapTarget || null;
             drag.changed = true;
         } catch (error) {
             const errorMessage = error && error.message ? error.message : "Road point is not valid.";
@@ -3528,6 +3559,15 @@ const SpellSystem = (() => {
                 ? drag.lastValidPoints
                 : roadPath.pathPoints;
             roadPath.setPathPoints(finalPoints, { markSurfaceDirty: false });
+            if (
+                drag.lastSnapTarget &&
+                typeof drag.lastSnapTarget.snapId === "string" &&
+                drag.lastSnapTarget.snapId.length > 0
+            ) {
+                setRoadPathEndpointSnapId(roadPath, Number(drag.pointIndex), drag.lastSnapTarget.snapId);
+            } else if (Number(drag.pointIndex) === 0 || Number(drag.pointIndex) === finalPoints.length - 1) {
+                setRoadPathEndpointSnapId(roadPath, Number(drag.pointIndex));
+            }
             persistEditedRoadPath(roadPath, roadPath.map || drag.map || wizardRef.map || null);
         }
         return true;
@@ -3628,8 +3668,16 @@ const SpellSystem = (() => {
             type: "roadPath",
             points: points.map((point, index) => RoadPath.normalizePoint(point, `road path placement point ${index}`)),
             width: RoadPath.normalizeWidth(width),
-            fillTexturePath: RoadPath.normalizeFillTexturePath(fillTexturePath)
+            fillTexturePath: RoadPath.normalizeFillTexturePath(fillTexturePath),
+            roadNetworkId: (
+                wizardRef.roadPathDraft &&
+                typeof wizardRef.roadPathDraft.roadNetworkId === "string" &&
+                wizardRef.roadPathDraft.roadNetworkId.length > 0
+            ) ? wizardRef.roadPathDraft.roadNetworkId : RoadPath.createSnapId("road-network"),
+            endpointSnapIds: RoadPath.normalizeEndpointSnapIds(wizardRef.roadPathDraft && wizardRef.roadPathDraft.endpointSnapIds)
         };
+        if (!baseRecord.endpointSnapIds.start) baseRecord.endpointSnapIds.start = RoadPath.createSnapId("road-snap");
+        if (!baseRecord.endpointSnapIds.end) baseRecord.endpointSnapIds.end = RoadPath.createSnapId("road-snap");
         baseRecord.x = baseRecord.points[0].x;
         baseRecord.y = baseRecord.points[0].y;
 
@@ -4696,6 +4744,131 @@ const SpellSystem = (() => {
         return null;
     }
 
+    function getRoadPathEndpointSnapId(roadPath, pointIndex) {
+        if (!roadPath || !Array.isArray(roadPath.pathPoints)) return "";
+        const index = Number(pointIndex);
+        if (index === 0) {
+            return roadPath.endpointSnapIds && typeof roadPath.endpointSnapIds.start === "string"
+                ? roadPath.endpointSnapIds.start
+                : "";
+        }
+        if (index === roadPath.pathPoints.length - 1) {
+            return roadPath.endpointSnapIds && typeof roadPath.endpointSnapIds.end === "string"
+                ? roadPath.endpointSnapIds.end
+                : "";
+        }
+        return "";
+    }
+
+    function setRoadPathEndpointSnapId(roadPath, pointIndex, snapId = "") {
+        if (!roadPath || !Array.isArray(roadPath.pathPoints)) return false;
+        const index = Number(pointIndex);
+        if (index !== 0 && index !== roadPath.pathPoints.length - 1) return false;
+        if (!roadPath.endpointSnapIds || typeof roadPath.endpointSnapIds !== "object") {
+            roadPath.endpointSnapIds = {};
+        }
+        const normalizedSnapId = (typeof snapId === "string" && snapId.trim().length > 0)
+            ? snapId.trim()
+            : (
+                typeof RoadPath === "function" && typeof RoadPath.createSnapId === "function"
+                    ? RoadPath.createSnapId("road-snap")
+                    : `road-snap:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+            );
+        if (index === 0) roadPath.endpointSnapIds.start = normalizedSnapId;
+        else roadPath.endpointSnapIds.end = normalizedSnapId;
+        return true;
+    }
+
+    function collectRoadPathEndpointSnapCandidates(wizardRef, worldX, worldY, options = {}) {
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : (typeof map !== "undefined" ? map : null);
+        if (!mapRef || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return [];
+        const excludeRoadPath = options.excludeRoadPath || null;
+        const excludePointIndex = Number.isInteger(options.excludePointIndex) ? options.excludePointIndex : null;
+        const candidates = [];
+        const seen = new Set();
+        const pushRoadPath = (roadPath) => {
+            if (!roadPath || roadPath.gone || roadPath.vanishing || roadPath.type !== "roadPath") return;
+            if (!Array.isArray(roadPath.pathPoints) || roadPath.pathPoints.length < 2) return;
+            if (seen.has(roadPath)) return;
+            seen.add(roadPath);
+            const endpointIndexes = [0, roadPath.pathPoints.length - 1];
+            for (let i = 0; i < endpointIndexes.length; i++) {
+                const pointIndex = endpointIndexes[i];
+                if (roadPath === excludeRoadPath && pointIndex === excludePointIndex) continue;
+                const point = roadPath.pathPoints[pointIndex];
+                if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+                const snapId = getRoadPathEndpointSnapId(roadPath, pointIndex);
+                candidates.push({
+                    obj: roadPath,
+                    pointIndex,
+                    point: { x: Number(point.x), y: Number(point.y) },
+                    snapId
+                });
+            }
+        };
+        if (typeof mapRef.getGameObjects === "function") {
+            const objects = mapRef.getGameObjects({ refresh: false }) || [];
+            for (let i = 0; i < objects.length; i++) pushRoadPath(objects[i]);
+        }
+        const objectState = mapRef._prototypeObjectState || null;
+        if (objectState && objectState.activeRuntimeObjectsByRecordId instanceof Map) {
+            for (const obj of objectState.activeRuntimeObjectsByRecordId.values()) pushRoadPath(obj);
+        }
+        if (Array.isArray(mapRef.objects)) {
+            for (let i = 0; i < mapRef.objects.length; i++) pushRoadPath(mapRef.objects[i]);
+        }
+        return candidates;
+    }
+
+    function getRoadPathEndpointSnapTargetAt(wizardRef, worldX, worldY, options = {}) {
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : (typeof map !== "undefined" ? map : null);
+        const candidates = collectRoadPathEndpointSnapCandidates(wizardRef, worldX, worldY, options);
+        const screenPoint = (typeof worldToScreen === "function")
+            ? worldToScreen({ x: worldX, y: worldY })
+            : null;
+        const maxScreenDistancePx = 18;
+        const maxWorldDistance = Number.isFinite(options.maxWorldDistance)
+            ? Number(options.maxWorldDistance)
+            : 1.25;
+        let best = null;
+        for (let i = 0; i < candidates.length; i++) {
+            const candidate = candidates[i];
+            let distanceMetric = Infinity;
+            let within = false;
+            if (screenPoint && Number.isFinite(screenPoint.x) && Number.isFinite(screenPoint.y) && typeof worldToScreen === "function") {
+                const candidateScreen = worldToScreen(candidate.point);
+                if (candidateScreen && Number.isFinite(candidateScreen.x) && Number.isFinite(candidateScreen.y)) {
+                    const screenDistance = Math.hypot(screenPoint.x - candidateScreen.x, screenPoint.y - candidateScreen.y);
+                    within = screenDistance <= maxScreenDistancePx;
+                    distanceMetric = screenDistance;
+                }
+            }
+            if (!within) {
+                const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                    ? mapRef.shortestDeltaX(worldX, candidate.point.x)
+                    : (candidate.point.x - worldX);
+                const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                    ? mapRef.shortestDeltaY(worldY, candidate.point.y)
+                    : (candidate.point.y - worldY);
+                const worldDistance = Math.hypot(dx, dy);
+                within = worldDistance <= maxWorldDistance;
+                distanceMetric = worldDistance * 1000;
+            }
+            if (!within) continue;
+            if (!best || distanceMetric < best.distanceMetric) {
+                best = { ...candidate, distanceMetric };
+            }
+        }
+        if (!best) return null;
+        return {
+            obj: best.obj,
+            pointIndex: best.pointIndex,
+            point: best.point,
+            snapId: best.snapId || "",
+            snapKind: "roadPathEndpoint"
+        };
+    }
+
     function getWallBuildStartAnchorForObject(obj, worldX, worldY, minSplitDistanceWorld = 0.1) {
         if (!obj || obj.type !== "wallSection") return null;
         const baseAnchor = getGroundAnchorPointForObject(obj, worldX, worldY);
@@ -4758,6 +4931,13 @@ const SpellSystem = (() => {
     }
 
     function getDragStartSnapTargetAt(wizardRef, spellName, worldX, worldY) {
+        if (spellName === "buildroad") {
+            const roadEndpoint = getRoadPathEndpointSnapTargetAt(wizardRef, worldX, worldY);
+            if (roadEndpoint && roadEndpoint.point) {
+                const node = wizardRef.map.worldToNode(roadEndpoint.point.x, roadEndpoint.point.y);
+                return { ...roadEndpoint, node };
+            }
+        }
         const obj = getSameTypeObjectTargetAt(wizardRef, spellName, worldX, worldY);
         if (!obj) return null;
         if (spellName === "wall" && obj.type === "wallSection") {
@@ -4783,7 +4963,7 @@ const SpellSystem = (() => {
         }
         if (spellName === "buildroad") {
             const node = wizardRef.map.worldToNode(anchor.x, anchor.y);
-            if (node) return { obj, node, point: { x: node.x, y: node.y } };
+            return { obj, node, point: { x: anchor.x, y: anchor.y } };
         } else {
             return { obj, point: anchor };
         }
@@ -6198,6 +6378,27 @@ const SpellSystem = (() => {
                 ensureDragPreview(wizardRef, "buildroad");
                 return true;
             }
+            const snapTarget = getDragStartSnapTargetAt(wizardRef, "buildroad", worldX, worldY);
+            if (snapTarget && snapTarget.snapKind === "roadPathEndpoint" && snapTarget.point) {
+                clearSelectedRoadPath(wizardRef);
+                const startPoint = getRoadPathPlacementPoint(wizardRef, worldX, worldY, snapTarget);
+                if (!startPoint) return false;
+                wizardRef.roadLayoutMode = true;
+                wizardRef.roadStartPoint = startPoint;
+                wizardRef.roadPathDraft = {
+                    points: [startPoint],
+                    width: getSelectedRoadWidth(wizardRef),
+                    fillTexturePath: getSelectedFlooringTexture(wizardRef),
+                    roadNetworkId: (typeof RoadPath === "function" && typeof RoadPath.createSnapId === "function")
+                        ? RoadPath.createSnapId("road-network")
+                        : "",
+                    endpointSnapIds: {
+                        start: snapTarget.snapId || ""
+                    }
+                };
+                ensureDragPreview(wizardRef, "buildroad");
+                return true;
+            }
             const existingRoadPath = pickRoadPathAt(wizardRef, worldX, worldY);
             if (existingRoadPath) {
                 wizardRef.selectedRoadPath = existingRoadPath;
@@ -6216,7 +6417,11 @@ const SpellSystem = (() => {
             wizardRef.roadPathDraft = {
                 points: [startPoint],
                 width: getSelectedRoadWidth(wizardRef),
-                fillTexturePath: getSelectedFlooringTexture(wizardRef)
+                fillTexturePath: getSelectedFlooringTexture(wizardRef),
+                roadNetworkId: (typeof RoadPath === "function" && typeof RoadPath.createSnapId === "function")
+                    ? RoadPath.createSnapId("road-network")
+                    : "",
+                endpointSnapIds: snapTarget && snapTarget.snapId ? { start: snapTarget.snapId } : {}
             };
             ensureDragPreview(wizardRef, "buildroad");
             return true;
@@ -6503,6 +6708,14 @@ const SpellSystem = (() => {
                 return true;
             }
             draft.points = proposedPoints;
+            if (!draft.endpointSnapIds || typeof draft.endpointSnapIds !== "object") {
+                draft.endpointSnapIds = {};
+            }
+            if (snapTarget && snapTarget.snapKind === "roadPathEndpoint" && snapTarget.snapId) {
+                draft.endpointSnapIds.end = snapTarget.snapId;
+            } else if (typeof RoadPath === "function" && typeof RoadPath.createSnapId === "function") {
+                draft.endpointSnapIds.end = RoadPath.createSnapId("road-snap");
+            }
             wizardRef.roadStartPoint = proposedPoints[0];
             ensureDragPreview(wizardRef, "buildroad");
             return true;
@@ -7864,6 +8077,93 @@ const SpellSystem = (() => {
         return { screenX, screenY };
     }
 
+    function paintTerrainNode(wizardRef, node, terrainType, options = {}) {
+        if (!node) {
+            throw new Error("terrain editor paint requires a node");
+        }
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
+        if (!mapRef) {
+            throw new Error("terrain editor requires a map");
+        }
+        const sectionKey = node && typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0
+            ? node._prototypeSectionKey
+            : (node && typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
+        let changed = false;
+        if (!sectionKey || typeof mapRef.getPrototypeSectionAsset !== "function") {
+            if (typeof mapRef.replaceGroundTerrainPolygonPatch !== "function") {
+                throw new Error("terrain editor requires map.replaceGroundTerrainPolygonPatch for non-section terrain painting");
+            }
+            changed = mapRef.replaceGroundTerrainPolygonPatch(node, terrainType, {
+                forceRepaintSameTerrain: options && options.forceRepaintSameTerrain === true
+            });
+        } else {
+            const asset = mapRef.getPrototypeSectionAsset(sectionKey);
+            if (!asset) {
+                throw new Error(`terrain editor could not find prototype section asset for ${sectionKey}`);
+            }
+            if (typeof mapRef.replaceGroundTerrainPolygonPatch !== "function") {
+                throw new Error("terrain editor requires map.replaceGroundTerrainPolygonPatch");
+            }
+            changed = mapRef.replaceGroundTerrainPolygonPatch(node, terrainType, {
+                asset,
+                sectionKey,
+                forceRepaintSameTerrain: options && options.forceRepaintSameTerrain === true
+            });
+        }
+        return changed;
+    }
+
+    function paintTerrainNodes(wizardRef, centerNode, nodes, terrainType, options = {}) {
+        if (!centerNode) {
+            throw new Error("terrain editor paint requires a center node");
+        }
+        const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
+        if (!mapRef) {
+            throw new Error("terrain editor requires a map");
+        }
+        if (typeof mapRef.replaceGroundTerrainPolygonPatch !== "function") {
+            throw new Error("terrain editor requires map.replaceGroundTerrainPolygonPatch");
+        }
+        const editedNodes = Array.isArray(nodes) ? nodes.filter(Boolean) : [centerNode];
+        const sectionKey = centerNode && typeof centerNode._prototypeSectionKey === "string" && centerNode._prototypeSectionKey.length > 0
+            ? centerNode._prototypeSectionKey
+            : (centerNode && typeof centerNode.ownerSectionKey === "string" ? centerNode.ownerSectionKey : "");
+        const patchOptions = {
+            editedNodes,
+            repairRadius: Number.isFinite(Number(options && options.repairRadius))
+                ? Math.max(0, Math.round(Number(options.repairRadius)))
+                : 2,
+            forceRepaintSameTerrain: options && options.forceRepaintSameTerrain === true
+        };
+        if (!sectionKey || typeof mapRef.getPrototypeSectionAsset !== "function") {
+            return mapRef.replaceGroundTerrainPolygonPatch(centerNode, terrainType, patchOptions);
+        }
+        const asset = mapRef.getPrototypeSectionAsset(sectionKey);
+        if (!asset) {
+            throw new Error(`terrain editor could not find prototype section asset for ${sectionKey}`);
+        }
+        return mapRef.replaceGroundTerrainPolygonPatch(centerNode, terrainType, {
+            ...patchOptions,
+            asset,
+            sectionKey
+        });
+    }
+
+    function collectTerrainBrushNodes(mapRef, centerNode, brushRadius) {
+        if (!centerNode) return [];
+        const rawRadius = Number(brushRadius);
+        const radius = Number.isFinite(rawRadius)
+            ? Math.max(TERRAIN_BRUSH_RADIUS_MIN, Math.min(TERRAIN_BRUSH_RADIUS_MAX, Math.round(rawRadius)))
+            : DEFAULT_TERRAIN_BRUSH_RADIUS;
+        if (radius === 1) return [centerNode];
+        if (typeof mapRef.collectGroundTerrainDeterministicBubbleNodes !== "function") {
+            throw new Error("terrain editor brush requires map.collectGroundTerrainDeterministicBubbleNodes");
+        }
+        return mapRef.collectGroundTerrainDeterministicBubbleNodes(centerNode, radius - 1)
+            .map(record => record && record.node)
+            .filter(Boolean);
+    }
+
     function paintTerrainAtWorldPoint(wizardRef, worldX, worldY) {
         const mapRef = wizardRef && wizardRef.map ? wizardRef.map : null;
         if (!mapRef || typeof mapRef.worldToNode !== "function") {
@@ -7874,26 +8174,14 @@ const SpellSystem = (() => {
             message("No terrain tile here.");
             return false;
         }
-        const terrainType = getSelectedTerrainType(wizardRef);
-        const sectionKey = node && typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0
-            ? node._prototypeSectionKey
-            : (node && typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "");
-        let changed = false;
-        if (!sectionKey || typeof mapRef.getPrototypeSectionAsset !== "function") {
-            if (typeof mapRef.replaceGroundTerrainPolygonPatch !== "function") {
-                throw new Error("terrain editor requires map.replaceGroundTerrainPolygonPatch for non-section terrain painting");
-            }
-            changed = mapRef.replaceGroundTerrainPolygonPatch(node, terrainType, { forceRepaintSameTerrain: true });
-        } else {
-            const asset = mapRef.getPrototypeSectionAsset(sectionKey);
-            if (!asset) {
-                throw new Error(`terrain editor could not find prototype section asset for ${sectionKey}`);
-            }
-            if (typeof mapRef.replaceGroundTerrainPolygonPatch !== "function") {
-                throw new Error("terrain editor requires map.replaceGroundTerrainPolygonPatch");
-            }
-            changed = mapRef.replaceGroundTerrainPolygonPatch(node, terrainType, { asset, sectionKey, forceRepaintSameTerrain: true });
+        if (typeof mapRef.getGroundTerrainTypeForNode !== "function") {
+            throw new Error("terrain editor requires map.getGroundTerrainTypeForNode");
         }
+        const terrainType = getSelectedTerrainType(wizardRef);
+        const brushRadius = getSelectedTerrainBrushRadius(wizardRef);
+        const brushNodes = collectTerrainBrushNodes(mapRef, node, brushRadius);
+        const repairRadius = brushRadius + 1;
+        const changed = paintTerrainNodes(wizardRef, node, brushNodes, terrainType, { repairRadius });
         if (!changed) return false;
         if (wizardRef) wizardRef._terrainEditMinimapDirty = true;
         // Terrain paint edits live terrain polygons locally. Do not reset
@@ -7934,7 +8222,7 @@ const SpellSystem = (() => {
             return false;
         }
         const terrainType = getSelectedTerrainType(wizardRef);
-        const tileKey = getTerrainPaintNodeKey(node, terrainType);
+        const tileKey = `${getTerrainPaintNodeKey(node, terrainType)}:${getSelectedTerrainBrushRadius(wizardRef)}`;
         if (wizardRef._terrainEditLastAutoPaintTileKey === tileKey) return false;
         wizardRef._terrainEditLastAutoPaintTileKey = tileKey;
         return paintTerrainAtWorldPoint(wizardRef, worldX, worldY);
@@ -11078,6 +11366,58 @@ const SpellSystem = (() => {
             }
             $grid.append(icon);
         });
+
+        const radius = getSelectedTerrainBrushRadius(wizardRef);
+        const tileCount = radius === 1 ? 1 : (radius === 2 ? 7 : 19);
+        const $brushControl = $("<div>")
+            .css({
+                "grid-column": "1 / -1",
+                "display": "flex",
+                "align-items": "center",
+                "gap": "8px",
+                "padding": "8px 10px",
+                "color": "#ffffff",
+                "background": "rgba(20,20,20,0.9)",
+                "border": "1px solid rgba(255,255,255,0.22)",
+                "border-radius": "6px",
+                "font-size": "12px"
+            });
+        const $label = $("<label>")
+            .attr("for", "terrainBrushRadius")
+            .css({
+                "white-space": "nowrap",
+                "font-weight": "bold"
+            })
+            .text("Radius");
+        const $slider = $("<input>")
+            .attr({
+                id: "terrainBrushRadius",
+                type: "range",
+                min: TERRAIN_BRUSH_RADIUS_MIN,
+                max: TERRAIN_BRUSH_RADIUS_MAX,
+                step: 1,
+                value: radius,
+                title: "Terrain brush radius"
+            })
+            .css({
+                flex: "1 1 auto",
+                "min-width": "80px"
+            })
+            .on("input change", event => {
+                const next = setSelectedTerrainBrushRadius(wizardRef, event.currentTarget.value);
+                const nextTileCount = next === 1 ? 1 : (next === 2 ? 7 : 19);
+                $value.text(`${next} (${nextTileCount})`);
+                resetTerrainAutoPaint(wizardRef);
+            });
+        const $value = $("<span>")
+            .css({
+                "min-width": "44px",
+                "text-align": "right",
+                "font-variant-numeric": "tabular-nums"
+            })
+            .text(`${radius} (${tileCount})`);
+        $brushControl.append($label, $slider, $value);
+        $grid.append($brushControl);
     }
 
     function openTerrainSelector(wizardRef) {
@@ -11117,6 +11457,18 @@ const SpellSystem = (() => {
         const terrainType = getTerrainTypeForHotkey(keyName);
         if (!terrainType) return false;
         return selectTerrainMenuType(wizardRef, terrainType);
+    }
+
+    function handleTerrainBrushRadiusHotkey(wizardRef, keyName) {
+        if (!wizardRef || wizardRef.currentSpell !== "terrainedit") return false;
+        const key = typeof keyName === "string" ? keyName.trim() : "";
+        if (!["1", "2", "3"].includes(key)) return false;
+        setSelectedTerrainBrushRadius(wizardRef, Number(key));
+        resetTerrainAutoPaint(wizardRef);
+        if (spellMenuMode === "terrain") {
+            renderTerrainSelector(wizardRef);
+        }
+        return true;
     }
 
     function renderTreeSelector(wizardRef) {
@@ -12961,6 +13313,9 @@ const SpellSystem = (() => {
         assignTerrainPolygonTilesAtWorldPoint,
         handleTerrainMenuHotkey,
         selectTerrainType,
+        getSelectedTerrainBrushRadius,
+        setSelectedTerrainBrushRadius,
+        handleTerrainBrushRadiusHotkey,
         refreshEditorSelector,
         setEditorPanelVisible,
         toggleEditorPanelVisible,

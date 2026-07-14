@@ -32,17 +32,32 @@ function createNode(xindex, yindex) {
         yindex,
         x: xindex * 0.866,
         y: yindex + (xindex % 2 === 0 ? 0.5 : 0),
+        traversalLayer: 0,
+        level: 0,
+        neighbors: [],
+        neighborOffsets: [],
+        blockedNeighbors: new Map(),
         objects: []
     };
 }
 
 function createPrototypeNodeMap(width = 12, height = 12, options = {}) {
     const materializeFloorNodes = options.materializeFloorNodes !== false;
+    const baseOffsets = [
+        { x: 1, y: 0 },
+        { x: -1, y: 0 },
+        { x: 0, y: 1 },
+        { x: 0, y: -1 }
+    ];
     const allNodesByCoordKey = new Map();
     for (let x = -2; x < width; x++) {
         for (let y = -2; y < height; y++) {
             allNodesByCoordKey.set(`${x},${y}`, createNode(x, y));
         }
+    }
+    for (const node of allNodesByCoordKey.values()) {
+        node.neighborOffsets = baseOffsets.slice();
+        node.neighbors = baseOffsets.map((offset) => allNodesByCoordKey.get(`${node.xindex + offset.x},${node.yindex + offset.y}`) || null);
     }
     const floorNodeLayerIndex = new Map();
     const floorNodesById = new Map();
@@ -254,6 +269,7 @@ function createBuildingSaveWithDoorAndColumn() {
         floorFragments: [{
             fragmentId: "floor-0",
             level: 0,
+            nodeBaseZ: 0,
             outerPolygon: [
                 { x: 0, y: 0 },
                 { x: 4, y: 0 },
@@ -464,6 +480,22 @@ function collectBuildingBlockers(map) {
         }
     }
     return Array.from(blockers);
+}
+
+function collectBuildingEdgeBlockerLinks(map) {
+    const links = [];
+    for (const node of map._prototypeSectionState.allNodesByCoordKey.values()) {
+        if (!(node.blockedNeighbors instanceof Map)) continue;
+        for (const [direction, blockers] of node.blockedNeighbors.entries()) {
+            if (!(blockers instanceof Set)) continue;
+            for (const blocker of blockers) {
+                if (blocker && blocker._prototypeBuildingMovementEdgeBlocker === true) {
+                    links.push({ node, direction, blocker });
+                }
+            }
+        }
+    }
+    return links;
 }
 
 test("building placements write lightweight refs into every touched section", () => {
@@ -990,6 +1022,11 @@ test("building placements block walls and columns, not the whole base floor", ()
         assert.equal(blockerPolygons.some((polygon) => pointInPolygon({ x: 3, y: 3 }, polygon)), true);
         assert.equal(blockerPolygons.some((polygon) => pointInPolygon({ x: 0, y: 2 }, polygon)), false);
         assert.equal(blockerPolygons.some((polygon) => pointInPolygon({ x: 2, y: 2 }, polygon)), false);
+        const edgeLinks = collectBuildingEdgeBlockerLinks(map);
+        assert.equal(edgeLinks.length > 0, true, "story-0 building walls should block neighboring base-node crossings");
+        assert.equal(edgeLinks.every((link) => link.blocker.buildingPlacementId === "building:test-house"), true);
+        assert.equal(placement.movementBlockedEdges.length > 0, true);
+        assert.equal(placement.movementBlockedEdges.every((edge) => edge.traversalLayer === 0), true);
         assert.equal(map._prototypeBuildingState.movementBlockersDirty, false);
     } finally {
         if (previousPolygonHitbox === undefined) {

@@ -683,6 +683,37 @@
             if (points.length < 2) {
                 throw new Error(`Cannot export road path in section ${ownerSectionKey}; at least two points are required.`);
             }
+            const roadPathApi = runtimeGlobalScope && runtimeGlobalScope.RoadPath ? runtimeGlobalScope.RoadPath : null;
+            const createRoadSnapId = (prefix = "road-snap") => (
+                roadPathApi && typeof roadPathApi.createSnapId === "function"
+                    ? roadPathApi.createSnapId(prefix)
+                    : `${prefix}:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+            );
+            const pointKey = (point) => (
+                roadPathApi && typeof roadPathApi.pointKey === "function"
+                    ? roadPathApi.pointKey(point)
+                    : `${Number(point.x).toFixed(6)},${Number(point.y).toFixed(6)}`
+            );
+            const baseEndpointSnapIds = roadPathApi && typeof roadPathApi.endpointSnapIdsFromData === "function"
+                ? roadPathApi.endpointSnapIdsFromData(record)
+                : {
+                    start: (
+                        record.endpointSnapIds &&
+                        typeof record.endpointSnapIds.start === "string" &&
+                        record.endpointSnapIds.start.trim().length > 0
+                    ) ? record.endpointSnapIds.start.trim() : (typeof record.startSnapId === "string" ? record.startSnapId : ""),
+                    end: (
+                        record.endpointSnapIds &&
+                        typeof record.endpointSnapIds.end === "string" &&
+                        record.endpointSnapIds.end.trim().length > 0
+                    ) ? record.endpointSnapIds.end.trim() : (typeof record.endSnapId === "string" ? record.endSnapId : "")
+                };
+            const baseRoadNetworkId = (typeof record.roadNetworkId === "string" && record.roadNetworkId.trim().length > 0)
+                ? record.roadNetworkId.trim()
+                : createRoadSnapId("road-network");
+            const snapIdsByPointKey = new Map();
+            snapIdsByPointKey.set(pointKey(points[0]), baseEndpointSnapIds.start || createRoadSnapId("road-snap"));
+            snapIdsByPointKey.set(pointKey(points[points.length - 1]), baseEndpointSnapIds.end || createRoadSnapId("road-snap"));
             if (!mapRef || typeof mapRef.getPrototypeSectionAsset !== "function") {
                 throw new Error("Cannot split exported road path; section asset lookup is unavailable.");
             }
@@ -751,6 +782,8 @@
                 } else {
                     sequentialPieces.push({ sectionKey, points: [a, b] });
                 }
+                const bKey = pointKey(b);
+                if (!snapIdsByPointKey.has(bKey)) snapIdsByPointKey.set(bKey, createRoadSnapId("road-snap"));
             }
             const pieces = [];
             for (let i = 0; i < sequentialPieces.length; i++) {
@@ -760,6 +793,11 @@
                 delete cloned.pathPoints;
                 cloned.x = cloned.points[0].x;
                 cloned.y = cloned.points[0].y;
+                cloned.roadNetworkId = baseRoadNetworkId;
+                cloned.endpointSnapIds = {
+                    start: snapIdsByPointKey.get(pointKey(cloned.points[0])) || createRoadSnapId("road-snap"),
+                    end: snapIdsByPointKey.get(pointKey(cloned.points[cloned.points.length - 1])) || createRoadSnapId("road-snap")
+                };
                 if (i > 0) delete cloned.id;
                 pieces.push({ sectionKey: piece.sectionKey, record: cloned });
             }
@@ -787,6 +825,10 @@
             const fillTexturePath = typeof record.fillTexturePath === "string" ? record.fillTexturePath : "";
             const textureId = typeof record.textureId === "string" ? record.textureId : "";
             const scriptingName = typeof record.scriptingName === "string" ? record.scriptingName : "";
+            const roadNetworkId = typeof record.roadNetworkId === "string" ? record.roadNetworkId : "";
+            const endpointSnapIds = record.endpointSnapIds && typeof record.endpointSnapIds === "object"
+                ? `${record.endpointSnapIds.start || ""},${record.endpointSnapIds.end || ""}`
+                : "";
             return [
                 "roadPath",
                 points,
@@ -794,7 +836,9 @@
                 layer,
                 fillTexturePath,
                 textureId,
-                scriptingName
+                scriptingName,
+                roadNetworkId,
+                endpointSnapIds
             ].join("::");
         };
         const pushCanonicalObjectRecord = (recordsBySectionKey, roadSignaturesBySectionKey, sectionKey, record) => {
@@ -887,6 +931,9 @@
         };
         map.canonicalizePrototypeRoadPathSectionRecords = function canonicalizePrototypeRoadPathSectionRecordsForMap(sectionKeys = null) {
             return canonicalizePrototypeRoadPathSectionRecords(this, sectionKeys);
+        };
+        runtimeGlobalScope.splitRoadPathSaveRecordBySection = function splitRoadPathSaveRecordBySection(mapRef, record, ownerSectionKey) {
+            return splitRoadPathExportRecord(mapRef, record, ownerSectionKey);
         };
         map.exportPrototypeSectionAssets = function exportPrototypeSectionAssets(sectionKeys = null) {
             const state = this._prototypeSectionState;

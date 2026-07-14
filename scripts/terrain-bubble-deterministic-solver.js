@@ -7,6 +7,7 @@ const {
     clipTerrainPolygonsToInnerSeven,
     compareTerrainBubblePolygons,
     coordKey,
+    getTerrainBubbleInputCoordSets,
     hexCorners,
     innerSevenMask,
     multiPolygonArea,
@@ -159,10 +160,10 @@ function sortPolygons(polygons) {
     });
 }
 
-function buildInitialSourcePolygons(tiles) {
+function buildInitialSourcePolygons(tiles, bubbleCoords = BUBBLE_COORDS) {
     const polygons = [];
     for (const type of TERRAIN_TYPES) {
-        const typeHexes = BUBBLE_COORDS
+        const typeHexes = bubbleCoords
             .filter((coord) => tiles.get(coordKey(coord)) === type)
             .map((coord) => ringToPolygonClippingPolygon(hexCorners(coord)));
         if (typeHexes.length === 0) continue;
@@ -171,9 +172,9 @@ function buildInitialSourcePolygons(tiles) {
     return sortPolygons(polygons);
 }
 
-function buildVertexContexts(tiles) {
+function buildVertexContexts(tiles, bubbleCoords = BUBBLE_COORDS) {
     const contexts = new Map();
-    for (const coord of BUBBLE_COORDS) {
+    for (const coord of bubbleCoords) {
         const type = tiles.get(coordKey(coord));
         const center = roundPoint(axialToModel(coord));
         for (const corner of hexCorners(coord)) {
@@ -206,8 +207,8 @@ function representedHighestPriority(tiles) {
     return highest;
 }
 
-function polygonTouchesInnerSeven(polygon) {
-    const clipped = polygonClipping.intersection(sourcePolygonToMultiPolygon(polygon), innerSevenMask());
+function polygonTouchesRepairMask(polygon, repairMask) {
+    const clipped = polygonClipping.intersection(sourcePolygonToMultiPolygon(polygon), repairMask);
     return multiPolygonArea(clipped) > EPSILON;
 }
 
@@ -398,8 +399,8 @@ function processRing(ring, terrainType, contexts, sourceVertexPolygonCounts, mov
     }
 }
 
-function collectDeterministicOperations(polygons, tiles) {
-    const contexts = buildVertexContexts(tiles);
+function collectDeterministicOperations(polygons, tiles, bubbleCoords = BUBBLE_COORDS, repairMask = innerSevenMask()) {
+    const contexts = buildVertexContexts(tiles, bubbleCoords);
     const sourceVertexPolygonCounts = buildSourceVertexPolygonCounts(polygons);
     const highestPriority = representedHighestPriority(tiles);
     const moveBySourceKey = new Map();
@@ -409,7 +410,7 @@ function collectDeterministicOperations(polygons, tiles) {
 
     for (const polygon of polygons) {
         if ((TERRAIN_PRIORITY.get(polygon.type) || 0) === highestPriority) continue;
-        if (!polygonTouchesInnerSeven(polygon)) continue;
+        if (!polygonTouchesRepairMask(polygon, repairMask)) continue;
         processRing(polygon.points, polygon.type, contexts, sourceVertexPolygonCounts, moveBySourceKey, deleteSourceKeys, insertBySourceEdgeKey, fixedSourceKeys);
         for (const hole of polygon.holes || []) {
             processRing(hole, polygon.type, contexts, sourceVertexPolygonCounts, moveBySourceKey, deleteSourceKeys, insertBySourceEdgeKey, fixedSourceKeys);
@@ -495,8 +496,8 @@ function pointInsideOrTouchingPolygon(point, polygon) {
     return true;
 }
 
-function polygonTouchesSameTerrainInnerCenter(polygon, tiles) {
-    for (const coord of INNER_COORDS) {
+function polygonTouchesSameTerrainInnerCenter(polygon, tiles, innerCoords = INNER_COORDS) {
+    for (const coord of innerCoords) {
         if (tiles.get(coordKey(coord)) !== polygon.type) continue;
         if (pointInsideOrTouchingPolygon(axialToModel(coord), polygon)) return true;
     }
@@ -504,20 +505,23 @@ function polygonTouchesSameTerrainInnerCenter(polygon, tiles) {
 }
 
 function generateDeterministicTerrainBubblePolygons(input) {
-    const tiles = terrainTilesByKey(input);
-    const initialPolygons = buildInitialSourcePolygons(tiles);
-    const operations = collectDeterministicOperations(initialPolygons, tiles);
+    const coordSets = getTerrainBubbleInputCoordSets(input);
+    const tiles = terrainTilesByKey(input, coordSets);
+    const repairMask = innerSevenMask(coordSets.innerCoords);
+    const initialPolygons = buildInitialSourcePolygons(tiles, coordSets.bubbleCoords);
+    const operations = collectDeterministicOperations(initialPolygons, tiles, coordSets.bubbleCoords, repairMask);
     const transformed = applyDeterministicOperations(initialPolygons, operations);
-    return clipTerrainPolygonsToInnerSeven(transformed)
-        .filter((polygon) => polygonTouchesSameTerrainInnerCenter(polygon, tiles));
+    return clipTerrainPolygonsToInnerSeven(transformed, coordSets.innerCoords)
+        .filter((polygon) => polygonTouchesSameTerrainInnerCenter(polygon, tiles, coordSets.innerCoords));
 }
 
 function normalizedInput(input) {
-    const tiles = terrainTilesByKey(input);
+    const coordSets = getTerrainBubbleInputCoordSets(input);
+    const tiles = terrainTilesByKey(input, coordSets);
     return {
         schema: "terrain-bubble-19-v1",
-        innerKeys: INNER_COORDS.map(coordKey),
-        tiles: BUBBLE_COORDS.map((coord) => ({
+        innerKeys: coordSets.innerCoords.map(coordKey),
+        tiles: coordSets.bubbleCoords.map((coord) => ({
             q: coord.q,
             r: coord.r,
             type: tiles.get(coordKey(coord))

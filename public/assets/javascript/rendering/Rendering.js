@@ -390,11 +390,93 @@ void main(void) {
         return normalized.map(ring => buildFloorVisualSignature(normalizeFloorVisualPointList(ring), [])).join("|");
     }
 
+    function floorVisualPointLiesOnSegment(point, a, b, epsilon = 1e-7) {
+        const px = Number(point && point.x);
+        const py = Number(point && point.y);
+        const ax = Number(a && a.x);
+        const ay = Number(a && a.y);
+        const bx = Number(b && b.x);
+        const by = Number(b && b.y);
+        if (!Number.isFinite(px) || !Number.isFinite(py) || !Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return false;
+        const dx = bx - ax;
+        const dy = by - ay;
+        const lengthSq = dx * dx + dy * dy;
+        if (!(lengthSq > epsilon * epsilon)) return Math.hypot(px - ax, py - ay) <= epsilon;
+        const cross = (px - ax) * dy - (py - ay) * dx;
+        if (Math.abs(cross) > epsilon * Math.sqrt(lengthSq)) return false;
+        const dot = (px - ax) * dx + (py - ay) * dy;
+        return dot >= -epsilon && dot <= lengthSq + epsilon;
+    }
+
+    function floorVisualSegmentLiesOnBoundaryRings(a, b, rings, epsilon = 1e-7) {
+        const normalized = Array.isArray(rings) ? rings : [];
+        for (let r = 0; r < normalized.length; r++) {
+            const ring = normalizeFloorVisualPointList(normalized[r]);
+            if (ring.length < 2) continue;
+            for (let i = 0; i < ring.length; i++) {
+                const c = ring[i];
+                const d = ring[(i + 1) % ring.length];
+                if (
+                    floorVisualPointLiesOnSegment(a, c, d, epsilon) &&
+                    floorVisualPointLiesOnSegment(b, c, d, epsilon)
+                ) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     function cloneFloorVisualDiagnosticRing(points) {
         return normalizeFloorVisualPointList(points).map(point => ({
             x: Math.round(Number(point.x) * 1000000) / 1000000,
             y: Math.round(Number(point.y) * 1000000) / 1000000
         }));
+    }
+
+    function summarizeFloorVisualRingEdges(points) {
+        const ring = normalizeFloorVisualPointList(points);
+        const zeroLengthEdges = [];
+        let minEdgeLength = Infinity;
+        let maxEdgeLength = 0;
+        let totalEdgeLength = 0;
+        for (let i = 0; i < ring.length; i++) {
+            const a = ring[i];
+            const b = ring[(i + 1) % ring.length];
+            const length = Math.hypot(Number(b.x) - Number(a.x), Number(b.y) - Number(a.y));
+            if (Number.isFinite(length)) {
+                minEdgeLength = Math.min(minEdgeLength, length);
+                maxEdgeLength = Math.max(maxEdgeLength, length);
+                totalEdgeLength += length;
+                if (!(length > 1e-9)) {
+                    zeroLengthEdges.push({
+                        edgeIndex: i,
+                        start: cloneFloorVisualDiagnosticRing([a])[0] || null,
+                        end: cloneFloorVisualDiagnosticRing([b])[0] || null
+                    });
+                }
+            }
+        }
+        return {
+            pointCount: ring.length,
+            signedArea: Math.round(getFloorVisualRingSignedArea(ring) * 1000000) / 1000000,
+            minEdgeLength: Number.isFinite(minEdgeLength) ? Math.round(minEdgeLength * 1000000) / 1000000 : null,
+            maxEdgeLength: Math.round(maxEdgeLength * 1000000) / 1000000,
+            totalEdgeLength: Math.round(totalEdgeLength * 1000000) / 1000000,
+            zeroLengthEdges
+        };
+    }
+
+    function throwTerrainAlphaBlendDiagnosticError(message, diagnostic) {
+        const err = new Error(message);
+        err.diagnostic = diagnostic || {};
+        if (typeof console !== "undefined" && console && typeof console.error === "function") {
+            console.error("[terrain alpha blend diagnostic]", {
+                message,
+                diagnostic: err.diagnostic
+            });
+        }
+        throw err;
     }
 
     function warnTerrainFadeClipApproximation(err, diagnostic) {
@@ -488,7 +570,7 @@ void main(void) {
         return area * 0.5;
     }
 
-    function offsetFloorVisualRing(points, amount) {
+    function offsetFloorVisualRing(points, amount, diagnosticContext = null) {
         const ring = normalizeFloorVisualPointList(points);
         const distance = Number(amount);
         if (ring.length < 3 || !Number.isFinite(distance) || Math.abs(distance) <= 1e-9) return ring;
@@ -534,7 +616,25 @@ void main(void) {
             const prevNormal = edgeNormal(prev, cur);
             const nextNormal = edgeNormal(cur, next);
             if (!prevNormal || !nextNormal) {
-                throw new Error("terrain alpha blend cannot offset a polygon ring with zero-length edges");
+                const prevEdgeLength = Math.hypot(Number(cur.x) - Number(prev.x), Number(cur.y) - Number(prev.y));
+                const nextEdgeLength = Math.hypot(Number(next.x) - Number(cur.x), Number(next.y) - Number(cur.y));
+                throwTerrainAlphaBlendDiagnosticError(
+                    "terrain alpha blend cannot offset a polygon ring with zero-length edges",
+                    {
+                        ...(diagnosticContext && typeof diagnosticContext === "object" ? diagnosticContext : {}),
+                        offsetAmount: distance,
+                        vertexIndex: i,
+                        previousEdgeIndex: (i + ring.length - 1) % ring.length,
+                        nextEdgeIndex: i,
+                        previousEdgeLength: Number.isFinite(prevEdgeLength) ? prevEdgeLength : null,
+                        nextEdgeLength: Number.isFinite(nextEdgeLength) ? nextEdgeLength : null,
+                        previousPoint: cloneFloorVisualDiagnosticRing([prev])[0] || null,
+                        currentPoint: cloneFloorVisualDiagnosticRing([cur])[0] || null,
+                        nextPoint: cloneFloorVisualDiagnosticRing([next])[0] || null,
+                        ringSummary: summarizeFloorVisualRingEdges(ring),
+                        ring: cloneFloorVisualDiagnosticRing(ring)
+                    }
+                );
             }
             const prevA = { x: prev.x + prevNormal.x * distance, y: prev.y + prevNormal.y * distance };
             const prevB = { x: cur.x + prevNormal.x * distance, y: cur.y + prevNormal.y * distance };
@@ -592,6 +692,9 @@ void main(void) {
         const clipBoundaryRings = Array.isArray(options && options.edgeFadeClipRings)
             ? options.edgeFadeClipRings.map(ring => normalizeFloorVisualPointList(ring)).filter(ring => ring.length >= 3)
             : [];
+        const skipBoundaryRings = Array.isArray(options && options.edgeFadeSkipRings)
+            ? options.edgeFadeSkipRings.map(ring => normalizeFloorVisualPointList(ring)).filter(ring => ring.length >= 3)
+            : clipBoundaryRings;
         const clipBoundaryOuter = clipBoundaryRings.length > 0 ? clipBoundaryRings[0] : null;
         const clipBoundaryHoles = clipBoundaryRings.length > 1 ? clipBoundaryRings.slice(1) : [];
         const sourceHoles = Array.isArray(holes)
@@ -602,6 +705,7 @@ void main(void) {
             : {};
         const sourceSignature = buildFloorVisualSignature(sourceOuter, sourceHoles);
         const clipSignature = buildFloorVisualClipBoundarySignature(clipBoundaryRings);
+        const skipClipBoundaryFade = options && options.skipClipBoundaryFade === true;
         const clipFadeBandPolygon = (bandOuter, bandContext = null) => {
             if (!clipBoundaryOuter) return [{ outer: bandOuter, holes: [] }];
             const api = getFloorVisualPolygonClippingApi();
@@ -684,6 +788,13 @@ void main(void) {
             }
             for (let i = 0; i < inner.length; i++) {
                 const next = (i + 1) % inner.length;
+                if (
+                    skipClipBoundaryFade &&
+                    skipBoundaryRings.length > 0 &&
+                    floorVisualSegmentLiesOnBoundaryRings(inner[i], inner[next], skipBoundaryRings)
+                ) {
+                    continue;
+                }
                 const bandOuter = [inner[i], inner[next], outerBand[next], outerBand[i]];
                 const clippedBands = clipFadeBandPolygon(bandOuter, {
                     edgeIndex: i,
@@ -699,12 +810,32 @@ void main(void) {
                 }
             }
         };
-        emitFadeBand(sourceOuter, offsetFloorVisualRing(sourceOuter, width), { ringKind: "outer" });
+        emitFadeBand(sourceOuter, offsetFloorVisualRing(sourceOuter, width, {
+            ...diagnosticBase,
+            ringKind: "outer",
+            holeIndex: null,
+            blendWidth: width,
+            sourceSignature,
+            clipSignature,
+            sourceOuter: cloneFloorVisualDiagnosticRing(sourceOuter),
+            sourceHoles: sourceHoles.map(hole => cloneFloorVisualDiagnosticRing(hole)),
+            clipRings: clipBoundaryRings.map(ring => cloneFloorVisualDiagnosticRing(ring))
+        }), { ringKind: "outer" });
         const normalizedHoles = Array.isArray(holes) ? holes : [];
         for (let h = 0; h < normalizedHoles.length; h++) {
             const hole = normalizeFloorVisualPointList(normalizedHoles[h]);
             if (hole.length < 3) continue;
-            emitFadeBand(hole, offsetFloorVisualRing(hole, -width), { ringKind: "hole", holeIndex: h });
+            emitFadeBand(hole, offsetFloorVisualRing(hole, -width, {
+                ...diagnosticBase,
+                ringKind: "hole",
+                holeIndex: h,
+                blendWidth: width,
+                sourceSignature,
+                clipSignature,
+                sourceOuter: cloneFloorVisualDiagnosticRing(sourceOuter),
+                sourceHoles: sourceHoles.map(sourceHole => cloneFloorVisualDiagnosticRing(sourceHole)),
+                clipRings: clipBoundaryRings.map(ring => cloneFloorVisualDiagnosticRing(ring))
+            }), { ringKind: "hole", holeIndex: h });
         }
         const IndexArray = points.length > 65535 ? Uint32Array : Uint16Array;
         return {
@@ -1626,6 +1757,8 @@ void main(void) {
             this.level0AnimatedWaterChunkTick = 0;
             this.floorVisualChunkClipCache = new Map();
             this.floorVisualChunkClipTick = 0;
+            this.level0TerrainPolygonEntryCache = new Map();
+            this.level0TerrainPolygonEntryTick = 0;
             this.bakedLevel0SectionKeys = new Set();
             this.bakedLevel0SectionSignature = "";
             this.level0GroundSurfacePendingLoads = new Set();
@@ -11517,7 +11650,15 @@ void main(void) {
             return section._cachedRenderWorldBounds;
         }
 
-        getPrototypeSectionTerrainClipPolygon(sectionKey, asset, state) {
+        getPrototypeSectionTerrainClipPolygon(sectionKey, asset, state, mapRef = null) {
+            if (mapRef && typeof mapRef.getGroundTerrainSectionClipPolygonPoints === "function") {
+                const terrainClip = normalizeFloorVisualPointList(
+                    mapRef.getGroundTerrainSectionClipPolygonPoints(sectionKey, asset)
+                );
+                if (terrainClip.length >= 3) {
+                    return { outer: terrainClip, holes: [] };
+                }
+            }
             const explicitPolygon = normalizeFloorVisualPointList(asset && asset.sectionPolygon);
             if (explicitPolygon.length >= 3) {
                 return { outer: explicitPolygon, holes: [] };
@@ -14292,6 +14433,12 @@ void main(void) {
                 this.level0AnimatedWaterChunkEntryCache = new Map();
             }
             this.level0AnimatedWaterChunkTick = 0;
+            if (this.level0TerrainPolygonEntryCache instanceof Map) {
+                this.level0TerrainPolygonEntryCache.clear();
+            } else {
+                this.level0TerrainPolygonEntryCache = new Map();
+            }
+            this.level0TerrainPolygonEntryTick = 0;
             if (this._level0ChunkReadyCache instanceof Map) this._level0ChunkReadyCache.clear();
             if (this._level0SectionAssetCache instanceof Map) this._level0SectionAssetCache.clear();
             this.bakedLevel0SectionKeys = new Set();
@@ -14308,6 +14455,11 @@ void main(void) {
         trimFloorVisualChunkClipCache(limit = FLOOR_LEVEL0_CHUNK_CACHE_LIMIT * 4) {
             if (!(this.floorVisualChunkClipCache instanceof Map)) return 0;
             return this.trimRenderCacheIncremental(this.floorVisualChunkClipCache, limit, 128);
+        }
+
+        trimLevel0TerrainPolygonEntryCache(limit = FLOOR_LEVEL0_CHUNK_CACHE_LIMIT * 4) {
+            if (!(this.level0TerrainPolygonEntryCache instanceof Map)) return 0;
+            return this.trimRenderCacheIncremental(this.level0TerrainPolygonEntryCache, limit, 64);
         }
 
         getCachedFloorVisualClippedPolygonsForChunk(fragmentId, renderOuter, holes, chunkBounds, chunkX, chunkY, shapeSignature) {
@@ -14434,17 +14586,56 @@ void main(void) {
         collectLevel0TerrainPolygonFloorVisualEntries(ctx, fragmentId, sectionKey, asset, baseZ, alpha, activeInteriorDepthBump = 0, clipPolygon = null) {
             const map = ctx && ctx.map;
             if (!map || !asset || !Array.isArray(asset.terrainPolygons) || asset.terrainPolygons.length === 0) return [];
-            const groups = this.getLevel0TerrainPolygonGroupsFromAsset(map, asset);
-            this.sortLevel0TerrainGroupsForDraw(groups);
             const nowMs = (ctx && Number.isFinite(ctx.renderNowMs)) ? Number(ctx.renderNowMs) : Date.now();
-            const out = [];
             const clipOuter = normalizeFloorVisualPointList(clipPolygon && clipPolygon.outer);
             const clipHoles = Array.isArray(clipPolygon && clipPolygon.holes) ? clipPolygon.holes : [];
-            const hasClipPolygon = clipOuter.length >= 3;
-            const edgeFadeClipRings = hasClipPolygon
+            // Experiment: render terrain directly from section asset polygons, without
+            // the additional floor/section render-time clip.
+            const hasClipPolygon = false;
+            const sectionBoundaryRings = clipOuter.length >= 3
                 ? [clipOuter].concat(clipHoles.map(hole => normalizeFloorVisualPointList(hole)).filter(hole => hole.length >= 3))
                 : [];
+            const edgeFadeClipRings = hasClipPolygon
+                ? sectionBoundaryRings
+                : [];
+            const edgeFadeSkipRings = sectionBoundaryRings;
             const edgeFadeClipSignature = buildFloorVisualClipBoundarySignature(edgeFadeClipRings);
+            const edgeFadeSkipSignature = buildFloorVisualClipBoundarySignature(edgeFadeSkipRings);
+            const terrainAlphaBlendWidth = FLOOR_LEVEL0_TERRAIN_ALPHA_BLEND_WIDTH_UNITS;
+            const cacheKey = [
+                "terrainEntries",
+                sectionKey || "",
+                fragmentId || "",
+                this.getLevel0TerrainPolygonsSignature(asset),
+                `clip:${edgeFadeClipSignature}`,
+                `skip:${edgeFadeSkipSignature}`,
+                `fade:${terrainAlphaBlendWidth}`,
+                `bump:${Number.isFinite(activeInteriorDepthBump) ? activeInteriorDepthBump : 0}`,
+                `model:${FLOOR_LEVEL0_TERRAIN_BOUNDARY_MODEL_VERSION}`
+            ].join("|");
+            if (!(this.level0TerrainPolygonEntryCache instanceof Map)) {
+                this.level0TerrainPolygonEntryCache = new Map();
+            }
+            let cached = this.level0TerrainPolygonEntryCache.get(cacheKey);
+            if (cached && Array.isArray(cached.templates)) {
+                cached.lastUsedTick = ++this.level0TerrainPolygonEntryTick;
+                this.touchRenderCacheEntry(this.level0TerrainPolygonEntryCache, cacheKey, cached);
+                if (this.currentFrameMetrics) {
+                    this.currentFrameMetrics.floorTerrainPolygonEntryCacheHits = (this.currentFrameMetrics.floorTerrainPolygonEntryCacheHits || 0) + 1;
+                }
+                const out = [];
+                for (let i = 0; i < cached.templates.length; i++) {
+                    const entry = this.cloneCachedLevel0TerrainPolygonEntry(cached.templates[i], baseZ, alpha, nowMs);
+                    if (entry) out.push(entry);
+                }
+                return out;
+            }
+            if (this.currentFrameMetrics) {
+                this.currentFrameMetrics.floorTerrainPolygonEntryCacheMisses = (this.currentFrameMetrics.floorTerrainPolygonEntryCacheMisses || 0) + 1;
+            }
+            const groups = this.getLevel0TerrainPolygonGroupsFromAsset(map, asset);
+            this.sortLevel0TerrainGroupsForDraw(groups);
+            const templates = [];
             for (let i = 0; i < groups.length; i++) {
                 const group = groups[i];
                 if (!group) continue;
@@ -14460,7 +14651,6 @@ void main(void) {
                     0.002 +
                     this.getLevel0TerrainDepthBiasOffset(group.type) +
                     activeInteriorDepthBump;
-                const terrainAlphaBlendWidth = FLOOR_LEVEL0_TERRAIN_ALPHA_BLEND_WIDTH_UNITS;
                 for (let p = 0; p < polygons.length; p++) {
                     const polygon = polygons[p];
                     if (!polygon || !Array.isArray(polygon.outer) || polygon.outer.length < 3) continue;
@@ -14475,10 +14665,10 @@ void main(void) {
                     for (let c = 0; c < clippedPolygons.length; c++) {
                         const piece = clippedPolygons[c];
                         if (!piece || !Array.isArray(piece.outer) || piece.outer.length < 3) continue;
-                        out.push({
+                        templates.push({
                             key: `fragment:${fragmentId}:terrain:${sectionKey || ""}:${group.type}:${i}:${p}:${c}`,
                             level: 0,
-                            baseZ,
+                            baseZ: 0,
                             outer: piece.outer,
                             holes: Array.isArray(piece.holes) ? piece.holes : [],
                             texture: null,
@@ -14486,7 +14676,7 @@ void main(void) {
                             textureRepeat,
                             texturePath,
                             tint: this.getLayerDarkenedTint(0xffffff, 0),
-                            alpha,
+                            alpha: 1,
                             depthBias: terrainDepthBias,
                             isHoleOverlay: false,
                             isAnimatedWater: group.type === "water",
@@ -14496,6 +14686,8 @@ void main(void) {
                             edgeFadeWidth: terrainAlphaBlendWidth,
                             edgeFadeClipRings,
                             edgeFadeClipSignature,
+                            edgeFadeSkipRings,
+                            skipClipBoundaryFade: edgeFadeSkipRings.length > 0,
                             edgeFadeDiagnosticContext: {
                                 terrainType: group.type,
                                 sectionKey: sectionKey || "",
@@ -14503,12 +14695,22 @@ void main(void) {
                                 polygonIndex: p,
                                 clippedPieceIndex: c
                             },
-                            animationNowMs: nowMs
+                            animationNowMs: 0
                         });
                     }
                 }
             }
-            this.sortLevel0TerrainFloorVisualEntriesForDraw(out);
+            this.sortLevel0TerrainFloorVisualEntriesForDraw(templates);
+            cached = {
+                templates,
+                lastUsedTick: ++this.level0TerrainPolygonEntryTick
+            };
+            this.level0TerrainPolygonEntryCache.set(cacheKey, cached);
+            const out = [];
+            for (let i = 0; i < templates.length; i++) {
+                const entry = this.cloneCachedLevel0TerrainPolygonEntry(templates[i], baseZ, alpha, nowMs);
+                if (entry) out.push(entry);
+            }
             return out;
         }
 
@@ -14545,7 +14747,7 @@ void main(void) {
             sourceSectionKeys.forEach((sectionKey) => {
                 const asset = state.sectionAssetsByKey.get(sectionKey);
                 if (!asset || !Array.isArray(asset.terrainPolygons) || asset.terrainPolygons.length === 0) return;
-                const clipPolygon = this.getPrototypeSectionTerrainClipPolygon(sectionKey, asset, state);
+                const clipPolygon = this.getPrototypeSectionTerrainClipPolygon(sectionKey, asset, state, map);
                 const terrainEntries = this.collectLevel0TerrainPolygonFloorVisualEntries(
                     ctx,
                     `section:${sectionKey}`,
@@ -14777,15 +14979,24 @@ void main(void) {
         buildRoadPathEndpointContinuity(roadPaths) {
             const out = new Map();
             const buckets = new Map();
+            const snapBuckets = new Map();
             const eps = 1e-4;
             const epsSq = eps * eps;
             const bucketCoord = (value) => Math.floor(Number(value) / eps);
             const bucketKey = (materialKey, bx, by) => `${materialKey}:${bx}:${by}`;
+            const snapBucketKey = (materialKey, snapId) => `${materialKey}:${snapId}`;
             const markConnected = (a, b) => {
                 if (a.roadPath === b.roadPath || a.materialKey !== b.materialKey) return;
                 const dx = a.point.x - b.point.x;
                 const dy = a.point.y - b.point.y;
                 if ((dx * dx) + (dy * dy) > epsSq) return;
+                const aContinuity = out.get(a.roadPath);
+                const bContinuity = out.get(b.roadPath);
+                if (aContinuity) aContinuity[a.end === "start" ? "startConnected" : "endConnected"] = true;
+                if (bContinuity) bContinuity[b.end === "start" ? "startConnected" : "endConnected"] = true;
+            };
+            const markSnapConnected = (a, b) => {
+                if (a.roadPath === b.roadPath || a.materialKey !== b.materialKey || !a.snapId || a.snapId !== b.snapId) return;
                 const aContinuity = out.get(a.roadPath);
                 const bContinuity = out.get(b.roadPath);
                 if (aContinuity) aContinuity[a.end === "start" ? "startConnected" : "endConnected"] = true;
@@ -14808,6 +15019,16 @@ void main(void) {
                     buckets.set(key, bucket);
                 }
                 bucket.push(endpoint);
+                if (endpoint.snapId) {
+                    const snapKey = snapBucketKey(endpoint.materialKey, endpoint.snapId);
+                    const existing = snapBuckets.get(snapKey);
+                    if (Array.isArray(existing)) {
+                        for (let i = 0; i < existing.length; i++) markSnapConnected(endpoint, existing[i]);
+                        existing.push(endpoint);
+                    } else {
+                        snapBuckets.set(snapKey, [endpoint]);
+                    }
+                }
             };
             const iterable = roadPaths && typeof roadPaths[Symbol.iterator] === "function" ? roadPaths : [];
             for (const roadPath of iterable) {
@@ -14815,8 +15036,13 @@ void main(void) {
                 if (!out.has(roadPath)) out.set(roadPath, { startConnected: false, endConnected: false });
                 const pair = this.getRoadPathEndpointPair(roadPath);
                 const materialKey = this.getRoadPathContinuityMaterialKey(roadPath);
-                addEndpoint({ roadPath, end: "start", point: pair.start, materialKey });
-                addEndpoint({ roadPath, end: "end", point: pair.end, materialKey });
+                const endpointSnapIds = roadPath.endpointSnapIds && typeof roadPath.endpointSnapIds === "object"
+                    ? roadPath.endpointSnapIds
+                    : {};
+                const startSnapId = typeof endpointSnapIds.start === "string" ? endpointSnapIds.start.trim() : "";
+                const endSnapId = typeof endpointSnapIds.end === "string" ? endpointSnapIds.end.trim() : "";
+                addEndpoint({ roadPath, end: "start", point: pair.start, materialKey, snapId: startSnapId });
+                addEndpoint({ roadPath, end: "end", point: pair.end, materialKey, snapId: endSnapId });
             }
             return out;
         }
@@ -15921,6 +16147,16 @@ void main(void) {
                 return String(a && a.key || "").localeCompare(String(b && b.key || ""));
             });
             return entries;
+        }
+
+        cloneCachedLevel0TerrainPolygonEntry(template, baseZ, alpha, nowMs) {
+            if (!template) return null;
+            return {
+                ...template,
+                baseZ,
+                alpha,
+                animationNowMs: nowMs
+            };
         }
 
         getLevel0TerrainMaterialRepeat(map, typeName) {
@@ -18349,7 +18585,12 @@ void main(void) {
                 if (outer.length < 3) continue;
                 const cacheKey = source.key;
                 let entry = this.floorVisualMeshByKey.get(cacheKey);
-                const signature = `${buildFloorVisualSignature(outer, source.holes)}:edgeFadeClip:${source.edgeFadeClipSignature || ""}`;
+                const signature = [
+                    buildFloorVisualSignature(outer, source.holes),
+                    `edgeFadeClip:${source.edgeFadeClipSignature || ""}`,
+                    `edgeFadeSkip:${buildFloorVisualClipBoundarySignature(source.edgeFadeSkipRings)}`,
+                    `skipClipBoundaryFade:${source.skipClipBoundaryFade === true ? 1 : 0}`
+                ].join(":");
                 if (
                     !entry ||
                     entry.signature !== signature ||
@@ -18363,6 +18604,8 @@ void main(void) {
                     const triangulation = Number.isFinite(source.edgeFadeWidth) && Number(source.edgeFadeWidth) > 0
                         ? triangulateFloorVisualTerrainBlendPolygon(outer, source.holes, Number(source.edgeFadeWidth), {
                             edgeFadeClipRings: source.edgeFadeClipRings,
+                            edgeFadeSkipRings: source.edgeFadeSkipRings,
+                            skipClipBoundaryFade: source.skipClipBoundaryFade === true,
                             edgeFadeDiagnosticContext: {
                                 ...(source.edgeFadeDiagnosticContext || {}),
                                 entryKey: cacheKey,
@@ -18475,6 +18718,9 @@ void main(void) {
             const trimmedChunkClips = this.trimFloorVisualChunkClipCache(
                 Math.max(FLOOR_LEVEL0_CHUNK_CACHE_LIMIT * 4, visibleKeys.size * 2)
             );
+            const trimmedTerrainEntries = this.trimLevel0TerrainPolygonEntryCache(
+                Math.max(FLOOR_LEVEL0_CHUNK_CACHE_LIMIT * 4, visibleKeys.size * 2)
+            );
             const trimMs = _pnow ? (_pnow() - trimStartMs) : 0;
             this.renderGrassDepthEffect(ctx, entries);
             this.renderTerrainPolygonDiagnosticOverlay(ctx, entries);
@@ -18493,6 +18739,11 @@ void main(void) {
                 this.floorVisualChunkClipCache instanceof Map ? this.floorVisualChunkClipCache.size : 0
             );
             this.setFrameMetric("floorVisualChunkClipsTrimmed", trimmedChunkClips);
+            this.setFrameMetric(
+                "floorTerrainPolygonEntryCacheSize",
+                this.level0TerrainPolygonEntryCache instanceof Map ? this.level0TerrainPolygonEntryCache.size : 0
+            );
+            this.setFrameMetric("floorTerrainPolygonEntriesTrimmed", trimmedTerrainEntries);
             this.setFrameMetric(
                 "floorAnimatedWaterChunkCacheSize",
                 this.level0AnimatedWaterChunkEntryCache instanceof Map ? this.level0AnimatedWaterChunkEntryCache.size : 0
@@ -22359,6 +22610,134 @@ void main(void) {
             }
         }
 
+        clearTerrainBrushPreview() {
+            if (!this.terrainBrushPreviewGraphics) return;
+            this.terrainBrushPreviewGraphics.clear();
+            this.terrainBrushPreviewGraphics.visible = false;
+        }
+
+        renderTerrainBrushPreview(ctx) {
+            const layer = this.layers.ui;
+            if (!layer) return;
+            if (!this.terrainBrushPreviewGraphics) {
+                this.terrainBrushPreviewGraphics = new PIXI.Graphics();
+                this.terrainBrushPreviewGraphics.name = "renderingTerrainBrushPreview";
+                this.terrainBrushPreviewGraphics.skipTransform = true;
+                this.terrainBrushPreviewGraphics.interactive = false;
+                this.terrainBrushPreviewGraphics.visible = false;
+                layer.addChild(this.terrainBrushPreviewGraphics);
+            } else if (this.terrainBrushPreviewGraphics.parent !== layer) {
+                layer.addChild(this.terrainBrushPreviewGraphics);
+            }
+
+            const g = this.terrainBrushPreviewGraphics;
+            g.clear();
+
+            const wizard = (ctx && ctx.wizard) || global.wizard || null;
+            const mapRef = (ctx && ctx.map) || (wizard && wizard.map) || global.map || null;
+            const mousePosRef = this.getMousePosRef(ctx);
+            if (
+                !wizard ||
+                wizard.currentSpell !== "terrainedit" ||
+                !mapRef ||
+                typeof mapRef.worldToNode !== "function" ||
+                typeof mapRef.getGroundTerrainHexCorners !== "function" ||
+                !this.camera ||
+                !mousePosRef ||
+                !Number.isFinite(mousePosRef.worldX) ||
+                !Number.isFinite(mousePosRef.worldY)
+            ) {
+                g.visible = false;
+                return;
+            }
+
+            const centerNode = mapRef.worldToNode(mousePosRef.worldX, mousePosRef.worldY);
+            if (!centerNode) {
+                g.visible = false;
+                return;
+            }
+
+            const spellSystemRef = (typeof SpellSystem !== "undefined")
+                ? SpellSystem
+                : (global.SpellSystem || null);
+            const brushRadius = (
+                spellSystemRef &&
+                typeof spellSystemRef.getSelectedTerrainBrushRadius === "function"
+            ) ? spellSystemRef.getSelectedTerrainBrushRadius(wizard) : 1;
+            const normalizedRadius = Math.max(1, Math.min(3, Math.round(Number(brushRadius) || 1)));
+            let outlinePoints = [];
+            if (normalizedRadius === 1) {
+                outlinePoints = mapRef.getGroundTerrainHexCorners(centerNode);
+                if (!Array.isArray(outlinePoints) || outlinePoints.length !== 6) {
+                    throw new Error("terrain brush preview requires six center hex corners");
+                }
+            } else {
+                if (typeof mapRef.collectGroundTerrainDeterministicBubbleNodes !== "function") {
+                    throw new Error("terrain brush preview requires map.collectGroundTerrainDeterministicBubbleNodes");
+                }
+                const axialRadius = normalizedRadius - 1;
+                const records = mapRef.collectGroundTerrainDeterministicBubbleNodes(centerNode, axialRadius);
+                const recordByCoord = new Map();
+                for (let i = 0; i < records.length; i++) {
+                    const record = records[i];
+                    if (!record || !record.node) continue;
+                    recordByCoord.set(`${record.q},${record.r}`, record);
+                }
+                const cornerCoords = [
+                    { q: axialRadius, r: 0 },
+                    { q: axialRadius, r: -axialRadius },
+                    { q: 0, r: -axialRadius },
+                    { q: -axialRadius, r: 0 },
+                    { q: -axialRadius, r: axialRadius },
+                    { q: 0, r: axialRadius }
+                ];
+                outlinePoints = cornerCoords.map(coord => {
+                    const record = recordByCoord.get(`${coord.q},${coord.r}`);
+                    if (!record || !record.node) {
+                        throw new Error(`terrain brush preview is missing outer corner tile ${coord.q},${coord.r}`);
+                    }
+                    const x = Number(record.node.x);
+                    const y = Number(record.node.y);
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                        throw new Error(`terrain brush preview outer corner ${coord.q},${coord.r} has non-finite center`);
+                    }
+                    return { x, y };
+                });
+            }
+
+            const drawDashedPolygon = (width, color, alpha) => {
+                g.lineStyle(width, color, alpha);
+                for (let i = 0; i < outlinePoints.length; i++) {
+                    const edgeA = outlinePoints[i];
+                    const edgeB = outlinePoints[(i + 1) % outlinePoints.length];
+                    const a = this.camera.worldToScreen(Number(edgeA.x), Number(edgeA.y), 0.01);
+                    const b = this.camera.worldToScreen(Number(edgeB.x), Number(edgeB.y), 0.01);
+                    const dx = b.x - a.x;
+                    const dy = b.y - a.y;
+                    const len = Math.hypot(dx, dy);
+                    if (!(len > 1)) continue;
+                    const ux = dx / len;
+                    const uy = dy / len;
+                    let pos = 0;
+                    let drawing = true;
+                    while (pos < len) {
+                        const segLen = drawing ? 7 : 5;
+                        const next = Math.min(pos + segLen, len);
+                        if (drawing) {
+                            g.moveTo(a.x + ux * pos, a.y + uy * pos);
+                            g.lineTo(a.x + ux * next, a.y + uy * next);
+                        }
+                        pos = next;
+                        drawing = !drawing;
+                    }
+                }
+            };
+
+            drawDashedPolygon(4, 0x102018, 0.72);
+            drawDashedPolygon(2, 0xffffff, 0.92);
+            g.visible = true;
+        }
+
         clearRoadPlacementPreview() {
             if (this.roadPlacementPreviewContainer) {
                 this.roadPlacementPreviewContainer.visible = false;
@@ -25885,6 +26264,9 @@ void main(void) {
             this.profileDrawPassSection("renderPrototypeBuildingExteriors", () => {
                 this.renderPrototypeBuildingExteriors(ctx);
             });
+            this.profileDrawPassSection("renderTerrainBrushPreview", () => {
+                this.renderTerrainBrushPreview(ctx);
+            });
             this.profileDrawPassSection("renderWallPlacementPreview", () => {
                 this.renderWallPlacementPreview(ctx);
             });
@@ -26277,6 +26659,10 @@ void main(void) {
                     floorVisualChunkClipCacheMisses: getMetric("floorVisualChunkClipCacheMisses"),
                     floorVisualChunkClipCacheSize: getMetric("floorVisualChunkClipCacheSize"),
                     floorVisualChunkClipsTrimmed: getMetric("floorVisualChunkClipsTrimmed"),
+                    floorTerrainPolygonEntryCacheHits: getMetric("floorTerrainPolygonEntryCacheHits"),
+                    floorTerrainPolygonEntryCacheMisses: getMetric("floorTerrainPolygonEntryCacheMisses"),
+                    floorTerrainPolygonEntryCacheSize: getMetric("floorTerrainPolygonEntryCacheSize"),
+                    floorTerrainPolygonEntriesTrimmed: getMetric("floorTerrainPolygonEntriesTrimmed"),
                     groundTilesSkippedForLevel0Chunks: getMetric("groundTilesSkippedForLevel0Chunks"),
                     groundTileSpritesVisible: getMetric("groundTileSpritesVisible"),
                     depthCandidates: getMetric("depthCandidates"),

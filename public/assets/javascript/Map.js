@@ -6219,6 +6219,94 @@ class GameMap {
         return typeName === "water";
     }
 
+    shouldGroundTerrainBlockNpcTraversal(typeName, node = null) {
+        return this.isGroundTerrainTypeImpassableForTraversal(typeName);
+    }
+
+    doesRoadFullyCoverGroundTerrainNode(road, node) {
+        if (!road || road.gone || !node || !this.isGroundTerrainTraversalNode(node)) return false;
+        if (road.type === "road") {
+            const roadNode = typeof road.getNode === "function" ? road.getNode() : road.node;
+            return roadNode === node;
+        }
+        if (road.type !== "roadPath") return false;
+        const outline = road.generatedGeometry && Array.isArray(road.generatedGeometry.outline)
+            ? road.generatedGeometry.outline
+            : (Array.isArray(road.outlinePolygon) ? road.outlinePolygon : null);
+        if (!Array.isArray(outline) || outline.length < 3) return false;
+        const radius = 1 / Math.sqrt(3);
+        for (let i = 0; i < 6; i++) {
+            const angle = (i * Math.PI / 3) + Math.PI;
+            const cornerX = Number(node.x) + Math.cos(angle) * radius;
+            const cornerY = Number(node.y) + Math.sin(angle) * radius;
+            if (!pointInPolygon2D(cornerX, cornerY, outline)) return false;
+        }
+        return true;
+    }
+
+    isGroundTerrainNodeCoveredByRoad(node) {
+        if (!node || !Array.isArray(node.objects)) return false;
+        for (let i = 0; i < node.objects.length; i++) {
+            if (this.doesRoadFullyCoverGroundTerrainNode(node.objects[i], node)) return true;
+        }
+        return false;
+    }
+
+    recomputeGroundTerrainPassabilityForNode(node) {
+        if (!node || !this.isGroundTerrainTraversalNode(node)) return false;
+        const typeName = this.getGroundTerrainTypeForNode(node);
+        const terrainBlocks = this.shouldGroundTerrainBlockNpcTraversal(typeName, node);
+        const roadCovered = this.isGroundTerrainNodeCoveredByRoad(node);
+        const nextTerrainBlocked = terrainBlocks && !roadCovered;
+        const previousTerrainBlocked = node._groundTerrainBlockedForNpcTraversal === true;
+        const wasBlocked = !!(node.blocked || node.blockedByObjects > 0);
+        node._groundTerrainBlockedForNpcTraversal = nextTerrainBlocked;
+        if (nextTerrainBlocked) {
+            node.blocked = true;
+            node._groundTerrainBlockOwnsBlockedFlag = true;
+        } else if (
+            node._groundTerrainBlockOwnsBlockedFlag === true ||
+            previousTerrainBlocked ||
+            (terrainBlocks && roadCovered && node.blocked === true && !(typeof node.hasBlockingObject === "function" && node.hasBlockingObject()))
+        ) {
+            node.blocked = false;
+            node._groundTerrainBlockOwnsBlockedFlag = false;
+        }
+        const isBlockedNow = !!(node.blocked || node.blockedByObjects > 0);
+        if (wasBlocked !== isBlockedNow && !this._suppressClearanceUpdates) {
+            if (typeof this.updateClearanceAround === "function") this.updateClearanceAround(node);
+            if (typeof this.markPathfindingSnapshotDirty === "function") this.markPathfindingSnapshotDirty();
+        }
+        return wasBlocked !== isBlockedNow;
+    }
+
+    recomputeGroundTerrainPassabilityForNodes(nodes) {
+        const list = nodes instanceof Set ? Array.from(nodes) : (Array.isArray(nodes) ? nodes : []);
+        let changed = false;
+        const seen = new Set();
+        for (let i = 0; i < list.length; i++) {
+            const node = list[i];
+            if (!node || seen.has(node)) continue;
+            seen.add(node);
+            changed = this.recomputeGroundTerrainPassabilityForNode(node) || changed;
+        }
+        return changed;
+    }
+
+    recomputeGroundTerrainPassabilityForRoad(road, extraNodes = null) {
+        const nodes = new Set();
+        if (Array.isArray(road && road._indexedNodes)) {
+            for (let i = 0; i < road._indexedNodes.length; i++) nodes.add(road._indexedNodes[i]);
+        }
+        if (road && road.node) nodes.add(road.node);
+        if (Array.isArray(extraNodes)) {
+            for (let i = 0; i < extraNodes.length; i++) nodes.add(extraNodes[i]);
+        } else if (extraNodes instanceof Set) {
+            extraNodes.forEach(node => nodes.add(node));
+        }
+        return this.recomputeGroundTerrainPassabilityForNodes(nodes);
+    }
+
     collectGroundTerrainCollisionPolygons(bounds = null, options = {}) {
         const queryBounds = bounds && typeof bounds === "object" ? bounds : null;
         if (queryBounds) {
@@ -6317,6 +6405,12 @@ class GameMap {
                 : (typeof (polygon && polygon.type) === "string" ? polygon.type : "");
             const sourceKey = typeof (entry && entry.sourceKey) === "string" ? entry.sourceKey : "terrain";
             const index = Number.isInteger(entry && entry.index) ? entry.index : i;
+            if (
+                terrainType === "water" &&
+                this.isGroundBridgeRoadCoveringHitbox(hitbox, options && options.bridgeRoads)
+            ) {
+                continue;
+            }
             const collision = resolveCircleTerrainPolygonCollision2D(
                 polygon,
                 hitbox,
@@ -6349,6 +6443,7 @@ class GameMap {
     isNodeTerrainImpassableForTraversal(node, options = {}) {
         if (!this.isGroundTerrainTraversalNode(node)) return false;
         if (options && options.ignoreTerrainPassability === true) return false;
+        if (this.isGroundTerrainNodeCoveredByRoad(node)) return false;
         const typeName = this.getGroundTerrainTypeForNode(node);
         const canTraverseTerrain = options && typeof options.canTraverseTerrain === "function"
             ? options.canTraverseTerrain
@@ -8367,7 +8462,7 @@ class GameMap {
         }
         const w = Number.isFinite(this.hexWidth) ? Number(this.hexWidth) : (1 / 0.866);
         const h = Number.isFinite(this.hexHeight) ? Number(this.hexHeight) : 1;
-        return [
+        const corners = [
             { x: x - w * 0.5, y },
             { x: x - w * 0.25, y: y - h * 0.5 },
             { x: x + w * 0.25, y: y - h * 0.5 },
@@ -8375,6 +8470,9 @@ class GameMap {
             { x: x + w * 0.25, y: y + h * 0.5 },
             { x: x - w * 0.25, y: y + h * 0.5 }
         ];
+        return this.shouldSnapGroundTerrainVerticesToRepairGrid()
+            ? corners.map(point => this.getGroundTerrainCanonicalRepairPoint(point))
+            : corners;
     }
 
     getGroundTerrainNodeKey(node) {
@@ -8454,6 +8552,16 @@ class GameMap {
         }
         if (typeof this.getNode === "function") {
             return this.getNode(xindex, yindex, 0) || null;
+        }
+        const x = Math.floor(Number(xindex));
+        const y = Math.floor(Number(yindex));
+        if (
+            Number.isFinite(x) &&
+            Number.isFinite(y) &&
+            Array.isArray(this.nodes) &&
+            Array.isArray(this.nodes[x])
+        ) {
+            return this.nodes[x][y] || null;
         }
         return null;
     }
@@ -8723,9 +8831,10 @@ class GameMap {
             }
             this.getGroundTerrainTextureIdForType(type);
             const preserveBoundaryVertices = !!(polygon && polygon._groundTerrainPreserveBoundaryVertices === true);
-            const points = preserveBoundaryVertices
-                ? this.dedupeGroundTerrainClosedRingPoints(polygon.points)
-                : this.simplifyGroundTerrainPolygonPoints(polygon.points);
+            const normalizeRing = (ring) => preserveBoundaryVertices
+                ? this.simplifyGroundTerrainPolygonPoints(ring)
+                : this.getGroundTerrainPolicyRingPoints(ring);
+            const points = normalizeRing(polygon.points);
             if (points.length < 3) {
                 throw new Error(`terrain polygon ${index} for ${type} has fewer than three points`);
             }
@@ -8734,9 +8843,7 @@ class GameMap {
             }
             const holes = Array.isArray(polygon.holes)
                 ? polygon.holes.map((hole, holeIndex) => {
-                    const holePoints = preserveBoundaryVertices
-                        ? this.dedupeGroundTerrainClosedRingPoints(hole)
-                        : this.simplifyGroundTerrainPolygonPoints(hole);
+                    const holePoints = normalizeRing(hole);
                     if (holePoints.length < 3) {
                         throw new Error(`terrain polygon ${index} for ${type} has a hole ${holeIndex} with fewer than three points`);
                     }
@@ -8747,14 +8854,7 @@ class GameMap {
                 })
                 : [];
             const normalized = holes.length > 0 ? { type, points, holes } : { type, points };
-            if (preserveBoundaryVertices) {
-                Object.defineProperty(normalized, "_groundTerrainPreserveBoundaryVertices", {
-                    value: true,
-                    enumerable: false,
-                    configurable: true
-                });
-            }
-            return normalized;
+            return this.copyGroundTerrainPolygonRuntimeMetadata(polygon, normalized);
         });
     }
 
@@ -8772,10 +8872,18 @@ class GameMap {
             this.getGroundTerrainTextureIdForType(type);
             const preserveBoundaryVertices = !!(polygon && polygon._groundTerrainPreserveBoundaryVertices === true);
             const normalizeRing = (ring) => preserveBoundaryVertices
-                ? this.dedupeGroundTerrainClosedRingPoints(ring)
-                : this.simplifyGroundTerrainPolygonPoints(ring);
+                ? this.simplifyGroundTerrainPolygonPoints(ring)
+                : this.getGroundTerrainPolicyRingPoints(ring);
             const points = normalizeRing(polygon.points);
-            if (points.length < 3 || Math.abs(this.getPolygonSignedArea2D(points)) <= 1e-9) {
+            if (
+                points.length < 3 ||
+                Math.abs(this.getPolygonSignedArea2D(points)) <= 1e-9 ||
+                (
+                    !preserveBoundaryVertices &&
+                    this.shouldSnapGroundTerrainVerticesToRepairGrid() &&
+                    !this.groundTerrainRingSurvivesRepairLatticeSnapping(points)
+                )
+            ) {
                 continue;
             }
             const holes = [];
@@ -8784,16 +8892,17 @@ class GameMap {
                 const holePoints = normalizeRing(sourceHoles[h]);
                 if (holePoints.length < 3) continue;
                 if (Math.abs(this.getPolygonSignedArea2D(holePoints)) <= 1e-9) continue;
+                if (
+                    !preserveBoundaryVertices &&
+                    this.shouldSnapGroundTerrainVerticesToRepairGrid() &&
+                    !this.groundTerrainRingSurvivesRepairLatticeSnapping(holePoints)
+                ) continue;
                 holes.push(holePoints);
             }
-            const sanitized = holes.length > 0 ? { type, points, holes } : { type, points };
-            if (preserveBoundaryVertices) {
-                Object.defineProperty(sanitized, "_groundTerrainPreserveBoundaryVertices", {
-                    value: true,
-                    enumerable: false,
-                    configurable: true
-                });
-            }
+            const sanitized = this.copyGroundTerrainPolygonRuntimeMetadata(
+                polygon,
+                holes.length > 0 ? { type, points, holes } : { type, points }
+            );
             out.push(sanitized);
         }
         return out;
@@ -8823,7 +8932,16 @@ class GameMap {
             throw new Error("terrain polygon clipping requires a terrain type");
         }
         this.getGroundTerrainTextureIdForType(polygon.type);
-        const outerRing = polygonToClipRing2D(this.getGroundTerrainClipRingPoints(
+        const preserveBoundaryVertices = !!(polygon && polygon._groundTerrainPreserveBoundaryVertices === true);
+        const getClipRingPoints = (points, label) => {
+            if (!preserveBoundaryVertices) return this.getGroundTerrainClipRingPoints(points, label);
+            const out = this.simplifyGroundTerrainPolygonPoints(points);
+            if (out.length < 3) {
+                throw new Error(`${label} collapsed below three points`);
+            }
+            return out;
+        };
+        const outerRing = polygonToClipRing2D(getClipRingPoints(
             polygon.points,
             `terrain polygon clipping outer ring for ${polygon.type}`
         ));
@@ -8833,7 +8951,7 @@ class GameMap {
         const rings = [outerRing];
         const holes = Array.isArray(polygon.holes) ? polygon.holes : [];
         for (let h = 0; h < holes.length; h++) {
-            const holeRing = polygonToClipRing2D(this.getGroundTerrainClipRingPoints(
+            const holeRing = polygonToClipRing2D(getClipRingPoints(
                 holes[h],
                 `terrain polygon clipping hole ${h} for ${polygon.type}`
             ));
@@ -8854,7 +8972,7 @@ class GameMap {
             if (!Array.isArray(polygon) || !Array.isArray(polygon[0])) {
                 throw new Error(`terrain polygon clipping produced malformed geometry for ${type}`);
             }
-            const points = this.simplifyGroundTerrainPolygonPoints(
+            const points = this.getGroundTerrainPolicyRingPoints(
                 clipRingToPolygonPoints2D(polygon[0], `terrain ${type} clipped ring`)
             );
             if (points.length < 3) {
@@ -8865,7 +8983,7 @@ class GameMap {
             }
             const holes = [];
             for (let h = 1; h < polygon.length; h++) {
-                const holePoints = this.simplifyGroundTerrainPolygonPoints(
+                const holePoints = this.getGroundTerrainPolicyRingPoints(
                     clipRingToPolygonPoints2D(polygon[h], `terrain ${type} clipped hole`)
                 );
                 if (holePoints.length < 3) {
@@ -8879,6 +8997,52 @@ class GameMap {
             out.push(holes.length > 0 ? { type, points, holes } : { type, points });
         }
         return out;
+    }
+
+    getGroundTerrainClipCoordinatePrecisionScale() {
+        return 1e12;
+    }
+
+    getGroundTerrainCanonicalClipCoordinateValue(value, label = "terrain clip coordinate") {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+            throw new Error(`${label} must be finite`);
+        }
+        const scale = this.getGroundTerrainClipCoordinatePrecisionScale();
+        const rounded = Math.round(numeric * scale) / scale;
+        return Object.is(rounded, -0) ? 0 : rounded;
+    }
+
+    normalizeGroundTerrainClipGeometryCoordinates(geometry, label = "terrain clip geometry") {
+        if (clipGeometryIsEmpty2D(geometry)) return [];
+        if (!Array.isArray(geometry)) {
+            throw new Error(`${label} must be a polygon clipping geometry`);
+        }
+        return geometry.map((polygon, polygonIndex) => {
+            if (!Array.isArray(polygon)) {
+                throw new Error(`${label} polygon ${polygonIndex} must be an array of rings`);
+            }
+            return polygon.map((ring, ringIndex) => {
+                if (!Array.isArray(ring)) {
+                    throw new Error(`${label} polygon ${polygonIndex} ring ${ringIndex} must be an array of points`);
+                }
+                return ring.map((point, pointIndex) => {
+                    if (!Array.isArray(point) || point.length < 2) {
+                        throw new Error(`${label} polygon ${polygonIndex} ring ${ringIndex} point ${pointIndex} is malformed`);
+                    }
+                    return [
+                        this.getGroundTerrainCanonicalClipCoordinateValue(
+                            point[0],
+                            `${label} polygon ${polygonIndex} ring ${ringIndex} point ${pointIndex} x`
+                        ),
+                        this.getGroundTerrainCanonicalClipCoordinateValue(
+                            point[1],
+                            `${label} polygon ${polygonIndex} ring ${ringIndex} point ${pointIndex} y`
+                        )
+                    ];
+                });
+            });
+        });
     }
 
     getGroundTerrainHexClipGeometry(node) {
@@ -8901,11 +9065,32 @@ class GameMap {
             ? geometries.filter(geometry => !clipGeometryIsEmpty2D(geometry))
             : [];
         if (source.length === 0) return [];
-        if (source.length === 1) return source[0];
+        const normalizedSource = source.map((geometry, index) => (
+            this.normalizeGroundTerrainClipGeometryCoordinates(geometry, `${label} input ${index}`)
+        ));
+        if (normalizedSource.length === 1) return normalizedSource[0];
         try {
-            return api.union(...source);
+            return this.normalizeGroundTerrainClipGeometryCoordinates(
+                api.union(...normalizedSource),
+                `${label} union output`
+            );
         } catch (err) {
-            throw new Error(`${label} union failed: ${err && err.message ? err.message : err}`);
+            const message = `${label} union failed: ${err && err.message ? err.message : err}`;
+            const diagnostic = {
+                label,
+                geometryCount: source.length,
+                geometries: source.map((geometry, index) => ({
+                    index,
+                    diagnostic: this.getGroundTerrainClipGeometryDiagnostic(geometry, null, {
+                        polygonLimit: 16,
+                        ringLimit: 4
+                    })
+                }))
+            };
+            this.logGroundTerrainDiagnostic("[terrain polygon union diagnostic]", message, diagnostic);
+            const error = new Error(message);
+            error.diagnostic = diagnostic;
+            throw error;
         }
     }
 
@@ -8978,6 +9163,25 @@ class GameMap {
             }
         }
         return false;
+    }
+
+    groundTerrainPolygonIntersectsRepairGeometry(polygon, repairGeometry, repairBounds = null) {
+        if (!polygon || typeof polygon.type !== "string" || !Array.isArray(polygon.points)) return false;
+        if (clipGeometryIsEmpty2D(repairGeometry)) return false;
+        const polygonBounds = getPolygonBounds2D(polygon.points);
+        const bounds = repairBounds || null;
+        if (bounds && !polygonBoundsOverlap2D(polygonBounds, bounds)) return false;
+        const api = getPolygonClippingApi2D();
+        if (!api || typeof api.intersection !== "function") {
+            throw new Error("terrain local patch source filtering requires polygon clipping intersection");
+        }
+        let intersection = [];
+        try {
+            intersection = api.intersection(this.groundTerrainPolygonToClipGeometry(polygon), repairGeometry);
+        } catch (err) {
+            throw new Error(`terrain local patch source filtering failed for ${polygon.type}: ${err && err.message ? err.message : err}`);
+        }
+        return !clipGeometryIsEmpty2D(intersection);
     }
 
     buildGroundTerrainLocalSmoothingGroup(type, affectedNodes, vertexSlotsByPointKey) {
@@ -9781,13 +9985,100 @@ class GameMap {
         return out;
     }
 
+    resolveGroundTerrainPolygonOverlapsByPrioritySequential(polygons) {
+        const api = getPolygonClippingApi2D();
+        if (!api || typeof api.difference !== "function") {
+            throw new Error("terrain polygon sequential priority overlay requires polygon clipping difference");
+        }
+        const source = this.sanitizeGroundTerrainPatchPolygons(polygons);
+        const records = source
+            .map((polygon, index) => ({
+                index,
+                type: polygon.type,
+                priority: this.getGroundTerrainEditPriority(polygon.type),
+                geometry: this.groundTerrainPolygonToClipGeometry(polygon)
+            }))
+            .sort((a, b) => (
+                b.priority - a.priority ||
+                a.index - b.index
+            ));
+        const accepted = [];
+        const out = [];
+        for (let i = 0; i < records.length; i++) {
+            const record = records[i];
+            let geometry = record.geometry;
+            for (let h = 0; h < accepted.length; h++) {
+                const higher = accepted[h];
+                if (!higher || higher.priority <= record.priority) continue;
+                if (clipGeometryIsEmpty2D(geometry)) break;
+                try {
+                    geometry = api.difference(geometry, higher.geometry);
+                } catch (err) {
+                    throw new Error(`terrain polygon sequential priority overlay failed for ${record.type}: ${err && err.message ? err.message : err}`);
+                }
+            }
+            if (clipGeometryIsEmpty2D(geometry)) continue;
+            accepted.push({
+                priority: record.priority,
+                geometry
+            });
+            out.push(...this.groundTerrainDeterministicClipGeometryToPolygons(record.type, geometry));
+        }
+        return out;
+    }
+
     getGroundTerrainVertexRepairEpsilon() {
         return 1e-3;
     }
 
+    getGroundTerrainRepairLatticeBasis() {
+        const w = Number.isFinite(this.hexWidth) ? Number(this.hexWidth) : (1 / 0.866);
+        const h = Number.isFinite(this.hexHeight) ? Number(this.hexHeight) : 1;
+        const subdivision = 8;
+        const xStep = (w * 0.5) / subdivision;
+        const yStep = (h * 0.5) / subdivision;
+        if (!(xStep > 0) || !(yStep > 0)) {
+            throw new Error("terrain repair lattice requires positive hex dimensions");
+        }
+        return { xStep, yStep };
+    }
+
+    getGroundTerrainRepairMinimumEdgeLength() {
+        const basis = this.getGroundTerrainRepairLatticeBasis();
+        return Math.min(
+            Math.abs(basis.xStep),
+            Math.hypot(basis.xStep * 0.5, basis.yStep)
+        );
+    }
+
+    getGroundTerrainRepairLatticeCoord(point) {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error("terrain repair point contains non-finite coordinates");
+        }
+        const basis = this.getGroundTerrainRepairLatticeBasis();
+        const j = Math.round(y / basis.yStep);
+        const i = Math.round((x - (j * basis.xStep * 0.5)) / basis.xStep);
+        return { i, j };
+    }
+
+    getGroundTerrainRepairPointForLatticeCoord(coord) {
+        const i = Number(coord && coord.i);
+        const j = Number(coord && coord.j);
+        if (!Number.isFinite(i) || !Number.isFinite(j)) {
+            throw new Error("terrain repair lattice coordinate is non-finite");
+        }
+        const basis = this.getGroundTerrainRepairLatticeBasis();
+        return {
+            x: (i + (j * 0.5)) * basis.xStep,
+            y: j * basis.yStep
+        };
+    }
+
     getGroundTerrainRepairPointKey(point) {
-        const q = Math.round(1 / this.getGroundTerrainVertexRepairEpsilon());
-        return `${Math.round(Number(point && point.x) * q)},${Math.round(Number(point && point.y) * q)}`;
+        const coord = this.getGroundTerrainRepairLatticeCoord(point);
+        return `${coord.i},${coord.j}`;
     }
 
     markGroundTerrainPolygonPreserveBoundaryVertices(polygon) {
@@ -9801,34 +10092,122 @@ class GameMap {
         return polygon;
     }
 
-    getGroundTerrainCanonicalRepairPoint(point) {
-        const x = Number(point && point.x);
-        const y = Number(point && point.y);
-        if (!Number.isFinite(x) || !Number.isFinite(y)) {
-            throw new Error("terrain repair point contains non-finite coordinates");
+    markGroundTerrainPolygonSectionBoundaryEdges(polygon, sectionKey, sectionRing) {
+        if (!polygon || typeof polygon !== "object") return polygon;
+        this.markGroundTerrainPolygonPreserveBoundaryVertices(polygon);
+        const ring = Array.isArray(sectionRing)
+            ? sectionRing.map(point => ({ x: Number(point && point.x), y: Number(point && point.y) }))
+                .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
+            : [];
+        const key = typeof sectionKey === "string" ? sectionKey : "";
+        Object.defineProperty(polygon, "_groundTerrainSectionKey", {
+            value: key,
+            enumerable: false,
+            configurable: true
+        });
+        Object.defineProperty(polygon, "_groundTerrainSectionRing", {
+            value: ring,
+            enumerable: false,
+            configurable: true
+        });
+        const edgeRecords = [];
+        if (ring.length >= 3) {
+            const threshold = this.getGroundTerrainVertexRepairEpsilon();
+            const collectRingEdges = (points, ringKind, holeIndex = null) => {
+                const source = Array.isArray(points) ? points : [];
+                for (let i = 0; i < source.length; i++) {
+                    const a = source[i];
+                    const b = source[(i + 1) % source.length];
+                    const projectionA = this.projectGroundTerrainPointToSectionBoundary(a, ring, threshold);
+                    const projectionB = this.projectGroundTerrainPointToSectionBoundary(b, ring, threshold);
+                    if (!projectionA || !projectionB) continue;
+                    const sectionEdgeIndex = Number(projectionA.edgeIndex);
+                    if (sectionEdgeIndex !== Number(projectionB.edgeIndex)) continue;
+                    const projectedLength = Math.hypot(
+                        Number(projectionB.point.x) - Number(projectionA.point.x),
+                        Number(projectionB.point.y) - Number(projectionA.point.y)
+                    );
+                    if (!(projectedLength > threshold)) continue;
+                    edgeRecords.push({
+                        sectionKey: key,
+                        ringKind,
+                        holeIndex,
+                        edgeIndex: i,
+                        sectionEdgeIndex,
+                        distanceA: Number(projectionA.distance),
+                        distanceB: Number(projectionB.distance),
+                        a: { x: Number(a && a.x), y: Number(a && a.y) },
+                        b: { x: Number(b && b.x), y: Number(b && b.y) },
+                        projectedA: { x: Number(projectionA.point.x), y: Number(projectionA.point.y) },
+                        projectedB: { x: Number(projectionB.point.x), y: Number(projectionB.point.y) }
+                    });
+                }
+            };
+            collectRingEdges(polygon.points, "outer", null);
+            const holes = Array.isArray(polygon.holes) ? polygon.holes : [];
+            for (let h = 0; h < holes.length; h++) {
+                collectRingEdges(holes[h], "hole", h);
+            }
         }
-        const q = Math.round(1 / this.getGroundTerrainVertexRepairEpsilon());
-        return {
-            x: Math.round(x * q) / q,
-            y: Math.round(y * q) / q
-        };
+        Object.defineProperty(polygon, "_groundTerrainSectionBoundaryEdges", {
+            value: edgeRecords,
+            enumerable: false,
+            configurable: true
+        });
+        return polygon;
     }
 
-    getGroundTerrainClipRingPoints(points, label = "terrain clip ring") {
-        const source = this.dedupeGroundTerrainPathPoints(points).map(point => this.getGroundTerrainCanonicalRepairPoint(point));
-        const out = [];
+    copyGroundTerrainPolygonRuntimeMetadata(source, polygon) {
+        if (!polygon || typeof polygon !== "object") return polygon;
+        const sectionRing = source && Array.isArray(source._groundTerrainSectionRing)
+            ? source._groundTerrainSectionRing
+            : null;
+        if (sectionRing) {
+            return this.markGroundTerrainPolygonSectionBoundaryEdges(
+                polygon,
+                source && typeof source._groundTerrainSectionKey === "string" ? source._groundTerrainSectionKey : "",
+                sectionRing
+            );
+        }
+        if (source && source._groundTerrainPreserveBoundaryVertices === true) {
+            this.markGroundTerrainPolygonPreserveBoundaryVertices(polygon);
+        }
+        if (source && Array.isArray(source._groundTerrainSectionBoundaryEdges)) {
+            Object.defineProperty(polygon, "_groundTerrainSectionBoundaryEdges", {
+                value: source._groundTerrainSectionBoundaryEdges.map(edge => ({ ...edge })),
+                enumerable: false,
+                configurable: true
+            });
+        }
+        return polygon;
+    }
+
+    getGroundTerrainCanonicalRepairPoint(point) {
+        return this.getGroundTerrainRepairPointForLatticeCoord(
+            this.getGroundTerrainRepairLatticeCoord(point)
+        );
+    }
+
+    shouldSnapGroundTerrainVerticesToRepairGrid() {
+        return true;
+    }
+
+    getGroundTerrainRepairSnappedRingPoints(points) {
+        const source = this.dedupeGroundTerrainPathPoints(points).map(point => this.getGroundTerrainRepairLatticeCoord(point));
+        const coords = [];
         let previousKey = "";
         for (let i = 0; i < source.length; i++) {
-            const key = this.getGroundTerrainRepairPointKey(source[i]);
+            const key = `${source[i].i},${source[i].j}`;
             if (key === previousKey) continue;
-            out.push(source[i]);
+            coords.push(source[i]);
             previousKey = key;
         }
-        if (out.length > 1) {
-            const firstKey = this.getGroundTerrainRepairPointKey(out[0]);
-            const lastKey = this.getGroundTerrainRepairPointKey(out[out.length - 1]);
-            if (firstKey === lastKey) out.pop();
+        if (coords.length > 1) {
+            const first = coords[0];
+            const last = coords[coords.length - 1];
+            if (first.i === last.i && first.j === last.j) coords.pop();
         }
+        const out = coords.map(coord => this.getGroundTerrainRepairPointForLatticeCoord(coord));
         let changed = true;
         while (changed && out.length > 3) {
             changed = false;
@@ -9847,10 +10226,559 @@ class GameMap {
                 }
             }
         }
+        return out;
+    }
+
+    getGroundTerrainPolicyRingPoints(points) {
+        return this.shouldSnapGroundTerrainVerticesToRepairGrid()
+            ? this.getGroundTerrainRepairSnappedRingPoints(points)
+            : this.simplifyGroundTerrainPolygonPoints(points);
+    }
+
+    getGroundTerrainClipRingPoints(points, label = "terrain clip ring") {
+        const out = this.getGroundTerrainPolicyRingPoints(points);
         if (out.length < 3) {
-            throw new Error(`${label} collapsed below three points after terrain repair-grid snapping`);
+            throw new Error(`${label} collapsed below three points after terrain vertex normalization`);
         }
         return out;
+    }
+
+    projectGroundTerrainPointToSectionBoundary(point, sectionRing, threshold = this.getGroundTerrainRepairMinimumEdgeLength()) {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        const ring = Array.isArray(sectionRing) ? sectionRing : [];
+        const maxDistance = Number(threshold);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || ring.length < 3 || !Number.isFinite(maxDistance) || maxDistance < 0) {
+            return null;
+        }
+        let best = null;
+        for (let i = 0; i < ring.length; i++) {
+            const a = ring[i];
+            const b = ring[(i + 1) % ring.length];
+            const ax = Number(a && a.x);
+            const ay = Number(a && a.y);
+            const bx = Number(b && b.x);
+            const by = Number(b && b.y);
+            if (![ax, ay, bx, by].every(Number.isFinite)) continue;
+            const dx = bx - ax;
+            const dy = by - ay;
+            const lengthSq = dx * dx + dy * dy;
+            if (!(lengthSq > 1e-12)) continue;
+            const rawT = ((x - ax) * dx + (y - ay) * dy) / lengthSq;
+            const t = Math.max(0, Math.min(1, rawT));
+            const projected = { x: ax + dx * t, y: ay + dy * t };
+            const distance = Math.hypot(x - projected.x, y - projected.y);
+            if (distance > maxDistance) continue;
+            if (rawT < -0.02 || rawT > 1.02) continue;
+            if (!best || distance < best.distance) {
+                best = {
+                    edgeIndex: i,
+                    distance,
+                    point: projected
+                };
+            }
+        }
+        return best;
+    }
+
+    getGroundTerrainSectionBoundaryProtectedRingPoints(points, sectionRing, label = "terrain section boundary protected ring") {
+        const source = this.dedupeGroundTerrainPathPoints(points);
+        if (source.length < 3) {
+            throw new Error(`${label} requires at least three source points`);
+        }
+        const threshold = Math.max(
+            this.getGroundTerrainVertexRepairEpsilon(),
+            this.getGroundTerrainRepairMinimumEdgeLength() * 0.2
+        );
+        const projections = source.map(point => this.projectGroundTerrainPointToSectionBoundary(point, sectionRing, threshold));
+        const out = [];
+        for (let i = 0; i < source.length; i++) {
+            const projection = projections[i];
+            out.push(projection
+                ? { x: Number(projection.point.x), y: Number(projection.point.y) }
+                : (this.shouldSnapGroundTerrainVerticesToRepairGrid()
+                    ? this.getGroundTerrainCanonicalRepairPoint(source[i])
+                    : { x: Number(source[i].x), y: Number(source[i].y) }));
+        }
+        return this.simplifyGroundTerrainPolygonPoints(out);
+    }
+
+    getGroundTerrainSectionBoundaryProtectedPolicyRingPoints(points, sectionRings, label = "terrain section boundary protected policy ring") {
+        const source = this.dedupeGroundTerrainPathPoints(points);
+        if (source.length < 3) return [];
+        const rings = (Array.isArray(sectionRings) ? sectionRings : [])
+            .filter(ring => Array.isArray(ring) && ring.length >= 3);
+        if (rings.length === 0) return this.getGroundTerrainPolicyRingPoints(source);
+        const threshold = Math.max(this.getGroundTerrainVertexRepairEpsilon(), 1e-7);
+        const out = [];
+        for (let i = 0; i < source.length; i++) {
+            let best = null;
+            for (let r = 0; r < rings.length; r++) {
+                const projection = this.projectGroundTerrainPointToSectionBoundary(source[i], rings[r], threshold);
+                if (!projection) continue;
+                if (!best || projection.distance < best.distance) best = projection;
+            }
+            out.push(best
+                ? { x: Number(best.point.x), y: Number(best.point.y) }
+                : (this.shouldSnapGroundTerrainVerticesToRepairGrid()
+                    ? this.getGroundTerrainCanonicalRepairPoint(source[i])
+                    : { x: Number(source[i].x), y: Number(source[i].y) }));
+        }
+        return this.simplifyGroundTerrainPolygonPoints(out);
+    }
+
+    getGroundTerrainDiagnosticRingPoint(point) {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        return {
+            x: Number.isFinite(x) ? x : null,
+            y: Number.isFinite(y) ? y : null
+        };
+    }
+
+    getGroundTerrainRingGeometryDiagnostic(points, sectionRing = null) {
+        const source = Array.isArray(points) ? points : [];
+        const finitePoints = source
+            .map(point => this.getGroundTerrainDiagnosticRingPoint(point))
+            .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        let minEdgeLength = Infinity;
+        let maxEdgeLength = 0;
+        let totalEdgeLength = 0;
+        const zeroLengthEdges = [];
+        const shortEdges = [];
+        const duplicateRepairKeys = [];
+        const seenRepairKeys = new Map();
+        const repairEpsilon = this.getGroundTerrainVertexRepairEpsilon();
+        const shortEdgeThreshold = this.getGroundTerrainRepairMinimumEdgeLength() * 0.5;
+        for (let i = 0; i < finitePoints.length; i++) {
+            const point = finitePoints[i];
+            minX = Math.min(minX, point.x);
+            minY = Math.min(minY, point.y);
+            maxX = Math.max(maxX, point.x);
+            maxY = Math.max(maxY, point.y);
+            let repairKey = "";
+            try {
+                repairKey = this.getGroundTerrainRepairPointKey(point);
+            } catch (err) {
+                repairKey = `invalid:${i}`;
+            }
+            if (seenRepairKeys.has(repairKey)) {
+                duplicateRepairKeys.push({
+                    key: repairKey,
+                    firstIndex: seenRepairKeys.get(repairKey),
+                    index: i
+                });
+            } else {
+                seenRepairKeys.set(repairKey, i);
+            }
+            const next = finitePoints[(i + 1) % finitePoints.length];
+            if (!next) continue;
+            const length = Math.hypot(next.x - point.x, next.y - point.y);
+            minEdgeLength = Math.min(minEdgeLength, length);
+            maxEdgeLength = Math.max(maxEdgeLength, length);
+            totalEdgeLength += length;
+            if (length <= repairEpsilon) zeroLengthEdges.push({ edgeIndex: i, length });
+            if (length > repairEpsilon && length < shortEdgeThreshold) shortEdges.push({ edgeIndex: i, length });
+        }
+        let signedArea = null;
+        try {
+            signedArea = finitePoints.length >= 3 ? this.getPolygonSignedArea2D(finitePoints) : 0;
+        } catch (err) {
+            signedArea = null;
+        }
+        let repairSignature = "";
+        try {
+            repairSignature = this.getGroundTerrainRepairRingSignature(finitePoints);
+        } catch (err) {
+            repairSignature = "";
+        }
+        const boundarySearchDistance = Number.MAX_SAFE_INTEGER;
+        const boundaryDistances = Array.isArray(sectionRing)
+            ? finitePoints.map((point, index) => {
+                const projection = this.projectGroundTerrainPointToSectionBoundary(point, sectionRing, boundarySearchDistance);
+                if (!projection) return { index, distance: null, edgeIndex: null, projectedByNormalizer: false };
+                return {
+                    index,
+                    distance: Number(projection.distance),
+                    edgeIndex: Number(projection.edgeIndex),
+                    projectedByNormalizer: Number(projection.distance) <= repairEpsilon,
+                    projectedPoint: this.getGroundTerrainDiagnosticRingPoint(projection.point)
+                };
+            })
+            : [];
+        return {
+            pointCount: source.length,
+            finitePointCount: finitePoints.length,
+            signedArea,
+            absArea: Number.isFinite(signedArea) ? Math.abs(signedArea) : null,
+            bounds: finitePoints.length > 0 ? { minX, minY, maxX, maxY } : null,
+            minEdgeLength: Number.isFinite(minEdgeLength) ? minEdgeLength : null,
+            maxEdgeLength,
+            totalEdgeLength,
+            zeroLengthEdges,
+            shortEdges,
+            duplicateRepairKeys,
+            repairSignature,
+            points: finitePoints,
+            boundaryDistances
+        };
+    }
+
+    throwGroundTerrainSectionRingDiagnostic(message, details) {
+        const diagnostic = details && typeof details === "object" ? details : {};
+        const error = new Error(message);
+        error.diagnostic = diagnostic;
+        if (typeof console !== "undefined" && console && typeof console.error === "function") {
+            console.error("[terrain section polygon diagnostic]", {
+                message,
+                diagnostic
+            });
+        }
+        throw error;
+    }
+
+    getGroundTerrainClipGeometryDiagnostic(geometry, sectionRing = null, options = {}) {
+        const source = Array.isArray(geometry) ? geometry : [];
+        const polygonLimit = Number.isFinite(options && options.polygonLimit) ? Math.max(0, Number(options.polygonLimit)) : 8;
+        const ringLimit = Number.isFinite(options && options.ringLimit) ? Math.max(0, Number(options.ringLimit)) : 4;
+        const polygons = [];
+        for (let p = 0; p < source.length && p < polygonLimit; p++) {
+            const polygon = source[p];
+            const rings = [];
+            if (Array.isArray(polygon)) {
+                for (let r = 0; r < polygon.length && r < ringLimit; r++) {
+                    const ring = polygon[r];
+                    let points = [];
+                    try {
+                        points = clipRingToPolygonPoints2D(ring, `terrain diagnostic clip geometry ${p}:${r}`);
+                    } catch (err) {
+                        rings.push({
+                            ringIndex: r,
+                            error: err && err.message ? err.message : String(err)
+                        });
+                        continue;
+                    }
+                    rings.push({
+                        ringIndex: r,
+                        ringKind: r === 0 ? "outer" : "hole",
+                        diagnostic: this.getGroundTerrainRingGeometryDiagnostic(points, sectionRing)
+                    });
+                }
+            }
+            polygons.push({
+                polygonIndex: p,
+                ringCount: Array.isArray(polygon) ? polygon.length : 0,
+                rings,
+                truncatedRings: Array.isArray(polygon) && polygon.length > ringLimit
+                    ? polygon.length - ringLimit
+                    : 0
+            });
+        }
+        return {
+            polygonCount: source.length,
+            polygons,
+            truncatedPolygons: source.length > polygonLimit ? source.length - polygonLimit : 0
+        };
+    }
+
+    getGroundTerrainSectionBoundaryDriftDiagnostics(sectionKey, polygons, sectionRing, options = {}) {
+        const source = Array.isArray(polygons) ? polygons : [];
+        const nearDistance = Number.isFinite(options && options.nearDistance)
+            ? Math.max(0, Number(options.nearDistance))
+            : this.getGroundTerrainRepairMinimumEdgeLength() * 4;
+        const onBoundaryDistance = Number.isFinite(options && options.onBoundaryDistance)
+            ? Math.max(0, Number(options.onBoundaryDistance))
+            : this.getGroundTerrainVertexRepairEpsilon();
+        const maxPoints = Number.isFinite(options && options.maxPoints) ? Math.max(1, Number(options.maxPoints)) : 64;
+        const driftPoints = [];
+        const driftSegments = [];
+        const ringRecords = [];
+        for (let p = 0; p < source.length; p++) {
+            const polygon = source[p];
+            if (!polygon || typeof polygon.type !== "string") continue;
+            const rings = [{ kind: "outer", points: polygon.points, ringIndex: 0 }];
+            const holes = Array.isArray(polygon.holes) ? polygon.holes : [];
+            for (let h = 0; h < holes.length; h++) rings.push({ kind: "hole", points: holes[h], ringIndex: h + 1, holeIndex: h });
+            for (let r = 0; r < rings.length; r++) {
+                const ring = Array.isArray(rings[r].points) ? rings[r].points : [];
+                const ringDrift = [];
+                for (let i = 0; i < ring.length; i++) {
+                    const point = ring[i];
+                    const projection = this.projectGroundTerrainPointToSectionBoundary(point, sectionRing, nearDistance);
+                    if (!projection) continue;
+                    const distance = Number(projection.distance);
+                    if (!(distance > onBoundaryDistance && distance <= nearDistance)) continue;
+                    const record = {
+                        polygonIndex: p,
+                        terrainType: polygon.type,
+                        ringKind: rings[r].kind,
+                        ringIndex: rings[r].ringIndex,
+                        holeIndex: rings[r].holeIndex,
+                        pointIndex: i,
+                        distance,
+                        edgeIndex: Number(projection.edgeIndex),
+                        point: this.getGroundTerrainDiagnosticRingPoint(point),
+                        projectedPoint: this.getGroundTerrainDiagnosticRingPoint(projection.point),
+                        repairKey: this.getGroundTerrainRepairPointKey(point),
+                        projectedRepairKey: this.getGroundTerrainRepairPointKey(projection.point)
+                    };
+                    if (driftPoints.length < maxPoints) driftPoints.push(record);
+                    ringDrift.push(record);
+                }
+                for (let i = 0; i < ring.length; i++) {
+                    const a = ring[i];
+                    const b = ring[(i + 1) % ring.length];
+                    const projectionA = this.projectGroundTerrainPointToSectionBoundary(a, sectionRing, nearDistance);
+                    const projectionB = this.projectGroundTerrainPointToSectionBoundary(b, sectionRing, nearDistance);
+                    if (!projectionA || !projectionB) continue;
+                    const distanceA = Number(projectionA.distance);
+                    const distanceB = Number(projectionB.distance);
+                    if (!(distanceA > onBoundaryDistance || distanceB > onBoundaryDistance)) continue;
+                    if (Number(projectionA.edgeIndex) !== Number(projectionB.edgeIndex)) continue;
+                    if (driftSegments.length >= maxPoints) continue;
+                    driftSegments.push({
+                        polygonIndex: p,
+                        terrainType: polygon.type,
+                        ringKind: rings[r].kind,
+                        ringIndex: rings[r].ringIndex,
+                        segmentIndex: i,
+                        edgeIndex: Number(projectionA.edgeIndex),
+                        distanceA,
+                        distanceB,
+                        a: this.getGroundTerrainDiagnosticRingPoint(a),
+                        b: this.getGroundTerrainDiagnosticRingPoint(b),
+                        projectedA: this.getGroundTerrainDiagnosticRingPoint(projectionA.point),
+                        projectedB: this.getGroundTerrainDiagnosticRingPoint(projectionB.point)
+                    });
+                }
+                if (ringDrift.length > 0) {
+                    ringRecords.push({
+                        polygonIndex: p,
+                        terrainType: polygon.type,
+                        ringKind: rings[r].kind,
+                        ringIndex: rings[r].ringIndex,
+                        driftPointCount: ringDrift.length,
+                        ring: this.getGroundTerrainRingGeometryDiagnostic(ring, sectionRing)
+                    });
+                }
+            }
+        }
+        return {
+            sectionKey,
+            polygonCount: source.length,
+            nearDistance,
+            onBoundaryDistance,
+            driftPointCount: driftPoints.length,
+            driftSegmentCount: driftSegments.length,
+            driftPoints,
+            driftSegments,
+            driftRings: ringRecords
+        };
+    }
+
+    getGroundTerrainSectionSplitWriteDiagnostics(sectionKey, records, sectionRing, options = {}) {
+        const source = Array.isArray(records) ? records : [];
+        const nearDistance = Number.isFinite(options && options.nearDistance)
+            ? Math.max(0, Number(options.nearDistance))
+            : Math.max(this.getGroundTerrainRepairMinimumEdgeLength() * 8, 1);
+        const onBoundaryDistance = Number.isFinite(options && options.onBoundaryDistance)
+            ? Math.max(0, Number(options.onBoundaryDistance))
+            : this.getGroundTerrainVertexRepairEpsilon();
+        const maxSegments = Number.isFinite(options && options.maxSegments) ? Math.max(1, Number(options.maxSegments)) : 96;
+        const suspectSegments = [];
+        const suspectRings = [];
+        for (let recordIndex = 0; recordIndex < source.length; recordIndex++) {
+            const record = source[recordIndex];
+            const polygon = record && record.polygon ? record.polygon : null;
+            if (!polygon || typeof polygon.type !== "string") continue;
+            const rings = [{ kind: "outer", points: polygon.points, ringIndex: 0 }];
+            const holes = Array.isArray(polygon.holes) ? polygon.holes : [];
+            for (let h = 0; h < holes.length; h++) rings.push({ kind: "hole", points: holes[h], ringIndex: h + 1, holeIndex: h });
+            for (let r = 0; r < rings.length; r++) {
+                const ring = Array.isArray(rings[r].points) ? rings[r].points : [];
+                const ringSegments = [];
+                for (let i = 0; i < ring.length; i++) {
+                    const a = ring[i];
+                    const b = ring[(i + 1) % ring.length];
+                    const projectionA = this.projectGroundTerrainPointToSectionBoundary(a, sectionRing, nearDistance);
+                    const projectionB = this.projectGroundTerrainPointToSectionBoundary(b, sectionRing, nearDistance);
+                    if (!projectionA || !projectionB) continue;
+                    const edgeIndexA = Number(projectionA.edgeIndex);
+                    const edgeIndexB = Number(projectionB.edgeIndex);
+                    if (edgeIndexA !== edgeIndexB) continue;
+                    const distanceA = Number(projectionA.distance);
+                    const distanceB = Number(projectionB.distance);
+                    if (!(distanceA > onBoundaryDistance || distanceB > onBoundaryDistance)) continue;
+                    const projectedLength = Math.hypot(
+                        Number(projectionB.point.x) - Number(projectionA.point.x),
+                        Number(projectionB.point.y) - Number(projectionA.point.y)
+                    );
+                    if (!(projectedLength > onBoundaryDistance)) continue;
+                    const segmentLength = Math.hypot(
+                        Number(b && b.x) - Number(a && a.x),
+                        Number(b && b.y) - Number(a && a.y)
+                    );
+                    const diagnostic = {
+                        recordIndex,
+                        sectionKey,
+                        sourcePolygonIndex: Number.isFinite(record.sourcePolygonIndex) ? Number(record.sourcePolygonIndex) : null,
+                        splitPolygonIndex: Number.isFinite(record.splitPolygonIndex) ? Number(record.splitPolygonIndex) : null,
+                        terrainType: polygon.type,
+                        ringKind: rings[r].kind,
+                        ringIndex: rings[r].ringIndex,
+                        holeIndex: rings[r].holeIndex,
+                        segmentIndex: i,
+                        sectionEdgeIndex: edgeIndexA,
+                        distanceA,
+                        distanceB,
+                        segmentLength,
+                        projectedLength,
+                        a: this.getGroundTerrainDiagnosticRingPoint(a),
+                        b: this.getGroundTerrainDiagnosticRingPoint(b),
+                        projectedA: this.getGroundTerrainDiagnosticRingPoint(projectionA.point),
+                        projectedB: this.getGroundTerrainDiagnosticRingPoint(projectionB.point),
+                        repairKeyA: this.getGroundTerrainRepairPointKey(a),
+                        repairKeyB: this.getGroundTerrainRepairPointKey(b),
+                        projectedRepairKeyA: this.getGroundTerrainRepairPointKey(projectionA.point),
+                        projectedRepairKeyB: this.getGroundTerrainRepairPointKey(projectionB.point)
+                    };
+                    if (suspectSegments.length < maxSegments) suspectSegments.push(diagnostic);
+                    ringSegments.push(diagnostic);
+                }
+                if (ringSegments.length > 0) {
+                    suspectRings.push({
+                        recordIndex,
+                        sourcePolygonIndex: Number.isFinite(record.sourcePolygonIndex) ? Number(record.sourcePolygonIndex) : null,
+                        splitPolygonIndex: Number.isFinite(record.splitPolygonIndex) ? Number(record.splitPolygonIndex) : null,
+                        terrainType: polygon.type,
+                        ringKind: rings[r].kind,
+                        ringIndex: rings[r].ringIndex,
+                        suspectSegmentCount: ringSegments.length,
+                        ring: this.getGroundTerrainRingGeometryDiagnostic(ring, sectionRing)
+                    });
+                }
+            }
+        }
+        return {
+            sectionKey,
+            recordCount: source.length,
+            nearDistance,
+            onBoundaryDistance,
+            suspectSegmentCount: suspectSegments.length,
+            suspectSegments,
+            suspectRings
+        };
+    }
+
+    groundTerrainSegmentsIntersectForDiagnostics(a, b, c, d, eps = 1e-9) {
+        const ax = Number(a && a.x);
+        const ay = Number(a && a.y);
+        const bx = Number(b && b.x);
+        const by = Number(b && b.y);
+        const cx = Number(c && c.x);
+        const cy = Number(c && c.y);
+        const dx = Number(d && d.x);
+        const dy = Number(d && d.y);
+        if (![ax, ay, bx, by, cx, cy, dx, dy].every(Number.isFinite)) return false;
+        const orient = (px, py, qx, qy, rx, ry) => ((qx - px) * (ry - py)) - ((qy - py) * (rx - px));
+        const o1 = orient(ax, ay, bx, by, cx, cy);
+        const o2 = orient(ax, ay, bx, by, dx, dy);
+        const o3 = orient(cx, cy, dx, dy, ax, ay);
+        const o4 = orient(cx, cy, dx, dy, bx, by);
+        if (o1 * o2 < -eps && o3 * o4 < -eps) return true;
+        return pointOnSegment2D(ax, ay, cx, cy, dx, dy, eps) ||
+            pointOnSegment2D(bx, by, cx, cy, dx, dy, eps) ||
+            pointOnSegment2D(cx, cy, ax, ay, bx, by, eps) ||
+            pointOnSegment2D(dx, dy, ax, ay, bx, by, eps);
+    }
+
+    groundTerrainRingCrossesSectionBoundaryForDiagnostics(points, sectionRing) {
+        const ring = Array.isArray(points) ? points : [];
+        const boundary = Array.isArray(sectionRing) ? sectionRing : [];
+        if (ring.length < 2 || boundary.length < 3) return false;
+        for (let i = 0; i < ring.length; i++) {
+            const a = ring[i];
+            const b = ring[(i + 1) % ring.length];
+            for (let e = 0; e < boundary.length; e++) {
+                const c = boundary[e];
+                const d = boundary[(e + 1) % boundary.length];
+                if (this.groundTerrainSegmentsIntersectForDiagnostics(a, b, c, d)) return true;
+            }
+        }
+        return false;
+    }
+
+    groundTerrainPolygonCrossesSectionBoundaryForDiagnostics(polygon, sectionRing) {
+        if (!polygon || !this.groundTerrainRingCrossesSectionBoundaryForDiagnostics(polygon.points, sectionRing)) {
+            const holes = Array.isArray(polygon && polygon.holes) ? polygon.holes : [];
+            for (let h = 0; h < holes.length; h++) {
+                if (this.groundTerrainRingCrossesSectionBoundaryForDiagnostics(holes[h], sectionRing)) return true;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    logGroundTerrainDiagnostic(label, message, diagnostic) {
+        if (typeof console !== "undefined" && console && typeof console.error === "function") {
+            console.error(label, {
+                message,
+                diagnostic
+            });
+        }
+    }
+
+    shouldLogGroundTerrainSectionBoundaryDriftDiagnostics() {
+        const root = (typeof globalThis !== "undefined") ? globalThis : null;
+        return this._debugTerrainSectionBoundaryDrift === true ||
+            !!(root && root.DEBUG_TERRAIN_SECTION_BOUNDARY_DRIFT === true);
+    }
+
+    recordGroundTerrainPatchDiagnostic(record) {
+        const hook = this && typeof this._debugGroundTerrainPatchDiagnosticHook === "function"
+            ? this._debugGroundTerrainPatchDiagnosticHook
+            : null;
+        if (!hook) return;
+        hook(record);
+    }
+
+    recordGroundTerrainPatchPolygonStageDiagnostic(stage, polygons, sources) {
+        const hook = this && typeof this._debugGroundTerrainPatchDiagnosticHook === "function"
+            ? this._debugGroundTerrainPatchDiagnosticHook
+            : null;
+        if (!hook) return;
+        const sourceList = Array.isArray(sources) ? sources : [];
+        const polygonList = Array.isArray(polygons) ? polygons : [];
+        for (let s = 0; s < sourceList.length; s++) {
+            const source = sourceList[s];
+            if (!source || !source.asset || typeof source.key !== "string") continue;
+            const sectionRing = this.getGroundTerrainSectionClipPolygonPoints(source.key, source.asset);
+            for (let p = 0; p < polygonList.length; p++) {
+                const polygon = polygonList[p];
+                if (!polygon || typeof polygon.type !== "string" || !Array.isArray(polygon.points)) continue;
+                if (!this.groundTerrainPolygonCrossesSectionBoundaryForDiagnostics(polygon, sectionRing)) continue;
+                hook({
+                    stage,
+                    sectionKey: source.key,
+                    polygonIndex: p,
+                    terrainType: polygon.type,
+                    ring: this.getGroundTerrainRingGeometryDiagnostic(polygon.points, sectionRing)
+                });
+            }
+        }
+    }
+
+    groundTerrainRingSurvivesRepairLatticeSnapping(points) {
+        const out = this.getGroundTerrainRepairSnappedRingPoints(points);
+        return out.length >= 3 && Math.abs(this.getPolygonSignedArea2D(out)) > 1e-9;
+    }
+
+    groundTerrainRingSurvivesRepairGridSnapping(points) {
+        return this.groundTerrainRingSurvivesRepairLatticeSnapping(points);
     }
 
     groundTerrainPointTouchesHexBoundary(point, node, eps = this.getGroundTerrainVertexRepairEpsilon()) {
@@ -10043,61 +10971,7 @@ class GameMap {
     }
 
     dedupeGroundTerrainClosedRingPoints(points) {
-        const source = this.dedupeGroundTerrainPathPoints(points);
-        const out = [];
-        let previousKey = "";
-        for (let i = 0; i < source.length; i++) {
-            const key = this.getGroundTerrainRepairPointKey(source[i]);
-            if (key === previousKey) continue;
-            out.push(source[i]);
-            previousKey = key;
-        }
-        if (out.length > 1) {
-            const firstKey = this.getGroundTerrainRepairPointKey(out[0]);
-            const lastKey = this.getGroundTerrainRepairPointKey(out[out.length - 1]);
-            if (firstKey === lastKey) out.pop();
-        }
-        let changed = true;
-        const eps = this.getGroundTerrainVertexRepairEpsilon();
-        const nearDuplicateDistanceSq = eps * eps * 4.5;
-        while (changed && out.length > 3) {
-            changed = false;
-            for (let i = 0; i < out.length; i++) {
-                const prev = out[(i + out.length - 1) % out.length];
-                const cur = out[i];
-                const next = out[(i + 1) % out.length];
-                const prevKey = this.getGroundTerrainRepairPointKey(prev);
-                const nextKey = this.getGroundTerrainRepairPointKey(next);
-                if (prevKey === nextKey) {
-                    out.splice(i, 1);
-                    changed = true;
-                    break;
-                }
-                const prevDx = Number(cur.x) - Number(prev.x);
-                const prevDy = Number(cur.y) - Number(prev.y);
-                const nextDx = Number(next.x) - Number(cur.x);
-                const nextDy = Number(next.y) - Number(cur.y);
-                const nearPrev = (prevDx * prevDx) + (prevDy * prevDy) <= nearDuplicateDistanceSq;
-                const nearNext = (nextDx * nextDx) + (nextDy * nextDy) <= nearDuplicateDistanceSq;
-                if (!nearPrev && !nearNext) continue;
-                if (nearPrev) {
-                    out[(i + out.length - 1) % out.length] = this.getGroundTerrainCanonicalRepairPoint({
-                        x: (Number(prev.x) + Number(cur.x)) * 0.5,
-                        y: (Number(prev.y) + Number(cur.y)) * 0.5
-                    });
-                    out.splice(i, 1);
-                } else if (nearNext) {
-                    out[i] = this.getGroundTerrainCanonicalRepairPoint({
-                        x: (Number(cur.x) + Number(next.x)) * 0.5,
-                        y: (Number(cur.y) + Number(next.y)) * 0.5
-                    });
-                    out.splice((i + 1) % out.length, 1);
-                }
-                changed = true;
-                break;
-            }
-        }
-        return out;
+        return this.getGroundTerrainPolicyRingPoints(points);
     }
 
     simplifyGroundTerrainPathPoints(points) {
@@ -11695,14 +12569,7 @@ class GameMap {
             const next = holes.length > 0
                 ? { type: polygon.type, points: polygon.points, holes }
                 : { type: polygon.type, points: polygon.points };
-            if (polygon._groundTerrainPreserveBoundaryVertices === true) {
-                Object.defineProperty(next, "_groundTerrainPreserveBoundaryVertices", {
-                    value: true,
-                    enumerable: false,
-                    configurable: true
-                });
-            }
-            out.push(next);
+            out.push(this.copyGroundTerrainPolygonRuntimeMetadata(polygon, next));
         }
         return this.sanitizeGroundTerrainPatchPolygons(out);
     }
@@ -11785,14 +12652,7 @@ class GameMap {
             const next = nextHoles.length > 0
                 ? { type: polygon.type, points: polygon.points, holes: nextHoles }
                 : { type: polygon.type, points: polygon.points };
-            if (polygon._groundTerrainPreserveBoundaryVertices === true) {
-                Object.defineProperty(next, "_groundTerrainPreserveBoundaryVertices", {
-                    value: true,
-                    enumerable: false,
-                    configurable: true
-                });
-            }
-            out.push(next);
+            out.push(this.copyGroundTerrainPolygonRuntimeMetadata(polygon, next));
         }
         return changed ? this.sanitizeGroundTerrainPatchPolygons(out) : source;
     }
@@ -11865,14 +12725,7 @@ class GameMap {
             const normalized = holes.length > 0
                 ? { type: polygon.type, points, holes }
                 : { type: polygon.type, points };
-            if (polygon._groundTerrainPreserveBoundaryVertices === true) {
-                Object.defineProperty(normalized, "_groundTerrainPreserveBoundaryVertices", {
-                    value: true,
-                    enumerable: false,
-                    configurable: true
-                });
-            }
-            return normalized;
+            return this.copyGroundTerrainPolygonRuntimeMetadata(polygon, normalized);
         });
         for (let p = 0; p < out.length; p++) {
             const polygon = out[p];
@@ -11913,14 +12766,10 @@ class GameMap {
                     addHole(directMatches[m].points);
                 }
             }
-            out[p] = { type: polygon.type, points: polygon.points, holes: nextHoles };
-            if (polygon._groundTerrainPreserveBoundaryVertices === true) {
-                Object.defineProperty(out[p], "_groundTerrainPreserveBoundaryVertices", {
-                    value: true,
-                    enumerable: false,
-                    configurable: true
-                });
-            }
+            out[p] = this.copyGroundTerrainPolygonRuntimeMetadata(
+                polygon,
+                { type: polygon.type, points: polygon.points, holes: nextHoles }
+            );
         }
         return out;
     }
@@ -11989,7 +12838,7 @@ class GameMap {
             const entry = candidates[i];
             const polygon = entry && entry.polygon ? entry.polygon : null;
             if (!polygon || entry.terrainType !== "water") continue;
-            if (this.terrainPolygonContainsPoint(polygon, px, py)) return true;
+            if (this.groundTerrainPolygonCoversPoint(polygon, px, py)) return true;
         }
         return false;
     }
@@ -12222,6 +13071,33 @@ class GameMap {
         return out;
     }
 
+    isGroundBridgeRoadCoveringHitbox(hitbox, roads = null) {
+        const cx = Number(hitbox && hitbox.x);
+        const cy = Number(hitbox && hitbox.y);
+        const radius = Number(hitbox && hitbox.radius);
+        if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(radius) || radius < 0) {
+            throw new Error("bridge-covered terrain hitbox query requires a finite circle hitbox");
+        }
+        const candidates = Array.isArray(roads)
+            ? roads
+            : this.collectGroundBridgeRoadsInBounds({
+                minX: cx - radius,
+                minY: cy - radius,
+                maxX: cx + radius,
+                maxY: cy + radius
+            });
+        for (let i = 0; i < candidates.length; i++) {
+            const entry = candidates[i];
+            const road = entry && entry.road ? entry.road : entry;
+            const polygon = entry && Array.isArray(entry.polygon)
+                ? entry.polygon
+                : this.getGroundBridgeRoadPolygon(road);
+            if (!polygon || polygon.length < 3) continue;
+            if (pointInPolygon2D(cx, cy, polygon)) return true;
+        }
+        return false;
+    }
+
     collectGroundBridgeRoadsAtPoint(x, y, roads = null) {
         const px = Number(x);
         const py = Number(y);
@@ -12277,7 +13153,24 @@ class GameMap {
         const climbDepth = Number.isFinite(Number(options && options.maxClimbSubmergedDepth))
             ? Math.max(0, Number(options.maxClimbSubmergedDepth))
             : 0.25;
-        if (!previous && !allowExistingBridgePosition && submergedDepth > climbDepth) return null;
+        let enteredFromBridgeApproach = false;
+        if (!previous && !allowExistingBridgePosition && submergedDepth > climbDepth && actor) {
+            const previousX = Number(actor.prevX);
+            const previousY = Number(actor.prevY);
+            if (Number.isFinite(previousX) && Number.isFinite(previousY)) {
+                const previousBridge = this.getGroundBridgeRoadAtPoint(previousX, previousY, options && options.bridgeRoads);
+                if (previousBridge) {
+                    enteredFromBridgeApproach = true;
+                } else {
+                    const previousImmersion = this.getGroundTerrainWaterImmersionAtPoint(previousX, previousY, options);
+                    const previousDepth = previousImmersion && previousImmersion.inWater === true && Number.isFinite(Number(previousImmersion.submergedDepth))
+                        ? Math.max(0, Number(previousImmersion.submergedDepth))
+                        : 0;
+                    enteredFromBridgeApproach = !previousImmersion || previousImmersion.inWater !== true || previousDepth <= climbDepth;
+                }
+            }
+        }
+        if (!previous && !allowExistingBridgePosition && submergedDepth > climbDepth && !enteredFromBridgeApproach) return null;
         return {
             onBridge: true,
             road: bridge.road,
@@ -12663,11 +13556,12 @@ class GameMap {
             const entry = candidates[i];
             const polygon = entry && entry.polygon ? entry.polygon : null;
             if (!polygon || entry.terrainType !== "water") continue;
-            if (!this.terrainPolygonContainsPoint(polygon, px, py)) continue;
+            const strictlyInsidePolygon = this.terrainPolygonContainsPoint(polygon, px, py);
+            if (!strictlyInsidePolygon && !this.groundTerrainPolygonCoversPoint(polygon, px, py)) continue;
             const tileDistance = this.getGroundTerrainWaterDistanceToNearestNonWaterTile(px, py, options);
-            const distanceSq = Number.isFinite(tileDistance)
+            const distanceSq = strictlyInsidePolygon && Number.isFinite(tileDistance)
                 ? tileDistance * tileDistance
-                : Infinity;
+                : this.getGroundTerrainWaterShoreDistanceSqForPolygon(px, py, polygon, options);
             if (!bestPolygon || distanceSq < bestDistanceSq) {
                 bestDistanceSq = distanceSq;
                 bestPolygon = polygon;
@@ -12924,11 +13818,124 @@ class GameMap {
         }];
     }
 
-    collectGroundTerrainPatchSectionKeysForNode(node, fallbackSectionKey = "") {
+    normalizeGroundTerrainSectionSourcePolygons(sectionKey, asset, polygons) {
+        const source = Array.isArray(polygons) ? polygons : [];
+        const sectionRing = this.getGroundTerrainSectionClipPolygonPoints(sectionKey, asset);
+        const out = [];
+        for (let index = 0; index < source.length; index++) {
+            const polygon = source[index];
+            const type = polygon && typeof polygon.type === "string" && polygon.type.length > 0
+                ? polygon.type
+                : "";
+            if (!type) {
+                throw new Error(`terrain section ${sectionKey || "(unknown)"} polygon ${index} is missing a terrain type`);
+            }
+            this.getGroundTerrainTextureIdForType(type);
+            const points = this.getGroundTerrainSectionBoundaryProtectedRingPoints(
+                polygon.points,
+                sectionRing,
+                `terrain section ${sectionKey || "(unknown)"} polygon ${index} ${type} outer ring`
+            );
+            if (points.length < 3) {
+                const message = `terrain section ${sectionKey || "(unknown)"} polygon ${index} for ${type} has fewer than three points`;
+                this.throwGroundTerrainSectionRingDiagnostic(message, {
+                    sectionKey,
+                    polygonIndex: index,
+                    terrainType: type,
+                    ringKind: "outer",
+                    sourceRing: this.getGroundTerrainRingGeometryDiagnostic(polygon.points, sectionRing),
+                    normalizedRing: this.getGroundTerrainRingGeometryDiagnostic(points, sectionRing),
+                    sourceHoles: Array.isArray(polygon.holes) ? polygon.holes.map(hole => this.getGroundTerrainRingGeometryDiagnostic(hole, sectionRing)) : [],
+                    sectionRing: this.getGroundTerrainRingGeometryDiagnostic(sectionRing)
+                });
+            }
+            if (Math.abs(this.getPolygonSignedArea2D(points)) <= 1e-9) {
+                const message = `terrain section ${sectionKey || "(unknown)"} polygon ${index} for ${type} has a degenerate outer ring`;
+                this.throwGroundTerrainSectionRingDiagnostic(message, {
+                    sectionKey,
+                    polygonIndex: index,
+                    terrainType: type,
+                    ringKind: "outer",
+                    sourceRing: this.getGroundTerrainRingGeometryDiagnostic(polygon.points, sectionRing),
+                    normalizedRing: this.getGroundTerrainRingGeometryDiagnostic(points, sectionRing),
+                    sourceHoles: Array.isArray(polygon.holes) ? polygon.holes.map(hole => this.getGroundTerrainRingGeometryDiagnostic(hole, sectionRing)) : [],
+                    sectionRing: this.getGroundTerrainRingGeometryDiagnostic(sectionRing)
+                });
+            }
+            const holes = [];
+            const sourceHoles = Array.isArray(polygon.holes) ? polygon.holes : [];
+            for (let h = 0; h < sourceHoles.length; h++) {
+                const holePoints = this.getGroundTerrainSectionBoundaryProtectedRingPoints(
+                    sourceHoles[h],
+                    sectionRing,
+                    `terrain section ${sectionKey || "(unknown)"} polygon ${index} ${type} hole ${h}`
+                );
+                if (holePoints.length < 3) {
+                    const message = `terrain section ${sectionKey || "(unknown)"} polygon ${index} for ${type} has a hole ${h} with fewer than three points`;
+                    this.throwGroundTerrainSectionRingDiagnostic(message, {
+                        sectionKey,
+                        polygonIndex: index,
+                        terrainType: type,
+                        ringKind: "hole",
+                        holeIndex: h,
+                        sourceOuter: this.getGroundTerrainRingGeometryDiagnostic(polygon.points, sectionRing),
+                        normalizedOuter: this.getGroundTerrainRingGeometryDiagnostic(points, sectionRing),
+                        sourceRing: this.getGroundTerrainRingGeometryDiagnostic(sourceHoles[h], sectionRing),
+                        normalizedRing: this.getGroundTerrainRingGeometryDiagnostic(holePoints, sectionRing),
+                        sectionRing: this.getGroundTerrainRingGeometryDiagnostic(sectionRing)
+                    });
+                }
+                if (Math.abs(this.getPolygonSignedArea2D(holePoints)) <= 1e-9) {
+                    const message = `terrain section ${sectionKey || "(unknown)"} polygon ${index} for ${type} has a degenerate hole ${h}`;
+                    this.throwGroundTerrainSectionRingDiagnostic(message, {
+                        sectionKey,
+                        polygonIndex: index,
+                        terrainType: type,
+                        ringKind: "hole",
+                        holeIndex: h,
+                        sourceOuter: this.getGroundTerrainRingGeometryDiagnostic(polygon.points, sectionRing),
+                        normalizedOuter: this.getGroundTerrainRingGeometryDiagnostic(points, sectionRing),
+                        sourceRing: this.getGroundTerrainRingGeometryDiagnostic(sourceHoles[h], sectionRing),
+                        normalizedRing: this.getGroundTerrainRingGeometryDiagnostic(holePoints, sectionRing),
+                        sectionRing: this.getGroundTerrainRingGeometryDiagnostic(sectionRing)
+                    });
+                }
+                holes.push(holePoints);
+            }
+            out.push(this.markGroundTerrainPolygonSectionBoundaryEdges(
+                holes.length > 0 ? { type, points, holes } : { type, points },
+                sectionKey,
+                sectionRing
+            ));
+        }
+        return out;
+    }
+
+    normalizeGroundTerrainPatchSourcePolygons(source) {
+        if (
+            source &&
+            source.kind === "section" &&
+            typeof source.key === "string" &&
+            source.asset
+        ) {
+            return this.normalizeGroundTerrainSectionSourcePolygons(
+                source.key,
+                source.asset,
+                Array.isArray(source.polygons) ? source.polygons : []
+            );
+        }
+        return this.normalizeGroundTerrainPolygons(source && Array.isArray(source.polygons) ? source.polygons : []);
+    }
+
+    collectGroundTerrainPatchSectionKeysForNode(node, fallbackSectionKey = "", radius = 2) {
         const keys = new Set();
         const fallback = typeof fallbackSectionKey === "string" ? fallbackSectionKey : "";
         if (fallback) keys.add(fallback);
-        const records = this.collectGroundTerrainDeterministicBubbleNodes(node, 2);
+        const rawRadius = Number(radius);
+        if (!Number.isFinite(rawRadius) || rawRadius < 0) {
+            throw new Error("terrain local patch section collection requires a finite bubble radius");
+        }
+        const records = this.collectGroundTerrainDeterministicBubbleNodes(node, Math.round(rawRadius));
         for (let i = 0; i < records.length; i++) {
             const localNode = records[i] && records[i].node ? records[i].node : null;
             const key = typeof (localNode && localNode._prototypeSectionKey) === "string" && localNode._prototypeSectionKey.length > 0
@@ -12936,18 +13943,14 @@ class GameMap {
                 : (typeof (localNode && localNode.ownerSectionKey) === "string" ? localNode.ownerSectionKey : "");
             if (key) keys.add(key);
         }
-        if (keys.size > 3) {
-            throw new Error(`terrain local patch touched ${keys.size} sections; expected at most 3`);
-        }
         return keys;
     }
 
-    getGroundTerrainSectionClipGeometry(sectionKey, asset) {
+    getGroundTerrainSectionPolygonPoints(sectionKey, asset) {
         const key = typeof sectionKey === "string" ? sectionKey : "";
         const explicitPolygon = Array.isArray(asset && asset.sectionPolygon) ? asset.sectionPolygon : null;
         if (explicitPolygon && explicitPolygon.length >= 3) {
-            const ring = polygonToClipRing2D(explicitPolygon);
-            if (ring) return [[ring]];
+            return explicitPolygon;
         }
         const state = this._prototypeSectionState || null;
         const section = (
@@ -12976,7 +13979,26 @@ class GameMap {
             state &&
             state.basis
         ) ? geometryApi.getSectionHexagonCorners(centerAxial, state.basis) : null;
-        const ring = polygonToClipRing2D(polygon);
+        if (Array.isArray(polygon) && polygon.length >= 3) return polygon;
+        throw new Error(`terrain local patch cannot split section ${key || "(unknown)"} without section polygon geometry`);
+    }
+
+    getGroundTerrainSectionClipPolygonPoints(sectionKey, asset) {
+        const points = this.simplifyGroundTerrainPolygonPoints(
+            this.getGroundTerrainSectionPolygonPoints(sectionKey, asset)
+        );
+        if (points.length < 3) {
+            throw new Error(`terrain section ${sectionKey || "(unknown)"} clip polygon collapsed below three points`);
+        }
+        if (Math.abs(this.getPolygonSignedArea2D(points)) <= 1e-9) {
+            throw new Error(`terrain section ${sectionKey || "(unknown)"} clip polygon is degenerate`);
+        }
+        return points;
+    }
+
+    getGroundTerrainSectionClipGeometry(sectionKey, asset) {
+        const key = typeof sectionKey === "string" ? sectionKey : "";
+        const ring = polygonToClipRing2D(this.getGroundTerrainSectionClipPolygonPoints(key, asset));
         if (ring) return [[ring]];
         throw new Error(`terrain local patch cannot split section ${key || "(unknown)"} without section polygon geometry`);
     }
@@ -13352,23 +14374,28 @@ class GameMap {
         return records;
     }
 
-    groundTerrainDeterministicClipGeometryToPolygons(type, geometry) {
+    groundTerrainDeterministicClipGeometryToPolygons(type, geometry, options = {}) {
         this.getGroundTerrainTextureIdForType(type);
         if (clipGeometryIsEmpty2D(geometry)) return [];
+        const sectionRings = Array.isArray(options && options.sectionRings) ? options.sectionRings : [];
         const out = [];
         for (let p = 0; p < geometry.length; p++) {
             const polygon = geometry[p];
             if (!Array.isArray(polygon) || !Array.isArray(polygon[0])) {
                 throw new Error(`terrain deterministic clipping produced malformed geometry for ${type}`);
             }
-            const points = this.dedupeGroundTerrainClosedRingPoints(
-                clipRingToPolygonPoints2D(polygon[0], `terrain deterministic ${type} ring`)
+            const points = this.getGroundTerrainSectionBoundaryProtectedPolicyRingPoints(
+                clipRingToPolygonPoints2D(polygon[0], `terrain deterministic ${type} ring`),
+                sectionRings,
+                `terrain deterministic ${type} ring`
             );
             if (points.length < 3 || Math.abs(this.getPolygonSignedArea2D(points)) <= 1e-9) continue;
             const holes = [];
             for (let h = 1; h < polygon.length; h++) {
-                const holePoints = this.dedupeGroundTerrainClosedRingPoints(
-                    clipRingToPolygonPoints2D(polygon[h], `terrain deterministic ${type} hole`)
+                const holePoints = this.getGroundTerrainSectionBoundaryProtectedPolicyRingPoints(
+                    clipRingToPolygonPoints2D(polygon[h], `terrain deterministic ${type} hole`),
+                    sectionRings,
+                    `terrain deterministic ${type} hole`
                 );
                 if (holePoints.length < 3 || Math.abs(this.getPolygonSignedArea2D(holePoints)) <= 1e-9) continue;
                 holes.push(holePoints);
@@ -13376,6 +14403,51 @@ class GameMap {
             out.push(this.markGroundTerrainPolygonPreserveBoundaryVertices(
                 holes.length > 0 ? { type, points, holes } : { type, points }
             ));
+        }
+        return out;
+    }
+
+    groundTerrainSectionSplitClipGeometryToPolygons(type, geometry, options = {}) {
+        this.getGroundTerrainTextureIdForType(type);
+        if (clipGeometryIsEmpty2D(geometry)) return [];
+        const sectionKey = options && typeof options.sectionKey === "string" ? options.sectionKey : "";
+        const sectionRing = options && Array.isArray(options.sectionRing) ? options.sectionRing : null;
+        const out = [];
+        for (let p = 0; p < geometry.length; p++) {
+            const polygon = geometry[p];
+            if (!Array.isArray(polygon) || !Array.isArray(polygon[0])) {
+                throw new Error(`terrain section split produced malformed geometry for ${type}`);
+            }
+            const rawPoints = this.simplifyGroundTerrainPolygonPoints(
+                clipRingToPolygonPoints2D(polygon[0], `terrain section split ${type} ring`)
+            );
+            const points = sectionRing
+                ? this.getGroundTerrainSectionBoundaryProtectedRingPoints(
+                    rawPoints,
+                    sectionRing,
+                    `terrain section split ${sectionKey || "(unknown)"} ${type} ring`
+                )
+                : rawPoints;
+            if (points.length < 3 || Math.abs(this.getPolygonSignedArea2D(points)) <= 1e-9) continue;
+            const holes = [];
+            for (let h = 1; h < polygon.length; h++) {
+                const rawHolePoints = this.simplifyGroundTerrainPolygonPoints(
+                    clipRingToPolygonPoints2D(polygon[h], `terrain section split ${type} hole`)
+                );
+                const holePoints = sectionRing
+                    ? this.getGroundTerrainSectionBoundaryProtectedRingPoints(
+                        rawHolePoints,
+                        sectionRing,
+                        `terrain section split ${sectionKey || "(unknown)"} ${type} hole ${h - 1}`
+                    )
+                    : rawHolePoints;
+                if (holePoints.length < 3 || Math.abs(this.getPolygonSignedArea2D(holePoints)) <= 1e-9) continue;
+                holes.push(holePoints);
+            }
+            const splitPolygon = holes.length > 0 ? { type, points, holes } : { type, points };
+            out.push(sectionRing
+                ? this.markGroundTerrainPolygonSectionBoundaryEdges(splitPolygon, sectionKey, sectionRing)
+                : this.markGroundTerrainPolygonPreserveBoundaryVertices(splitPolygon));
         }
         return out;
     }
@@ -13402,9 +14474,9 @@ class GameMap {
         return { x, y };
     }
 
-    getGroundTerrainDeterministicTypeForRecord(record, editedNodeKey, nextType, sourceRecords = []) {
+    getGroundTerrainDeterministicTypeForRecord(record, editedNodeKey, nextType, sourceRecords = [], editedNodeKeys = null) {
         const key = this.getGroundTerrainNodeKey(record.node);
-        if (key === editedNodeKey) return nextType;
+        if (key === editedNodeKey || (editedNodeKeys && editedNodeKeys.has(key))) return nextType;
         const tileType = this.getGroundTerrainTypeForNode(record.node);
         if (tileType !== "grass") return tileType;
         const center = this.getGroundTerrainDeterministicRecordCenter(record);
@@ -13483,18 +14555,29 @@ class GameMap {
         return out;
     }
 
-    buildGroundTerrainDeterministicBubblePatch(node, terrainType, sourceRecords = []) {
+    buildGroundTerrainDeterministicBubblePatch(node, terrainType, sourceRecords = [], options = {}) {
         const nextType = (typeof terrainType === "string" && terrainType.length > 0) ? terrainType : "grass";
         this.getGroundTerrainTextureIdForType(nextType, node.xindex, node.yindex);
         const solver = this.getGroundTerrainDeterministicSolver();
-        const bubbleRecords = this.collectGroundTerrainDeterministicBubbleNodes(node, 2);
+        const repairRadius = Number.isFinite(Number(options && options.repairRadius))
+            ? Math.max(0, Math.round(Number(options.repairRadius)))
+            : 1;
+        const contextRadius = Number.isFinite(Number(options && options.contextRadius))
+            ? Math.max(repairRadius + 1, Math.round(Number(options.contextRadius)))
+            : repairRadius + 1;
+        const bubbleRecords = this.collectGroundTerrainDeterministicBubbleNodes(node, contextRadius);
         const editedNodeKey = this.getGroundTerrainNodeKey(node);
+        const editedNodeKeys = new Set([editedNodeKey]);
+        const editedNodes = Array.isArray(options && options.editedNodes) ? options.editedNodes : [];
+        for (let i = 0; i < editedNodes.length; i++) {
+            if (editedNodes[i]) editedNodeKeys.add(this.getGroundTerrainNodeKey(editedNodes[i]));
+        }
         const coordKey = (coord) => `${coord.q},${coord.r}`;
         const innerRecords = bubbleRecords.filter(record => Math.max(
             Math.abs(record.q),
             Math.abs(record.r),
             Math.abs(-record.q - record.r)
-        ) <= 1);
+        ) <= repairRadius);
         const repairNodes = innerRecords.map(record => record.node);
         const repairGeometry = this.buildGroundTerrainHexPatchGeometry(repairNodes);
         const patchBounds = this.getGroundTerrainHexPatchBounds(repairNodes);
@@ -13504,7 +14587,7 @@ class GameMap {
             tiles: bubbleRecords.map(record => ({
                 q: record.q,
                 r: record.r,
-                type: this.getGroundTerrainDeterministicTypeForRecord(record, editedNodeKey, nextType, sourceRecords)
+                type: this.getGroundTerrainDeterministicTypeForRecord(record, editedNodeKey, nextType, sourceRecords, editedNodeKeys)
             }))
         };
         const polygons = solver.generateDeterministicTerrainBubblePolygons(input);
@@ -13527,15 +14610,43 @@ class GameMap {
         const nextType = (typeof terrainType === "string" && terrainType.length > 0) ? terrainType : "grass";
         this.getGroundTerrainTextureIdForType(nextType, node.xindex, node.yindex);
         const asset = options && options.asset ? options.asset : null;
-        const currentType = this.getGroundTerrainTypeForNode(node);
         const forceRepaintSameTerrain = options && options.forceRepaintSameTerrain === true;
-        if (currentType === nextType && !forceRepaintSameTerrain) {
+        const editedNodeRecords = [];
+        const editedNodeKeys = new Set();
+        const sourceEditedNodes = Array.isArray(options && options.editedNodes) && options.editedNodes.length > 0
+            ? options.editedNodes
+            : [node];
+        for (let i = 0; i < sourceEditedNodes.length; i++) {
+            const editedNode = sourceEditedNodes[i];
+            if (!editedNode || editedNode._prototypeVoid === true) continue;
+            const key = this.getGroundTerrainNodeKey(editedNode);
+            if (editedNodeKeys.has(key)) continue;
+            editedNodeKeys.add(key);
+            editedNodeRecords.push({
+                node: editedNode,
+                key,
+                previousTextureId: Number.isFinite(editedNode.groundTextureId) ? Number(editedNode.groundTextureId) : 0,
+                previousType: this.getGroundTerrainTypeForNode(editedNode)
+            });
+        }
+        if (editedNodeRecords.length === 0) {
+            throw new Error("terrain patch replacement requires at least one edited node");
+        }
+        const hasTerrainChange = editedNodeRecords.some(record => record.previousType !== nextType);
+        if (!hasTerrainChange && !forceRepaintSameTerrain) {
             return false;
         }
         const sectionKey = options && typeof options.sectionKey === "string" ? options.sectionKey : "";
-        const previousTextureId = Number.isFinite(node.groundTextureId) ? Number(node.groundTextureId) : 0;
+        const repairRadius = Number.isFinite(Number(options && options.repairRadius))
+            ? Math.max(0, Math.round(Number(options.repairRadius)))
+            : 1;
+        const contextRadius = repairRadius + 1;
         const allowedSectionKeys = (sectionKey || asset)
-            ? this.collectGroundTerrainPatchSectionKeysForNode(node, sectionKey || (typeof (asset && asset.key) === "string" ? asset.key : ""))
+            ? this.collectGroundTerrainPatchSectionKeysForNode(
+                node,
+                sectionKey || (typeof (asset && asset.key) === "string" ? asset.key : ""),
+                contextRadius
+            )
             : null;
         const sources = this.collectGroundTerrainPatchPolygonSources({
             ...options,
@@ -13548,13 +14659,14 @@ class GameMap {
             typeof api.difference !== "function" ||
             typeof api.intersection !== "function"
         ) {
-            node.groundTextureId = previousTextureId;
             throw new Error("terrain deterministic patch requires polygon clipping union, difference, and intersection");
         };
         const allSourceRecords = [];
         for (let s = 0; s < sources.length; s++) {
             const source = sources[s];
-            const normalized = this.normalizeGroundTerrainPolygons(source.polygons);
+            const normalized = this.sanitizeGroundTerrainPatchPolygons(
+                this.normalizeGroundTerrainPatchSourcePolygons(source)
+            );
             for (let p = 0; p < normalized.length; p++) {
                 allSourceRecords.push({
                     source,
@@ -13571,27 +14683,48 @@ class GameMap {
             record.polygon.type === "grass"
         ));
         const shouldPersistPatchedType = (type) => type !== "grass" || hasStoredGrassParticipant;
-        const unionGeometries = (geometries, label) => {
-            const sourceGeometries = geometries.filter(geometry => !clipGeometryIsEmpty2D(geometry));
-            if (sourceGeometries.length === 0) return [];
-            return this.unionGroundTerrainClipGeometries(sourceGeometries, label);
+        const restoreEditedNodeTextures = () => {
+            for (let i = 0; i < editedNodeRecords.length; i++) {
+                editedNodeRecords[i].node.groundTextureId = editedNodeRecords[i].previousTextureId;
+            }
         };
         let bubblePatch = null;
         try {
-            this.setGroundTerrainType(node.xindex, node.yindex, nextType);
-            bubblePatch = this.buildGroundTerrainDeterministicBubblePatch(node, nextType, allSourceRecords);
+            for (let i = 0; i < editedNodeRecords.length; i++) {
+                const editedNode = editedNodeRecords[i].node;
+                this.setGroundTerrainType(editedNode.xindex, editedNode.yindex, nextType);
+            }
+            bubblePatch = this.buildGroundTerrainDeterministicBubblePatch(node, nextType, allSourceRecords, {
+                editedNodes: editedNodeRecords.map(record => record.node),
+                repairRadius,
+                contextRadius
+            });
         } catch (err) {
-            node.groundTextureId = previousTextureId;
+            restoreEditedNodeTextures();
             throw err;
         }
         if (!bubblePatch || clipGeometryIsEmpty2D(bubblePatch.repairGeometry)) {
-            node.groundTextureId = previousTextureId;
+            restoreEditedNodeTextures();
             throw new Error("terrain deterministic patch did not produce repair geometry");
         }
         const localBoundaryNodes = Array.isArray(bubblePatch.bubbleRecords)
             ? bubblePatch.bubbleRecords.map(record => record && record.node).filter(Boolean)
             : this.collectGroundTerrainExpandedLocalAffectedNodes(bubblePatch.repairNodes);
         const localPartitionBounds = this.getGroundTerrainPolygonCollectionBounds(bubblePatch.polygons) || bubblePatch.patchBounds;
+        const affectedSourceRecords = [];
+        const unchangedSourceRecords = [];
+        for (let r = 0; r < allSourceRecords.length; r++) {
+            const record = allSourceRecords[r];
+            if (
+                record &&
+                record.polygon &&
+                this.groundTerrainPolygonIntersectsRepairGeometry(record.polygon, bubblePatch.repairGeometry, bubblePatch.patchBounds)
+            ) {
+                affectedSourceRecords.push(record);
+            } else if (record && record.polygon) {
+                unchangedSourceRecords.push(record);
+            }
+        }
         const localPartitionRepairKeys = new Set();
         for (let p = 0; p < bubblePatch.polygons.length; p++) {
             const polygon = bubblePatch.polygons[p];
@@ -13606,94 +14739,123 @@ class GameMap {
                 }
             }
         }
-        const typeSet = new Set(allSourceRecords.map(record => record.polygon.type));
-        for (let p = 0; p < bubblePatch.polygons.length; p++) {
-            if (bubblePatch.polygons[p] && typeof bubblePatch.polygons[p].type === "string") {
-                typeSet.add(bubblePatch.polygons[p].type);
-            }
-        }
-        typeSet.add(nextType);
-        const oldGeometryByType = new Map();
-        for (const type of typeSet) {
-            const geometries = allSourceRecords
-                .filter(record => record.polygon && record.polygon.type === type)
-                .map(record => this.groundTerrainPolygonToClipGeometry(record.polygon));
-            oldGeometryByType.set(type, unionGeometries(geometries, `terrain deterministic patch old ${type}`));
-        }
-        const bubbleGeometryByType = new Map();
-        for (const type of typeSet) {
-            const geometries = bubblePatch.polygons
-                .filter(polygon => polygon && polygon.type === type)
-                .map(polygon => this.groundTerrainPolygonToClipGeometry(polygon));
-            bubbleGeometryByType.set(type, unionGeometries(geometries, `terrain deterministic patch bubble ${type}`));
-        }
         const patchedPolygons = [];
         try {
-            for (const type of typeSet) {
-                const oldGeometry = oldGeometryByType.get(type) || [];
-                const localSourceGeometry = shouldPersistPatchedType(type)
-                    ? (bubbleGeometryByType.get(type) || [])
-                    : [];
-                let oldMinusNonMatchingGeometry = oldGeometry;
+            const sourceSectionRings = [];
+            for (let s = 0; s < sources.length; s++) {
+                const source = sources[s];
+                if (!source || !source.asset || typeof source.key !== "string") continue;
+                const ring = this.getGroundTerrainSectionClipPolygonPoints(source.key, source.asset);
+                if (Array.isArray(ring) && ring.length >= 3) sourceSectionRings.push(ring);
+            }
+            const bubbleGeometryByType = new Map();
+            for (let p = 0; p < bubblePatch.polygons.length; p++) {
+                const polygon = bubblePatch.polygons[p];
+                if (!polygon || typeof polygon.type !== "string") continue;
+                if (!bubbleGeometryByType.has(polygon.type)) bubbleGeometryByType.set(polygon.type, []);
+                bubbleGeometryByType.get(polygon.type).push(this.groundTerrainPolygonToClipGeometry(polygon));
+            }
+            for (const [type, geometries] of bubbleGeometryByType.entries()) {
+                bubbleGeometryByType.set(
+                    type,
+                    this.unionGroundTerrainClipGeometries(geometries, `terrain deterministic patch bubble ${type}`)
+                );
+            }
+            const retainedGeometriesByType = new Map();
+            for (let r = 0; r < affectedSourceRecords.length; r++) {
+                const record = affectedSourceRecords[r];
+                const polygon = record && record.polygon ? record.polygon : null;
+                if (!polygon || !shouldPersistPatchedType(polygon.type)) continue;
                 const nonMatchingGeometries = [];
-                for (const [otherType, otherGeometry] of bubbleGeometryByType.entries()) {
-                    if (otherType === type || clipGeometryIsEmpty2D(otherGeometry)) continue;
-                    nonMatchingGeometries.push(otherGeometry);
+                for (const [type, geometry] of bubbleGeometryByType.entries()) {
+                    if (type === polygon.type || clipGeometryIsEmpty2D(geometry)) continue;
+                    nonMatchingGeometries.push(geometry);
                 }
-                if (!clipGeometryIsEmpty2D(oldMinusNonMatchingGeometry) && nonMatchingGeometries.length > 0) {
-                    const nonMatchingGeometry = unionGeometries(nonMatchingGeometries, `terrain deterministic patch nonmatching ${type}`);
-                    if (!clipGeometryIsEmpty2D(nonMatchingGeometry)) {
-                        oldMinusNonMatchingGeometry = api.difference(oldMinusNonMatchingGeometry, nonMatchingGeometry);
+                let retainedGeometry = this.groundTerrainPolygonToClipGeometry(polygon);
+                try {
+                    if (nonMatchingGeometries.length > 0) {
+                        const nonMatchingGeometry = this.unionGroundTerrainClipGeometries(
+                            nonMatchingGeometries,
+                            `terrain deterministic patch nonmatching ${polygon.type}`
+                        );
+                        if (!clipGeometryIsEmpty2D(nonMatchingGeometry)) {
+                            retainedGeometry = api.difference(retainedGeometry, nonMatchingGeometry);
+                        }
                     }
+                } catch (err) {
+                    throw new Error(`terrain deterministic patch old ${polygon.type} local subtraction failed: ${err && err.message ? err.message : err}`);
                 }
-                const combinedGeometry = unionGeometries([oldMinusNonMatchingGeometry, localSourceGeometry], `terrain deterministic patch combined ${type}`);
+                if (clipGeometryIsEmpty2D(retainedGeometry)) continue;
+                if (!retainedGeometriesByType.has(polygon.type)) retainedGeometriesByType.set(polygon.type, []);
+                retainedGeometriesByType.get(polygon.type).push(retainedGeometry);
+            }
+            const patchedTypes = new Set(retainedGeometriesByType.keys());
+            for (const type of bubbleGeometryByType.keys()) {
+                if (shouldPersistPatchedType(type)) patchedTypes.add(type);
+            }
+            for (const type of patchedTypes) {
+                const geometries = (retainedGeometriesByType.get(type) || []).slice();
+                const localGeometry = bubbleGeometryByType.get(type) || [];
+                if (shouldPersistPatchedType(type) && !clipGeometryIsEmpty2D(localGeometry)) {
+                    geometries.push(localGeometry);
+                }
+                const combinedGeometry = this.unionGroundTerrainClipGeometries(
+                    geometries,
+                    `terrain deterministic patch retained ${type}`
+                );
                 if (clipGeometryIsEmpty2D(combinedGeometry)) continue;
-                patchedPolygons.push(...this.groundTerrainDeterministicClipGeometryToPolygons(type, combinedGeometry));
+                patchedPolygons.push(...this.groundTerrainDeterministicClipGeometryToPolygons(type, combinedGeometry, {
+                    sectionRings: sourceSectionRings
+                }));
             }
         } catch (err) {
-            node.groundTextureId = previousTextureId;
+            restoreEditedNodeTextures();
             throw err;
         }
+        this.recordGroundTerrainPatchPolygonStageDiagnostic("after-patch-union", patchedPolygons, sources);
         let persistedPatchedPolygons = this.sanitizeGroundTerrainPatchPolygons(
             patchedPolygons.filter(polygon => shouldPersistPatchedType(polygon.type))
         );
-        persistedPatchedPolygons = this.reconcileGroundTerrainContainedPatchHoles(persistedPatchedPolygons);
-        persistedPatchedPolygons = this.removeGroundTerrainContainedPatchArtifacts(persistedPatchedPolygons);
+        this.recordGroundTerrainPatchPolygonStageDiagnostic("after-initial-sanitize", persistedPatchedPolygons, sources);
         persistedPatchedPolygons = this.canonicalizeGroundTerrainNestedPolygonBoundaries(persistedPatchedPolygons);
-        persistedPatchedPolygons = this.removeGroundTerrainPatchHoleArtifacts(persistedPatchedPolygons);
+        this.recordGroundTerrainPatchPolygonStageDiagnostic("after-canonicalize-nested-boundaries", persistedPatchedPolygons, sources);
         persistedPatchedPolygons = persistedPatchedPolygons.filter(polygon => shouldPersistPatchedType(polygon.type));
+        this.recordGroundTerrainPatchPolygonStageDiagnostic("after-filter-persisted-types", persistedPatchedPolygons, sources);
         persistedPatchedPolygons = this.alignGroundTerrainSharedBoundaryRepairPoints(persistedPatchedPolygons, localPartitionBounds);
+        this.recordGroundTerrainPatchPolygonStageDiagnostic("after-align-shared-boundary-repair-points", persistedPatchedPolygons, sources);
         persistedPatchedPolygons = this.alignGroundTerrainCrossingRepairEndpoints(
             persistedPatchedPolygons,
             localPartitionRepairKeys
         );
+        this.recordGroundTerrainPatchPolygonStageDiagnostic("after-align-crossing-repair-endpoints", persistedPatchedPolygons, sources);
         persistedPatchedPolygons = this.synchronizeGroundTerrainAdjacentPairBoundaryPaths(
             persistedPatchedPolygons,
             localBoundaryNodes,
             localPartitionBounds
         );
-        persistedPatchedPolygons = this.removeGroundTerrainSmallLocalArtifacts(
-            persistedPatchedPolygons,
-            localBoundaryNodes,
-            localPartitionRepairKeys,
-            localPartitionBounds
-        );
+        this.recordGroundTerrainPatchPolygonStageDiagnostic("after-synchronize-adjacent-pair-boundary-paths", persistedPatchedPolygons, sources);
         persistedPatchedPolygons = this.insertGroundTerrainLocalCoverageSnapPoints(
             persistedPatchedPolygons,
             localBoundaryNodes,
             localPartitionBounds
         );
+        this.recordGroundTerrainPatchPolygonStageDiagnostic("after-insert-local-coverage-snap-points", persistedPatchedPolygons, sources);
         persistedPatchedPolygons = this.synchronizeGroundTerrainAdjacentPairBoundaryPaths(
             persistedPatchedPolygons,
             localBoundaryNodes,
             localPartitionBounds,
             { allowEndpointInsertion: true }
         );
+        this.recordGroundTerrainPatchPolygonStageDiagnostic("after-synchronize-adjacent-pair-boundary-paths-with-endpoints", persistedPatchedPolygons, sources);
         persistedPatchedPolygons = this.alignGroundTerrainCrossingRepairEndpoints(
             persistedPatchedPolygons,
             localPartitionRepairKeys
         );
+        this.recordGroundTerrainPatchPolygonStageDiagnostic("after-align-crossing-repair-endpoints-final", persistedPatchedPolygons, sources);
+        persistedPatchedPolygons = this.resolveGroundTerrainPolygonOverlapsByPrioritySequential(persistedPatchedPolygons);
+        this.recordGroundTerrainPatchPolygonStageDiagnostic("after-priority-overlay", persistedPatchedPolygons, sources);
         persistedPatchedPolygons = this.sanitizeGroundTerrainPatchPolygons(persistedPatchedPolygons);
+        this.recordGroundTerrainPatchPolygonStageDiagnostic("after-final-sanitize", persistedPatchedPolygons, sources);
         if (sectionKey || asset) {
             const sourceByKey = new Map(sources.map(source => [source.key, source]));
             const touchedSectionKeys = new Set();
@@ -13708,61 +14870,160 @@ class GameMap {
                 const source = sourceByKey.get(key);
                 if (!source || !source.asset) continue;
                 const sectionPolygons = [];
+                const unchangedSectionPolygons = unchangedSourceRecords
+                    .filter(record => record && record.source && record.source.key === key && record.polygon)
+                    .sort((a, b) => Number(a.sourceIndex) - Number(b.sourceIndex))
+                    .map(record => record.polygon);
+                const sectionRing = this.getGroundTerrainSectionClipPolygonPoints(key, source.asset);
                 const clipGeometry = this.getGroundTerrainSectionClipGeometry(key, source.asset);
+                const sectionBoundarySplitPolygons = [];
+                const sectionBoundarySplitRecords = [];
                 for (let p = 0; p < persistedPatchedPolygons.length; p++) {
                     const polygon = persistedPatchedPolygons[p];
+                    const crossesSectionBoundary = this.groundTerrainPolygonCrossesSectionBoundaryForDiagnostics(polygon, sectionRing);
+                    if (crossesSectionBoundary) {
+                        this.recordGroundTerrainPatchDiagnostic({
+                            stage: "before-section-split",
+                            sectionKey: key,
+                            polygonIndex: p,
+                            terrainType: polygon.type,
+                            ring: this.getGroundTerrainRingGeometryDiagnostic(polygon.points, sectionRing)
+                        });
+                    }
                     let clipped = [];
                     try {
                         clipped = api.intersection(this.groundTerrainPolygonToClipGeometry(polygon), clipGeometry);
                     } catch (err) {
                         throw new Error(`terrain deterministic patch section split failed for ${key}: ${err && err.message ? err.message : err}`);
                     }
-                    const splitPolygons = this.groundTerrainDeterministicClipGeometryToPolygons(polygon.type, clipped);
+                    if (crossesSectionBoundary && !clipGeometryIsEmpty2D(clipped)) {
+                        this.recordGroundTerrainPatchDiagnostic({
+                            stage: "section-split-clipped",
+                            sectionKey: key,
+                            polygonIndex: p,
+                            terrainType: polygon.type,
+                            clippedGeometry: this.getGroundTerrainClipGeometryDiagnostic(clipped, sectionRing, {
+                                polygonLimit: 16,
+                                ringLimit: 4
+                            })
+                        });
+                    }
+                    if (
+                        crossesSectionBoundary &&
+                        this.shouldLogGroundTerrainSectionBoundaryDriftDiagnostics() &&
+                        !clipGeometryIsEmpty2D(clipped)
+                    ) {
+                        const clippedDiagnostic = this.getGroundTerrainClipGeometryDiagnostic(
+                            clipped,
+                            sectionRing,
+                            { polygonLimit: 8, ringLimit: 4 }
+                        );
+                        const hasBoundaryDrift = clippedDiagnostic.polygons.some(record => (
+                            Array.isArray(record.rings) &&
+                            record.rings.some(ring => (
+                                ring &&
+                                ring.diagnostic &&
+                                Array.isArray(ring.diagnostic.boundaryDistances) &&
+                                ring.diagnostic.boundaryDistances.some(point => (
+                                    Number(point && point.distance) > this.getGroundTerrainVertexRepairEpsilon() &&
+                                    Number(point && point.distance) <= this.getGroundTerrainRepairMinimumEdgeLength() * 4
+                                ))
+                            ))
+                        ));
+                        if (hasBoundaryDrift) {
+                            this.logGroundTerrainDiagnostic(
+                                "[terrain section clip boundary drift diagnostic]",
+                                `terrain deterministic patch section ${key} clipped geometry has points near but not on the section boundary before split conversion`,
+                                {
+                                    sectionKey: key,
+                                    terrainType: polygon.type,
+                                    polygonIndex: p,
+                                    clippedGeometry: clippedDiagnostic
+                                }
+                            );
+                        }
+                    }
+                    const splitPolygons = this.groundTerrainSectionSplitClipGeometryToPolygons(polygon.type, clipped, {
+                        sectionKey: key,
+                        sectionRing
+                    });
+                    if (crossesSectionBoundary && splitPolygons.length > 0) {
+                        this.recordGroundTerrainPatchDiagnostic({
+                            stage: "section-split-output",
+                            sectionKey: key,
+                            polygonIndex: p,
+                            terrainType: polygon.type,
+                            polygons: splitPolygons.map((splitPolygon, splitPolygonIndex) => ({
+                                splitPolygonIndex,
+                                outer: this.getGroundTerrainRingGeometryDiagnostic(splitPolygon.points, sectionRing),
+                                holes: Array.isArray(splitPolygon.holes)
+                                    ? splitPolygon.holes.map(hole => this.getGroundTerrainRingGeometryDiagnostic(hole, sectionRing))
+                                    : []
+                            }))
+                        });
+                    }
+                    if (crossesSectionBoundary) {
+                        sectionBoundarySplitPolygons.push(...splitPolygons);
+                        for (let s = 0; s < splitPolygons.length; s++) {
+                            sectionBoundarySplitRecords.push({
+                                sourcePolygonIndex: p,
+                                splitPolygonIndex: sectionPolygons.length + s,
+                                polygon: splitPolygons[s]
+                            });
+                        }
+                    }
                     sectionPolygons.push(...splitPolygons);
                 }
-                const sectionBoundaryNodes = localBoundaryNodes.filter(localNode => {
-                    if (!localNode || localNode._prototypeVoid === true) return false;
-                    const localSectionKey = typeof localNode._prototypeSectionKey === "string" && localNode._prototypeSectionKey.length > 0
-                        ? localNode._prototypeSectionKey
-                        : (typeof localNode.ownerSectionKey === "string" ? localNode.ownerSectionKey : "");
-                    return localSectionKey === key;
-                });
-                let cleanedSectionPolygons = this.sanitizeGroundTerrainPatchPolygons(sectionPolygons);
-                cleanedSectionPolygons = this.insertGroundTerrainSectionBoundaryCoveragePoints(
-                    cleanedSectionPolygons,
-                    sectionBoundaryNodes,
-                    source.asset.sectionPolygon,
-                    localPartitionBounds
-                );
-                cleanedSectionPolygons = this.insertGroundTerrainLocalCoverageSnapPoints(
-                    cleanedSectionPolygons,
-                    sectionBoundaryNodes,
-                    localPartitionBounds
-                );
-                cleanedSectionPolygons = this.synchronizeGroundTerrainAdjacentPairBoundaryPaths(
-                    cleanedSectionPolygons,
-                    sectionBoundaryNodes,
-                    localPartitionBounds,
-                    { allowEndpointInsertion: true }
-                );
-                cleanedSectionPolygons = this.alignGroundTerrainCrossingRepairEndpoints(
-                    cleanedSectionPolygons,
-                    localPartitionRepairKeys
-                );
-                source.asset.terrainPolygons = this.sanitizeGroundTerrainPatchPolygons(cleanedSectionPolygons);
+                if (this.shouldLogGroundTerrainSectionBoundaryDriftDiagnostics() && sectionBoundarySplitPolygons.length > 0) {
+                    const driftDiagnostic = this.getGroundTerrainSectionBoundaryDriftDiagnostics(
+                        key,
+                        sectionBoundarySplitPolygons,
+                        sectionRing
+                    );
+                    if (driftDiagnostic.driftPointCount > 0 || driftDiagnostic.driftSegmentCount > 0) {
+                        this.logGroundTerrainDiagnostic(
+                            "[terrain section split boundary drift diagnostic]",
+                            `terrain deterministic patch section ${key} produced split points near but not on the section boundary`,
+                            driftDiagnostic
+                        );
+                    }
+                    const writeDiagnostic = this.getGroundTerrainSectionSplitWriteDiagnostics(
+                        key,
+                        sectionBoundarySplitRecords,
+                        sectionRing
+                    );
+                    if (writeDiagnostic.suspectSegmentCount > 0) {
+                        this.logGroundTerrainDiagnostic(
+                            "[terrain section split write diagnostic]",
+                            `terrain deterministic patch section ${key} is writing split segments near but not on the section boundary`,
+                            writeDiagnostic
+                        );
+                    }
+                }
+                source.asset.terrainPolygons = unchangedSectionPolygons.concat(sectionPolygons);
                 source.asset._level0GroundSurfaceVersion = (Number(source.asset._level0GroundSurfaceVersion) || 0) + 1;
             }
-            const editedSectionKey = typeof node._prototypeSectionKey === "string" && node._prototypeSectionKey.length > 0
-                ? node._prototypeSectionKey
-                : sectionKey;
-            if (editedSectionKey === sectionKey) {
+            for (let i = 0; i < editedNodeRecords.length; i++) {
+                const editedNode = editedNodeRecords[i].node;
+                const editedSectionKey = typeof editedNode._prototypeSectionKey === "string" && editedNode._prototypeSectionKey.length > 0
+                    ? editedNode._prototypeSectionKey
+                    : (typeof editedNode.ownerSectionKey === "string" && editedNode.ownerSectionKey.length > 0
+                        ? editedNode.ownerSectionKey
+                        : sectionKey);
+                if (!editedSectionKey) {
+                    throw new Error("terrain section patch edited node is missing a section key");
+                }
                 const editedSource = sourceByKey.get(editedSectionKey) || null;
-                const editedAsset = editedSource && editedSource.asset ? editedSource.asset : asset;
-                this.syncGroundTerrainEditedTileForSectionAsset(editedAsset, editedSectionKey, node);
+                const editedAsset = editedSource && editedSource.asset ? editedSource.asset : (
+                    editedSectionKey === sectionKey ? asset : null
+                );
+                this.syncGroundTerrainEditedTileForSectionAsset(editedAsset, editedSectionKey, editedNode);
             }
             this.invalidateGroundBridgeBarrierCache();
         } else {
-            this.terrainPolygons = persistedPatchedPolygons;
+            this.terrainPolygons = this.sanitizeGroundTerrainPatchPolygons(
+                unchangedSourceRecords.map(record => record.polygon).concat(persistedPatchedPolygons)
+            );
             this._level0GroundSurfaceVersion = (Number(this._level0GroundSurfaceVersion) || 0) + 1;
             this.invalidateGroundBridgeBarrierCache();
         }

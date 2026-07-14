@@ -35,6 +35,36 @@
         };
     }
 
+    const SECTION_HEXAGON_CORNER_CACHE_LIMIT = 4096;
+    const sectionHexagonCornerCache = new Map();
+
+    function getSectionHexagonCornerCacheKey(centerAxial, basis) {
+        const numberKey = value => String(Math.round((Number(value) || 0) * 1000000));
+        return [
+            numberKey(centerAxial && centerAxial.q),
+            numberKey(centerAxial && centerAxial.r),
+            numberKey(basis && basis.qAxis && basis.qAxis.q),
+            numberKey(basis && basis.qAxis && basis.qAxis.r),
+            numberKey(basis && basis.rAxis && basis.rAxis.q),
+            numberKey(basis && basis.rAxis && basis.rAxis.r)
+        ].join(":");
+    }
+
+    function cloneSectionPolygon(points) {
+        return points.map(point => ({
+            x: Number(point.x),
+            y: Number(point.y)
+        }));
+    }
+
+    function rememberSectionHexagonCorners(cacheKey, corners) {
+        if (sectionHexagonCornerCache.size >= SECTION_HEXAGON_CORNER_CACHE_LIMIT) {
+            const firstKey = sectionHexagonCornerCache.keys().next().value;
+            if (firstKey !== undefined) sectionHexagonCornerCache.delete(firstKey);
+        }
+        sectionHexagonCornerCache.set(cacheKey, cloneSectionPolygon(corners));
+    }
+
     function axialDistance(a, b) {
         const dq = Number(a.q) - Number(b.q);
         const dr = Number(a.r) - Number(b.r);
@@ -252,6 +282,9 @@
     // Each corner is the centroid of this section's center and its two adjacent neighbor
     // section centers, guaranteeing exact shared edges with no gap or overlap.
     function getSectionHexagonCorners(centerAxial, basis) {
+        const cacheKey = getSectionHexagonCornerCacheKey(centerAxial, basis);
+        const cached = sectionHexagonCornerCache.get(cacheKey);
+        if (cached) return cloneSectionPolygon(cached);
         const cq = Number(centerAxial && centerAxial.q) || 0;
         const cr = Number(centerAxial && centerAxial.r) || 0;
         const qaq = Number(basis && basis.qAxis && basis.qAxis.q) || 0;
@@ -259,24 +292,22 @@
         const raq = Number(basis && basis.rAxis && basis.rAxis.q) || 0;
         const rar = Number(basis && basis.rAxis && basis.rAxis.r) || 0;
 
-        // Tile-axial offsets from this section center to each of the 6 neighboring section centers
         const neighborAxials = SECTION_DIRECTIONS.map(d => ({
             q: cq + d.q * qaq + d.r * raq,
             r: cr + d.q * qar + d.r * rar
         }));
-
         const selfWorld = offsetToWorld(axialToEvenQOffset({ q: cq, r: cr }));
         const neighborWorlds = neighborAxials.map(a => offsetToWorld(axialToEvenQOffset(a)));
-
-        // Corner i is the centroid of self + neighbor[i] + neighbor[(i+1)%6]
-        return SECTION_DIRECTIONS.map((_, i) => {
-            const n1 = neighborWorlds[i];
-            const n2 = neighborWorlds[(i + 1) % 6];
+        const corners = SECTION_DIRECTIONS.map((_, index) => {
+            const n1 = neighborWorlds[index];
+            const n2 = neighborWorlds[(index + 1) % neighborWorlds.length];
             return {
-                x: (selfWorld.x + n1.x + n2.x) / 3,
-                y: (selfWorld.y + n1.y + n2.y) / 3
+                x: (Number(selfWorld.x) + Number(n1.x) + Number(n2.x)) / 3,
+                y: (Number(selfWorld.y) + Number(n1.y) + Number(n2.y)) / 3
             };
         });
+        rememberSectionHexagonCorners(cacheKey, corners);
+        return cloneSectionPolygon(corners);
     }
 
     const api = {

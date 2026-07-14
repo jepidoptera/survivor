@@ -15,6 +15,7 @@ const GLOBAL_KEYS = [
     "paused",
     "projectiles",
     "Road",
+    "RoadPath",
     "WallSectionUnit",
     "StaticObject",
     "Roof",
@@ -333,6 +334,11 @@ test("saveGameState splits road paths on section edges", () => {
                 y: 0,
                 width: 4,
                 textureId: "road",
+                roadNetworkId: "road-network:test",
+                endpointSnapIds: {
+                    start: "road-snap:start",
+                    end: "road-snap:end"
+                },
                 points: [
                     { x: -5, y: 0 },
                     { x: 5, y: 0 }
@@ -421,6 +427,15 @@ test("saveGameState splits road paths on section edges", () => {
         { x: 0, y: 0 },
         { x: 5, y: 0 }
     ]);
+    const splitA = sectionsByKey.get("A").objects[0];
+    const splitB = sectionsByKey.get("B").objects[0];
+    assert.equal(splitA.roadNetworkId, "road-network:test");
+    assert.equal(splitB.roadNetworkId, "road-network:test");
+    assert.equal(splitA.endpointSnapIds.start, "road-snap:start");
+    assert.equal(splitB.endpointSnapIds.end, "road-snap:end");
+    assert.equal(splitA.endpointSnapIds.end, splitB.endpointSnapIds.start);
+    assert.notEqual(splitA.endpointSnapIds.end, "road-snap:start");
+    assert.notEqual(splitA.endpointSnapIds.end, "road-snap:end");
 });
 
 test("saveGameState splits road paths into inactive neighbor sections", () => {
@@ -442,6 +457,11 @@ test("saveGameState splits road paths into inactive neighbor sections", () => {
                 y: 0,
                 width: 4,
                 textureId: "road",
+                roadNetworkId: "road-network:inactive-neighbor",
+                endpointSnapIds: {
+                    start: "road-snap:inactive-start",
+                    end: "road-snap:inactive-end"
+                },
                 points: [
                     { x: -5, y: 0 },
                     { x: 5, y: 0 }
@@ -536,6 +556,9 @@ test("saveGameState splits road paths into inactive neighbor sections", () => {
         { x: 0, y: 0 },
         { x: 5, y: 0 }
     ]);
+    assert.equal(sectionsByKey.get("0,0").objects[0].endpointSnapIds.end, sectionsByKey.get("1,0").objects[0].endpointSnapIds.start);
+    assert.equal(sectionsByKey.get("0,0").objects[0].roadNetworkId, "road-network:inactive-neighbor");
+    assert.equal(sectionsByKey.get("1,0").objects[0].roadNetworkId, "road-network:inactive-neighbor");
 });
 
 test("exportPrototypeSectionAssets splits road paths into inactive neighbor sections", () => {
@@ -563,6 +586,11 @@ test("exportPrototypeSectionAssets splits road paths into inactive neighbor sect
                 y: 0,
                 width: 4,
                 textureId: "road",
+                roadNetworkId: "road-network:export",
+                endpointSnapIds: {
+                    start: "road-snap:export-start",
+                    end: "road-snap:export-end"
+                },
                 points: [
                     { x: -5, y: 0 },
                     { x: 5, y: 0 }
@@ -658,6 +686,9 @@ test("exportPrototypeSectionAssets splits road paths into inactive neighbor sect
         { x: 0, y: 0 },
         { x: 5, y: 0 }
     ]);
+    assert.equal(sectionsByKey.get("0,0").objects[0].endpointSnapIds.end, sectionsByKey.get("1,0").objects[0].endpointSnapIds.start);
+    assert.equal(sectionsByKey.get("0,0").objects[0].roadNetworkId, "road-network:export");
+    assert.equal(sectionsByKey.get("1,0").objects[0].roadNetworkId, "road-network:export");
     assert.deepEqual(sectionA.objects.map((record) => record.points), [
         [
             { x: -5, y: 0 },

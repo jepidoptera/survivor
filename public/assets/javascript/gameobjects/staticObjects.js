@@ -6623,6 +6623,14 @@ class RoadPath extends StaticObject {
     static MIN_SEGMENT_LENGTH = 1e-5;
     static JOIN_PARALLEL_EPSILON = 1e-7;
     static MAX_TURN_RADIANS = Math.PI / 2;
+    static SNAP_POINT_EPSILON = 1e-6;
+
+    static createSnapId(prefix = "road-snap") {
+        const randomPart = (typeof crypto !== "undefined" && crypto && typeof crypto.randomUUID === "function")
+            ? crypto.randomUUID()
+            : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        return `${prefix}:${randomPart}`;
+    }
 
     static normalizePoint(raw, label = "road path point") {
         const x = Number(raw && raw.x);
@@ -6665,6 +6673,34 @@ class RoadPath extends StaticObject {
         }
         if (typeof texturePath === "string" && texturePath.length > 0) return texturePath;
         return "/assets/images/flooring/dirt.jpg";
+    }
+
+    static normalizeEndpointSnapIds(rawIds = null) {
+        if (!rawIds || typeof rawIds !== "object") return {};
+        const out = {};
+        if (typeof rawIds.start === "string" && rawIds.start.trim().length > 0) out.start = rawIds.start.trim();
+        if (typeof rawIds.end === "string" && rawIds.end.trim().length > 0) out.end = rawIds.end.trim();
+        return out;
+    }
+
+    static endpointSnapIdsFromData(data = {}) {
+        const ids = RoadPath.normalizeEndpointSnapIds(data.endpointSnapIds);
+        if (!ids.start && typeof data.startSnapId === "string" && data.startSnapId.trim().length > 0) {
+            ids.start = data.startSnapId.trim();
+        }
+        if (!ids.end && typeof data.endSnapId === "string" && data.endSnapId.trim().length > 0) {
+            ids.end = data.endSnapId.trim();
+        }
+        return ids;
+    }
+
+    static pointKey(point, precision = 6) {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error("road path snap point requires finite x/y coordinates");
+        }
+        return `${x.toFixed(precision)},${y.toFixed(precision)}`;
     }
 
     static lineIntersection(a0, a1, b0, b1, label = "road path join") {
@@ -6817,6 +6853,11 @@ class RoadPath extends StaticObject {
         this.width = geometry.width;
         this.height = geometry.width;
         this.fillTexturePath = RoadPath.normalizeFillTexturePath(options.fillTexturePath);
+        this.roadNetworkId = (typeof options.roadNetworkId === "string" && options.roadNetworkId.trim().length > 0)
+            ? options.roadNetworkId.trim()
+            : RoadPath.createSnapId("road-network");
+        this.endpointSnapIds = RoadPath.normalizeEndpointSnapIds(options.endpointSnapIds);
+        this.ensureEndpointSnapIds();
         this.generatedGeometry = geometry;
         this.segmentPolygons = geometry.segments.map(segment => segment.polygon.map(point => ({ ...point })));
         this.outlinePolygon = geometry.outline.map(point => ({ ...point }));
@@ -6834,12 +6875,22 @@ class RoadPath extends StaticObject {
             sampleSpacing: Math.max(0.5, Math.min(1.5, geometry.width * 0.5)),
             extraPoints: this.outlinePolygon
         });
+        if (this.map && typeof this.map.recomputeGroundTerrainPassabilityForRoad === "function") {
+            this.map.recomputeGroundTerrainPassabilityForRoad(this);
+        }
         if (this.map && Array.isArray(this.map.objects) && !this.map.objects.includes(this)) {
             this.map.objects.push(this);
         }
         if (!options.suppressLevel0RoadSurfaceDirty) {
             this.markLevel0RoadSurfaceDirty({ immediate: true });
         }
+    }
+
+    ensureEndpointSnapIds() {
+        this.endpointSnapIds = RoadPath.normalizeEndpointSnapIds(this.endpointSnapIds);
+        if (!this.endpointSnapIds.start) this.endpointSnapIds.start = RoadPath.createSnapId("road-snap");
+        if (!this.endpointSnapIds.end) this.endpointSnapIds.end = RoadPath.createSnapId("road-snap");
+        return this.endpointSnapIds;
     }
 
     getLevel0RoadSurfaceDirtyRect() {
@@ -6901,9 +6952,11 @@ class RoadPath extends StaticObject {
     setPathPoints(points, options = {}) {
         const updateIndexedNodes = !(options && options.updateIndexedNodes === false);
         const markSurfaceDirty = !(options && options.markSurfaceDirty === false);
+        const previousNodes = Array.isArray(this._indexedNodes) ? this._indexedNodes.slice() : [];
         if (markSurfaceDirty) this.markLevel0RoadSurfaceDirty({ immediate: true });
         const geometry = RoadPath.computeGeometry(points, this.roadWidth);
         this.pathPoints = geometry.points;
+        this.ensureEndpointSnapIds();
         this.width = geometry.width;
         this.height = geometry.width;
         this.generatedGeometry = geometry;
@@ -6920,6 +6973,9 @@ class RoadPath extends StaticObject {
                 extraPoints: this.outlinePolygon
             });
         }
+        if (this.map && typeof this.map.recomputeGroundTerrainPassabilityForRoad === "function") {
+            this.map.recomputeGroundTerrainPassabilityForRoad(this, previousNodes);
+        }
         if (markSurfaceDirty) this.markLevel0RoadSurfaceDirty({ immediate: true });
         return true;
     }
@@ -6927,6 +6983,14 @@ class RoadPath extends StaticObject {
     setWidth(width) {
         this.roadWidth = RoadPath.normalizeWidth(width);
         return this.setPathPoints(this.pathPoints);
+    }
+
+    removeFromNodes() {
+        const previousNodes = Array.isArray(this._indexedNodes) ? this._indexedNodes.slice() : (this.node ? [this.node] : []);
+        super.removeFromNodes();
+        if (this.map && typeof this.map.recomputeGroundTerrainPassabilityForRoad === "function") {
+            this.map.recomputeGroundTerrainPassabilityForRoad(this, previousNodes);
+        }
     }
 
     removeFromGame() {
@@ -6941,6 +7005,11 @@ class RoadPath extends StaticObject {
         data.points = points.map((point, index) => RoadPath.normalizePoint(point, `road path save point ${index}`));
         data.width = RoadPath.normalizeWidth(this.roadWidth);
         data.fillTexturePath = RoadPath.normalizeFillTexturePath(this.fillTexturePath);
+        data.roadNetworkId = (typeof this.roadNetworkId === "string" && this.roadNetworkId.length > 0)
+            ? this.roadNetworkId
+            : RoadPath.createSnapId("road-network");
+        this.roadNetworkId = data.roadNetworkId;
+        data.endpointSnapIds = RoadPath.normalizeEndpointSnapIds(this.ensureEndpointSnapIds());
         data.isPassable = true;
         data.blocksTile = false;
         data.castsLosShadows = false;
@@ -6964,6 +7033,10 @@ class RoadPath extends StaticObject {
         const roadPath = new RoadPath(rawPoints, map, {
             width,
             fillTexturePath: data.fillTexturePath,
+            roadNetworkId: (typeof data.roadNetworkId === "string" && data.roadNetworkId.trim().length > 0)
+                ? data.roadNetworkId.trim()
+                : undefined,
+            endpointSnapIds: RoadPath.endpointSnapIdsFromData(data),
             traversalLayer,
             level: traversalLayer,
             suppressAutoScriptingName: !!options.suppressAutoScriptingName,
@@ -7924,6 +7997,9 @@ class Road extends StaticObject {
         if (this.node && typeof this.node.recountBlockingObjects === 'function') {
             this.node.recountBlockingObjects();
         }
+        if (this.map && typeof this.map.recomputeGroundTerrainPassabilityForRoad === 'function') {
+            this.map.recomputeGroundTerrainPassabilityForRoad(this);
+        }
         
         const deferTextureRefresh = !!(options && options.deferTextureRefresh);
         if (!deferTextureRefresh) {
@@ -7959,7 +8035,11 @@ class Road extends StaticObject {
     removeFromNodes() {
         const deferNeighborRefresh = !!this._deferRoadNeighborRefresh;
         const node = this.getNode();
+        const previousNodes = Array.isArray(this._indexedNodes) ? this._indexedNodes.slice() : (node ? [node] : []);
         super.removeFromNodes();
+        if (this.map && typeof this.map.recomputeGroundTerrainPassabilityForRoad === 'function') {
+            this.map.recomputeGroundTerrainPassabilityForRoad(this, previousNodes);
+        }
 
         if (!deferNeighborRefresh) {
             const neighborNodes = node ? [1, 3, 5, 7, 9, 11]

@@ -1275,12 +1275,61 @@ function splitRoadPathSavePointsAtSectionPolygon(points, polygon) {
     return deduped;
 }
 
-function cloneRoadPathSaveRecordForPoints(record, points, sectionKey, pieceIndex) {
+function createRoadPathSaveSnapId(prefix = "road-snap") {
+    const roadPathApi = typeof globalThis !== "undefined" ? globalThis.RoadPath : null;
+    if (roadPathApi && typeof roadPathApi.createSnapId === "function") {
+        return roadPathApi.createSnapId(prefix);
+    }
+    return `${prefix}:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function roadPathSavePointKey(point) {
+    const roadPathApi = typeof globalThis !== "undefined" ? globalThis.RoadPath : null;
+    if (roadPathApi && typeof roadPathApi.pointKey === "function") {
+        return roadPathApi.pointKey(point);
+    }
+    const x = Number(point && point.x);
+    const y = Number(point && point.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        throw new Error("road path save snap point requires finite x/y coordinates");
+    }
+    return `${x.toFixed(6)},${y.toFixed(6)}`;
+}
+
+function getRoadPathSaveEndpointSnapIds(record) {
+    const roadPathApi = typeof globalThis !== "undefined" ? globalThis.RoadPath : null;
+    if (roadPathApi && typeof roadPathApi.endpointSnapIdsFromData === "function") {
+        return roadPathApi.endpointSnapIdsFromData(record);
+    }
+    return {
+        start: (
+            record &&
+            record.endpointSnapIds &&
+            typeof record.endpointSnapIds.start === "string" &&
+            record.endpointSnapIds.start.trim().length > 0
+        ) ? record.endpointSnapIds.start.trim() : (typeof (record && record.startSnapId) === "string" ? record.startSnapId : ""),
+        end: (
+            record &&
+            record.endpointSnapIds &&
+            typeof record.endpointSnapIds.end === "string" &&
+            record.endpointSnapIds.end.trim().length > 0
+        ) ? record.endpointSnapIds.end.trim() : (typeof (record && record.endSnapId) === "string" ? record.endSnapId : "")
+    };
+}
+
+function cloneRoadPathSaveRecordForPoints(record, points, sectionKey, pieceIndex, splitMetadata = null) {
     const cloned = clonePrototypeSectionWorldObjectRecord(record);
     cloned.points = points.map((point, index) => normalizeRoadPathSavePoint(point, `road path split ${pieceIndex} point ${index}`));
     delete cloned.pathPoints;
     cloned.x = cloned.points[0].x;
     cloned.y = cloned.points[0].y;
+    if (splitMetadata && splitMetadata.snapIdsByPointKey instanceof Map) {
+        cloned.roadNetworkId = splitMetadata.roadNetworkId;
+        cloned.endpointSnapIds = {
+            start: splitMetadata.snapIdsByPointKey.get(roadPathSavePointKey(cloned.points[0])) || createRoadPathSaveSnapId("road-snap"),
+            end: splitMetadata.snapIdsByPointKey.get(roadPathSavePointKey(cloned.points[cloned.points.length - 1])) || createRoadPathSaveSnapId("road-snap")
+        };
+    }
     if (typeof cloned.scriptingName === "string" && cloned.scriptingName.length > 0) {
         cloned.scriptingName = `${cloned.scriptingName}_${sectionKey.replace(/[^A-Za-z0-9_$]/g, "_")}_${pieceIndex}`;
     }
@@ -1299,6 +1348,13 @@ function splitRoadPathSaveRecordBySection(mapRef, record, ownerSectionKey) {
     if (points.length < 2) {
         throw new Error(`Cannot save road path in section ${ownerSectionKey}; at least two points are required.`);
     }
+    const baseEndpointSnapIds = getRoadPathSaveEndpointSnapIds(record);
+    const roadNetworkId = (typeof record.roadNetworkId === "string" && record.roadNetworkId.trim().length > 0)
+        ? record.roadNetworkId.trim()
+        : createRoadPathSaveSnapId("road-network");
+    const snapIdsByPointKey = new Map();
+    snapIdsByPointKey.set(roadPathSavePointKey(points[0]), baseEndpointSnapIds.start || createRoadPathSaveSnapId("road-snap"));
+    snapIdsByPointKey.set(roadPathSavePointKey(points[points.length - 1]), baseEndpointSnapIds.end || createRoadPathSaveSnapId("road-snap"));
     if (!mapRef || typeof mapRef.getPrototypeSectionAsset !== "function") {
         throw new Error("Cannot split road path for save; section asset lookup is unavailable.");
     }
@@ -1385,7 +1441,10 @@ function splitRoadPathSaveRecordBySection(mapRef, record, ownerSectionKey) {
             "split span"
         );
         pushSpan(sectionKey, a, b);
+        const bKey = roadPathSavePointKey(b);
+        if (!snapIdsByPointKey.has(bKey)) snapIdsByPointKey.set(bKey, createRoadPathSaveSnapId("road-snap"));
     }
+    const splitMetadata = { roadNetworkId, snapIdsByPointKey };
     const pieces = [];
     for (let pieceIndex = 0; pieceIndex < sequentialPieces.length; pieceIndex++) {
         const piece = sequentialPieces[pieceIndex];
@@ -1399,7 +1458,7 @@ function splitRoadPathSaveRecordBySection(mapRef, record, ownerSectionKey) {
         if (deduped.length < 2) continue;
         pieces.push({
             sectionKey: piece.sectionKey,
-            record: cloneRoadPathSaveRecordForPoints(record, deduped, piece.sectionKey, pieceIndex)
+            record: cloneRoadPathSaveRecordForPoints(record, deduped, piece.sectionKey, pieceIndex, splitMetadata)
         });
     }
     if (pieces.length === 0) {

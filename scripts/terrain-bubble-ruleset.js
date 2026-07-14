@@ -40,6 +40,46 @@ function createBubbleCoords(radius) {
     return coords.sort((a, b) => axialDistance(a) - axialDistance(b) || a.r - b.r || a.q - b.q);
 }
 
+function parseCoordKey(key) {
+    const parts = String(key).split(",");
+    if (parts.length !== 2) throw new Error(`terrain bubble ruleset got invalid coord key ${key}`);
+    const q = Number(parts[0]);
+    const r = Number(parts[1]);
+    if (!Number.isFinite(q) || !Number.isFinite(r)) {
+        throw new Error(`terrain bubble ruleset got invalid coord key ${key}`);
+    }
+    return { q: Math.round(q), r: Math.round(r) };
+}
+
+function getTerrainBubbleInputCoordSets(input) {
+    const hasExplicitInnerKeys = Array.isArray(input && input.innerKeys) && input.innerKeys.length > 0;
+    const requestedInnerCoords = Array.isArray(input && input.innerKeys) && input.innerKeys.length > 0
+        ? input.innerKeys.map(parseCoordKey)
+        : INNER_COORDS;
+    let repairRadius = 0;
+    const requestedInnerKeys = new Set();
+    for (const coord of requestedInnerCoords) {
+        repairRadius = Math.max(repairRadius, axialDistance(coord));
+        requestedInnerKeys.add(coordKey(coord));
+    }
+    const legacyInner = requestedInnerKeys.size === INNER_KEYS.size &&
+        INNER_COORDS.every(coord => requestedInnerKeys.has(coordKey(coord)));
+    const canonicalRepairCoords = createBubbleCoords(repairRadius);
+    const fullRepairBubble = requestedInnerKeys.size === canonicalRepairCoords.length &&
+        canonicalRepairCoords.every(coord => requestedInnerKeys.has(coordKey(coord)));
+    const innerCoords = legacyInner
+        ? INNER_COORDS
+        : (fullRepairBubble ? canonicalRepairCoords : requestedInnerCoords);
+    let contextRadius = hasExplicitInnerKeys ? 0 : 2;
+    for (const coord of innerCoords) {
+        contextRadius = Math.max(contextRadius, axialDistance(coord) + 1);
+    }
+    return {
+        innerCoords,
+        bubbleCoords: createBubbleCoords(contextRadius)
+    };
+}
+
 function roundNumber(value) {
     return Math.round(Number(value) * ROUND_SCALE) / ROUND_SCALE;
 }
@@ -175,14 +215,17 @@ function unionAll(multiPolygons) {
     return polygonClipping.union(...nonEmpty);
 }
 
-function innerSevenMask() {
-    return unionAll(INNER_COORDS.map((coord) => ringToPolygonClippingPolygon(hexCorners(coord))));
+function innerSevenMask(innerCoords = INNER_COORDS) {
+    return unionAll(innerCoords.map((coord) => ringToPolygonClippingPolygon(hexCorners(coord))));
 }
 
-function terrainTilesByKey(input) {
+function terrainTilesByKey(input, coordSets = null) {
     if (!input || !Array.isArray(input.tiles)) {
         throw new Error("terrain bubble ruleset requires input.tiles");
     }
+    const requiredCoords = coordSets && Array.isArray(coordSets.bubbleCoords)
+        ? coordSets.bubbleCoords
+        : getTerrainBubbleInputCoordSets(input).bubbleCoords;
     const tiles = new Map();
     for (const tile of input.tiles) {
         if (!tile || !TERRAIN_TYPES.includes(tile.type)) {
@@ -190,16 +233,16 @@ function terrainTilesByKey(input) {
         }
         tiles.set(coordKey(tile), tile.type);
     }
-    for (const coord of BUBBLE_COORDS) {
+    for (const coord of requiredCoords) {
         const key = coordKey(coord);
         if (!tiles.has(key)) throw new Error(`terrain bubble ruleset input missing tile ${key}`);
     }
     return tiles;
 }
 
-function buildHexVertexContexts(tiles) {
+function buildHexVertexContexts(tiles, bubbleCoords = BUBBLE_COORDS) {
     const contexts = new Map();
-    for (const coord of BUBBLE_COORDS) {
+    for (const coord of bubbleCoords) {
         const type = tiles.get(coordKey(coord));
         const center = axialToModel(coord);
         for (const corner of hexCorners(coord)) {
@@ -240,7 +283,7 @@ function threeTerrainJunctionReplacement(context, options = {}) {
 }
 
 function applyLocalJunctionRules(polygons, tiles, options = {}) {
-    const contexts = buildHexVertexContexts(tiles);
+    const contexts = buildHexVertexContexts(tiles, options.bubbleCoords || BUBBLE_COORDS);
     const out = [];
     for (const polygon of polygons) {
         const points = normalizeRing(polygon.points.map((point) => {
@@ -267,12 +310,13 @@ function applyLocalJunctionRules(polygons, tiles, options = {}) {
 }
 
 function generateTerrainBubblePolygons(input, options = {}) {
-    const tiles = terrainTilesByKey(input);
-    const mask = innerSevenMask();
+    const coordSets = getTerrainBubbleInputCoordSets(input);
+    const tiles = terrainTilesByKey(input, coordSets);
+    const mask = innerSevenMask(coordSets.innerCoords);
     const polygons = [];
 
     for (const type of TERRAIN_TYPES) {
-        const typeHexes = INNER_COORDS
+        const typeHexes = coordSets.innerCoords
             .filter((coord) => tiles.get(coordKey(coord)) === type)
             .map((coord) => ringToPolygonClippingPolygon(hexCorners(coord)));
         if (typeHexes.length === 0) continue;
@@ -282,13 +326,13 @@ function generateTerrainBubblePolygons(input, options = {}) {
     }
 
     const nextPolygons = options.useThreeTerrainJunctionRule
-        ? applyLocalJunctionRules(polygons, tiles, options)
+        ? applyLocalJunctionRules(polygons, tiles, { ...options, bubbleCoords: coordSets.bubbleCoords })
         : polygons;
     return sortTerrainPolygons(nextPolygons);
 }
 
-function clipTerrainPolygonsToInnerSeven(polygons) {
-    const mask = innerSevenMask();
+function clipTerrainPolygonsToInnerSeven(polygons, innerCoords = INNER_COORDS) {
+    const mask = innerSevenMask(innerCoords);
     const byType = new Map(TERRAIN_TYPES.map((type) => [type, []]));
     for (const polygon of Array.isArray(polygons) ? polygons : []) {
         if (!polygon || !TERRAIN_TYPES.includes(polygon.type)) continue;
@@ -358,12 +402,15 @@ module.exports = {
     DIRECTIONS,
     INNER_COORDS,
     TERRAIN_TYPES,
+    axialDistance,
     axialToModel,
     applyLocalJunctionRules,
     clipTerrainPolygonsToInnerSeven,
     compareTerrainBubblePolygons,
     coordKey,
+    createBubbleCoords,
     generateTerrainBubblePolygons,
+    getTerrainBubbleInputCoordSets,
     hexCorners,
     innerSevenMask,
     multiPolygonArea,

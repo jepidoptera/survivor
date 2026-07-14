@@ -1026,6 +1026,49 @@ test("hitbox movement treats water terrain polygons as impassable", () => {
     assert.ok(actor.x <= 0.82, `swept collision should stop near the water edge, got x=${actor.x}`);
 });
 
+test("hitbox movement can cross water terrain on a bridge road", () => {
+    const start = createNode(0, 0, { x: 0, y: 1, baseZ: 0 });
+    const map = Object.create(GameMap.prototype);
+    Object.assign(map, createMovementMap([start]));
+    map.terrainPolygons = [{
+        type: "water",
+        points: [
+            { x: 1, y: 0 },
+            { x: 3, y: 0 },
+            { x: 3, y: 2 },
+            { x: 1, y: 2 }
+        ]
+    }];
+    const bridgeRoad = {
+        type: "roadPath",
+        outlinePolygon: [
+            { x: 0, y: 0.6 },
+            { x: 4, y: 0.6 },
+            { x: 4, y: 1.4 },
+            { x: 0, y: 1.4 }
+        ]
+    };
+    map.objects = [bridgeRoad];
+
+    const actor = createCharacterHarness(Character, map, start, {
+        frameRate: 1,
+        speed: 2,
+        groundRadius: 0.2,
+        movementVector: { x: 1.2, y: 0 },
+        _closeCombatState: { phase: "test" },
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        groundPlaneHitbox: { type: "circle", x: start.x, y: start.y, radius: 0.2 },
+        visualHitbox: { type: "circle", x: start.x, y: start.y, radius: 0.2 }
+    });
+
+    assert.equal(actor.moveDirection({ x: 1, y: 0 }, { lockMovementVector: true }), true);
+    assert.ok(actor.x > 1, `actor should cross onto the bridge over water, got x=${actor.x}`);
+    assert.equal(actor._bridgeMovementState && actor._bridgeMovementState.onBridge, true);
+    assert.equal(actor._bridgeMovementState.road, bridgeRoad);
+});
+
 test("Blodia.move uses traversal-step interpolation like Character.move", () => {
     const start = createNode(0, 0, { x: 0, y: 0, baseZ: 0 });
     const end = createNode(1, 0, { x: 2, y: 0, baseZ: 6 });

@@ -22,6 +22,8 @@ out vec4 fragColor;
 uniform sampler2D uRootMask;
 uniform sampler2D uSeedTexture;
 uniform vec2 uScreenSize;
+uniform vec2 uRootMaskSize;
+uniform vec2 uRootMaskWorldOrigin;
 uniform vec2 uCameraWorld;
 uniform vec2 uSeedCameraWorld;
 uniform float uCameraZ;
@@ -79,6 +81,14 @@ vec2 seedScreenToWorld(vec2 seedScreen) {
 
 vec2 seedScreenToSnappedWorld(vec2 seedScreen) {
     return screenToWorldWithCamera(seedScreen, uSeedCameraWorld);
+}
+
+vec2 rootMaskUvForWorld(vec2 seedWorld) {
+    vec2 maskSize = max(uRootMaskSize, vec2(1.0));
+    return vec2(
+        (seedWorld.x - uRootMaskWorldOrigin.x) * uViewScale,
+        (seedWorld.y - uRootMaskWorldOrigin.y) * uViewScale * uXyRatio
+    ) / maskSize;
 }
 
 float depthForSeedWorld(vec2 seedWorld) {
@@ -187,7 +197,15 @@ void main(void) {
                 continue;
             }
 
-            vec2 maskUv = seedScreen / screenSize;
+            vec2 maskUv = rootMaskUvForWorld(seedScreenToWorld(seedScreen));
+            if (
+                maskUv.x < 0.0 ||
+                maskUv.y < 0.0 ||
+                maskUv.x > 1.0 ||
+                maskUv.y > 1.0
+            ) {
+                continue;
+            }
             float rootMask = texture(uRootMask, maskUv).r;
             if (rootMask <= uRootMaskThreshold) continue;
 

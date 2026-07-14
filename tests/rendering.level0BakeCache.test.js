@@ -2681,6 +2681,141 @@ test("terrain fade clipping failures render an approximation with diagnostic geo
     assert.equal(Array.isArray(warnings[0][1].clipRings), true);
 });
 
+test("terrain alpha fade skips section clip boundary edges", () => {
+    class FakeBuffer {
+        constructor(data) {
+            this.data = data;
+        }
+        update() {}
+    }
+    class FakeGeometry {
+        constructor() {
+            this.buffers = new Map();
+            this.index = null;
+        }
+        addAttribute(name, data) {
+            this.buffers.set(name, new FakeBuffer(data));
+            return this;
+        }
+        addIndex(data) {
+            this.index = new FakeBuffer(data);
+            return this;
+        }
+        getBuffer(name) {
+            return this.buffers.get(name) || null;
+        }
+    }
+    class FakeContainer {
+        constructor() {
+            this.children = [];
+            this.position = { set() {} };
+            this.scale = { set() {} };
+        }
+        addChild(child) {
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+        }
+        addChildAt(child) {
+            this.addChild(child);
+        }
+        removeChild(child) {
+            const index = this.children.indexOf(child);
+            if (index >= 0) this.children.splice(index, 1);
+            if (child.parent === this) child.parent = null;
+        }
+    }
+    class FakeMesh {
+        constructor(geometry, shader) {
+            this.geometry = geometry;
+            this.shader = shader;
+            this.parent = null;
+            this.visible = false;
+            this.position = { set() {} };
+            this.scale = { set() {} };
+        }
+        destroy() {}
+    }
+    const fakePixi = {
+        Container: FakeContainer,
+        Geometry: FakeGeometry,
+        Mesh: FakeMesh,
+        Shader: { from: (_vs, _fs, uniforms) => ({ uniforms }) },
+        State: class {},
+        Texture: {
+            WHITE: { id: "white" },
+            from: (path) => ({ id: path, baseTexture: {} })
+        },
+        utils: {
+            earcut(vertices) {
+                const count = Math.floor(vertices.length / 2);
+                const indices = [];
+                for (let i = 1; i < count - 1; i++) indices.push(0, i, i + 1);
+                return indices;
+            }
+        }
+    };
+    const RenderingImpl = loadRenderingImpl({
+        PIXI: fakePixi,
+        app: { screen: { width: 800, height: 600 } }
+    });
+    const makeRenderer = (skipClipBoundaryFade) => {
+        const renderer = new RenderingImpl();
+        renderer.layers = { depthObjects: new FakeContainer() };
+        renderer.camera = { x: 0, y: 0, z: 0, viewscale: 1, xyratio: 1 };
+        renderer.collectFloorVisualEntries = () => [{
+            key: "fragment:section:0,0:terrain:mud:0:0:0",
+            level: 0,
+            baseZ: 0,
+            outer: [
+                { x: 1, y: 0 },
+                { x: 4, y: 0 },
+                { x: 4, y: 2 },
+                { x: 1, y: 2 }
+            ],
+            holes: [],
+            texture: null,
+            textureBounds: null,
+            textureRepeat: { x: 1, y: 1 },
+            texturePath: "/assets/images/mud.png",
+            tint: 0xffffff,
+            alpha: 1,
+            depthBias: 0.001,
+            isHoleOverlay: false,
+            terrainType: "mud",
+            edgeFadeWidth: 0.25,
+            edgeFadeClipRings: [],
+            edgeFadeClipSignature: "",
+            edgeFadeSkipRings: [[
+                { x: 0, y: 0 },
+                { x: 5, y: 0 },
+                { x: 5, y: 2 },
+                { x: 0, y: 2 }
+            ]],
+            skipClipBoundaryFade,
+            edgeFadeDiagnosticContext: {
+                terrainType: "mud",
+                sectionKey: "0,0"
+            }
+        }];
+        renderer.renderFloorVisualPolygons({});
+        return renderer.floorVisualMeshByKey.get("fragment:section:0,0:terrain:mud:0:0:0");
+    };
+
+    const withBoundaryFade = makeRenderer(false);
+    const withoutBoundaryFade = makeRenderer(true);
+
+    assert.ok(withBoundaryFade.triangulation.vertexCount > withoutBoundaryFade.triangulation.vertexCount);
+    const skippedPositions = Array.from(withoutBoundaryFade.mesh.geometry.getBuffer("aVertexPosition").data);
+    const skippedAlpha = Array.from(withoutBoundaryFade.mesh.geometry.getBuffer("aEdgeAlpha").data);
+    for (let i = 0; i < skippedAlpha.length; i++) {
+        const y = skippedPositions[i * 2 + 1];
+        assert.ok(
+            !(Math.abs(y - 2) <= 1e-7 && skippedAlpha[i] < 0.999),
+            "section boundary should not emit fade-band alpha vertices"
+        );
+    }
+});
+
 test("interior presentation foreground promotes spell and selection overlays", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -7928,6 +8063,39 @@ test("road path render collection uses active runtime records without node scann
     assert.equal(result.considered, 1);
 });
 
+test("road path endpoint continuity uses shared snap ids for seamless joins", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.getLayerIndexForNode = () => 0;
+    renderer.getLayerIndexForObject = () => 0;
+
+    const roadA = {
+        type: "roadPath",
+        fillTexturePath: "/assets/images/flooring/dirt.jpg",
+        endpointSnapIds: { start: "road-snap:a-start", end: "road-snap:shared" },
+        generatedGeometry: {
+            points: [{ x: 0, y: 0 }, { x: 5, y: 0 }],
+            outline: []
+        }
+    };
+    const roadB = {
+        type: "roadPath",
+        fillTexturePath: "/assets/images/flooring/dirt.jpg",
+        endpointSnapIds: { start: "road-snap:shared", end: "road-snap:b-end" },
+        generatedGeometry: {
+            points: [{ x: 5.01, y: 0 }, { x: 10, y: 0 }],
+            outline: []
+        }
+    };
+
+    const continuity = renderer.buildRoadPathEndpointContinuity([roadA, roadB]);
+
+    assert.equal(continuity.get(roadA).endConnected, true);
+    assert.equal(continuity.get(roadB).startConnected, true);
+    assert.equal(continuity.get(roadA).startConnected, false);
+    assert.equal(continuity.get(roadB).endConnected, false);
+});
+
 test("level 0 terrain polygon floor visuals use active section assets without floor fragments", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -7978,6 +8146,65 @@ test("level 0 terrain polygon floor visuals use active section assets without fl
         point.y >= -0.0001 &&
         point.y <= 5.0001
     )), true);
+});
+
+test("level 0 terrain polygon floor visual collection reuses cached section entries", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.camera = { x: 0, y: 0, z: 0, width: 20, height: 20 };
+    const asset = {
+        key: "0,0",
+        sectionPolygon: [
+            { x: 0, y: 0 },
+            { x: 5, y: 0 },
+            { x: 5, y: 5 },
+            { x: 0, y: 5 }
+        ],
+        terrainPolygons: [{
+            type: "water",
+            points: [
+                { x: -2, y: 2 },
+                { x: 8, y: 2 },
+                { x: 8, y: 8 },
+                { x: -2, y: 8 }
+            ]
+        }]
+    };
+    const map = {
+        floorsById: new Map(),
+        hexWidth: 1 / 0.866,
+        hexHeight: 1,
+        getGroundPolygonMaterialPathForType: type => `/assets/images/${type}.png`,
+        getGroundPolygonMaterialScaleForType: () => 1,
+        _prototypeSectionState: {
+            activeSectionKeys: new Set(["0,0"]),
+            sectionAssetsByKey: new Map([["0,0", asset]])
+        }
+    };
+    const ctx = {
+        map,
+        camera: renderer.camera,
+        viewport: { width: 20, height: 20 },
+        renderNowMs: 100
+    };
+
+    renderer.currentFrameMetrics = {};
+    const first = renderer.collectFloorVisualEntries(ctx);
+    const firstMetrics = renderer.currentFrameMetrics;
+    renderer.currentFrameMetrics = {};
+    ctx.renderNowMs = 250;
+    const second = renderer.collectFloorVisualEntries(ctx);
+    const secondMetrics = renderer.currentFrameMetrics;
+
+    assert.equal(first.length, 1);
+    assert.equal(second.length, 1);
+    assert.equal(firstMetrics.floorTerrainPolygonEntryCacheMisses, 1);
+    assert.equal(firstMetrics.floorTerrainPolygonEntryCacheHits || 0, 0);
+    assert.equal(secondMetrics.floorTerrainPolygonEntryCacheHits, 1);
+    assert.equal(secondMetrics.floorTerrainPolygonEntryCacheMisses || 0, 0);
+    assert.equal(first[0].key, second[0].key);
+    assert.equal(first[0].animationNowMs, 100);
+    assert.equal(second[0].animationNowMs, 250);
 });
 
 test("building cutaway-rendered floor fragments are not collected as floor visual polygons", () => {

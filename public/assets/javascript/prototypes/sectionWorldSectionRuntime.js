@@ -1,6 +1,8 @@
 (function (globalScope) {
     "use strict";
 
+    const SECTION_TERRAIN_HYDRATED_KEY = "_prototypeSectionTerrainHydratedKey";
+
     function sectionOwnsPrototypeNode(node, assetKey) {
         if (!node) return false;
         if (typeof node._prototypeSectionKey !== "string" || node._prototypeSectionKey.length === 0) {
@@ -10,19 +12,43 @@
         return node._prototypeSectionKey === assetKey;
     }
 
+    function markPrototypeTerrainPolygonsHydratedForSection(polygons, sectionKey) {
+        if (Array.isArray(polygons)) {
+            Object.defineProperty(polygons, SECTION_TERRAIN_HYDRATED_KEY, {
+                value: sectionKey,
+                enumerable: false,
+                configurable: true
+            });
+        }
+        return polygons;
+    }
+
     function preservePrototypeTerrainPolygonsForSection(map, asset) {
         if (!map || !asset) return;
+        const sectionKey = typeof asset.key === "string" ? asset.key : "";
         const terrainPolygons = Array.isArray(asset.terrainPolygons) ? asset.terrainPolygons : [];
-        if (typeof map.normalizeGroundTerrainPolygons !== "function") {
+        if (terrainPolygons[SECTION_TERRAIN_HYDRATED_KEY] === sectionKey) return;
+        if (typeof map.normalizeGroundTerrainSectionSourcePolygons !== "function") {
             if (terrainPolygons.length === 0) {
-                asset.terrainPolygons = [];
+                asset.terrainPolygons = markPrototypeTerrainPolygonsHydratedForSection([], sectionKey);
                 return;
             }
-            throw new Error("section terrain hydration requires map.normalizeGroundTerrainPolygons");
+            throw new Error("section terrain hydration requires map.normalizeGroundTerrainSectionSourcePolygons");
         }
         // Terrain polygons are live authored geometry. Hydration must not project
         // them back through every node, or repeated save/load cycles can creep.
-        asset.terrainPolygons = map.normalizeGroundTerrainPolygons(terrainPolygons);
+        // Persisted JSON loses the non-enumerable section-boundary metadata, so
+        // rebuild it with the section-aware normalizer instead of generic terrain
+        // policy snapping.
+        const normalized = map.normalizeGroundTerrainSectionSourcePolygons(
+            sectionKey,
+            asset,
+            terrainPolygons
+        );
+        if (!Array.isArray(normalized)) {
+            throw new Error(`section terrain hydration for ${sectionKey || "(unknown)"} did not return polygon array`);
+        }
+        asset.terrainPolygons = markPrototypeTerrainPolygonsHydratedForSection(normalized, sectionKey);
     }
 
     function getPrototypeAssetGroundTextureId(asset, coordKey, offset, textureCount, pickPrototypeGroundTextureId) {

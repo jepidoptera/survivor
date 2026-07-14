@@ -1650,13 +1650,19 @@ jQuery(() => {
         if (!directive || typeof directive !== "object") return null;
         const rawSource = String(directive.source || "").trim().toLowerCase();
         const source = rawSource === "prototype-indexeddb" ? "section-indexeddb" : rawSource;
-        if (source !== "server" && source !== "section-indexeddb") return null;
+        if (source !== "server" && source !== "section-indexeddb" && source !== "section-server") return null;
         const normalized = { source };
         if (source === "server" && typeof directive.fileName === "string" && directive.fileName.trim().length > 0) {
             normalized.fileName = directive.fileName.trim();
         }
+        if (source === "server" && typeof directive.slot === "string" && directive.slot.trim().length > 0) {
+            normalized.slot = directive.slot.trim();
+        }
         if (source === "section-indexeddb" && typeof directive.key === "string" && directive.key.trim().length > 0) {
             normalized.key = directive.key.trim();
+        }
+        if (source === "section-server" && typeof directive.slot === "string" && directive.slot.trim().length > 0) {
+            normalized.slot = directive.slot.trim();
         }
         return normalized;
     }
@@ -5826,6 +5832,99 @@ jQuery(() => {
             return true;
         }
 
+        if (source === "section-server") {
+            const slot = (typeof directive.slot === "string") ? directive.slot.trim() : "";
+            const loadedPath = slot.length > 0 ? `/assets/saves/${slot}/` : "";
+            if (!slot.length) {
+                message("Section-world server save load is missing a slot");
+                console.error("Startup section-world server load failed: missing slot", directive);
+                return true;
+            }
+            if (!map || typeof map.loadPrototypeSectionWorld !== "function" || typeof fetch !== "function") {
+                message("Section-world server save load is unavailable");
+                console.error(`Startup section-world server load failed for ${loadedPath}: loader unavailable`);
+                return true;
+            }
+            beginPrototypeStartupPerf("autoload-section-world-server-save", { slot });
+            try {
+                const qs = new URLSearchParams();
+                qs.set("slot", slot);
+                qs.set("_ts", String(Date.now()));
+                const response = await fetch(`/api/sectionworld?${qs.toString()}`, { method: "GET", cache: "no-store" });
+                let bundle = null;
+                try {
+                    bundle = await response.json();
+                } catch (error) {
+                    throw new Error(`section-world server save response was not JSON: ${error && error.message ? error.message : error}`);
+                }
+                if (!response.ok || !bundle || bundle.ok !== true) {
+                    const reason = bundle && bundle.reason ? String(bundle.reason) : `HTTP ${response.status}`;
+                    message(`Failed to load ${loadedPath} (${reason})`);
+                    console.error(`Startup section-world server load failed for ${loadedPath}:`, bundle);
+                    finishPrototypeStartupPerf("startup-perf-failed", { slot, reason });
+                    return true;
+                }
+                const manifest = (bundle && bundle.manifest && typeof bundle.manifest === "object") ? bundle.manifest : null;
+                const sectionWorldBundle = (
+                    manifest &&
+                    typeof manifest.activeCenterKey === "string" &&
+                    manifest.activeCenterKey.length > 0 &&
+                    typeof bundle.activeCenterKey !== "string"
+                ) ? { ...bundle, activeCenterKey: manifest.activeCenterKey } : bundle;
+                if (map.loadPrototypeSectionWorld(sectionWorldBundle) !== true) {
+                    const reason = "section-world-apply-failed";
+                    message(`Failed to load ${loadedPath} (${reason})`);
+                    console.error(`Startup section-world server load failed for ${loadedPath}: map.loadPrototypeSectionWorld returned false`);
+                    finishPrototypeStartupPerf("startup-perf-failed", { slot, reason });
+                    return true;
+                }
+                if (typeof map.syncPrototypeWalls === "function") {
+                    map.syncPrototypeWalls();
+                }
+                if (typeof map.syncPrototypeObjects === "function") {
+                    map.syncPrototypeObjects();
+                }
+                if (typeof map.syncPrototypeAnimals === "function") {
+                    map.syncPrototypeAnimals();
+                }
+                if (typeof map.syncPrototypePowerups === "function") {
+                    map.syncPrototypePowerups();
+                }
+                if (manifest && manifest.wizard && typeof manifest.wizard === "object" && wizard && typeof wizard.loadJson === "function") {
+                    ensureViewportGeometryForRestore("section-world server save wizard load");
+                    wizard.loadJson(cloneWizardLoadDataForRuntime(manifest.wizard));
+                }
+                const savedMazeMode = (
+                    manifest &&
+                    manifest.los &&
+                    typeof manifest.los === "object" &&
+                    typeof manifest.los.mazeMode === "boolean"
+                ) ? manifest.los.mazeMode : null;
+                if (typeof applySavedLosMazeModeValue === "function") {
+                    applySavedLosMazeModeValue(savedMazeMode);
+                }
+                if (map && typeof map.updatePrototypeSectionBubble === "function") {
+                    map.updatePrototypeSectionBubble(wizard, { force: true });
+                }
+                restoreWizardSavedMovementSupportAfterBubble(wizard);
+                if (typeof centerViewport === "function") {
+                    centerViewport(wizard, 0, 0);
+                }
+                if (wizard && typeof wizard.updateStatusBars === "function") {
+                    wizard.updateStatusBars();
+                }
+                setLastSaveReloadDirective({ source: "section-server", slot });
+                message(`Loaded ${loadedPath}`);
+                console.log(`Startup loaded section-world server save from ${loadedPath}`);
+            } catch (error) {
+                const reason = error && error.message ? error.message : "network-failed";
+                message(`Failed to load ${loadedPath} (${reason})`);
+                console.error(`Startup section-world server load failed for ${loadedPath}:`, error);
+                finishPrototypeStartupPerf("startup-perf-failed", { slot, reason });
+            }
+            return true;
+        }
+
         if (source === "server") {
             if (typeof loadGameStateFromServerFile !== "function") {
                 message("Server file load is unavailable");
@@ -6705,6 +6804,19 @@ jQuery(() => {
             return;
         }
 
+        if (
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey &&
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.handleTerrainBrushRadiusHotkey === "function" &&
+            SpellSystem.handleTerrainBrushRadiusHotkey(wizard, event.key)
+        ) {
+            event.preventDefault();
+            return;
+        }
+
         if (event.key === "Tab") {
             event.preventDefault();
             const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
@@ -7354,7 +7466,7 @@ jQuery(() => {
             console.log('Hex grid:', showHexGrid ? 'ON' : 'OFF');
         }
 
-        // Save game to fixed server path with Ctrl+Shift+S
+        // Save section-world to the maps server slot with Ctrl+Shift+S.
         if ((event.key === 's' || event.key === 'S') && event.ctrlKey && event.shiftKey) {
             event.preventDefault();
             if (typeof saveSectionWorldToServerSlot === "function") {
@@ -7376,13 +7488,13 @@ jQuery(() => {
             return;
         }
 
-        // Load game from fixed server path with Ctrl+Shift+L
+        // Load section-world from the same maps slot used by Ctrl+Shift+S.
         if ((event.key === 'l' || event.key === 'L') && event.ctrlKey && event.shiftKey) {
             event.preventDefault();
-            if (reloadWithStartupLoadDirective({ source: "server" })) {
-                message('Reloading and loading /assets/saves/savefile.json...');
+            if (reloadWithStartupLoadDirective({ source: "section-server", slot: "maps" })) {
+                message('Reloading and loading /assets/saves/maps/...');
             } else {
-                message('Failed to queue reload for server save load');
+                message('Failed to queue reload for section-world server save load');
             }
             return;
         }
