@@ -1606,7 +1606,8 @@ class Character {
                 ...options,
                 actor: this,
                 traversalLayer: this.getCurrentMovementLayer(options),
-                terrainCollisionPolygons: nearbyTerrainPolygons
+                terrainCollisionPolygons: nearbyTerrainPolygons,
+                bridgeRoads: nearbyBridgeRoads
             });
         };
         const addTerrainCollision = (collision, iteration, sampleX, sampleY) => {
