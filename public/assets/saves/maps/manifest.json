@@ -1,14 +1,14 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -43.52329156646342,
-    "y": 121.66970297672145,
+    "x": -4.292204165163537,
+    "y": 135.64993886270122,
     "z": 0,
-    "currentLayer": 8,
-    "traversalLayer": 8,
-    "currentLayerBaseZ": 30,
-    "surfaceId": "building:placed-9:surface:floor-fragment-71",
-    "fragmentId": "building:placed-9:floor:floor-fragment-71",
+    "currentLayer": 0,
+    "traversalLayer": 0,
+    "currentLayerBaseZ": 0,
+    "surfaceId": "floor_area:-2,-1:0",
+    "fragmentId": "floor_area:-2,-1:0:0",
     "hp": 100,
     "maxHp": 100,
     "mp": 100,
@@ -24,20 +24,22 @@
     "shieldHp": 0,
     "maxShieldHp": 0,
     "food": 0,
-    "currentSpell": "teleport",
-    "activeAura": "speed",
+    "currentSpell": "terrainedit",
+    "activeAura": "healing",
     "activeAuras": [
-      "speed",
-      "healing"
+      "healing",
+      "speed"
     ],
     "unlockedMagic": [],
+    "skillpoints": 0,
+    "spellLevels": {},
     "selectedFlooringTexture": "/assets/images/flooring/dirt.jpg",
     "selectedTerrainType": "water",
     "selectedTreeTextureVariant": "random",
     "selectedPlaceableCategory": "flowers",
-    "selectedPlaceableTexturePath": "/assets/images/flowers/red%20flower.png",
+    "selectedPlaceableTexturePath": "/assets/images/flowers/yellow%20flower.png",
     "selectedPlaceableByCategory": {
-      "flowers": "/assets/images/flowers/red%20flower.png",
+      "flowers": "/assets/images/flowers/yellow%20flower.png",
       "windows": "/assets/images/windows/very%20plain%20arch.png",
       "doors": "/assets/images/doors/door2.png",
       "furniture": "/assets/images/furniture/armor.png",
@@ -67,9 +69,10 @@
       "/assets/images/furniture/armor.png": 0,
       "/assets/images/flowers/white%20rosebush.png": 0,
       "/assets/images/flowers/blue%20flower%20bush.png": 0,
-      "/assets/images/flowers/lily%20plant.png": 0
+      "/assets/images/flowers/lily%20plant.png": 0,
+      "/assets/images/flowers/yellow%20flower.png": 0
     },
-    "selectedPlaceableScale": 0.927,
+    "selectedPlaceableScale": 0.866,
     "selectedPlaceableScaleByTexture": {
       "/assets/images/doors/door5.png": 1,
       "/assets/images/windows/window.png": 0.997,
@@ -92,7 +95,8 @@
       "/assets/images/furniture/armor.png": 1.452,
       "/assets/images/flowers/white%20rosebush.png": 2.773,
       "/assets/images/flowers/blue%20flower%20bush.png": 1.618,
-      "/assets/images/flowers/lily%20plant.png": 1.618
+      "/assets/images/flowers/lily%20plant.png": 1.618,
+      "/assets/images/flowers/yellow%20flower.png": 0.866
     },
     "selectedPlaceableRotation": 0,
     "selectedPlaceableRotationByTexture": {
@@ -117,7 +121,8 @@
       "/assets/images/furniture/armor.png": 0,
       "/assets/images/flowers/white%20rosebush.png": 0,
       "/assets/images/flowers/blue%20flower%20bush.png": 0,
-      "/assets/images/flowers/lily%20plant.png": 0
+      "/assets/images/flowers/lily%20plant.png": 0,
+      "/assets/images/flowers/yellow%20flower.png": 0
     },
     "selectedPlaceableRotationAxis": "none",
     "selectedPlaceableRotationAxisByTexture": {
@@ -142,7 +147,8 @@
       "/assets/images/furniture/armor.png": "none",
       "/assets/images/flowers/white%20rosebush.png": "none",
       "/assets/images/flowers/blue%20flower%20bush.png": "none",
-      "/assets/images/flowers/lily%20plant.png": "none"
+      "/assets/images/flowers/lily%20plant.png": "none",
+      "/assets/images/flowers/yellow%20flower.png": "none"
     },
     "selectedPlaceableAnchorX": 0.5,
     "selectedPlaceableAnchorY": 0.5,
@@ -168,7 +174,8 @@
       "/assets/images/furniture/armor.png": 0.5,
       "/assets/images/flowers/white%20rosebush.png": 0.5,
       "/assets/images/flowers/blue%20flower%20bush.png": 0.5,
-      "/assets/images/flowers/lily%20plant.png": 0.5
+      "/assets/images/flowers/lily%20plant.png": 0.5,
+      "/assets/images/flowers/yellow%20flower.png": 0.5
     },
     "selectedPlaceableAnchorYByTexture": {
       "/assets/images/doors/door5.png": 1,
@@ -192,12 +199,13 @@
       "/assets/images/furniture/armor.png": 0.9,
       "/assets/images/flowers/white%20rosebush.png": 0.5,
       "/assets/images/flowers/blue%20flower%20bush.png": 0.5,
-      "/assets/images/flowers/lily%20plant.png": 0.5
+      "/assets/images/flowers/lily%20plant.png": 0.5,
+      "/assets/images/flowers/yellow%20flower.png": 0.5
     },
     "selectedPowerupPlacementScale": 0.465,
     "selectedPowerupFileName": "lightning.png",
     "selectedEditorCategory": "flowers",
-    "selectedFloorEditLevel": 8,
+    "selectedFloorEditLevel": 0,
     "selectedWallHeight": 6,
     "selectedWallThickness": 0.25,
     "selectedRoadWidth": 3,
@@ -283,8 +291,8 @@
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -59.02329156646342,
-      "y": 108.16556415877511
+      "x": -19.799931596494766,
+      "y": 114.35645402713669
     }
   },
   "los": {

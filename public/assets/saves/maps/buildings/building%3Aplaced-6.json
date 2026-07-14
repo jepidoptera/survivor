@@ -3442,5 +3442,5 @@
   "loadState": "shell",
   "contentVersion": 1,
   "movementBlockedEdges": [],
-  "movementEdgeBlockerVersion": "surface-neighbor-crossings-v3"
+  "movementEdgeBlockerVersion": "surface-neighbor-crossings-v4-ground-walls"
 }

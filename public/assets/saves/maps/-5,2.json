@@ -22145,10 +22145,5 @@
     }
   ],
   "powerups": [],
-  "buildingRefs": [
-    {
-      "id": "building:placed-7",
-      "shell": true
-    }
-  ]
+  "buildingRefs": []
 }
