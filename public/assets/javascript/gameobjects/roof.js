@@ -1520,7 +1520,7 @@ void main(void) {
         const eaveCount = Math.max(0, this.numEaves || 0);
         const eaves = Array.isArray(this.vertices) ? this.vertices.slice(0, eaveCount) : [];
         if (!eaves.length || typeof PolygonHitbox === 'undefined') {
-            this.groundPlaneHitbox = null;
+            this.shadowBox = null;
             this.wallDepthHitbox = null;
             return;
         }
@@ -1555,7 +1555,7 @@ void main(void) {
             };
         });
 
-        this.groundPlaneHitbox = new PolygonHitbox(shrunkPoints);
+        this.shadowBox = new PolygonHitbox(shrunkPoints);
     }
 
     setInteriorHideHitboxFromLocalPoints(localPoints) {
@@ -1600,8 +1600,8 @@ void main(void) {
             triangles: Array.isArray(this.faces)
                 ? this.faces.map(face => [face[0], face[1], face[2]])
                 : [],
-            groundPlaneHitbox: this.groundPlaneHitbox && Array.isArray(this.groundPlaneHitbox.points)
-                ? { points: this.groundPlaneHitbox.points.map(p => ({ x: p.x, y: p.y })) }
+            shadowBox: this.shadowBox && Array.isArray(this.shadowBox.points)
+                ? { points: this.shadowBox.points.map(p => ({ x: p.x, y: p.y })) }
                 : null,
             interiorHideHitbox: this.interiorHideHitbox && Array.isArray(this.interiorHideHitbox.points)
                 ? { points: this.interiorHideHitbox.points.map(p => ({ x: p.x, y: p.y })) }
@@ -1643,6 +1643,9 @@ void main(void) {
 
     static loadJson(data, options = {}) {
         if (!data || data.type !== 'roof') return null;
+        if (typeof globalThis.normalizeLegacyHitboxFieldsDeep === "function") {
+            globalThis.normalizeLegacyHitboxFieldsDeep(data);
+        }
 
         const x = Number.isFinite(data.x) ? data.x : 0;
         const y = Number.isFinite(data.y) ? data.y : 0;
@@ -1753,22 +1756,22 @@ void main(void) {
         } else {
             // Backward-compatible fallback for old saves.
             roof.interiorHidePolygonPoints = (
-                roof.groundPlaneHitbox &&
-                Array.isArray(roof.groundPlaneHitbox.points)
-            ) ? roof.groundPlaneHitbox.points.map(p => ({ x: Number(p.x) || 0, y: Number(p.y) || 0 })) : null;
+                roof.shadowBox &&
+                Array.isArray(roof.shadowBox.points)
+            ) ? roof.shadowBox.points.map(p => ({ x: Number(p.x) || 0, y: Number(p.y) || 0 })) : null;
             roof.interiorHideHitbox = roof.interiorHidePolygonPoints && roof.interiorHidePolygonPoints.length >= 3
                 ? new PolygonHitbox(roof.interiorHidePolygonPoints)
                 : null;
         }
 
         if (
-            data.groundPlaneHitbox &&
-            Array.isArray(data.groundPlaneHitbox.points) &&
-            data.groundPlaneHitbox.points.length >= 3 &&
+            data.shadowBox &&
+            Array.isArray(data.shadowBox.points) &&
+            data.shadowBox.points.length >= 3 &&
             typeof PolygonHitbox !== 'undefined'
         ) {
-            roof.groundPlaneHitbox = new PolygonHitbox(
-                data.groundPlaneHitbox.points.map(p => ({
+            roof.shadowBox = new PolygonHitbox(
+                data.shadowBox.points.map(p => ({
                     x: Number(p.x) || 0,
                     y: Number(p.y) || 0
                 }))

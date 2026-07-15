@@ -13,6 +13,35 @@
     const powerupItemsByFileName = new Map();
     const powerupItemsByTypeKey = new Map();
 
+    function normalizeLegacyPowerupHitboxFields(value) {
+        if (typeof global.normalizeLegacyHitboxFieldsDeep === "function") {
+            return global.normalizeLegacyHitboxFieldsDeep(value);
+        }
+        if (!value || typeof value !== "object") return value;
+        const mappings = [
+            ["groundPlaneHitbox", "shadowBox"],
+            ["visualHitbox", "touchBox"],
+            ["groundPlaneHitboxOverridePoints", "shadowBoxOverridePoints"],
+            ["wallGroundHitboxPoints", "wallShadowBoxPoints"]
+        ];
+        for (let i = 0; i < mappings.length; i++) {
+            const oldKey = mappings[i][0];
+            const newKey = mappings[i][1];
+            if (
+                Object.prototype.hasOwnProperty.call(value, oldKey) &&
+                !Object.prototype.hasOwnProperty.call(value, newKey)
+            ) {
+                value[newKey] = value[oldKey];
+            }
+        }
+        if (Array.isArray(value)) {
+            for (let i = 0; i < value.length; i++) normalizeLegacyPowerupHitboxFields(value[i]);
+        } else {
+            for (const key of Object.keys(value)) normalizeLegacyPowerupHitboxFields(value[key]);
+        }
+        return value;
+    }
+
     function decodeUriSafe(value) {
         if (typeof value !== "string") return "";
         try {
@@ -83,14 +112,16 @@
     function mergePowerupImageData(defaults, item) {
         const base = (defaults && typeof defaults === "object") ? defaults : {};
         const row = (item && typeof item === "object") ? item : {};
+        normalizeLegacyPowerupHitboxFields(base);
+        normalizeLegacyPowerupHitboxFields(row);
         const merged = { ...base, ...row };
         merged.anchor = {
             ...(base.anchor && typeof base.anchor === "object" ? base.anchor : {}),
             ...(row.anchor && typeof row.anchor === "object" ? row.anchor : {})
         };
-        merged.groundPlaneHitbox = {
-            ...(base.groundPlaneHitbox && typeof base.groundPlaneHitbox === "object" ? base.groundPlaneHitbox : {}),
-            ...(row.groundPlaneHitbox && typeof row.groundPlaneHitbox === "object" ? row.groundPlaneHitbox : {})
+        merged.shadowBox = {
+            ...(base.shadowBox && typeof base.shadowBox === "object" ? base.shadowBox : {}),
+            ...(row.shadowBox && typeof row.shadowBox === "object" ? row.shadowBox : {})
         };
         merged.billboard = {
             ...(base.billboard && typeof base.billboard === "object" ? base.billboard : {}),
@@ -138,6 +169,7 @@
             .then(async (response) => {
                 if (!response.ok) return null;
                 const parsed = await response.json();
+                normalizeLegacyPowerupHitboxFields(parsed);
                 powerupItemsDocCache = (parsed && typeof parsed === "object") ? parsed : null;
                 buildPowerupItemsIndex(powerupItemsDocCache);
                 return powerupItemsDocCache;
@@ -189,8 +221,8 @@
         const opts = (options && typeof options === "object") ? options : {};
         const imageData = getPowerupImageData(powerupType);
         const sizeScale = Number.isFinite(opts.size) && Number(opts.size) > 0 ? Number(opts.size) : 1;
-        const hitboxSpec = (imageData && imageData.groundPlaneHitbox && typeof imageData.groundPlaneHitbox === "object")
-            ? imageData.groundPlaneHitbox
+        const hitboxSpec = (imageData && imageData.shadowBox && typeof imageData.shadowBox === "object")
+            ? imageData.shadowBox
             : null;
         const baseWidth = Number.isFinite(imageData && imageData.width) ? Number(imageData.width) : 0.8;
         const baseHeight = Number.isFinite(imageData && imageData.height) ? Number(imageData.height) : 0.8;
@@ -345,7 +377,7 @@
 
             this.applyImageData(getPowerupImageDataByFile(this.imageFileName));
 
-            this.groundPlaneHitbox = new CircleHitbox(
+            this.shadowBox = new CircleHitbox(
                 this.x + this.hitboxOffsetX,
                 this.y + this.hitboxOffsetY,
                 this.radius
@@ -416,8 +448,8 @@
             this.lodTextures = normalizePowerupLodTextures(imageData.lodTextures, this.imagePath);
             this._activeLodTexturePath = null;
 
-            const hitboxSpec = (imageData.groundPlaneHitbox && typeof imageData.groundPlaneHitbox === "object")
-                ? imageData.groundPlaneHitbox
+            const hitboxSpec = (imageData.shadowBox && typeof imageData.shadowBox === "object")
+                ? imageData.shadowBox
                 : null;
             if (!this._explicitOverrides.radius) {
                 if (hitboxSpec && Number.isFinite(hitboxSpec.radius)) {
@@ -487,17 +519,17 @@
         }
 
         updateHitbox() {
-            if (!this.groundPlaneHitbox) {
-                this.groundPlaneHitbox = new CircleHitbox(
+            if (!this.shadowBox) {
+                this.shadowBox = new CircleHitbox(
                     this.x + this.hitboxOffsetX,
                     this.y + this.hitboxOffsetY,
                     this.radius
                 );
                 return;
             }
-            this.groundPlaneHitbox.x = this.x + this.hitboxOffsetX;
-            this.groundPlaneHitbox.y = this.y + this.hitboxOffsetY;
-            this.groundPlaneHitbox.radius = this.radius;
+            this.shadowBox.x = this.x + this.hitboxOffsetX;
+            this.shadowBox.y = this.y + this.hitboxOffsetY;
+            this.shadowBox.radius = this.radius;
         }
 
         ensureSprite() {
@@ -537,11 +569,11 @@
         intersectsWizard(wizard) {
             if (!wizard || this.gone || this.collected) return false;
             if (!canPowerupInteractWithWizardLayer(this, wizard)) return false;
-            const wizardHitbox = wizard.groundPlaneHitbox || wizard.visualHitbox || null;
-            if (!wizardHitbox || !this.groundPlaneHitbox || typeof this.groundPlaneHitbox.intersects !== "function") {
+            const wizardHitbox = wizard.shadowBox || wizard.touchBox || null;
+            if (!wizardHitbox || !this.shadowBox || typeof this.shadowBox.intersects !== "function") {
                 return false;
             }
-            return !!this.groundPlaneHitbox.intersects(wizardHitbox);
+            return !!this.shadowBox.intersects(wizardHitbox);
         }
 
         gravitateToward(targetX, targetY, dt) {
@@ -677,6 +709,7 @@
 
         static loadJson(data, mapRef = null) {
             if (!data || typeof data !== "object") return null;
+            normalizeLegacyPowerupHitboxFields(data);
             const fileName = (typeof data.file === "string" && data.file.trim().length > 0)
                 ? data.file.trim()
                 : DEFAULT_IMAGE_FILE;
@@ -832,7 +865,7 @@
 
         for (const wall of WallCtor._allSections.values()) {
             if (!wall || wall.gone || wall.vanishing) continue;
-            const hitbox = wall.groundPlaneHitbox;
+            const hitbox = wall.shadowBox;
             if (!hitbox || !Array.isArray(hitbox.points) || hitbox.points.length < 2) continue;
 
             // Quick AABB rejection using the hitbox bounds
@@ -860,7 +893,7 @@
 
         for (const wall of WallCtor._allSections.values()) {
             if (!wall || wall.gone || wall.vanishing) continue;
-            const wallHitbox = wall.groundPlaneHitbox || wall.visualHitbox || wall.hitbox || null;
+            const wallHitbox = wall.shadowBox || wall.touchBox || wall.hitbox || null;
             if (!wallHitbox) continue;
             if (typeof wallHitbox.intersects === "function" && wallHitbox.intersects(hitbox)) {
                 return true;

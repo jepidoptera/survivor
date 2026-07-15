@@ -34,7 +34,7 @@ function describeTreePlacementObject(obj) {
 }
 
 function getTreePlacementObjectHitbox(obj) {
-    return obj && (obj.groundPlaneHitbox || obj.hitbox || null);
+    return obj && (obj.shadowBox || obj.hitbox || null);
 }
 
 function treePlacementHitboxesIntersect(hitboxA, hitboxB) {

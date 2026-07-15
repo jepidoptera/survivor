@@ -38,15 +38,15 @@ test("this.hasShadow=true creates LOS shadow geometry for hitbox-less targets", 
         type: "flower",
         hasShadow: false,
         castsLosShadows: false,
-        groundPlaneHitbox: null,
-        visualHitbox: { type: "circle", x: 3, y: 4, radius: 0.5 }
+        shadowBox: null,
+        touchBox: { type: "circle", x: 3, y: 4, radius: 0.5 }
     };
     let helperTarget = null;
     let invalidated = false;
     let presented = false;
     global.ensureLosShadowHitboxForObject = obj => {
         helperTarget = obj;
-        obj.groundPlaneHitbox = { type: "circle", x: 3, y: 4, radius: 0.5 };
+        obj.shadowBox = { type: "circle", x: 3, y: 4, radius: 0.5 };
         return true;
     };
     global.Rendering = {
@@ -65,7 +65,7 @@ test("this.hasShadow=true creates LOS shadow geometry for hitbox-less targets", 
     assert.equal(target.hasShadow, true);
     assert.equal(target.castsLosShadows, true);
     assert.equal(helperTarget, target);
-    assert.deepEqual(target.groundPlaneHitbox, { type: "circle", x: 3, y: 4, radius: 0.5 });
+    assert.deepEqual(target.shadowBox, { type: "circle", x: 3, y: 4, radius: 0.5 });
     assert.equal(invalidated, true);
     assert.equal(presented, true);
 });

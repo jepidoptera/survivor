@@ -786,7 +786,7 @@ class PlaceObject extends globalThis.Spell {
                 useWallSnapPlacement &&
                 Number.isFinite(wallSnapPlacement.mountedWallFacingSign)
             ) ? Number(wallSnapPlacement.mountedWallFacingSign) : null,
-            groundPlaneHitboxOverridePoints: useWallSnapPlacement ? wallSnapPlacement.wallGroundHitboxPoints : undefined
+            shadowBoxOverridePoints: useWallSnapPlacement ? wallSnapPlacement.wallShadowBoxPoints : undefined
         });
         if (placedObject && isPlaceObjectDebugLoggingEnabled()) {
             const debugNow = (typeof performance !== "undefined" && performance && typeof performance.now === "function")

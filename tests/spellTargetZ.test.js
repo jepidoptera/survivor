@@ -337,8 +337,8 @@ test("move object drag applies force toward the mouse instead of teleporting", (
         node,
         isPassable: false,
         groundRadius: 0.25,
-        groundPlaneHitbox: new context.CircleHitbox(0, 0, 0.25),
-        visualHitbox: new context.CircleHitbox(0, 0, 0.25)
+        shadowBox: new context.CircleHitbox(0, 0, 0.25),
+        touchBox: new context.CircleHitbox(0, 0, 0.25)
     };
     node.objects.push(target);
     context.renderingScenePicker = {
@@ -395,14 +395,14 @@ test("move object force drag is resisted by wall hitboxes", () => {
         moveObjectForceStrength: 2000,
         moveObjectMaxSpeed: 50,
         moveObjectForceDamping: 0,
-        groundPlaneHitbox: new context.CircleHitbox(0, 0, 0.25),
-        visualHitbox: new context.CircleHitbox(0, 0, 0.25)
+        shadowBox: new context.CircleHitbox(0, 0, 0.25),
+        touchBox: new context.CircleHitbox(0, 0, 0.25)
     };
     const wall = {
         type: "wallSection",
         isPassable: false,
         traversalLayer: 0,
-        groundPlaneHitbox: new context.PolygonHitbox([
+        shadowBox: new context.PolygonHitbox([
             { x: 1.0, y: -2 },
             { x: 1.2, y: -2 },
             { x: 1.2, y: 2 },
@@ -445,7 +445,7 @@ test("move object force drag is resisted by prototype building movement blockers
         type: "prototypeBuildingMovementBlocker",
         isPassable: false,
         traversalLayer: 0,
-        groundPlaneHitbox: new context.PolygonHitbox([
+        shadowBox: new context.PolygonHitbox([
             { x: 1.0, y: -2 },
             { x: 1.2, y: -2 },
             { x: 1.2, y: 2 },
@@ -482,8 +482,8 @@ test("move object force drag is resisted by prototype building movement blockers
         moveObjectForceStrength: 2000,
         moveObjectMaxSpeed: 50,
         moveObjectForceDamping: 0,
-        groundPlaneHitbox: new context.CircleHitbox(0, 0, 0.25),
-        visualHitbox: new context.CircleHitbox(0, 0, 0.25)
+        shadowBox: new context.CircleHitbox(0, 0, 0.25),
+        touchBox: new context.CircleHitbox(0, 0, 0.25)
     };
     node.objects.push(target);
     context.renderingScenePicker = {
@@ -534,7 +534,7 @@ test("god mode move object drag preserves grab offset and ignores blockers", () 
                 type: "prototypeBuildingMovementBlocker",
                 isPassable: false,
                 traversalLayer: 0,
-                groundPlaneHitbox: new context.PolygonHitbox([
+                shadowBox: new context.PolygonHitbox([
                     { x: 1.0, y: -2 },
                     { x: 1.2, y: -2 },
                     { x: 1.2, y: 2 },
@@ -553,8 +553,8 @@ test("god mode move object drag preserves grab offset and ignores blockers", () 
         node,
         isPassable: false,
         groundRadius: 0.25,
-        groundPlaneHitbox: new context.CircleHitbox(0, 0, 0.25),
-        visualHitbox: new context.CircleHitbox(0, 0, 0.25)
+        shadowBox: new context.CircleHitbox(0, 0, 0.25),
+        touchBox: new context.CircleHitbox(0, 0, 0.25)
     };
     node.objects.push(target);
     context.renderingScenePicker = {

@@ -17860,7 +17860,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 1.3746135093142227,
           "y": -23.81655915270682
@@ -17907,7 +17907,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -5.084774779535535,
           "y": -22.46495811334492
@@ -17954,7 +17954,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 7.78691459062064,
           "y": -21.949778087916958
@@ -18001,7 +18001,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -11.95627266568272,
           "y": -11.590531780966137
@@ -18048,7 +18048,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -10.537879558026486,
           "y": -5.011464872033033
@@ -18095,7 +18095,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -6.165664061956763,
           "y": -0.08056242628009433
@@ -18142,7 +18142,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 0.3245693547648347,
           "y": 1.9012965388648078
@@ -18189,7 +18189,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 6.895355222532912,
           "y": 0.5552832153930267
@@ -18236,7 +18236,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 11.76609687456511,
           "y": -4.049036526473274
@@ -18283,7 +18283,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 13.794076411499349,
           "y": -10.525960784024674
@@ -18330,7 +18330,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 12.129705849120002,
           "y": -17.04712209403094
@@ -18377,7 +18377,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -0.17052995681108965,
           "y": 2.236344026777722
@@ -18424,7 +18424,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 3.2509198435054505,
           "y": 2.0527838852544917
@@ -18471,7 +18471,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 6.586542901985081,
           "y": 1.089926968715403
@@ -18518,7 +18518,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 1.863277011528166,
           "y": -24.16606576219577
@@ -18565,7 +18565,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -1.5607116168242334,
           "y": -24.019578399304493
@@ -18612,7 +18612,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -4.789837990780146,
           "y": -23.01404735092022
@@ -18674,7 +18674,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": true,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -1.8824258365649542,
           "y": -23.529269925879067
@@ -18721,7 +18721,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -10.775279183747774,
           "y": -5.577392459245175
@@ -18768,7 +18768,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -6.641283363281739,
           "y": -0.4496915172101982
@@ -18815,7 +18815,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -11.885952241798073,
           "y": -12.200193698954335
@@ -18862,7 +18862,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -9.583778312449514,
           "y": -18.43067975919811
@@ -18909,7 +18909,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -4.515098446743356,
           "y": -22.693215626073023
@@ -18956,7 +18956,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 1.9847630103937892,
           "y": -23.750603087081878
@@ -19003,7 +19003,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 8.265522982483196,
           "y": -21.565634073907752
@@ -19050,7 +19050,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 12.386885852939951,
           "y": -16.489904845647928
@@ -19097,7 +19097,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 13.705096138576309,
           "y": -9.918741608363277
@@ -19144,7 +19144,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 6.317242987669795,
           "y": 0.7612416096427828
@@ -19191,7 +19191,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -0.2838920682752865,
           "y": 1.8167488567810706
@@ -19238,7 +19238,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -6.996712057747581,
           "y": -22.442722012108888
@@ -19285,7 +19285,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -11.579728215234484,
           "y": -17.009265886627894
@@ -19332,7 +19332,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 6.802706863731565,
           "y": -23.601855241516567
@@ -19379,7 +19379,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 12.161311375557045,
           "y": -18.943599570141302
@@ -19426,7 +19426,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 13.39454161642571,
           "y": -4.997675943380944
@@ -19473,7 +19473,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 8.819337617104667,
           "y": 0.5072484741573786
@@ -19520,7 +19520,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 11.385986065845808,
           "y": -3.5672187296297735
@@ -19567,7 +19567,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -5.175400821772062,
           "y": 1.5767536843601562
@@ -19614,7 +19614,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -10.545720941839601,
           "y": -3.1264763981953725
@@ -19661,7 +19661,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -6.996712057747581,
           "y": -22.442722012108888
@@ -19708,7 +19708,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -11.579728215234484,
           "y": -17.009265886627894
@@ -19755,7 +19755,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 6.802706863731565,
           "y": -23.601855241516567
@@ -19802,7 +19802,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 12.161311375557045,
           "y": -18.943599570141302
@@ -19849,7 +19849,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 13.39454161642571,
           "y": -4.997675943380944
@@ -19896,7 +19896,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 8.819337617104667,
           "y": 0.5072484741573786
@@ -19943,7 +19943,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -5.175400821772062,
           "y": 1.5767536843601562
@@ -19990,7 +19990,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -10.545720941839601,
           "y": -3.1264763981953725
@@ -20037,7 +20037,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -6.996712057747581,
           "y": -22.442722012108888
@@ -20084,7 +20084,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -11.579728215234484,
           "y": -17.009265886627894
@@ -20131,7 +20131,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 6.802706863731565,
           "y": -23.601855241516567
@@ -20178,7 +20178,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 12.161311375557045,
           "y": -18.943599570141302
@@ -20225,7 +20225,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 13.39454161642571,
           "y": -4.997675943380944
@@ -20272,7 +20272,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 8.819337617104667,
           "y": 0.5072484741573786
@@ -20319,7 +20319,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -5.175400821772062,
           "y": 1.5767536843601562
@@ -20366,7 +20366,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -10.545720941839601,
           "y": -3.1264763981953725
@@ -20413,7 +20413,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -9.951429648846696,
           "y": -17.93928876303952
@@ -20460,7 +20460,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -10.775279183747774,
           "y": -5.577392459245175
@@ -20507,7 +20507,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -6.641283363281739,
           "y": -0.4496915172101982
@@ -20554,7 +20554,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -11.885952241798073,
           "y": -12.200193698954335
@@ -20601,7 +20601,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -9.583778312449514,
           "y": -18.43067975919811
@@ -20648,7 +20648,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -4.515098446743356,
           "y": -22.693215626073023
@@ -20695,7 +20695,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 1.9847630103937892,
           "y": -23.750603087081878
@@ -20742,7 +20742,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 8.265522982483196,
           "y": -21.565634073907752
@@ -20789,7 +20789,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 12.386885852939951,
           "y": -16.489904845647928
@@ -20836,7 +20836,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 13.705096138576309,
           "y": -9.918741608363277
@@ -20883,7 +20883,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 6.317242987669795,
           "y": 0.7612416096427828
@@ -20930,7 +20930,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -0.2838920682752865,
           "y": 1.8167488567810706
@@ -20977,7 +20977,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 11.385986065845808,
           "y": -3.5672187296297735
@@ -21024,7 +21024,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -10.775279183747774,
           "y": -5.577392459245175
@@ -21071,7 +21071,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -6.641283363281739,
           "y": -0.4496915172101982
@@ -21118,7 +21118,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -11.885952241798073,
           "y": -12.200193698954335
@@ -21165,7 +21165,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -9.583778312449514,
           "y": -18.43067975919811
@@ -21212,7 +21212,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -4.515098446743356,
           "y": -22.693215626073023
@@ -21259,7 +21259,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 1.9847630103937892,
           "y": -23.750603087081878
@@ -21306,7 +21306,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 8.265522982483196,
           "y": -21.565634073907752
@@ -21353,7 +21353,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 12.386885852939951,
           "y": -16.489904845647928
@@ -21400,7 +21400,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 13.705096138576309,
           "y": -9.918741608363277
@@ -21447,7 +21447,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 6.317242987669795,
           "y": 0.7612416096427828
@@ -21494,7 +21494,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -0.2838920682752865,
           "y": 1.8167488567810706
@@ -21541,7 +21541,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 11.385986065845808,
           "y": -3.5672187296297735
@@ -21588,7 +21588,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 5.4263385112307265,
           "y": -4.580659899941544
@@ -21635,7 +21635,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -3.6943385112307268,
           "y": -17.419340100058452
@@ -21682,7 +21682,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 8.396203475959316,
           "y": -14.30069877708467
@@ -21729,7 +21729,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -6.664203475959316,
           "y": -7.699301222915332
@@ -21776,7 +21776,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -6.164518513360256,
           "y": -14.683352285759863
@@ -21823,7 +21823,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 0.9320150027597696,
           "y": -19.302024525625857
@@ -21870,7 +21870,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 7.896518513360255,
           "y": -7.316647714240135
@@ -21917,7 +21917,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 0.7999849972402303,
           "y": -2.697975474374143

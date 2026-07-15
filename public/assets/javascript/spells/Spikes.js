@@ -44,8 +44,8 @@ class SpikeProjectile {
         this._lastUpdateTime = 0;
         this._pausedAt = null;
         this.hitbox = new CircleHitbox(this.x, this.y, this.radius);
-        this.groundPlaneHitbox = this.hitbox;
-        this.visualHitbox = this.hitbox;
+        this.shadowBox = this.hitbox;
+        this.touchBox = this.hitbox;
         this.movement = {
             x: this.dirX * this.speed / Math.max(1, frameRate),
             y: this.dirY * this.speed / Math.max(1, frameRate),
@@ -171,9 +171,9 @@ class SpikeProjectile {
             animals.includes(target)
         );
         if (isAnimalTarget) {
-            return target.visualHitbox || target.groundPlaneHitbox || target.hitbox || null;
+            return target.touchBox || target.shadowBox || target.hitbox || null;
         }
-        return target.groundPlaneHitbox || target.visualHitbox || target.hitbox || null;
+        return target.shadowBox || target.touchBox || target.hitbox || null;
     }
 
     canDamageTarget(target) {

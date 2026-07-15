@@ -18,7 +18,7 @@
       "width": 0.5,
       "height": 0.5,
       "frameCount": { "x": 1, "y": 2 },
-      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.3333333333 }
+      "shadowBox": { "radiusFromSizeMultiplier": 0.3333333333 }
     },
     {
       "id": "goat",
@@ -27,7 +27,7 @@
       "width": 0.99,
       "height": 0.825,
       "frameCount": { "x": 1, "y": 2 },
-      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.3333333333 }
+      "shadowBox": { "radiusFromSizeMultiplier": 0.3333333333 }
     },
     {
       "id": "deer",
@@ -36,7 +36,7 @@
       "width": 1.2,
       "height": 1.0,
       "frameCount": { "x": 1, "y": 2 },
-      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.3333333333 }
+      "shadowBox": { "radiusFromSizeMultiplier": 0.3333333333 }
     },
     {
       "id": "bear",
@@ -45,8 +45,8 @@
       "width": 1.4,
       "height": 1.0,
       "frameCount": { "x": 2, "y": 2 },
-      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.5 },
-      "visualHitbox": { 
+      "shadowBox": { "radiusFromSizeMultiplier": 0.5 },
+      "touchBox": { 
         "type": "polygon",
         "points": [
           { "x": -0.5, "y": -0.8 },
@@ -64,8 +64,8 @@
       "height": 1.0,
       "anchor": { "x": 0.5, "y": 0.8 },
       "frameCount": { "x": 2, "y": 4 },
-      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.5 },
-      "visualHitbox": { 
+      "shadowBox": { "radiusFromSizeMultiplier": 0.5 },
+      "touchBox": { 
         "type": "polygon",
         "points": [
           { "x": -0.5, "y": -0.8 },
@@ -82,7 +82,7 @@
       "width": 2.03,
       "height": 1.45,
       "frameCount": { "x": 2, "y": 2 },
-      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.3333333333 }
+      "shadowBox": { "radiusFromSizeMultiplier": 0.3333333333 }
     },
     {
       "id": "yeti",
@@ -91,7 +91,7 @@
       "width": 2.1,
       "height": 1.75,
       "frameCount": { "x": 2, "y": 2 },
-      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.3333333333 }
+      "shadowBox": { "radiusFromSizeMultiplier": 0.3333333333 }
     },
     {
       "id": "blodia",
@@ -100,8 +100,8 @@
       "width": 0.9,
       "height": 2.8,
       "frameCount": { "x": 2, "y": 1 },
-      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.1666666667 },
-      "visualHitbox": { 
+      "shadowBox": { "radiusFromSizeMultiplier": 0.1666666667 },
+      "touchBox": { 
         "type": "polygon",
         "points": [
           { "x": -0.3, "y": -1.5 },
@@ -118,7 +118,7 @@
       "width": 1,
       "height": 1,
       "frameCount": { "x": 1, "y": 2 },
-      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.3333333333 }
+      "shadowBox": { "radiusFromSizeMultiplier": 0.3333333333 }
     },
     {
       "id": "armadillo",
@@ -127,7 +127,7 @@
       "width": 1,
       "height": 1,
       "frameCount": { "x": 1, "y": 2 },
-      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.3333333333 }
+      "shadowBox": { "radiusFromSizeMultiplier": 0.3333333333 }
     },
     {
       "id": "coyote",
@@ -136,7 +136,7 @@
       "width": 1.75,
       "height": 1,
       "frameCount": { "x": 1, "y": 2 },
-      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.3333333333 }
+      "shadowBox": { "radiusFromSizeMultiplier": 0.3333333333 }
     },
     {
       "id": "porcupine",
@@ -145,7 +145,7 @@
       "width": 1.15,
       "height": 1,
       "frameCount": { "x": 2, "y": 2 },
-      "groundPlaneHitbox": { "radiusFromSizeMultiplier": 0.3333333333 }
+      "shadowBox": { "radiusFromSizeMultiplier": 0.3333333333 }
     }
   ]
 }

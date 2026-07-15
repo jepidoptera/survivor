@@ -11,7 +11,7 @@
       "x": 0.5,
       "y": 0.5
     },
-    "groundPlaneHitbox": {
+    "shadowBox": {
       "type": "circle",
       "xOffset": 0,
       "yOffset": 0,
@@ -51,7 +51,7 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,
@@ -95,7 +95,7 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,
@@ -149,7 +149,7 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,
@@ -206,7 +206,7 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,
@@ -250,7 +250,7 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,
@@ -304,7 +304,7 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,
@@ -361,7 +361,7 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,
@@ -410,7 +410,7 @@
         "y": 2
       },
       "animatedFps": 6,
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,
@@ -451,7 +451,7 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,
@@ -495,7 +495,7 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffset": 0,

@@ -3799,7 +3799,7 @@ function loadGameState(saveData) {
                 for (let i = 0; i < mapObjects.length; i++) {
                     const obj = mapObjects[i];
                     if (!obj || obj.gone || obj.vanishing) continue;
-                    const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+                    const hitbox = obj.shadowBox || obj.touchBox || obj.hitbox || null;
                     if (!hitbox) continue;
                     if (obj.type === "triggerArea" || obj.isTriggerArea === true) {
                         if (!usePrototypeTriggerRegistry) {
@@ -3824,7 +3824,7 @@ function loadGameState(saveData) {
                     const obj = mapPowerups[i];
                     if (!obj || obj.gone || obj.vanishing || obj.collected) continue;
                     if (obj.map && wizard.map && obj.map !== wizard.map) continue;
-                    const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+                    const hitbox = obj.shadowBox || obj.touchBox || obj.hitbox || null;
                     if (!hitbox) continue;
                     touchEntries.push({ obj, hitbox, forceTouch: false });
                 }
@@ -3837,7 +3837,7 @@ function loadGameState(saveData) {
                     if (!obj || obj === wizard || obj.gone || obj.vanishing) continue;
                     if (touchObjects.has(obj)) continue;
                     if (obj.map && wizard.map && obj.map !== wizard.map) continue;
-                    const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+                    const hitbox = obj.shadowBox || obj.touchBox || obj.hitbox || null;
                     if (!hitbox) continue;
                     const hasTouchScript = (
                         typeof scriptingApi.hasEventScriptForTarget === "function" &&

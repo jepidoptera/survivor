@@ -876,8 +876,8 @@
         displayObj.groundRadius = Math.max(width, height) * 0.5;
         displayObj.visualRadius = displayObj.groundRadius;
         const hitbox = buildPrototypeTriggerDisplayHitbox(points);
-        displayObj.groundPlaneHitbox = hitbox;
-        displayObj.visualHitbox = hitbox;
+        displayObj.shadowBox = hitbox;
+        displayObj.touchBox = hitbox;
         if (displayObj.pixiSprite) {
             displayObj.pixiSprite.x = displayObj.x;
             displayObj.pixiSprite.y = displayObj.y;

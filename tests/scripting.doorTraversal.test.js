@@ -74,7 +74,7 @@ test("object playerTouches fires for non-door scripted objects", () => {
         }
     };
     const hitbox = createRectHitbox(-1, -1, 1, 1);
-    statue.groundPlaneHitbox = hitbox;
+    statue.shadowBox = hitbox;
 
     const wizard = {
         x: 0,
@@ -116,7 +116,7 @@ test("object playerTouches does not fire across floor fragments", () => {
         }
     };
     const hitbox = createRectHitbox(-1, -1, 1, 1);
-    statue.groundPlaneHitbox = hitbox;
+    statue.shadowBox = hitbox;
 
     const wizard = {
         x: 0,
@@ -164,7 +164,7 @@ test("object playerTouches fires for matching upper-floor membership", () => {
         }
     };
     const hitbox = createRectHitbox(-1, -1, 1, 1);
-    statue.groundPlaneHitbox = hitbox;
+    statue.shadowBox = hitbox;
 
     const wizard = {
         x: 0,
@@ -219,7 +219,7 @@ test("object playerTouches does not fire across upper-floor membership", () => {
         }
     };
     const hitbox = createRectHitbox(-1, -1, 1, 1);
-    statue.groundPlaneHitbox = hitbox;
+    statue.shadowBox = hitbox;
 
     const wizard = {
         x: 0,
@@ -348,7 +348,7 @@ test("door exit still fires after the door drops out of the nearby query", () =>
         _learnedEnterSign: -1
     };
     const hitbox = createRectHitbox(-4, -1, 4, 1);
-    door.groundPlaneHitbox = hitbox;
+    door.shadowBox = hitbox;
 
     const wizard = {
         map: null,

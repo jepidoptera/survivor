@@ -341,8 +341,8 @@ class Vanish extends globalThis.Spell {
         for(let obj of onscreenObjects) {
             if (!obj || obj.gone || obj.vanishing) continue;
             if (globalThis.Spell.isGroundLayerTarget(obj)) continue;
-            if (!obj.visualHitbox) continue;
-            let hit = obj.visualHitbox.intersects({type: "circle", x: this.x, y: this.y, radius: this.radius});
+            if (!obj.touchBox) continue;
+            let hit = obj.touchBox.intersects({type: "circle", x: this.x, y: this.y, radius: this.radius});
             if (hit && !obj.vanishing) {
                 this.vanishTarget(obj, { x: this.x, y: this.y });
                 this.deactivate();

@@ -1861,7 +1861,7 @@ void main(void) {
 
         getGroundHitboxPickProxyForItem(item, layerRank = 1) {
             if (!item) return null;
-            const hitbox = item.groundPlaneHitbox || item.visualHitbox || item.hitbox || null;
+            const hitbox = item.shadowBox || item.touchBox || item.hitbox || null;
             if (!hitbox) return null;
             if (!(this.groundHitboxPickProxyByObject instanceof Map)) {
                 this.groundHitboxPickProxyByObject = new Map();
@@ -3878,7 +3878,7 @@ void main(void) {
             if (!roof) return null;
             const pointSources = [
                 roof.interiorHidePolygonPoints,
-                roof.groundPlaneHitbox && roof.groundPlaneHitbox.points,
+                roof.shadowBox && roof.shadowBox.points,
                 roof.interiorHideHitbox && roof.interiorHideHitbox.points
             ];
             for (let i = 0; i < pointSources.length; i++) {
@@ -5419,7 +5419,7 @@ void main(void) {
 
         getFloorObjectPickerSignature(item) {
             if (!item || typeof item !== "object") return "";
-            const hitbox = item.groundPlaneHitbox || item.visualHitbox || null;
+            const hitbox = item.shadowBox || item.touchBox || null;
             const hitboxSignature = hitbox ? JSON.stringify({
                 type: hitbox.constructor && hitbox.constructor.name ? hitbox.constructor.name : "",
                 x: Number.isFinite(Number(hitbox.x)) ? Number(Number(hitbox.x).toFixed(4)) : null,
@@ -9820,8 +9820,8 @@ void main(void) {
                 Number.isFinite(item.width) ? item.width / 2 : 0,
                 Number.isFinite(item.height) ? item.height / 2 : 0,
                 Number.isFinite(item.radius) ? item.radius : 0,
-                (item.groundPlaneHitbox && Number.isFinite(item.groundPlaneHitbox.radius))
-                    ? item.groundPlaneHitbox.radius : 0,
+                (item.shadowBox && Number.isFinite(item.shadowBox.radius))
+                    ? item.shadowBox.radius : 0,
                 Number.isFinite(item.visualRadius) ? item.visualRadius : 0
             );
             if (visR <= 0) return true;
@@ -10204,7 +10204,7 @@ void main(void) {
                 const roofInteriorHitbox = (
                     roofRef.interiorHideHitbox &&
                     typeof roofRef.interiorHideHitbox.containsPoint === "function"
-                ) ? roofRef.interiorHideHitbox : roofRef.groundPlaneHitbox;
+                ) ? roofRef.interiorHideHitbox : roofRef.shadowBox;
                 if (!roofInteriorHitbox || typeof roofInteriorHitbox.containsPoint !== "function") continue;
                 if (roofInteriorHitbox.containsPoint(worldX, worldY)) {
                     return true;
@@ -10345,7 +10345,7 @@ void main(void) {
         }
 
         isLosOccluder(item) {
-            if (!item || !item.groundPlaneHitbox) return false;
+            if (!item || !item.shadowBox) return false;
             if (item.type === "road" || item.type === "roadPath" || item.type === "firewall" || item.type === "roof") return false;
             if (typeof item.hasShadow === "boolean" && !item.hasShadow) return false;
             if (typeof item.castsLosShadows === "boolean" && !item.castsLosShadows) return false;
@@ -13112,8 +13112,8 @@ void main(void) {
                 container.addChild(g);
             }
             g.clear();
-            const points = (item.groundPlaneHitbox && Array.isArray(item.groundPlaneHitbox.points))
-                ? item.groundPlaneHitbox.points
+            const points = (item.shadowBox && Array.isArray(item.shadowBox.points))
+                ? item.shadowBox.points
                 : null;
             if (!this.shouldShowTriggerAreaToolOutlines(wizardOverride) || !points || points.length < 3) {
                 g.visible = false;
@@ -13187,8 +13187,8 @@ void main(void) {
                 container.addChild(g);
             }
             g.clear();
-            const points = (item.groundPlaneHitbox && Array.isArray(item.groundPlaneHitbox.points))
-                ? item.groundPlaneHitbox.points
+            const points = (item.shadowBox && Array.isArray(item.shadowBox.points))
+                ? item.shadowBox.points
                 : null;
             if (!this.shouldShowTriggerAreaVertexMarkersForTool(wizardOverride) || !points || points.length < 3) {
                 g.visible = false;

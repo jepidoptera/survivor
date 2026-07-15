@@ -161887,7 +161887,7 @@
       "mountedSectionId": 4055,
       "mountedWallSectionUnitId": 4055,
       "mountedWallFacingSign": -1,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 194.62910842948918,
           "y": 95.88937681617244
@@ -161936,7 +161936,7 @@
       "mountedSectionId": 4078,
       "mountedWallSectionUnitId": 4078,
       "mountedWallFacingSign": -1,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 200.36911514868598,
           "y": 102.02782265317126
@@ -161987,7 +161987,7 @@
       "mountedSectionId": 3133,
       "mountedWallSectionUnitId": 3133,
       "mountedWallFacingSign": -1,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 230.15937182035725,
           "y": 98.42807091240121
@@ -162036,7 +162036,7 @@
       "mountedSectionId": 4545,
       "mountedWallSectionUnitId": 4545,
       "mountedWallFacingSign": 1,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 235.1953943929367,
           "y": 130.29483192693954
@@ -162085,7 +162085,7 @@
       "mountedSectionId": 3777,
       "mountedWallSectionUnitId": 3777,
       "mountedWallFacingSign": -1,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 256.0536211486773,
           "y": 120.42487755567117

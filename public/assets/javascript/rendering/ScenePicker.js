@@ -882,7 +882,7 @@ void main(void) {
             for (let i = 0; i < items.length; i++) {
                 const obj = items[i];
                 if (!obj || obj.gone || obj.vanishing) continue;
-                const hitbox = obj.groundPlaneHitbox;
+                const hitbox = obj.shadowBox;
                 if (!hitbox) continue;
                 const isTriggerArea = !!(obj.type === "triggerArea" || obj.isTriggerArea === true);
                 if (isTriggerArea && !includeTriggerAreas) continue;
@@ -1059,7 +1059,7 @@ void main(void) {
         }
 
         getRoadTilePickPolygon(road) {
-            const hitbox = road && road.groundPlaneHitbox ? road.groundPlaneHitbox : null;
+            const hitbox = road && road.shadowBox ? road.shadowBox : null;
             if (hitbox && Array.isArray(hitbox.points) && hitbox.points.length >= 3) {
                 const out = [];
                 for (let i = 0; i < hitbox.points.length; i++) {
@@ -1851,9 +1851,9 @@ void main(void) {
                 const baseZ = record.isTriggerAreaBorder ? 0 : this.getObjectPickLayerBaseZ(item);
                 const points = (
                     item &&
-                    item.groundPlaneHitbox &&
-                    Array.isArray(item.groundPlaneHitbox.points)
-                ) ? item.groundPlaneHitbox.points : null;
+                    item.shadowBox &&
+                    Array.isArray(item.shadowBox.points)
+                ) ? item.shadowBox.points : null;
                 if (!camera || !points || points.length < 3) {
                     proxy.visible = false;
                     return false;
@@ -2338,8 +2338,8 @@ void main(void) {
 
         drawHitboxOverlay(target, ctx, pulse) {
             const g = this.highlightGraphics;
-            if (!g || !target || !target.hitbox && !target.visualHitbox && !target.groundPlaneHitbox) return false;
-            const hitbox = target.visualHitbox || target.groundPlaneHitbox || target.hitbox || null;
+            if (!g || !target || !target.hitbox && !target.touchBox && !target.shadowBox) return false;
+            const hitbox = target.touchBox || target.shadowBox || target.hitbox || null;
             if (!hitbox) return false;
             const camera = ctx && ctx.camera;
             if (!camera || typeof camera.worldToScreen !== "function") return false;

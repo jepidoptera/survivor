@@ -619,7 +619,7 @@ test("WallSectionUnit registers upper-layer walls to nodes touched by their grou
         thickness: 0.35
     });
     wall._collectCenterlineMapNodes = () => [];
-    wall.groundPlaneHitbox = {
+    wall.shadowBox = {
         getBounds() {
             return { x: baseNode.x - 0.1, y: baseNode.y - 0.1, width: 0.2, height: 0.2 };
         }

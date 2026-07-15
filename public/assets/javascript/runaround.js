@@ -487,7 +487,7 @@ app.stage.addChild(cursorLayer);
 let landTileSprite = null;
 let gridGraphics = null;
 let hitboxGraphics = null;
-let groundPlaneHitboxGraphics = null;
+let shadowBoxGraphics = null;
 let wizardBoundaryGraphics = null;
 let wizardFrames = []; // Array of frame textures for wizard animation
 /** @type {Wizard|null} */

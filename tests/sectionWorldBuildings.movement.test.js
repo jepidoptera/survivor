@@ -1014,10 +1014,10 @@ test("building placements block walls and columns, not the whole base floor", ()
             assert.equal(blocker.buildingPlacementId, "building:test-house");
             assert.equal(blocker.isPassable, false);
             assert.equal(blocker.blocksTile, false);
-            assert.ok(blocker.groundPlaneHitbox instanceof TestPolygonHitbox);
+            assert.ok(blocker.shadowBox instanceof TestPolygonHitbox);
             assert.ok(blocker._prototypeBuildingMovementNodes.length > 0);
         });
-        const blockerPolygons = blockers.map((blocker) => blocker.groundPlaneHitbox.points);
+        const blockerPolygons = blockers.map((blocker) => blocker.shadowBox.points);
         assert.equal(blockerPolygons.some((polygon) => pointInPolygon({ x: 0, y: 0.5 }, polygon)), true);
         assert.equal(blockerPolygons.some((polygon) => pointInPolygon({ x: 3, y: 3 }, polygon)), true);
         assert.equal(blockerPolygons.some((polygon) => pointInPolygon({ x: 0, y: 2 }, polygon)), false);
@@ -1076,7 +1076,7 @@ test("moving a building placement rebuilds footprints and movement blockers", ()
 
         const nextBlockers = collectBuildingBlockers(map);
         assert.equal(nextBlockers.length, 3);
-        const blockerPolygons = nextBlockers.map((blocker) => blocker.groundPlaneHitbox.points);
+        const blockerPolygons = nextBlockers.map((blocker) => blocker.shadowBox.points);
         assert.equal(blockerPolygons.some((polygon) => pointInPolygon({ x: 5, y: 5.5 }, polygon)), true);
         assert.equal(blockerPolygons.some((polygon) => pointInPolygon({ x: 0, y: 0.5 }, polygon)), false);
     } finally {

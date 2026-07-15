@@ -3827,8 +3827,8 @@ export class BuildingEditorState extends EventTarget {
                     id: object.id,
                     x: Number(object.x),
                     y: Number(object.y),
-                    groundPlaneHitboxOverridePoints: Array.isArray(object.groundPlaneHitboxOverridePoints)
-                        ? object.groundPlaneHitboxOverridePoints.map((point) => ({ x: Number(point.x), y: Number(point.y) }))
+                    shadowBoxOverridePoints: Array.isArray(object.shadowBoxOverridePoints)
+                        ? object.shadowBoxOverridePoints.map((point) => ({ x: Number(point.x), y: Number(point.y) }))
                         : null
                 }))
         };
@@ -3888,8 +3888,8 @@ export class BuildingEditorState extends EventTarget {
             if (!snapshot) return;
             if (Number.isFinite(snapshot.x)) object.x = snapshot.x + delta.dx;
             if (Number.isFinite(snapshot.y)) object.y = snapshot.y + delta.dy;
-            if (Array.isArray(snapshot.groundPlaneHitboxOverridePoints)) {
-                object.groundPlaneHitboxOverridePoints = snapshot.groundPlaneHitboxOverridePoints
+            if (Array.isArray(snapshot.shadowBoxOverridePoints)) {
+                object.shadowBoxOverridePoints = snapshot.shadowBoxOverridePoints
                     .map((hitboxPoint) => translatePoint(hitboxPoint, delta.dx, delta.dy));
             }
         });
@@ -4313,8 +4313,8 @@ export class BuildingEditorState extends EventTarget {
         object.isPassable = asset.isPassable !== false;
         object.blocksTile = asset.blocksTile === true;
         object.castsLosShadows = asset.castsLosShadows === true;
-        object.groundPlaneHitboxOverridePoints = Array.isArray(placement.groundPlaneHitboxOverridePoints)
-            ? placement.groundPlaneHitboxOverridePoints.map((point) => ({ x: Number(point.x), y: Number(point.y) }))
+        object.shadowBoxOverridePoints = Array.isArray(placement.shadowBoxOverridePoints)
+            ? placement.shadowBoxOverridePoints.map((point) => ({ x: Number(point.x), y: Number(point.y) }))
             : undefined;
         this.building.mountedWallObjects.push(object);
         this.draft = null;

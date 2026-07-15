@@ -368,8 +368,8 @@ test("flowers burn into falling fragments and remove themselves from the game", 
     assert.ok(flower._flowerBurnFragments.every(frag => frag.landed === true));
     assert.equal(flower.blocksTile, false);
     assert.equal(flower.isPassable, true);
-    assert.equal(flower.groundPlaneHitbox, null);
-    assert.equal(flower.visualHitbox, null);
+    assert.equal(flower.shadowBox, null);
+    assert.equal(flower.touchBox, null);
 
     globalThis.frameCount = 520;
     flower.update();
@@ -1007,10 +1007,10 @@ test("placed object load recenters hitboxes and node index after saved position 
     }, map);
 
     assert.ok(obj);
-    assert.equal(obj.groundPlaneHitbox.x, 8);
-    assert.equal(obj.groundPlaneHitbox.y, 9);
-    assert.equal(obj.visualHitbox.x, 8);
-    assert.equal(obj.visualHitbox.y, 9 - obj.height * 0.25);
+    assert.equal(obj.shadowBox.x, 8);
+    assert.equal(obj.shadowBox.y, 9);
+    assert.equal(obj.touchBox.x, 8);
+    assert.equal(obj.touchBox.y, 9 - obj.height * 0.25);
     assert.equal(obj.node, savedUpperNode);
     assert.equal(savedUpperNode.objects.includes(obj), true);
     assert.equal(constructorUpperNode.objects.includes(obj), false);

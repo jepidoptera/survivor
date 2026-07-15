@@ -319,7 +319,7 @@ void main(void) {
 
             // Renderable 3d mesh data for renderer handoff.
             this.mesh3d = null;
-            this.groundPlaneHitbox = null;
+            this.shadowBox = null;
             this._depthDisplayMesh = null;
             this._depthGeometryCache = null;
             this._losIlluminationTMin = null;
@@ -2798,18 +2798,18 @@ void main(void) {
         _rebuildGroundPlaneHitboxFromBasePerimeter(perimeter = null) {
             const corners = Array.isArray(perimeter) ? perimeter : this._buildBasePerimeterCorners();
             if (!Array.isArray(corners) || corners.length < 3) {
-                this.groundPlaneHitbox = null;
+                this.shadowBox = null;
                 return null;
             }
 
             if (typeof globalScope.PolygonHitbox === "function") {
-                this.groundPlaneHitbox = new globalScope.PolygonHitbox(
+                this.shadowBox = new globalScope.PolygonHitbox(
                     corners.map(c => ({ x: Number(c.x), y: Number(c.y) }))
                 );
             } else {
-                this.groundPlaneHitbox = null;
+                this.shadowBox = null;
             }
-            return this.groundPlaneHitbox;
+            return this.shadowBox;
         }
 
         _profilePointAt(profile, side, t) {
@@ -3138,7 +3138,7 @@ void main(void) {
             const ey = Number(this.endPoint && this.endPoint.y);
             if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) {
                 this.mesh3d = null;
-                this.groundPlaneHitbox = null;
+                this.shadowBox = null;
                 return null;
             }
             const dx = ex - sx;
@@ -3146,14 +3146,14 @@ void main(void) {
             const len = Math.hypot(dx, dy);
             if (!(len > EPS)) {
                 this.mesh3d = null;
-                this.groundPlaneHitbox = null;
+                this.shadowBox = null;
                 return null;
             }
 
             const perimeter = this._buildBasePerimeterCorners();
             if (!Array.isArray(perimeter) || perimeter.length < 3) {
                 this.mesh3d = null;
-                this.groundPlaneHitbox = null;
+                this.shadowBox = null;
                 return null;
             }
 
@@ -3173,7 +3173,7 @@ void main(void) {
             const nPerim = perimeter.length;
             if (nPerim < 3) {
                 this.mesh3d = null;
-                this.groundPlaneHitbox = null;
+                this.shadowBox = null;
                 return null;
             }
 
@@ -6183,7 +6183,7 @@ void main(void) {
 
         _collectGroundHitboxMapNodes() {
             const mapRef = this.map || null;
-            const hitbox = this.groundPlaneHitbox || this._rebuildGroundPlaneHitboxFromBasePerimeter();
+            const hitbox = this.shadowBox || this._rebuildGroundPlaneHitboxFromBasePerimeter();
             if (!mapRef || !hitbox || typeof hitbox.getBounds !== "function") return [];
             const bounds = hitbox.getBounds();
             if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y) ||
@@ -8107,6 +8107,9 @@ void main(void) {
 
         static loadJson(data, mapRef, options) {
             if (!data || data.type !== "wallSection" || !mapRef) return null;
+            if (typeof globalScope.normalizeLegacyHitboxFieldsDeep === "function") {
+                globalScope.normalizeLegacyHitboxFieldsDeep(data);
+            }
             const opts = options || {};
             try {
                 const loadStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")

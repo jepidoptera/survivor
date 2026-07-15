@@ -35,8 +35,8 @@ class LightningBoltProjectile {
         this.ageMs = 0;
         this.maxLifetimeMs = (LightningBoltProjectile.MAX_RANGE / Math.max(0.001, this.speed)) * 1000;
         this.hitbox = new CircleHitbox(this.x, this.y, this.radius);
-        this.groundPlaneHitbox = this.hitbox;
-        this.visualHitbox = this.hitbox;
+        this.shadowBox = this.hitbox;
+        this.touchBox = this.hitbox;
         this.movement = {
             x: this.dirX * this.speed / Math.max(1, frameRate),
             y: this.dirY * this.speed / Math.max(1, frameRate),
@@ -117,7 +117,7 @@ class LightningBoltProjectile {
 
     getTargetHitbox(target) {
         if (!target) return null;
-        return target.visualHitbox || target.groundPlaneHitbox || target.hitbox || null;
+        return target.touchBox || target.shadowBox || target.hitbox || null;
     }
 
     getPotentialTargets() {

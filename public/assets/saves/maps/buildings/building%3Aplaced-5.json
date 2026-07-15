@@ -1431,7 +1431,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": true,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -2.6046494441547723,
           "y": 10.0125
@@ -1478,7 +1478,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 5.196,
           "y": 4.675063386664179
@@ -1540,7 +1540,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": true,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 7.806500000000001,
           "y": 1.9251369086907868
@@ -1587,7 +1587,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 5.196,
           "y": -0.28647507487428214
@@ -1634,7 +1634,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 5.196,
           "y": 2.194294155894948
@@ -1681,7 +1681,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -8.66,
           "y": 0.8057058441050522
@@ -1728,7 +1728,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -8.66,
           "y": -1.6750633866641786
@@ -1775,7 +1775,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -8.66,
           "y": 3.286475074874282
@@ -1822,7 +1822,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -11.258,
           "y": 0.8057058441050522
@@ -1869,7 +1869,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -1.0377058441050515,
           "y": -7
@@ -1916,7 +1916,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -9.947094155894947,
           "y": 10
@@ -1963,7 +1963,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -6.186694155894947,
           "y": 10
@@ -2010,7 +2010,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 1.3341058441050517,
           "y": 10
@@ -2057,7 +2057,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 5.094505844105054,
           "y": 10
@@ -2104,7 +2104,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 6.483094155894948,
           "y": -7
@@ -2151,7 +2151,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 2.7226941558949482,
           "y": -7
@@ -2198,7 +2198,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -4.79810584410505,
           "y": -7
@@ -2245,7 +2245,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -8.558505844105053,
           "y": -7
@@ -2292,7 +2292,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 7.794,
           "y": 8.475544155894948
@@ -2339,7 +2339,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 7.794,
           "y": 4.58715129875209
@@ -2386,7 +2386,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 7.7940000000000005,
           "y": -0.19856298696219632
@@ -2433,7 +2433,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 7.7940000000000005,
           "y": -4.086955844105052
@@ -2480,7 +2480,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -11.258,
           "y": -3.980008441609234
@@ -2527,7 +2527,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -11.258,
           "y": 5.591420129819337

@@ -26,6 +26,30 @@ let beamIdCounter = 1;
 let columnIdCounter = 1;
 let stairIdCounter = 1;
 
+function normalizeLegacyHitboxFields(value) {
+    if (!value || typeof value !== "object") return value;
+    const mappings = [
+        ["groundPlaneHitbox", "shadowBox"],
+        ["visualHitbox", "touchBox"],
+        ["groundPlaneHitboxOverridePoints", "shadowBoxOverridePoints"],
+        ["wallGroundHitboxPoints", "wallShadowBoxPoints"]
+    ];
+    for (const [oldKey, newKey] of mappings) {
+        if (
+            Object.prototype.hasOwnProperty.call(value, oldKey) &&
+            !Object.prototype.hasOwnProperty.call(value, newKey)
+        ) {
+            value[newKey] = value[oldKey];
+        }
+    }
+    if (Array.isArray(value)) {
+        value.forEach((entry) => normalizeLegacyHitboxFields(entry));
+    } else {
+        Object.keys(value).forEach((key) => normalizeLegacyHitboxFields(value[key]));
+    }
+    return value;
+}
+
 function nextStringId(prefix) {
     return `${prefix}-${stringIdCounter++}`;
 }
@@ -1539,7 +1563,7 @@ function updateMountedObjectWorldPosition(building, floor, wall, object) {
     object.placementRotation = Math.atan2(uy, ux) * 180 / Math.PI;
     const halfWidth = Number(object.width) * 0.5;
     const hitboxHalfT = halfThickness * (String(object.category || "").trim().toLowerCase() === "doors" ? 1.1 : 1);
-    object.groundPlaneHitboxOverridePoints = [
+    object.shadowBoxOverridePoints = [
         { x: center.x - ux * halfWidth + nx * hitboxHalfT, y: center.y - uy * halfWidth + ny * hitboxHalfT },
         { x: center.x + ux * halfWidth + nx * hitboxHalfT, y: center.y + uy * halfWidth + ny * hitboxHalfT },
         { x: center.x + ux * halfWidth - nx * hitboxHalfT, y: center.y + uy * halfWidth - ny * hitboxHalfT },
@@ -2358,6 +2382,7 @@ export function normalizeImportedBuilding(raw) {
     if (!building || typeof building !== "object") {
         throw new Error("imported building JSON must be an object");
     }
+    normalizeLegacyHitboxFields(building);
     if (building.schema !== "survivor-building-v1") {
         throw new Error(`unsupported building schema: ${building.schema || "missing"}`);
     }
@@ -2584,8 +2609,8 @@ export function normalizeImportedBuilding(raw) {
             if (object.isPassable !== undefined) normalized.isPassable = object.isPassable !== false;
             if (object.blocksTile !== undefined) normalized.blocksTile = object.blocksTile === true;
             if (object.castsLosShadows !== undefined) normalized.castsLosShadows = object.castsLosShadows === true;
-            if (Array.isArray(object.groundPlaneHitboxOverridePoints)) {
-                normalized.groundPlaneHitboxOverridePoints = object.groundPlaneHitboxOverridePoints
+            if (Array.isArray(object.shadowBoxOverridePoints)) {
+                normalized.shadowBoxOverridePoints = object.shadowBoxOverridePoints
                     .filter((point) => finitePoint(point))
                     .map((point) => ({ x: Number(point.x), y: Number(point.y) }));
             }
@@ -2621,8 +2646,8 @@ export function normalizeImportedBuilding(raw) {
         if (object.isPassable !== undefined) normalized.isPassable = object.isPassable !== false;
         if (object.blocksTile !== undefined) normalized.blocksTile = object.blocksTile === true;
         if (object.castsLosShadows !== undefined) normalized.castsLosShadows = object.castsLosShadows === true;
-        if (Array.isArray(object.groundPlaneHitboxOverridePoints)) {
-            normalized.groundPlaneHitboxOverridePoints = object.groundPlaneHitboxOverridePoints
+        if (Array.isArray(object.shadowBoxOverridePoints)) {
+            normalized.shadowBoxOverridePoints = object.shadowBoxOverridePoints
                 .filter((point) => finitePoint(point))
                 .map((point) => ({ x: Number(point.x), y: Number(point.y) }));
         }

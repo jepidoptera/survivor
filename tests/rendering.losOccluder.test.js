@@ -60,13 +60,13 @@ test("hasShadow=false excludes static objects from LOS occluders", () => {
 
     assert.equal(renderer.isLosOccluder({
         type: "tree",
-        groundPlaneHitbox: {},
+        shadowBox: {},
         hasShadow: true
     }), true);
 
     assert.equal(renderer.isLosOccluder({
         type: "tree",
-        groundPlaneHitbox: {},
+        shadowBox: {},
         hasShadow: false
     }), false);
 });

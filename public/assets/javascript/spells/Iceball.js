@@ -569,8 +569,8 @@ class Iceball extends globalThis.Fireball {
         const doesImpactHitObject = (obj) => {
             if (!obj) return false;
             const hitboxes = (obj.type === "tree")
-                ? [obj.groundPlaneHitbox, obj.hitbox]
-                : [obj.visualHitbox, obj.groundPlaneHitbox, obj.hitbox];
+                ? [obj.shadowBox, obj.hitbox]
+                : [obj.touchBox, obj.shadowBox, obj.hitbox];
             for (let i = 0; i < hitboxes.length; i++) {
                 const hb = hitboxes[i];
                 if (!hb || typeof hb.intersects !== "function") continue;

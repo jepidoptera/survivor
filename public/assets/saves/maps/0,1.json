@@ -28468,7 +28468,7 @@
           24
         ]
       ],
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "points": [
           {
             "x": 221.36146672381878,
@@ -28601,7 +28601,7 @@
       "mountedSectionId": 5129,
       "mountedWallSectionUnitId": 5129,
       "mountedWallFacingSign": 1,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 219.45115348030492,
           "y": 237.7832854822584

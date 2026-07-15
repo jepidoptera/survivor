@@ -127711,7 +127711,7 @@
       "mountedSectionId": 483,
       "mountedWallSectionUnitId": 483,
       "mountedWallFacingSign": -1,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 269.93015447285904,
           "y": 83.4130222876679
@@ -127760,7 +127760,7 @@
       "mountedSectionId": 496,
       "mountedWallSectionUnitId": 496,
       "mountedWallFacingSign": 1,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 287.9493915705109,
           "y": 69.48562318382756

@@ -2851,7 +2851,7 @@
             isPassable: false,
             blocksTile: false,
             gone: false,
-            groundPlaneHitbox: new PolygonHitboxCtor(normalizedPolygon),
+            shadowBox: new PolygonHitboxCtor(normalizedPolygon),
             _prototypeBuildingMovementBlocker: true,
             _prototypeBuildingMovementNodes: []
         };
@@ -3019,7 +3019,7 @@
                     : (Number.isFinite(Number(blocker.level)) ? Math.round(Number(blocker.level)) : 0);
                 if (blockerLayer !== layer) continue;
                 if (seen && seen.has(blocker)) continue;
-                if (!boundsOverlap(queryBounds, boundsFromHitbox(blocker.groundPlaneHitbox))) continue;
+                if (!boundsOverlap(queryBounds, boundsFromHitbox(blocker.shadowBox))) continue;
                 if (seen) seen.add(blocker);
                 out.push(blocker);
             }
@@ -3651,8 +3651,8 @@
         const radiusCandidates = [
             Number(obj && obj.groundRadius),
             Number(obj && obj.visualRadius),
-            Number(obj && obj.groundPlaneHitbox && obj.groundPlaneHitbox.radius),
-            Number(obj && obj.visualHitbox && obj.visualHitbox.radius),
+            Number(obj && obj.shadowBox && obj.shadowBox.radius),
+            Number(obj && obj.touchBox && obj.touchBox.radius),
             Number(obj && obj.width) * 0.5,
             Number(obj && obj.height) * 0.5
         ].filter((value) => Number.isFinite(value) && value > 0);
@@ -3801,8 +3801,8 @@
                 fragmentId: obj && obj.fragmentId || "",
                 surfaceId: obj && obj.surfaceId || "",
                 membership,
-                groundPlaneHitbox: getPrototypeBuildingHitboxDiagnostic(obj && obj.groundPlaneHitbox),
-                visualHitbox: getPrototypeBuildingHitboxDiagnostic(obj && obj.visualHitbox)
+                shadowBox: getPrototypeBuildingHitboxDiagnostic(obj && obj.shadowBox),
+                touchBox: getPrototypeBuildingHitboxDiagnostic(obj && obj.touchBox)
             },
             baseNode: baseNode ? {
                 id: baseNode.id || "",

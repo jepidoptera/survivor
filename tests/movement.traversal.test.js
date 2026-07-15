@@ -323,7 +323,7 @@ test("GameMap stair fast-path movement is blocked by swept building wall blocker
         assert.ok(bounds.minX <= -3.95 && bounds.maxX >= -3.95);
         return [{
             gone: false,
-            groundPlaneHitbox: {
+            shadowBox: {
                 intersects(hitbox) {
                     return rectCircleIntersects(wallRect, hitbox);
                 }
@@ -354,7 +354,7 @@ test("GameMap stair fast-path reports only into-wall blocker contact", () => {
     map.wrapY = false;
     map.collectPrototypeBuildingMovementBlockersInBounds = () => [{
         gone: false,
-        groundPlaneHitbox: {
+        shadowBox: {
             intersects(hitbox) {
                 const radius = Number(hitbox && hitbox.radius) || 0;
                 const y = Number(hitbox && hitbox.y);
@@ -859,8 +859,8 @@ function createCharacterHarness(ClassRef, map, startNode, overrides = {}) {
         _onScreen: false,
         nodeVisitLog: [],
         nodeVisitLogLimit: 50,
-        visualHitbox: { moveTo() {} },
-        groundPlaneHitbox: { moveTo() {} },
+        touchBox: { moveTo() {} },
+        shadowBox: { moveTo() {} },
         direction: null,
         _closeCombatState: null,
         _blodiaAi() {},
@@ -1017,8 +1017,8 @@ test("hitbox movement treats water terrain polygons as impassable", () => {
         currentLayer: 0,
         traversalLayer: 0,
         currentLayerBaseZ: 0,
-        groundPlaneHitbox: { type: "circle", x: start.x, y: start.y, radius: 0.2 },
-        visualHitbox: { type: "circle", x: start.x, y: start.y, radius: 0.2 }
+        shadowBox: { type: "circle", x: start.x, y: start.y, radius: 0.2 },
+        touchBox: { type: "circle", x: start.x, y: start.y, radius: 0.2 }
     });
 
     assert.equal(actor.moveDirection({ x: 1, y: 0 }, { lockMovementVector: true }), true);
@@ -1059,8 +1059,8 @@ test("hitbox movement can cross water terrain on a bridge road", () => {
         currentLayer: 0,
         traversalLayer: 0,
         currentLayerBaseZ: 0,
-        groundPlaneHitbox: { type: "circle", x: start.x, y: start.y, radius: 0.2 },
-        visualHitbox: { type: "circle", x: start.x, y: start.y, radius: 0.2 }
+        shadowBox: { type: "circle", x: start.x, y: start.y, radius: 0.2 },
+        touchBox: { type: "circle", x: start.x, y: start.y, radius: 0.2 }
     });
 
     assert.equal(actor.moveDirection({ x: 1, y: 0 }, { lockMovementVector: true }), true);
@@ -2387,7 +2387,7 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
 
     const wallBlocker = {
         gone: false,
-        groundPlaneHitbox: {
+        shadowBox: {
             intersects(hitbox) {
                 const radius = Number(hitbox && hitbox.radius) || 0;
                 const x = Number(hitbox && hitbox.x);
@@ -2485,7 +2485,7 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
 
         const overlappingEntryWallBlocker = {
             gone: false,
-            groundPlaneHitbox: {
+            shadowBox: {
                 intersects(hitbox) {
                     const radius = Number(hitbox && hitbox.radius) || 0;
                     const x = Number(hitbox && hitbox.x);

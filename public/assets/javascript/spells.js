@@ -207,8 +207,8 @@ class FirewallEmitter {
         this.pixiSprite.anchor.set(0.5, 1);
         this.pixiSprite.renderable = false; // invisible body, only flame should render
         this.pixiSprite.alpha = 1;
-        this.visualHitbox = new CircleHitbox(this.x, this.y, 0.25);
-        this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, 0.1);
+        this.touchBox = new CircleHitbox(this.x, this.y, 0.25);
+        this.shadowBox = new CircleHitbox(this.x, this.y, 0.1);
         this.isOnFire = true;
         this.fireSprite = null;
         this.fireFrameIndex = (animatedFrameIndex !== null) ? animatedFrameIndex : Math.floor(Math.random() * 25); // random phase
@@ -340,8 +340,8 @@ class FirewallEmitter {
 
     handleCharacterCollision(character) {
         if (!character || character.gone || character.dead) return;
-        const characterHitbox = character.visualHitbox || character.groundPlaneHitbox || character.hitbox;
-        const emitterHitbox = this.visualHitbox || this.groundPlaneHitbox || this.hitbox;
+        const characterHitbox = character.touchBox || character.shadowBox || character.hitbox;
+        const emitterHitbox = this.touchBox || this.shadowBox || this.hitbox;
         if (!characterHitbox || !emitterHitbox) return;
         if (!hitboxesIntersect(characterHitbox, emitterHitbox)) return;
 
@@ -2119,8 +2119,8 @@ const SpellSystem = (() => {
         const height = Number.isFinite(imageData && imageData.height)
             ? Math.max(0.01, Number(imageData.height))
             : POWERUP_PLACEMENT_DEFAULT_HEIGHT;
-        const radius = Number.isFinite(imageData && imageData.groundPlaneHitbox && imageData.groundPlaneHitbox.radius)
-            ? Math.max(0.01, Number(imageData.groundPlaneHitbox.radius))
+        const radius = Number.isFinite(imageData && imageData.shadowBox && imageData.shadowBox.radius)
+            ? Math.max(0.01, Number(imageData.shadowBox.radius))
             : POWERUP_PLACEMENT_DEFAULT_RADIUS;
         const imagePath = (imageData && typeof imageData.imagePath === "string" && imageData.imagePath.length > 0)
             ? imageData.imagePath
@@ -4088,7 +4088,7 @@ const SpellSystem = (() => {
 
         // Fallen trees update their collision polygons; prefer those over anchor math.
         if (target && target.type === "tree" && (target.falling || target.fallenHitboxCreated)) {
-            const fallenHitbox = target.visualHitbox || target.groundPlaneHitbox || target.hitbox || null;
+            const fallenHitbox = target.touchBox || target.shadowBox || target.hitbox || null;
             if (fallenHitbox && typeof fallenHitbox.getBounds === "function") {
                 try {
                     const bounds = fallenHitbox.getBounds();
@@ -4164,7 +4164,7 @@ const SpellSystem = (() => {
             }
         }
 
-        const hitbox = target.visualHitbox || target.groundPlaneHitbox || target.hitbox || null;
+        const hitbox = target.touchBox || target.shadowBox || target.hitbox || null;
         if (hitbox && typeof hitbox.getBounds === "function") {
             try {
                 const bounds = hitbox.getBounds();
@@ -5617,7 +5617,7 @@ const SpellSystem = (() => {
                     snappedY,
                     snappedZ,
                     snappedRotationDeg: rotDeg,
-                    wallGroundHitboxPoints: [p1, p2, p3, p4]
+                    wallShadowBoxPoints: [p1, p2, p3, p4]
                 };
             }
         }
@@ -5649,8 +5649,8 @@ const SpellSystem = (() => {
         target.mountedSectionId = placement.mountedSectionId;
         target.mountedWallSectionUnitId = placement.mountedWallSectionUnitId;
         target.mountedWallFacingSign = placement.mountedWallFacingSign;
-        target.groundPlaneHitboxOverridePoints = Array.isArray(placement.wallGroundHitboxPoints)
-            ? placement.wallGroundHitboxPoints.map(point => ({ x: Number(point.x), y: Number(point.y) }))
+        target.shadowBoxOverridePoints = Array.isArray(placement.wallShadowBoxPoints)
+            ? placement.wallShadowBoxPoints.map(point => ({ x: Number(point.x), y: Number(point.y) }))
             : null;
 
         if (typeof target.applyPlaceableMetadata === "function" && target._placedObjectMetadata) {
@@ -5662,12 +5662,12 @@ const SpellSystem = (() => {
             target.snapToMountedWall();
         }
         if (
-            Array.isArray(target.groundPlaneHitboxOverridePoints) &&
-            target.groundPlaneHitboxOverridePoints.length >= 3 &&
+            Array.isArray(target.shadowBoxOverridePoints) &&
+            target.shadowBoxOverridePoints.length >= 3 &&
             typeof PolygonHitbox === "function"
         ) {
-            target.groundPlaneHitbox = new PolygonHitbox(
-                target.groundPlaneHitboxOverridePoints.map(point => ({ x: point.x, y: point.y }))
+            target.shadowBox = new PolygonHitbox(
+                target.shadowBoxOverridePoints.map(point => ({ x: point.x, y: point.y }))
             );
         }
         if (typeof target.refreshIndexedNodesFromHitbox === "function") {
@@ -5753,7 +5753,7 @@ const SpellSystem = (() => {
     }
 
     function cloneMoveObjectGroundHitboxAt(target, anchor, candidateX, candidateY, mapRef) {
-        const hitbox = target && (target.groundPlaneHitbox || target.visualHitbox || target.hitbox) || null;
+        const hitbox = target && (target.shadowBox || target.touchBox || target.hitbox) || null;
         if (!hitbox || !anchor) return null;
         const dx = (typeof mapRef.shortestDeltaX === "function")
             ? mapRef.shortestDeltaX(anchor.x, candidateX)
@@ -5829,7 +5829,7 @@ const SpellSystem = (() => {
 
     function doesObjectBlockMoveObjectDrag(obj) {
         if (!obj || obj.gone || obj.vanishing) return false;
-        if (!(obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox)) return false;
+        if (!(obj.shadowBox || obj.touchBox || obj.hitbox)) return false;
         if (typeof globalThis !== "undefined" && typeof globalThis.doesObjectBlockPassage === "function") {
             return !!globalThis.doesObjectBlockPassage(obj);
         }
@@ -5877,7 +5877,7 @@ const SpellSystem = (() => {
             if (!obj || obj === target || seen.has(obj)) return;
             if (!doesObjectBlockMoveObjectDrag(obj)) return;
             if (!doesMoveObjectBlockerApplyToLayer(obj, targetLayer)) return;
-            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+            const hitbox = obj.shadowBox || obj.touchBox || obj.hitbox || null;
             if (!hitbox) return;
             const bounds = getMoveObjectHitboxBounds(hitbox);
             if (!moveObjectBoundsOverlap(queryBounds, bounds, 0.5)) return;
@@ -5946,7 +5946,7 @@ const SpellSystem = (() => {
         let maxPushLen = 0;
         for (let i = 0; i < blockers.length; i++) {
             const blocker = blockers[i];
-            const hitbox = blocker && (blocker.groundPlaneHitbox || blocker.visualHitbox || blocker.hitbox) || null;
+            const hitbox = blocker && (blocker.shadowBox || blocker.touchBox || blocker.hitbox) || null;
             if (!hitbox) continue;
             let collision = null;
             if (typeof hitbox.intersects === "function") collision = hitbox.intersects(probe);
@@ -6203,17 +6203,17 @@ const SpellSystem = (() => {
         if (Number.isFinite(target.travelY)) target.travelY = 0;
         if (Object.prototype.hasOwnProperty.call(target, "moving")) target.moving = false;
 
-        if (Array.isArray(target.groundPlaneHitboxOverridePoints) && target.groundPlaneHitboxOverridePoints.length >= 3) {
-            target.groundPlaneHitboxOverridePoints = translatePointArray(target.groundPlaneHitboxOverridePoints, dx, dy, mapRef);
+        if (Array.isArray(target.shadowBoxOverridePoints) && target.shadowBoxOverridePoints.length >= 3) {
+            target.shadowBoxOverridePoints = translatePointArray(target.shadowBoxOverridePoints, dx, dy, mapRef);
         }
 
-        if (target.visualHitbox) {
-            translateHitboxInPlace(target.visualHitbox, dx, dy, mapRef);
+        if (target.touchBox) {
+            translateHitboxInPlace(target.touchBox, dx, dy, mapRef);
         }
-        if (target.groundPlaneHitbox && target.groundPlaneHitbox !== target.visualHitbox) {
-            translateHitboxInPlace(target.groundPlaneHitbox, dx, dy, mapRef);
+        if (target.shadowBox && target.shadowBox !== target.touchBox) {
+            translateHitboxInPlace(target.shadowBox, dx, dy, mapRef);
         }
-        if (target.hitbox && target.hitbox !== target.groundPlaneHitbox && target.hitbox !== target.visualHitbox) {
+        if (target.hitbox && target.hitbox !== target.shadowBox && target.hitbox !== target.touchBox) {
             translateHitboxInPlace(target.hitbox, dx, dy, mapRef);
         }
 
@@ -7055,7 +7055,7 @@ const SpellSystem = (() => {
             const obj = runtimeScriptObjects[i];
             if (!obj) continue;
             if (obj.type === "triggerArea" || obj.isTriggerArea === true) continue;
-            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+            const hitbox = obj.shadowBox || obj.touchBox || obj.hitbox || null;
             if (!hitbox) continue;
             const hasTouchScript = (
                 (typeof globalThis !== "undefined" && globalThis.Scripting && typeof globalThis.Scripting.hasEventScriptForTarget === "function")
@@ -7213,7 +7213,7 @@ const SpellSystem = (() => {
         if (!wizardRef || !wizardRef.map) return;
         if (wizardRef.gone || wizardRef.dead) return;
         const target = wizardRef;
-        const targetHitbox = target.visualHitbox || target.groundPlaneHitbox || target.hitbox;
+        const targetHitbox = target.touchBox || target.shadowBox || target.hitbox;
         const activeFirewalls = Number(
             (typeof globalThis !== "undefined" && globalThis.activeFirewallEmitterCount)
                 ? globalThis.activeFirewallEmitterCount
@@ -7270,7 +7270,7 @@ const SpellSystem = (() => {
             const obj = nearbyAll[i];
             if (!obj || obj.gone || obj.vanishing) continue;
             if (obj.type === "triggerArea" || obj.isTriggerArea === true) continue;
-            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+            const hitbox = obj.shadowBox || obj.touchBox || obj.hitbox || null;
             if (!hitbox) continue;
             const forceTouch = !!(forceTouchedObjects && forceTouchedObjects.has(obj));
             nearbyScriptEntries.push({ obj, hitbox, forceTouch });
@@ -7287,7 +7287,7 @@ const SpellSystem = (() => {
             if (!obj || obj.gone || obj.vanishing || obj.collected) continue;
             if (obj.map && wizardRef.map && obj.map !== wizardRef.map) continue;
             if (nearbyScriptObjects.has(obj)) continue;
-            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+            const hitbox = obj.shadowBox || obj.touchBox || obj.hitbox || null;
             if (!hitbox) continue;
             nearbyScriptEntries.push({ obj, hitbox, forceTouch: false });
             nearbyScriptObjects.add(obj);
@@ -7303,7 +7303,7 @@ const SpellSystem = (() => {
             if (!obj || obj === wizardRef || obj.gone || obj.vanishing) continue;
             if (nearbyScriptObjects.has(obj)) continue;
             if (obj.map && wizardRef.map && obj.map !== wizardRef.map) continue;
-            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+            const hitbox = obj.shadowBox || obj.touchBox || obj.hitbox || null;
             if (!hitbox) continue;
             const forceTouch = !!(forceTouchedObjects && forceTouchedObjects.has(obj));
             nearbyScriptEntries.push({ obj, hitbox, forceTouch });
@@ -7332,7 +7332,7 @@ const SpellSystem = (() => {
                 if (!obj || obj.gone || obj.vanishing) continue;
                 if (!(obj.type === "triggerArea" || obj.isTriggerArea === true)) continue;
                 if (nearbyScriptObjects.has(obj)) continue;
-                const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+                const hitbox = obj.shadowBox || obj.touchBox || obj.hitbox || null;
                 if (!hitbox) continue;
                 nearbyScriptEntries.push({ obj, hitbox });
             }

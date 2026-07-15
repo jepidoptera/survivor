@@ -7769,7 +7769,7 @@ export class BuildingRenderer {
         if (!best) return null;
         const halfWidth = width * 0.5;
         const hitboxHalfThickness = GABLE_MOUNT_WALL_THICKNESS * 0.5;
-        best.groundPlaneHitboxOverridePoints = [
+        best.shadowBoxOverridePoints = [
             { x: best.wallCenter.x - best.sectionDirX * halfWidth + best.sectionNormalX * hitboxHalfThickness, y: best.wallCenter.y - best.sectionDirY * halfWidth + best.sectionNormalY * hitboxHalfThickness },
             { x: best.wallCenter.x + best.sectionDirX * halfWidth + best.sectionNormalX * hitboxHalfThickness, y: best.wallCenter.y + best.sectionDirY * halfWidth + best.sectionNormalY * hitboxHalfThickness },
             { x: best.wallCenter.x + best.sectionDirX * halfWidth - best.sectionNormalX * hitboxHalfThickness, y: best.wallCenter.y + best.sectionDirY * halfWidth - best.sectionNormalY * hitboxHalfThickness },

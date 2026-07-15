@@ -3027,7 +3027,7 @@ class GameMap {
             height: Math.max(0.01, Math.abs(Number(stair.higherZ) - Number(stair.lowerZ)) || 3),
             isPassable: false,
             gone: false,
-            groundPlaneHitbox: new PolygonHitboxCtor(polygon),
+            shadowBox: new PolygonHitboxCtor(polygon),
             _stairFootprintMovementBlocker: true,
             _stairEndpoint: endpoint,
             _stairRecord: stair,
@@ -3812,12 +3812,12 @@ class GameMap {
                 if (
                     !blocker ||
                     blocker.gone ||
-                    !blocker.groundPlaneHitbox ||
-                    typeof blocker.groundPlaneHitbox.intersects !== "function"
+                    !blocker.shadowBox ||
+                    typeof blocker.shadowBox.intersects !== "function"
                 ) {
                     continue;
                 }
-                const collision = blocker.groundPlaneHitbox.intersects(hitbox);
+                const collision = blocker.shadowBox.intersects(hitbox);
                 if (!collision) continue;
                 const pushX = Number(collision.pushX);
                 const pushY = Number(collision.pushY);
@@ -12968,9 +12968,9 @@ class GameMap {
         if (layer !== 0) return null;
         const sourcePoints = Array.isArray(road.outlinePolygon)
             ? road.outlinePolygon
-            : (road.groundPlaneHitbox && Array.isArray(road.groundPlaneHitbox.points)
-                ? road.groundPlaneHitbox.points
-                : (road.visualHitbox && Array.isArray(road.visualHitbox.points) ? road.visualHitbox.points : null));
+            : (road.shadowBox && Array.isArray(road.shadowBox.points)
+                ? road.shadowBox.points
+                : (road.touchBox && Array.isArray(road.touchBox.points) ? road.touchBox.points : null));
         if (!Array.isArray(sourcePoints) || sourcePoints.length < 3) return null;
         const points = [];
         for (let i = 0; i < sourcePoints.length; i++) {

@@ -1231,7 +1231,7 @@
         if (mapRef && typeof mapRef.wrapWorldY === "function") centroidY = mapRef.wrapWorldY(centroidY);
 
         // Which side of the door's normal is the loop interior on?
-        const hitbox = door.groundPlaneHitbox || door.visualHitbox || door.hitbox || null;
+        const hitbox = door.shadowBox || door.touchBox || door.hitbox || null;
         const sign = getDoorTraversalSide(door, hitbox, centroidX, centroidY, mapRef);
         door._interiorNormalSign = sign;
         return sign;
@@ -3220,7 +3220,7 @@
                 continue;
             }
 
-            const latestHitbox = touchedObj.groundPlaneHitbox || touchedObj.visualHitbox || touchedObj.hitbox || (touched && touched.hitbox) || null;
+            const latestHitbox = touchedObj.shadowBox || touchedObj.touchBox || touchedObj.hitbox || (touched && touched.hitbox) || null;
             const stillWithinDetachBuffer = latestHitbox
                 ? isPointInDoorHitbox(latestHitbox, wizardX, wizardY, detachRadius)
                 : false;
@@ -3276,7 +3276,7 @@
                 stateByDoorId.delete(doorId);
                 continue;
             }
-            const trackedHitbox = trackedDoor.groundPlaneHitbox || trackedDoor.visualHitbox || trackedDoor.hitbox || state.hitbox || null;
+            const trackedHitbox = trackedDoor.shadowBox || trackedDoor.touchBox || trackedDoor.hitbox || state.hitbox || null;
             if (!trackedHitbox) continue;
             appendDoorEntry(trackedDoor, trackedHitbox);
         }

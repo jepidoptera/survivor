@@ -897,7 +897,7 @@ class Wizard extends Character {
         const isRoadObjectUnderWizard = (obj, node) => {
             if (!obj || obj.gone || obj.vanishing) return false;
             if (!objectMatchesLayer(obj, node)) return false;
-            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || null;
+            const hitbox = obj.shadowBox || obj.touchBox || null;
             if (obj.type === "road") return roadHitboxTouchesWizard(hitbox);
             if (obj.type === "roadPath") return roadHitboxTouchesWizard(hitbox);
             return false;
@@ -1338,7 +1338,7 @@ class Wizard extends Character {
     }
 
     doesObjectBlockVectorMovement(obj, options = {}) {
-        if (!obj || obj === this || obj.gone || !obj.groundPlaneHitbox) return false;
+        if (!obj || obj === this || obj.gone || !obj.shadowBox) return false;
         if (!doesObjectBlockWizardMovement(obj)) return false;
 
         if (!Number.isFinite(this.currentLayerBaseZ)) {
@@ -1447,7 +1447,7 @@ class Wizard extends Character {
                     if (objLayer !== wizardLayer) continue;
                     const doorCandidate = !!(isDoorPlacedObjectFn && isDoorPlacedObjectFn(obj));
                     if (doorCandidate && !nearbyDoorSet.has(obj)) {
-                        const doorHitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox;
+                        const doorHitbox = obj.shadowBox || obj.touchBox || obj.hitbox;
                         if (doorHitbox && (typeof doorHitbox.containsPoint === "function" || typeof doorHitbox.intersects === "function")) {
                             const locked = isDoorLockedFn ? !!isDoorLockedFn(obj) : (obj.isPassable === false);
                             nearbyDoors.push({ obj, hitbox: doorHitbox, canTraverse: !locked });
@@ -1661,8 +1661,8 @@ class Wizard extends Character {
         const candidateHitbox = { type: "circle", x: newX, y: newY, radius: Math.max(0, Number(radius) || 0) };
         for (let i = 0; i < nearbyObjects.length; i++) {
             const obj = nearbyObjects[i];
-            if (!obj || !obj.groundPlaneHitbox || typeof obj.groundPlaneHitbox.intersects !== "function") continue;
-            const collision = obj.groundPlaneHitbox.intersects(candidateHitbox);
+            if (!obj || !obj.shadowBox || typeof obj.shadowBox.intersects !== "function") continue;
+            const collision = obj.shadowBox.intersects(candidateHitbox);
             if (collision && collision.pushX !== undefined) {
                 return false;
             }

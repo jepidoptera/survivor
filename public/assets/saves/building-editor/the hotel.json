@@ -3007,7 +3007,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": true,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 1.4588163803941803,
           "y": 10.131949855191353

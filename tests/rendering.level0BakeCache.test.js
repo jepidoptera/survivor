@@ -7553,7 +7553,7 @@ test("building render cache includes roofs by footprint when wall ids are unavai
         ],
         faces: [[0, 1, 2], [0, 2, 3]],
         wallLoopSectionIds: [],
-        groundPlaneHitbox: {
+        shadowBox: {
             points: [
                 { x: 2, y: 2 },
                 { x: 8, y: 2 },
