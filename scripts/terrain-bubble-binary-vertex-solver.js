@@ -4,12 +4,13 @@ const fs = require("fs");
 const path = require("path");
 const polygonClipping = require("polygon-clipping");
 
-const TERRAIN_TYPES = ["grass", "water", "mud", "desert"];
+const TERRAIN_TYPES = ["grass", "mowedgrass", "water", "mud", "desert"];
 const TERRAIN_PRIORITY = new Map([
     ["water", 0],
     ["mud", 1],
     ["grass", 2],
-    ["desert", 3]
+    ["mowedgrass", 3],
+    ["desert", 4]
 ]);
 const DIRECTIONS = [
     { q: 1, r: 0 },

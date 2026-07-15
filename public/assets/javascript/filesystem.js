@@ -533,6 +533,7 @@ function getGroundTerrainTypeForTextureIdForLoad(mapRef, textureId, label) {
     if (id === 52) return "desert";
     if (id === 53) return "water";
     if (id === 54) return "mud";
+    if (id === 55) return "mowedgrass";
     throw new Error(`${label} cannot resolve terrain type without map.getGroundTerrainDef`);
 }
 

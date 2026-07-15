@@ -11,7 +11,7 @@ const {
 } = require("./terrain-bubble-learner");
 
 const DEFAULT_EXAMPLES_PATH = path.join(__dirname, "..", "public", "assets", "data", "terrain-bubble-examples.json");
-const TERRAIN_TYPES = ["grass", "water", "mud", "desert"];
+const TERRAIN_TYPES = ["grass", "mowedgrass", "water", "mud", "desert"];
 const SQRT3 = Math.sqrt(3);
 const ROUND_SCALE = 1000000;
 const DEFAULT_MAX_ERROR = 0.25;
@@ -49,7 +49,8 @@ const TERRAIN_PRIORITY = new Map([
     ["water", 0],
     ["mud", 1],
     ["grass", 2],
-    ["desert", 3]
+    ["mowedgrass", 3],
+    ["desert", 4]
 ]);
 
 function parseArgs(argv) {

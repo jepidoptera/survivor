@@ -22,7 +22,8 @@ const TERRAIN_PRIORITY = new Map([
     ["water", 0],
     ["mud", 1],
     ["grass", 2],
-    ["desert", 3]
+    ["mowedgrass", 3],
+    ["desert", 4]
 ]);
 
 function roundNumber(value) {
@@ -559,7 +560,7 @@ function buildSuggestion(input, fields = {}) {
             totalVertices: totalVertexCount(polygons),
             deterministicSolver: {
                 schema: "terrain-bubble-deterministic-solver-v1",
-                priorityOrder: ["water", "mud", "grass", "desert"]
+                priorityOrder: ["water", "mud", "grass", "mowedgrass", "desert"]
             }
         }
     };

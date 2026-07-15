@@ -21,7 +21,8 @@ const TERRAIN_PRIORITY = new Map([
     ["water", 0],
     ["mud", 1],
     ["grass", 2],
-    ["desert", 3]
+    ["mowedgrass", 3],
+    ["desert", 4]
 ]);
 
 function roundNumber(value) {

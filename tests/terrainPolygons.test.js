@@ -2488,7 +2488,7 @@ test("cross-section lake with mud island preserves raw section water/mud borders
 });
 
 test("nested terrain polygons keep outer holes contiguous with inner polygon boundaries for every type pair", () => {
-    const terrainTypes = ["water", "mud", "grass", "desert"];
+    const terrainTypes = ["water", "mud", "grass", "mowedgrass", "desert"];
     const failures = [];
 
     for (const outerType of terrainTypes) {
@@ -2625,8 +2625,24 @@ test("terrain edit priority orders boundary ownership", () => {
     const map = createTerrainPatchMap();
 
     assert.ok(map.getGroundTerrainEditPriority("desert") > map.getGroundTerrainEditPriority("grass"));
+    assert.ok(map.getGroundTerrainEditPriority("desert") > map.getGroundTerrainEditPriority("mowedgrass"));
+    assert.ok(map.getGroundTerrainEditPriority("mowedgrass") > map.getGroundTerrainEditPriority("grass"));
     assert.ok(map.getGroundTerrainEditPriority("grass") > map.getGroundTerrainEditPriority("mud"));
     assert.ok(map.getGroundTerrainEditPriority("mud") > map.getGroundTerrainEditPriority("water"));
+});
+
+test("mowed grass is a distinct plain grass terrain material", () => {
+    const map = createTerrainPatchMap();
+    const node = map.nodes[3][3];
+    const textureId = map.getGroundTerrainTextureIdForType("mowedgrass", node.xindex, node.yindex);
+
+    assert.equal(textureId, 55);
+    node.groundTextureId = textureId;
+    assert.equal(map.getGroundTerrainTypeForNode(node), "mowedgrass");
+    assert.equal(map.getGroundPolygonMaterialPathForType("mowedgrass"), "/assets/images/terrain/materials/grass.png");
+    map.groundPalette = Array.from({ length: 61 }, (_unused, index) => `test-${index}`);
+    map.groundTexturePaths = Array.from({ length: 61 }, () => "/assets/images/terrain/materials/grass.png");
+    assert.equal(map.getGroundTexturePathForNode(node), "/assets/images/terrain/materials/grass.png");
 });
 
 test("water immersion query reports shore distance and slope depth", () => {

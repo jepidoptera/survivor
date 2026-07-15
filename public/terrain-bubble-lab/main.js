@@ -2,7 +2,8 @@
     'use strict';
 
     const TERRAIN_TYPES = [
-        { key: 'grass', label: 'Grass', color: '#4ca044', outline: '#9fe293' },
+        { key: 'grass', label: 'Tall Grass', color: '#4ca044', outline: '#9fe293' },
+        { key: 'mowedgrass', label: 'Mowed Grass', color: '#6ebf48', outline: '#c8f0a8' },
         { key: 'water', label: 'Water', color: '#2f91d7', outline: '#d9f3ff' },
         { key: 'mud', label: 'Mud', color: '#8a5b36', outline: '#ffad3d' },
         { key: 'desert', label: 'Desert', color: '#d9bd55', outline: '#fff13f' }

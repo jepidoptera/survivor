@@ -137,6 +137,33 @@ test("grass blade renderer still subtracts road path outline polygons from grass
     assert.equal(entries[0].baseZ, 0);
 });
 
+test("grass blade roots treat mowed grass as plain terrain without blades", () => {
+    const context = loadGrassBladeContext();
+    const renderer = new context.RenderingGrassBlades.Renderer();
+    const entries = renderer.collectGrassMaskEntries([
+        {
+            key: "fragment:section:0,0:floor:level0-material",
+            level: 0,
+            texturePath: "/assets/images/terrain/materials/grass.png",
+            outer: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }],
+            holes: [],
+            alpha: 1
+        },
+        {
+            key: "fragment:section:0,0:terrain:mowedgrass:0",
+            level: 0,
+            isTerrainPolygon: true,
+            terrainType: "mowedgrass",
+            outer: [{ x: 1, y: 1 }, { x: 3, y: 1 }, { x: 3, y: 3 }, { x: 1, y: 3 }],
+            holes: [],
+            alpha: 1
+        }
+    ]);
+    assert.equal(entries.length, 2);
+    assert.equal(entries[0].mode, "add");
+    assert.equal(entries[1].mode, "remove");
+});
+
 test("game views load grass blade module before main renderer", () => {
     for (const view of ["views/hunt.ejs", "views/sectionworld.ejs"]) {
         const source = fs.readFileSync(path.join(ROOT, view), "utf8");

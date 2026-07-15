@@ -31,6 +31,8 @@
                 return 0xffa500;
             case "grass":
                 return 0x00ff00;
+            case "mowedgrass":
+                return 0x7fd65a;
             case "desert":
                 return 0xffff00;
             default:

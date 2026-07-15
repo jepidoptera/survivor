@@ -373,13 +373,15 @@ const SpellSystem = (() => {
     const TERRAIN_EDITOR_ICON = "/assets/images/land tiles/desert0.png";
     const DEFAULT_TERRAIN_TYPE = "grass";
     const TERRAIN_TOOL_DEFS = [
-        { name: "grass", label: "Grass", icon: "/assets/images/land tiles/forest0.png" },
+        { name: "grass", label: "Tall Grass", icon: "/assets/images/terrain/materials/tall-grass-preview.png" },
+        { name: "mowedgrass", label: "Mowed Grass", icon: "/assets/images/terrain/materials/grass-preview.png" },
         { name: "desert", label: "Desert", icon: "/assets/images/land tiles/desert0.png" },
         { name: "water", label: "Water", icon: "/assets/images/land tiles/water1.png" },
         { name: "mud", label: "Mud", icon: "/assets/images/terrain/materials/dirt.png" }
     ];
     const TERRAIN_HOTKEY_TYPES = {
         g: "grass",
+        l: "mowedgrass",
         d: "desert",
         w: "water",
         m: "mud"

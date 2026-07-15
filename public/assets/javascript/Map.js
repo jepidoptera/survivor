@@ -460,11 +460,11 @@ const FOREST_GROUND_TEXTURE_COUNT = 52;
 const GROUND_TERRAIN_DEFS = [
     {
         name: "grass",
-        label: "Grass",
+        label: "Tall Grass",
         idStart: 0,
         baseCount: FOREST_GROUND_BASE_COUNT,
         textureNames: Array.from({ length: FOREST_GROUND_TEXTURE_COUNT }, (_unused, index) => `forest${index}`),
-        icon: "/assets/images/land tiles/forest0.png",
+        icon: "/assets/images/terrain/materials/tall-grass-preview.png",
         polygonMaterial: "/assets/images/terrain/materials/grass.png",
         polygonMaterialScale: 10
     },
@@ -498,6 +498,17 @@ const GROUND_TERRAIN_DEFS = [
         icon: "/assets/images/terrain/materials/dirt.png",
         polygonMaterial: "/assets/images/terrain/materials/dirt.png",
         polygonMaterialScale: 20
+    },
+    {
+        name: "mowedgrass",
+        label: "Mowed Grass",
+        idStart: FOREST_GROUND_TEXTURE_COUNT + 3,
+        baseCount: 1,
+        textureNames: ["mowedgrass"],
+        texturePaths: ["/assets/images/terrain/materials/grass.png"],
+        icon: "/assets/images/terrain/materials/grass-preview.png",
+        polygonMaterial: "/assets/images/terrain/materials/grass.png",
+        polygonMaterialScale: 10
     }
 ];
 
@@ -9217,7 +9228,8 @@ class GameMap {
         if (type === "water") return 0;
         if (type === "mud") return 1;
         if (type === "grass") return 2;
-        if (type === "desert" || type === "sand") return 3;
+        if (type === "mowedgrass") return 3;
+        if (type === "desert" || type === "sand") return 4;
         throw new Error(`unknown terrain edit priority for "${typeName}"`);
     }
 

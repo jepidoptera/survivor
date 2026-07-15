@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const outputPath = path.join(__dirname, '..', 'public', 'assets', 'data', 'terrain-bubble-examples.json');
-const terrainTypes = ['grass', 'water', 'mud', 'desert'];
+const terrainTypes = ['grass', 'mowedgrass', 'water', 'mud', 'desert'];
 const directions = [
     { q: 1, r: 0 },
     { q: 1, r: -1 },

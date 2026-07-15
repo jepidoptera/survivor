@@ -4997,7 +4997,30 @@ jQuery(() => {
                 : getLayerBaseZ(wizardLayer);
             wizard.prevJumpHeight = Number.isFinite(wizard.jumpHeight) ? wizard.jumpHeight : 0;
             const isFalling = !!(wizard._floorFallState && wizard._floorFallState.active);
-            if (!isFalling) {
+            const drowningMomentumNowMs = performance.now();
+            const drowningMomentumActive = !!(
+                wizard.dead &&
+                typeof wizard.isDrowningMomentumActive === "function" &&
+                wizard.isDrowningMomentumActive(drowningMomentumNowMs)
+            );
+            if (drowningMomentumActive) {
+                movementSectionStartMs = movementPerfNow();
+                if (typeof wizard.applyDrowningMomentumForFrame === "function") {
+                    wizard.applyDrowningMomentumForFrame(drowningMomentumNowMs);
+                }
+                wizard.moveDirection(wizard.movementVector, {
+                    lockMovementVector: true,
+                    allowUnsupportedPosition: true,
+                    preserveDrowningMomentum: true
+                });
+                movementPerfRecord("movement.step.moveDirection.drowning", movementSectionStartMs);
+            } else if (wizard.dead) {
+                wizard.moving = false;
+                if (wizard.movementVector && typeof wizard.movementVector === "object") {
+                    wizard.movementVector.x = 0;
+                    wizard.movementVector.y = 0;
+                }
+            } else if (!isFalling) {
                 movementSectionStartMs = movementPerfNow();
                 wizard.moveDirection(moveVector, moveOptions);
                 movementPerfRecord("movement.step.moveDirection", movementSectionStartMs);
@@ -6821,7 +6844,7 @@ jQuery(() => {
             !event.metaKey &&
             !event.repeat &&
             wizard &&
-            ["w", "m", "d", "g"].includes(keyLower) &&
+            ["w", "m", "d", "g", "l"].includes(keyLower) &&
             typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.isEditorMode === "function" &&
             SpellSystem.isEditorMode() &&
@@ -6829,7 +6852,7 @@ jQuery(() => {
         ) {
             const terrainType = keyLower === "w"
                 ? "water"
-                : (keyLower === "m" ? "mud" : (keyLower === "d" ? "desert" : "grass"));
+                : (keyLower === "m" ? "mud" : (keyLower === "d" ? "desert" : (keyLower === "l" ? "mowedgrass" : "grass")));
             event.preventDefault();
             SpellSystem.selectTerrainType(wizard, terrainType);
             updateEditorPlacementActiveState(isEditorPlacementKeyHeld());

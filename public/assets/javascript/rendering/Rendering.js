@@ -16157,8 +16157,9 @@ void main(void) {
             const type = typeof typeName === "string" ? typeName.trim().toLowerCase() : "";
             if (type === "grass") return 0;
             if (type === "mud") return 1;
-            if (type === "desert" || type === "sand") return 2;
-            if (type === "water") return 3;
+            if (type === "mowedgrass") return 2;
+            if (type === "desert" || type === "sand") return 3;
+            if (type === "water") return 4;
             throw new Error(`unknown level 0 terrain draw order for "${typeName}"`);
         }
 

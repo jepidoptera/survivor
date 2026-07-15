@@ -4,6 +4,7 @@ const WIZARD_WATER_MOVEMENT_DEPTH_SLOPE = 2 / 3;
 const WIZARD_WATER_MAX_DEPTH_UNITS = 2 / 3;
 const WIZARD_WATER_FULL_SUBMERGED_DEPTH_UNITS = 2 / 3;
 const WIZARD_FULLY_SUBMERGED_SPEED_MULTIPLIER = 1 / 3;
+const WIZARD_DROWNING_MOMENTUM_DECAY_MS = 1500;
 
 const WIZARD_SHIELD_DEPTH_NEAR_METRIC = -128;
 const WIZARD_SHIELD_DEPTH_FAR_METRIC = 256;
@@ -268,6 +269,7 @@ class Wizard extends Character {
         this._adventureDeathAnimationStartedAtMs = null;
         this._adventureDeathAnimationDurationMs = 4000;
         this._adventureDeathCause = "";
+        this._drowningMomentumState = null;
         this.magic = 100;
         this.maxMagic = 100;
         this.gameMode = WIZARD_GAME_MODE_GOD;
@@ -441,6 +443,7 @@ class Wizard extends Character {
         this._adventureDeathAnimationActive = false;
         this._adventureDeathAnimationStartedAtMs = null;
         this._adventureDeathCause = "";
+        this._drowningMomentumState = null;
     }
     getAdventureDeathAnimationProgress(nowMs = null) {
         if (!this._adventureDeathAnimationActive) return 0;
@@ -472,7 +475,20 @@ class Wizard extends Character {
             ? options.cause
             : "";
         this.startAdventureDeathAnimation(deathAnimationMs);
-        if (typeof pause === "function") {
+        const pauseDelayMs = Number.isFinite(Number(options && options.pauseDelayMs))
+            ? Math.max(0, Number(options.pauseDelayMs))
+            : 0;
+        if (typeof pause === "function" && pauseDelayMs > 0) {
+            setTimeout(() => {
+                if (
+                    this._adventureRespawnPending &&
+                    this._adventureDeathAnimationActive &&
+                    this._adventureDeathCause === ((options && typeof options.cause === "string") ? options.cause : "")
+                ) {
+                    pause();
+                }
+            }, pauseDelayMs);
+        } else if (typeof pause === "function") {
             pause();
         }
         if (typeof message === "function") {
@@ -513,6 +529,60 @@ class Wizard extends Character {
         }
         this.hp = 0;
         return this.queueAdventureRespawn(options);
+    }
+    startDrowningMomentumDecay(durationMs = WIZARD_DROWNING_MOMENTUM_DECAY_MS) {
+        const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        const vector = this.movementVector && typeof this.movementVector === "object"
+            ? this.movementVector
+            : { x: 0, y: 0 };
+        const vx = Number.isFinite(Number(vector.x)) ? Number(vector.x) : 0;
+        const vy = Number.isFinite(Number(vector.y)) ? Number(vector.y) : 0;
+        this._drowningMomentumState = {
+            startedAtMs: nowMs,
+            durationMs: Number.isFinite(Number(durationMs)) ? Math.max(0, Number(durationMs)) : WIZARD_DROWNING_MOMENTUM_DECAY_MS,
+            velocityX: vx,
+            velocityY: vy
+        };
+        return this._drowningMomentumState;
+    }
+    getDrowningMomentumProgress(nowMs = null) {
+        const state = this._drowningMomentumState;
+        if (!state || typeof state !== "object") return 1;
+        const durationMs = Number.isFinite(Number(state.durationMs))
+            ? Math.max(0, Number(state.durationMs))
+            : WIZARD_DROWNING_MOMENTUM_DECAY_MS;
+        if (durationMs <= 0) return 1;
+        const currentMs = Number.isFinite(Number(nowMs))
+            ? Number(nowMs)
+            : ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now());
+        const startedAtMs = Number.isFinite(Number(state.startedAtMs)) ? Number(state.startedAtMs) : currentMs;
+        return Math.max(0, Math.min(1, (currentMs - startedAtMs) / durationMs));
+    }
+    isDrowningMomentumActive(nowMs = null) {
+        const state = this._drowningMomentumState;
+        if (!state || typeof state !== "object") return false;
+        if (this._adventureDeathCause !== "drowning") return false;
+        const speed = Math.hypot(Number(state.velocityX) || 0, Number(state.velocityY) || 0);
+        return speed > 1e-4 && this.getDrowningMomentumProgress(nowMs) < 1;
+    }
+    applyDrowningMomentumForFrame(nowMs = null) {
+        const state = this._drowningMomentumState;
+        if (!state || typeof state !== "object") return false;
+        const progress = this.getDrowningMomentumProgress(nowMs);
+        const remaining = Math.max(0, 1 - progress);
+        if (this.movementVector && typeof this.movementVector === "object") {
+            this.movementVector.x = (Number(state.velocityX) || 0) * remaining;
+            this.movementVector.y = (Number(state.velocityY) || 0) * remaining;
+        }
+        if (remaining <= 0) {
+            this._drowningMomentumState = null;
+            return false;
+        }
+        return true;
     }
     startJump() {
         if (typeof this.isFrozen === "function" && this.isFrozen()) return;
@@ -933,6 +1003,7 @@ class Wizard extends Character {
 
     drownAtMaxWaterDepth() {
         if (this.dead || this._adventureRespawnPending) return false;
+        this.startDrowningMomentumDecay(WIZARD_DROWNING_MOMENTUM_DECAY_MS);
         this.hp = 0;
         if (typeof this.updateStatusBars === "function") {
             this.updateStatusBars();
@@ -945,7 +1016,10 @@ class Wizard extends Character {
             this.isAdventureMode() &&
             typeof this.updateAdventureDeathState === "function"
         ) {
-            return this.updateAdventureDeathState({ cause: "drowning" });
+            return this.updateAdventureDeathState({
+                cause: "drowning",
+                pauseDelayMs: WIZARD_DROWNING_MOMENTUM_DECAY_MS
+            });
         }
         if (typeof this.die === "function") {
             this.die();
@@ -956,6 +1030,7 @@ class Wizard extends Character {
     }
 
     getVectorMovementEnvironmentSpeedMultiplier(options = {}) {
+        if (options && options.preserveDrowningMomentum === true) return 1;
         const activeAuras = Array.isArray(this.activeAuras)
             ? this.activeAuras
             : (typeof this.activeAura === "string" ? [this.activeAura] : []);

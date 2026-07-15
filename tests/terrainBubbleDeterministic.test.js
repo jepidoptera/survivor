@@ -153,7 +153,7 @@ test("deterministic suggestion and scoring use deterministic metadata", () => {
     const input = makeInput((coord) => coord.q >= 0 ? "desert" : "water");
     const suggestion = buildSuggestion(input);
     assert.equal(suggestion.editor.generatedBy, "terrain-bubble-deterministic-solver-v1");
-    assert.equal(suggestion.editor.deterministicSolver.priorityOrder.join(","), "water,mud,grass,desert");
+    assert.equal(suggestion.editor.deterministicSolver.priorityOrder.join(","), "water,mud,grass,mowedgrass,desert");
     assertFinitePolygons(suggestion.output.polygons);
 
     const report = scoreExamples([suggestion]);
