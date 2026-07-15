@@ -14688,13 +14688,6 @@ class GameMap {
                 });
             }
         }
-        const hasStoredGrassParticipant = allSourceRecords.some(record => (
-            record &&
-            !record.ephemeral &&
-            record.polygon &&
-            record.polygon.type === "grass"
-        ));
-        const shouldPersistPatchedType = (type) => type !== "grass" || hasStoredGrassParticipant;
         const restoreEditedNodeTextures = () => {
             for (let i = 0; i < editedNodeRecords.length; i++) {
                 editedNodeRecords[i].node.groundTextureId = editedNodeRecords[i].previousTextureId;
@@ -14737,6 +14730,17 @@ class GameMap {
                 unchangedSourceRecords.push(record);
             }
         }
+        const hasAffectedStoredGrassParticipant = affectedSourceRecords.some(record => (
+            record &&
+            !record.ephemeral &&
+            record.polygon &&
+            record.polygon.type === "grass"
+        ));
+        const shouldPersistPatchedType = (type) => (
+            type !== "grass" ||
+            hasAffectedStoredGrassParticipant ||
+            nextType === "grass"
+        );
         const localPartitionRepairKeys = new Set();
         for (let p = 0; p < bubblePatch.polygons.length; p++) {
             const polygon = bubblePatch.polygons[p];
@@ -15289,10 +15293,6 @@ class GameMap {
         if (!normalized) {
             throw new Error("terrain polygon tile assignment requires a polygon");
         }
-        const api = getPolygonClippingApi2D();
-        if (!api || typeof api.difference !== "function") {
-            throw new Error("terrain polygon tile assignment requires polygon clipping difference");
-        }
         const sectionKey = options && typeof options.sectionKey === "string" ? options.sectionKey : "";
         const asset = options && options.asset ? options.asset : null;
         const explicitNodes = Array.isArray(options && options.nodes) ? options.nodes : null;
@@ -15320,19 +15320,16 @@ class GameMap {
             }
         }
 
-        const polygonGeometry = this.groundTerrainPolygonToClipGeometry(normalized);
         const assignedNodes = [];
         for (let i = 0; i < sourceNodes.length; i++) {
             const node = sourceNodes[i];
             if (!node || node._prototypeVoid === true) continue;
-            const hexGeometry = this.getGroundTerrainHexClipGeometry(node);
-            let uncovered = null;
-            try {
-                uncovered = api.difference(hexGeometry, polygonGeometry);
-            } catch (err) {
-                throw new Error(`terrain polygon tile assignment containment check failed for ${normalized.type}: ${err && err.message ? err.message : err}`);
+            const nodeX = Number(node.x);
+            const nodeY = Number(node.y);
+            if (!Number.isFinite(nodeX) || !Number.isFinite(nodeY)) {
+                throw new Error(`terrain polygon tile assignment requires finite node center for ${normalized.type}`);
             }
-            if (clipGeometryIsEmpty2D(uncovered)) assignedNodes.push(node);
+            if (this.terrainPolygonContainsPoint(normalized, nodeX, nodeY)) assignedNodes.push(node);
         }
 
         const textureIdForNode = (node) => this.getGroundTerrainTextureIdForType(

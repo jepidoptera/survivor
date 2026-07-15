@@ -8,6 +8,7 @@
     const ROOT_MASK_THRESHOLD = 0.35;
     const GRASS_TERRAIN_TYPE = "grass";
     const CHUNK_SIZE_WORLD = 8;
+    const CHUNK_ROOT_MASK_SIZE = 128;
     const CHUNK_BUILD_BUDGET_PER_FRAME = 3;
     const MAX_CACHED_CHUNKS = 128;
     const BLADE_DENSITY_PER_WORLD = 36;
@@ -56,6 +57,35 @@
             if (Number.isFinite(x) && Number.isFinite(y)) out.push({ x, y });
         }
         return out;
+    }
+
+    function getPointListBounds(points) {
+        if (!Array.isArray(points) || points.length === 0) return null;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (let i = 0; i < points.length; i++) {
+            const x = Number(points[i] && points[i].x);
+            const y = Number(points[i] && points[i].y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+        }
+        if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null;
+        return { minX, minY, maxX, maxY };
+    }
+
+    function boundsIntersect(a, b, epsilon = 0) {
+        if (!a || !b) return false;
+        return (
+            a.maxX >= b.minX - epsilon &&
+            a.maxY >= b.minY - epsilon &&
+            a.minX <= b.maxX + epsilon &&
+            a.minY <= b.maxY + epsilon
+        );
     }
 
     function getScreenSize(rendererAdapter, ctx) {
@@ -122,10 +152,7 @@
         constructor() {
             this.container = null;
             this.state = null;
-            this.rootMaskTexture = null;
             this.rootMaskGraphics = null;
-            this.rootMaskSizeKey = "";
-            this.rootMaskSignature = "";
             this.chunks = new Map();
             this.losDepthCanvas = null;
             this.losDepthContext = null;
@@ -168,16 +195,6 @@
             return state;
         }
 
-        ensureRootMaskTexture(width, height) {
-            const sizeKey = `${width}x${height}`;
-            if (this.rootMaskTexture && this.rootMaskSizeKey === sizeKey) return this.rootMaskTexture;
-            if (this.rootMaskTexture && typeof this.rootMaskTexture.destroy === "function") this.rootMaskTexture.destroy(true);
-            this.rootMaskTexture = PIXI.RenderTexture.create({ width, height, resolution: 1 });
-            this.rootMaskSizeKey = sizeKey;
-            this.rootMaskSignature = "";
-            return this.rootMaskTexture;
-        }
-
         ensureRootMaskGraphics() {
             if (this.rootMaskGraphics) return this.rootMaskGraphics;
             this.rootMaskGraphics = new PIXI.Graphics();
@@ -214,6 +231,7 @@
                     source: entry,
                     mode: addRoots ? "add" : "remove",
                     outer,
+                    bounds: getPointListBounds(outer),
                     holes: Array.isArray(entry.holes)
                         ? entry.holes.map(normalizePointList).filter((hole) => hole.length >= 3)
                         : [],
@@ -253,6 +271,7 @@
                     source: roadPath,
                     mode: "remove",
                     outer,
+                    bounds: getPointListBounds(outer),
                     holes: [],
                     baseZ: this.roadPathBaseZ(roadPath, rendererAdapter)
                 });
@@ -290,24 +309,54 @@
             return baseZ;
         }
 
-        drawScreenRing(graphics, rendererAdapter, ring, baseZ) {
-            const camera = rendererAdapter && rendererAdapter.camera ? rendererAdapter.camera : null;
-            if (!camera || typeof camera.worldToScreen !== "function") {
-                throw new Error("grass blade root mask requires RenderingCamera.worldToScreen");
+        getChunkWorldBounds(cx, cy) {
+            const x = Number(cx) * CHUNK_SIZE_WORLD;
+            const y = Number(cy) * CHUNK_SIZE_WORLD;
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                throw new Error("grass blade chunk bounds require finite chunk coordinates");
+            }
+            return {
+                minX: x,
+                minY: y,
+                maxX: x + CHUNK_SIZE_WORLD,
+                maxY: y + CHUNK_SIZE_WORLD
+            };
+        }
+
+        getMaskEntriesForChunk(maskEntries, cx, cy) {
+            if (!Array.isArray(maskEntries)) {
+                throw new Error("grass blade chunk mask requires mask entries");
+            }
+            const chunkBounds = this.getChunkWorldBounds(cx, cy);
+            const out = [];
+            for (let i = 0; i < maskEntries.length; i++) {
+                const entry = maskEntries[i];
+                if (!entry) continue;
+                const entryBounds = entry.bounds || getPointListBounds(entry.outer);
+                if (boundsIntersect(entryBounds, chunkBounds, 1e-9)) out.push(entry);
+            }
+            return out;
+        }
+
+        drawChunkMaskRing(graphics, ring, chunk) {
+            if (!chunk || !Number.isFinite(chunk.originX) || !Number.isFinite(chunk.originY)) {
+                throw new Error("grass blade chunk mask requires finite chunk origin");
             }
             const flat = [];
+            const scale = CHUNK_ROOT_MASK_SIZE / CHUNK_SIZE_WORLD;
             for (let i = 0; i < ring.length; i++) {
                 const pt = ring[i];
-                const screen = camera.worldToScreen(pt.x, pt.y, baseZ);
-                if (!screen || !Number.isFinite(screen.x) || !Number.isFinite(screen.y)) {
-                    throw new Error("grass blade root mask received a non-finite projected polygon point");
+                const x = (finiteNumber(pt && pt.x, NaN) - chunk.originX) * scale;
+                const y = (finiteNumber(pt && pt.y, NaN) - chunk.originY) * scale;
+                if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                    throw new Error("grass blade chunk mask received a non-finite projected polygon point");
                 }
-                flat.push(screen.x, screen.y);
+                flat.push(x, y);
             }
             graphics.drawPolygon(flat);
         }
 
-        rootMaskEntrySignature(entry) {
+        maskEntrySignature(entry) {
             if (!entry) return "";
             const parts = [
                 entry.mode === "remove" ? "remove" : "add",
@@ -327,28 +376,36 @@
             return parts.join("|");
         }
 
-        buildRootMaskSignature(rendererAdapter, maskEntries, width, height, baseZ) {
-            const camera = rendererAdapter && rendererAdapter.camera ? rendererAdapter.camera : null;
-            if (!camera) throw new Error("grass blade root mask signature requires a rendering camera");
+        buildChunkMaskSignature(maskEntries, baseZ) {
+            const entrySignatures = Array.isArray(maskEntries)
+                ? maskEntries.map(entry => this.maskEntrySignature(entry)).sort()
+                : [];
             return [
-                `${Math.max(1, Math.round(width))}x${Math.max(1, Math.round(height))}`,
-                signatureNumber(camera.x),
-                signatureNumber(camera.y),
-                signatureNumber(camera.z),
-                signatureNumber(camera.viewscale),
-                signatureNumber(camera.xyratio),
                 signatureNumber(baseZ),
-                maskEntries.map(entry => this.rootMaskEntrySignature(entry)).join("~")
+                entrySignatures.join("~")
             ].join("::");
         }
 
-        updateRootMask(rendererAdapter, ctx, maskEntries, width, height, baseZ) {
+        ensureChunkMaskTexture(chunk) {
+            if (!chunk) throw new Error("grass blade chunk mask texture requires a chunk");
+            if (chunk.maskTexture) return chunk.maskTexture;
+            const texture = PIXI.RenderTexture.create({
+                width: CHUNK_ROOT_MASK_SIZE,
+                height: CHUNK_ROOT_MASK_SIZE,
+                resolution: 1
+            });
+            configurePixelTextureSampling(texture);
+            chunk.maskTexture = texture;
+            return texture;
+        }
+
+        updateChunkMask(rendererAdapter, ctx, chunk, maskEntries, baseZ, signature) {
+            if (!chunk) throw new Error("grass blade chunk mask update requires a chunk");
             const appRef = (ctx && ctx.app) || global.app || null;
             const renderer = appRef && appRef.renderer ? appRef.renderer : null;
-            if (!renderer || typeof renderer.render !== "function") throw new Error("grass blade root mask requires an app renderer");
-            const texture = this.ensureRootMaskTexture(width, height);
-            const signature = this.buildRootMaskSignature(rendererAdapter, maskEntries, width, height, baseZ);
-            if (this.rootMaskSignature === signature) return { texture, rebuilt: false, maskMs: 0 };
+            if (!renderer || typeof renderer.render !== "function") throw new Error("grass blade chunk mask requires an app renderer");
+            const texture = this.ensureChunkMaskTexture(chunk);
+            if (chunk.maskSignature === signature) return { texture, rebuilt: false, maskMs: 0 };
             const perfNow = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
                 ? performance.now.bind(performance)
                 : null;
@@ -356,7 +413,7 @@
             const graphics = this.ensureRootMaskGraphics();
             graphics.clear();
             graphics.beginFill(ROOT_MASK_CLEAR_COLOR, 0);
-            graphics.drawRect(0, 0, width, height);
+            graphics.drawRect(0, 0, CHUNK_ROOT_MASK_SIZE, CHUNK_ROOT_MASK_SIZE);
             graphics.endFill();
             const canDrawHoles = typeof graphics.beginHole === "function" && typeof graphics.endHole === "function";
             const drawEntries = (mode, color) => {
@@ -364,12 +421,12 @@
                 for (let i = 0; i < maskEntries.length; i++) {
                     const entry = maskEntries[i];
                     if (!entry || entry.mode !== mode) continue;
-                    this.drawScreenRing(graphics, rendererAdapter, entry.outer, baseZ);
+                    this.drawChunkMaskRing(graphics, entry.outer, chunk);
                     if (entry.holes.length > 0) {
-                        if (!canDrawHoles) throw new Error("grass blade root mask requires PIXI.Graphics beginHole/endHole for holed grass polygons");
+                        if (!canDrawHoles) throw new Error("grass blade chunk mask requires PIXI.Graphics beginHole/endHole for holed grass polygons");
                         for (let h = 0; h < entry.holes.length; h++) {
                             graphics.beginHole();
-                            this.drawScreenRing(graphics, rendererAdapter, entry.holes[h], baseZ);
+                            this.drawChunkMaskRing(graphics, entry.holes[h], chunk);
                             graphics.endHole();
                         }
                     }
@@ -379,7 +436,7 @@
             drawEntries("add", ROOT_MASK_FILL_COLOR);
             drawEntries("remove", ROOT_MASK_ERASE_COLOR);
             renderer.render(graphics, texture, true);
-            this.rootMaskSignature = signature;
+            chunk.maskSignature = signature;
             return { texture, rebuilt: true, maskMs: perfNow ? (perfNow() - startMs) : 0 };
         }
 
@@ -395,6 +452,8 @@
                 uRootMask: rootMask || PIXI.Texture.WHITE,
                 uLosDepthTexture: PIXI.Texture.WHITE,
                 uScreenSize: new Float32Array([width, height]),
+                uRootMaskWorldOrigin: new Float32Array([0, 0]),
+                uRootMaskWorldSize: new Float32Array([CHUNK_SIZE_WORLD, CHUNK_SIZE_WORLD]),
                 uCameraWorld: new Float32Array([0, 0]),
                 uCameraZ: 0,
                 uBaseZ: baseZ,
@@ -439,7 +498,7 @@
             return Math.max(1, Math.round(count));
         }
 
-        buildChunkMesh(cx, cy, renderer, rootMask, width, height, baseZ) {
+        buildChunkMesh(cx, cy, renderer, width, height, baseZ) {
             const shaders = global.RenderingGrassBladeShaders;
             if (!shaders || !shaders.vertexWebgl2 || !shaders.fragmentWebgl2) {
                 throw new Error("grass blade rendering requires RenderingGrassBladeShaders");
@@ -513,12 +572,22 @@
                 .addAttribute("aSwayMeta", swayMeta, 2)
                 .addAttribute("aColorShift", colorShift, 1)
                 .addIndex(indices);
-            const shader = PIXI.Shader.from(shaders.vertexWebgl2, shaders.fragmentWebgl2, this.createChunkUniforms(rootMask, width, height, baseZ));
+            const shader = PIXI.Shader.from(shaders.vertexWebgl2, shaders.fragmentWebgl2, this.createChunkUniforms(PIXI.Texture.WHITE, width, height, baseZ));
             const mesh = new PIXI.Mesh(geometry, shader, this.ensureState(), PIXI.DRAW_MODES.TRIANGLES);
             mesh.name = `grassBladeChunk:${cx},${cy}`;
             mesh.interactive = false;
             mesh.visible = false;
-            return { cx, cy, mesh, bladeCount, lastSeenFrame: this.frameId };
+            return {
+                cx,
+                cy,
+                originX: cx * CHUNK_SIZE_WORLD,
+                originY: cy * CHUNK_SIZE_WORLD,
+                mesh,
+                maskTexture: null,
+                maskSignature: "",
+                bladeCount,
+                lastSeenFrame: this.frameId
+            };
         }
 
         visibleChunkKeys(camera, width, height) {
@@ -552,6 +621,7 @@
             const mesh = chunk.mesh;
             if (mesh && mesh.parent) mesh.parent.removeChild(mesh);
             if (mesh && typeof mesh.destroy === "function") mesh.destroy({ children: false, texture: false, baseTexture: false });
+            if (chunk.maskTexture && typeof chunk.maskTexture.destroy === "function") chunk.maskTexture.destroy(true);
             this.chunks.delete(key);
         }
 
@@ -704,10 +774,15 @@
             };
         }
 
-        applyFrameUniforms(uniforms, rootMask, width, height, baseZ, camera, shadowState) {
-            uniforms.uRootMask = rootMask;
+        applyFrameUniforms(uniforms, chunk, width, height, baseZ, camera, shadowState) {
+            if (!chunk || !chunk.maskTexture) throw new Error("grass blade chunk uniforms require a mask texture");
+            uniforms.uRootMask = chunk.maskTexture;
             uniforms.uScreenSize[0] = width;
             uniforms.uScreenSize[1] = height;
+            uniforms.uRootMaskWorldOrigin[0] = chunk.originX;
+            uniforms.uRootMaskWorldOrigin[1] = chunk.originY;
+            uniforms.uRootMaskWorldSize[0] = CHUNK_SIZE_WORLD;
+            uniforms.uRootMaskWorldSize[1] = CHUNK_SIZE_WORLD;
             uniforms.uCameraWorld[0] = finiteNumber(camera && camera.x, 0);
             uniforms.uCameraWorld[1] = finiteNumber(camera && camera.y, 0);
             uniforms.uCameraZ = finiteNumber(camera && camera.z, 0);
@@ -768,14 +843,20 @@
             const roadPathMaskEntries = this.collectRoadPathMaskEntries(rendererAdapter, ctx)
                 .filter((entry) => entry && Math.abs(finiteNumber(entry.baseZ, 0) - baseZ) <= 0.000001);
             for (let i = 0; i < roadPathMaskEntries.length; i++) maskEntries.push(roadPathMaskEntries[i]);
-            const rootMaskResult = this.updateRootMask(rendererAdapter, ctx, maskEntries, width, height, baseZ);
-            const rootMask = rootMaskResult && rootMaskResult.texture ? rootMaskResult.texture : null;
-            if (!rootMask) throw new Error("grass blade root mask update did not return a texture");
             const container = this.ensureContainer(rendererAdapter);
             container.visible = true;
             const camera = rendererAdapter && rendererAdapter.camera ? rendererAdapter.camera : {};
             const visible = this.visibleChunkKeys(camera, width, height);
             const visibleKeySet = new Set(visible.map(item => item.key));
+            const visibleChunkState = new Map();
+            for (let i = 0; i < visible.length; i++) {
+                const item = visible[i];
+                const localEntries = this.getMaskEntriesForChunk(maskEntries, item.cx, item.cy);
+                visibleChunkState.set(item.key, {
+                    localEntries,
+                    signature: this.buildChunkMaskSignature(localEntries, baseZ)
+                });
+            }
             this.chunks.forEach((chunk, key) => {
                 if (chunk && chunk.mesh) chunk.mesh.visible = false;
                 if (visibleKeySet.has(key)) chunk.lastSeenFrame = this.frameId;
@@ -784,19 +865,27 @@
             for (let i = 0; i < visible.length && built < CHUNK_BUILD_BUDGET_PER_FRAME; i++) {
                 const item = visible[i];
                 if (this.chunks.has(item.key)) continue;
-                const chunk = this.buildChunkMesh(item.cx, item.cy, renderer, rootMask, width, height, baseZ);
+                const chunk = this.buildChunkMesh(item.cx, item.cy, renderer, width, height, baseZ);
                 this.chunks.set(item.key, chunk);
                 built += 1;
             }
             const shadowState = this.prepareShadowState(rendererAdapter, ctx);
             let visibleChunks = 0;
             let visibleBlades = 0;
+            let masksRebuilt = 0;
+            let maskMs = 0;
             this.chunks.forEach((chunk, key) => {
                 if (!visibleKeySet.has(key) || !chunk || !chunk.mesh) return;
+                const chunkState = visibleChunkState.get(key);
+                if (!chunkState) throw new Error(`grass blade visible chunk ${key} is missing mask state`);
+                const maskResult = this.updateChunkMask(rendererAdapter, ctx, chunk, chunkState.localEntries, baseZ, chunkState.signature);
+                if (!maskResult || !maskResult.texture) throw new Error("grass blade chunk mask update did not return a texture");
+                if (maskResult.rebuilt === true) masksRebuilt += 1;
+                maskMs += Number.isFinite(maskResult.maskMs) ? Number(maskResult.maskMs) : 0;
                 if (chunk.mesh.parent !== container) container.addChild(chunk.mesh);
                 const uniforms = chunk.mesh.shader && chunk.mesh.shader.uniforms ? chunk.mesh.shader.uniforms : null;
                 if (!uniforms) throw new Error("grass blade chunk mesh is missing shader uniforms");
-                this.applyFrameUniforms(uniforms, rootMask, width, height, baseZ, camera, shadowState);
+                this.applyFrameUniforms(uniforms, chunk, width, height, baseZ, camera, shadowState);
                 chunk.mesh.visible = true;
                 chunk.lastSeenFrame = this.frameId;
                 visibleChunks += 1;
@@ -813,8 +902,8 @@
                 chunksBuilt: built,
                 chunksPending: Math.max(0, visible.length - visibleChunks),
                 blades: visibleBlades,
-                maskRebuilt: rootMaskResult.rebuilt === true ? 1 : 0,
-                maskMs: Number.isFinite(rootMaskResult.maskMs) ? Number(rootMaskResult.maskMs) : 0,
+                maskRebuilt: masksRebuilt,
+                maskMs,
                 losShadow: shadowState.losEnabled,
                 wizardShadow: shadowState.wizardShadowEnabled
             };

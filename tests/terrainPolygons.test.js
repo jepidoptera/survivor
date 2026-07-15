@@ -1260,6 +1260,14 @@ function paintTerrainModelEdits(fixture, edits, options = {}) {
     }
 }
 
+function terrainPolygonsContainingNode(map, polygons, node, terrainType) {
+    return (Array.isArray(polygons) ? polygons : []).filter(polygon => (
+        polygon &&
+        polygon.type === terrainType &&
+        map.terrainPolygonContainsPoint(polygon, Number(node.x), Number(node.y))
+    ));
+}
+
 function assertTerrainModelFixtureInvariants(fixture, label, nodes = null) {
     const rawPolygons = fixture.rawPolygons();
     assertTerrainPolygonsPassRendererPreflight(rawPolygons, label);
@@ -2311,7 +2319,7 @@ test("terrain patch sanitization drops holes collapsed by repair-lattice snappin
     assert.doesNotThrow(() => map.groundTerrainPolygonToClipGeometry(polygons[0]));
 });
 
-test("terrain polygon tile assignment paints only fully contained hexes", () => {
+test("terrain polygon tile assignment paints hexes with centers inside", () => {
     const map = createTerrainPatchMap(8, 8);
     const insideNodes = [map.nodes[3][3], map.nodes[3][4]];
     const polygon = map.groundTerrainClipGeometryToPolygons(
@@ -2334,7 +2342,7 @@ test("terrain polygon tile assignment paints only fully contained hexes", () => 
     assert.equal(map.getGroundTerrainTypeForNode(map.nodes[4][3]), "grass");
 });
 
-test("terrain polygon tile assignment ignores hexes that only have centers inside", () => {
+test("terrain polygon tile assignment paints hexes even when only their centers are inside", () => {
     const map = createTerrainPatchMap(8, 8);
     const node = map.nodes[3][3];
     const polygon = {
@@ -2353,8 +2361,8 @@ test("terrain polygon tile assignment ignores hexes that only have centers insid
 
     assert.equal(result.foundPolygon, true);
     assert.equal(result.terrainType, "mud");
-    assert.equal(result.assignedCount, 0);
-    assert.equal(map.getGroundTerrainTypeForNode(node), "grass");
+    assert.equal(result.assignedCount, 1);
+    assert.equal(map.getGroundTerrainTypeForNode(node), "mud");
 });
 
 test("terrain double-click polygon tile assignment is wired through the terrain painter", () => {
@@ -2448,6 +2456,38 @@ test("terrain polygon patch repair excludes off-repair source polygons", () => {
         polygon.type === "mud" &&
         JSON.stringify(polygon.points) === farSignature
     )));
+});
+
+test("terrain edits preserve explicit grass island when mud or mowed grass touches it", () => {
+    const cases = ["mud", "mowedgrass"];
+    for (const terrainType of cases) {
+        const fixture = createTerrainModelFixture("none", 24, 20);
+        const { map } = fixture;
+        const deterministicSolver = require("../scripts/terrain-bubble-deterministic-solver");
+        map.getGroundTerrainDeterministicSolver = () => deterministicSolver;
+
+        paintTerrainModelEdits(fixture, [
+            ...rectTerrainEdits(6, 17, 5, 14, "water"),
+            ...rectTerrainEdits(10, 13, 8, 10, "grass"),
+            [10, 8, terrainType]
+        ]);
+
+        const untouchedIslandNode = map.nodes[13][10];
+        assert.equal(
+            terrainPolygonsContainingNode(map, map.terrainPolygons, untouchedIslandNode, "water").length,
+            0,
+            `${terrainType}: untouched grass island node should not be covered by water`
+        );
+        assert.ok(
+            terrainPolygonsContainingNode(map, map.terrainPolygons, untouchedIslandNode, "grass").length > 0,
+            `${terrainType}: untouched island area should have explicit grass topology`
+        );
+        assert.ok(
+            terrainPolygonsContainingNode(map, map.terrainPolygons, map.nodes[10][8], terrainType).length > 0,
+            `${terrainType}: edited island edge should be covered by the painted terrain`
+        );
+        assertTerrainModelFixtureInvariants(fixture, `${terrainType} touching grass island`);
+    }
 });
 
 test("cross-section lake with mud island preserves raw section water/mud borders", () => {

@@ -43,7 +43,7 @@
     const GROUND_SHADOW_DEPTH_BIAS_UNITS = ROAD_PATH_DEPTH_BIAS_UNITS + 0.004;
     const FLOOR_VISUAL_HOLE_DEPTH_BIAS_UNITS = 0.02;
     const FLOOR_BELOW_CURRENT_DARKNESS_MULTIPLIER = 0.8;
-    const BUILDING_CUTAWAY_GHOST_ALPHA = 0.1;
+    const BUILDING_CUTAWAY_GHOST_ALPHA = 0;
     const BUILDING_CUTAWAY_INTERIOR_ALPHA = 0.5;
     const PROTOTYPE_BUILDING_EXTERIOR_CUTAWAY_ALPHA_THRESHOLD = 8;
     const BUILDING_CUTAWAY_COMPOSITE_VERSION = 5;
@@ -4112,7 +4112,10 @@ void main(void) {
 
         getBuildingCutawayTransitionAlpha(transition, nowMs) {
             const currentMs = Number.isFinite(nowMs) ? Number(nowMs) : Date.now();
-            const minAlpha = Math.max(0, Math.min(1, Number(BUILDING_CUTAWAY_GHOST_ALPHA) || 0.1));
+            const configuredMinAlpha = Number(BUILDING_CUTAWAY_GHOST_ALPHA);
+            const minAlpha = Number.isFinite(configuredMinAlpha)
+                ? Math.max(0, Math.min(1, configuredMinAlpha))
+                : 0;
             const durationMs = Math.max(1, Number(BUILDING_CUTAWAY_ENTRY_FADE_MS) || 500);
             const startedAtMs = transition && Number.isFinite(transition.startedAtMs)
                 ? Number(transition.startedAtMs)
@@ -4135,7 +4138,10 @@ void main(void) {
             }
             const key = this.getBuildingCutawayTransitionKey(buildingId);
             const currentMs = Number.isFinite(nowMs) ? Number(nowMs) : Date.now();
-            const minAlpha = Math.max(0, Math.min(1, Number(BUILDING_CUTAWAY_GHOST_ALPHA) || 0.1));
+            const configuredMinAlpha = Number(BUILDING_CUTAWAY_GHOST_ALPHA);
+            const minAlpha = Number.isFinite(configuredMinAlpha)
+                ? Math.max(0, Math.min(1, configuredMinAlpha))
+                : 0;
             let transition = this.buildingCutawayEntryTransitions.get(key);
             if (!transition || transition.mode !== "enter" || !Number.isFinite(transition.startedAtMs)) {
                 const startAlpha = transition
@@ -10341,6 +10347,7 @@ void main(void) {
         isLosOccluder(item) {
             if (!item || !item.groundPlaneHitbox) return false;
             if (item.type === "road" || item.type === "roadPath" || item.type === "firewall" || item.type === "roof") return false;
+            if (typeof item.hasShadow === "boolean" && !item.hasShadow) return false;
             if (typeof item.castsLosShadows === "boolean" && !item.castsLosShadows) return false;
             const isAnimal = (typeof Animal !== "undefined" && item instanceof Animal);
             if (isAnimal) return false;
@@ -27110,6 +27117,14 @@ void main(void) {
                 };
             }
             return singleton.resetLevel0GroundSurfaceCaches(reason);
+        },
+        invalidateLosState() {
+            if (!singleton) return false;
+            singleton.currentLosState = null;
+            singleton.lastLosCandidateCount = -1;
+            singleton.lastLosCandidateHash = 0;
+            singleton.lastLosComputeAtMs = 0;
+            return true;
         },
         isBuildingInteriorPresentationActive(ctx = null) {
             if (!singleton || typeof singleton.isBuildingInteriorPresentationActive !== "function") return false;

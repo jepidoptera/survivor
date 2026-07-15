@@ -48,13 +48,18 @@ test("grass blade shader masks and shades whole blades by base position", () => 
     assert.match(source, /vColorShift = clamp\(aColorShift,\s*-0\.2,\s*0\.2\);/);
     assert.match(source, /uniform float uTimeSeconds;/);
     assert.match(source, /uniform float uSwayRadians;/);
+    assert.match(source, /uniform vec2 uRootMaskWorldOrigin;/);
+    assert.match(source, /uniform vec2 uRootMaskWorldSize;/);
+    assert.match(source, /vec2 rootMaskUvForWorld\(vec2 baseWorld\)/);
+    assert.match(source, /return \(baseWorld - uRootMaskWorldOrigin\) \/ max\(uRootMaskWorldSize,\s*vec2\(0\.0001\)\);/);
+    assert.doesNotMatch(source, /\(baseWorld\.x - uRootMaskWorldOrigin\.x\) \* uViewScale/);
     assert.match(source, /float staticTiltRadians = clamp\(aBladeMeta\.w,\s*-0\.2,\s*0\.2\);/);
     assert.match(source, /float swayRadians = sin\(uTimeSeconds \* max\(0\.01,\s*aSwayMeta\.y\) \+ aSwayMeta\.x\) \* uSwayRadians;/);
     assert.match(source, /float tiltRadians = clamp\(staticTiltRadians \+ swayRadians,\s*-0\.35,\s*0\.35\);/);
     assert.match(source, /float tiltOffsetPx = tan\(tiltRadians\) \* bladeHeightPx \* t;/);
     assert.match(source, /float bladeHalfWidthPx = halfWidthPx \* widthScale;/);
     assert.match(source, /aBladeVertex\.x \* bladeHalfWidthPx \+ tiltOffsetPx/);
-    assert.match(source, /vec2 maskUv = vBaseScreen \/ screenSize;/);
+    assert.match(source, /vec2 maskUv = rootMaskUvForWorld\(vBaseWorld\);/);
     assert.match(source, /texture\(uRootMask,\s*maskUv\)\.r/);
     assert.match(source, /gl_FragDepth = depthForBaseWorld\(vBaseWorld\);/);
     assert.match(source, /grassShadowShade\(vBaseWorld\)/);
@@ -76,10 +81,18 @@ test("grass blade renderer generates deterministic chunk meshes instead of a ful
     assert.match(source, /LARGE_LAYER_SIZE = 1\.37/);
     assert.match(source, /uTimeSeconds: 0/);
     assert.match(source, /uSwayRadians: BLADE_SWAY_RADIANS/);
+    assert.match(source, /CHUNK_ROOT_MASK_SIZE = 128/);
+    assert.match(source, /uRootMaskWorldOrigin:\s*new Float32Array\(\[0,\s*0\]\)/);
+    assert.match(source, /uRootMaskWorldSize:\s*new Float32Array\(\[CHUNK_SIZE_WORLD,\s*CHUNK_SIZE_WORLD\]\)/);
+    assert.match(source, /drawChunkMaskRing\(graphics,\s*entry\.outer,\s*chunk\)/);
+    assert.match(source, /getMaskEntriesForChunk\(maskEntries,\s*item\.cx,\s*item\.cy\)/);
+    assert.match(source, /updateChunkMask\(rendererAdapter,\s*ctx,\s*chunk,\s*chunkState\.localEntries,\s*baseZ,\s*chunkState\.signature\)/);
+    assert.match(source, /uniforms\.uRootMaskWorldOrigin\[0\] = chunk\.originX;/);
+    assert.match(source, /uniforms\.uRootMaskWorldSize\[0\] = CHUNK_SIZE_WORLD;/);
     assert.match(source, /uTint:\s*new Float32Array\(\[0\.6667,\s*0\.6667,\s*0\.1333,\s*1\]\)/);
     assert.match(source, /uTintLow:\s*new Float32Array\(\[0,\s*0\.4,\s*0,\s*1\]\)/);
     assert.match(source, /densityScale: 1 \/ \(LARGE_LAYER_SIZE \* LARGE_LAYER_SIZE\)/);
-    assert.match(source, /buildChunkMesh\(cx,\s*cy,\s*renderer,\s*rootMask,\s*width,\s*height,\s*baseZ\)/);
+    assert.match(source, /buildChunkMesh\(cx,\s*cy,\s*renderer,\s*width,\s*height,\s*baseZ\)/);
     assert.match(source, /const vertexCount = bladeCount \* 4;/);
     assert.match(source, /if \(vertexCount > 65535\) throw new Error\(`grass blade chunk has \$\{vertexCount\} vertices, which exceeds Uint16 index capacity`\);/);
     assert.match(source, /const indexCount = bladeCount \* 6;/);
@@ -106,6 +119,42 @@ test("grass blade renderer generates deterministic chunk meshes instead of a ful
     assert.match(source, /uniforms\.uTimeSeconds = currentTimeSeconds\(\);/);
     assert.doesNotMatch(source, /uSeedTexture/);
     assert.doesNotMatch(source, /aScreenPosition/);
+});
+
+test("grass blade chunk mask signatures are local to intersecting geometry", () => {
+    const context = loadGrassBladeContext();
+    const renderer = new context.RenderingGrassBlades.Renderer();
+    const entries = renderer.collectGrassMaskEntries([
+        {
+            key: "fragment:section:0,0:floor:level0-material",
+            level: 0,
+            texturePath: "/assets/images/terrain/materials/grass.png",
+            outer: [{ x: 0, y: 0 }, { x: 24, y: 0 }, { x: 24, y: 8 }, { x: 0, y: 8 }],
+            holes: [],
+            alpha: 1,
+            baseZ: 0
+        },
+        {
+            key: "fragment:section:0,0:terrain:mowedgrass:0",
+            level: 0,
+            isTerrainPolygon: true,
+            terrainType: "mowedgrass",
+            outer: [{ x: 1, y: 1 }, { x: 2, y: 1 }, { x: 2, y: 2 }, { x: 1, y: 2 }],
+            holes: [],
+            alpha: 1,
+            baseZ: 0
+        }
+    ]);
+    const editedChunkEntriesBefore = renderer.getMaskEntriesForChunk(entries, 0, 0);
+    const untouchedChunkEntriesBefore = renderer.getMaskEntriesForChunk(entries, 2, 0);
+    const editedChunkBefore = renderer.buildChunkMaskSignature(editedChunkEntriesBefore, 0);
+    const untouchedChunkBefore = renderer.buildChunkMaskSignature(untouchedChunkEntriesBefore, 0);
+    entries[1].outer[1].x = 3;
+    entries[1].bounds = { minX: 1, minY: 1, maxX: 3, maxY: 2 };
+    const editedChunkAfter = renderer.buildChunkMaskSignature(renderer.getMaskEntriesForChunk(entries, 0, 0), 0);
+    const untouchedChunkAfter = renderer.buildChunkMaskSignature(renderer.getMaskEntriesForChunk(entries, 2, 0), 0);
+    assert.notEqual(editedChunkBefore, editedChunkAfter);
+    assert.equal(untouchedChunkBefore, untouchedChunkAfter);
 });
 
 test("grass blade renderer still subtracts road path outline polygons from grass roots", () => {
