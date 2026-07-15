@@ -39,7 +39,8 @@
     const FLOOR_VISUAL_DEPTH_NEAR_METRIC = -128;
     const FLOOR_VISUAL_DEPTH_FAR_METRIC = 256;
     const FLOOR_VISUAL_DEPTH_BIAS_UNITS = 0.001;
-    const ROAD_PATH_DEPTH_BIAS_UNITS = FLOOR_VISUAL_DEPTH_BIAS_UNITS + 0.035;
+    const LEVEL0_TERRAIN_TOP_DEPTH_BIAS_UNITS = FLOOR_VISUAL_DEPTH_BIAS_UNITS + 0.002 + (4 * FLOOR_LEVEL0_TERRAIN_DEPTH_BIAS_STEP_UNITS);
+    const ROAD_PATH_DEPTH_BIAS_UNITS = LEVEL0_TERRAIN_TOP_DEPTH_BIAS_UNITS + 0.004;
     const GROUND_SHADOW_DEPTH_BIAS_UNITS = ROAD_PATH_DEPTH_BIAS_UNITS + 0.004;
     const FLOOR_VISUAL_HOLE_DEPTH_BIAS_UNITS = 0.02;
     const FLOOR_BELOW_CURRENT_DARKNESS_MULTIPLIER = 0.8;
@@ -14160,6 +14161,40 @@ void main(void) {
             container.scale.set(1, 1);
         }
 
+        ensureRoadSpriteDepthContainer() {
+            const parent = this.layers && this.layers.depthObjects;
+            const container = this.layers && this.layers.roadsFloor;
+            if (!parent || !container) return container || null;
+            if (typeof PIXI === "undefined") return container;
+            const floorContainer = this.ensureFloorVisualContainer();
+            if (container.parent !== parent) {
+                parent.addChild(container);
+            }
+            if (
+                floorContainer &&
+                floorContainer.parent === parent &&
+                container.parent === parent &&
+                typeof parent.getChildIndex === "function" &&
+                typeof parent.setChildIndex === "function"
+            ) {
+                const floorIndex = parent.getChildIndex(floorContainer);
+                let desiredIndex = Math.min(floorIndex + 1, parent.children.length - 1);
+                if (this.roadPathDepthContainer && this.roadPathDepthContainer.parent === parent) {
+                    desiredIndex = Math.min(desiredIndex, parent.getChildIndex(this.roadPathDepthContainer));
+                }
+                if (parent.getChildIndex(container) !== desiredIndex) {
+                    parent.setChildIndex(container, desiredIndex);
+                }
+            }
+            container.position.set(0, 0);
+            container.scale.set(1, 1);
+            container.visible = true;
+            if (Object.prototype.hasOwnProperty.call(container, "renderable")) {
+                container.renderable = true;
+            }
+            return container;
+        }
+
         ensureRoadPathDepthContainer() {
             const parent = this.layers && this.layers.depthObjects;
             if (!parent || typeof PIXI === "undefined") return null;
@@ -18883,7 +18918,7 @@ void main(void) {
         renderRoadsAndFloors(ctx, visibleNodes) {
             const map = ctx.map;
             const cam = this.camera;
-            const container = this.layers.roadsFloor;
+            const container = this.ensureRoadSpriteDepthContainer();
             if (!map || !Array.isArray(map.nodes) || !container) return;
             const diagnosticsEnabled = !!this.currentFrameMetrics;
             const functionStartMs = diagnosticsEnabled ? performance.now() : 0;

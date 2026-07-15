@@ -3960,7 +3960,15 @@ void main(void) {
         if (typeof this.scriptingName === "string" && this.scriptingName.trim().length > 0) {
             data.scriptingName = this.scriptingName.trim();
         }
-        if (typeof this.hasShadow === "boolean" && this.hasShadow !== true) {
+        const shouldPersistScriptedHasShadow = (
+            typeof this.hasShadow === "boolean" &&
+            (
+                this.hasShadow !== true ||
+                Object.prototype.hasOwnProperty.call(data, "script") ||
+                (typeof data.scriptingName === "string" && data.scriptingName.length > 0)
+            )
+        );
+        if (shouldPersistScriptedHasShadow) {
             data.hasShadow = this.hasShadow;
             data.castsLosShadows = this.hasShadow;
         }

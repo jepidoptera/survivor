@@ -96,6 +96,46 @@ test("object playerTouches fires for non-door scripted objects", () => {
     assert.equal(events[0].eventName, "playerTouches");
 });
 
+test("object playerTouches prefers touchBox over shadowBox", () => {
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerTouches", (payload) => {
+        events.push(payload);
+    });
+
+    const flower = {
+        type: "flower",
+        category: "flowers",
+        x: 0,
+        y: 0,
+        traversalLayer: 0,
+        gone: false,
+        script: {
+            playerTouches: "healPlayer(1)"
+        }
+    };
+    flower.shadowBox = createRectHitbox(5, 5, 6, 6);
+    flower.touchBox = createRectHitbox(-1, -1, 1, 1);
+
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 0,
+        map: null,
+        _scriptTouchedObjectsById: new Map()
+    };
+
+    scripting.processObjectTouchEvents(
+        wizard,
+        [{ obj: flower, hitbox: flower.shadowBox }],
+        0
+    );
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0].target, flower);
+    assert.equal(events[0].eventName, "playerTouches");
+});
+
 test("object playerTouches does not fire across floor fragments", () => {
     const scripting = loadScripting();
     const events = [];

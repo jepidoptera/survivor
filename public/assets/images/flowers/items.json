@@ -7,17 +7,23 @@
     "renderDepthOffset": 0,
     "blocksTile": false,
     "isPassable": true,
-    "castsLosShadows": true,
+    "castsLosShadows": false,
     "rotationAxis": "none",
     "anchor": {
         "x": 0.5,
         "y": 0.5
       },
     "spellTargetPoint": [0.5, 0.5],
+    "shadowBox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffsetFromHeightMultiplier": -0.4,
+      "radiusFromMaxDimensionMultiplier": 0.24
+    },
     "touchBox": {
       "type": "circle",
       "xOffset": 0,
-      "yOffsetFromHeightMultiplier": -0.25,
+      "yOffsetFromHeightMultiplier": -0.4,
       "radiusFromMaxDimensionMultiplier": 0.5
     }
   },
@@ -52,17 +58,21 @@
       "renderDepthOffset": 0,
       "blocksTile": false,
       "isPassable": true,
+      "castsLosShadows": true,
       "anchor": {
         "x": 0.5,
         "y": 0.5
       },
       "shadowBox": {
-        "type": "none"
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.24
       },
       "touchBox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
+        "yOffsetFromHeightMultiplier": -0.4,
         "radiusFromMaxDimensionMultiplier": 0.5
       }
     },
@@ -95,6 +105,7 @@
       "height": 1,
       "renderDepthOffset": 0,
       "blocksTile": false,
+      "castsLosShadows": true,
       "isPassable": true,
       "anchor": {
         "x": 0.5,
@@ -103,13 +114,13 @@
       "shadowBox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": 0.5,
-        "radiusFromMaxDimensionMultiplier": 0.4
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.24
       },
       "touchBox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
+        "yOffsetFromHeightMultiplier": -0.4,
         "radiusFromMaxDimensionMultiplier": 0.5
       }
     },
@@ -126,12 +137,15 @@
         "y": 0.5
       },
       "shadowBox": {
-        "type": "none"
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.24
       },
       "touchBox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
+        "yOffsetFromHeightMultiplier": -0.4,
         "radiusFromMaxDimensionMultiplier": 0.5
       }
     },
@@ -163,8 +177,9 @@
       "width": 1,
       "height": 1,
       "renderDepthOffset": 0,
-      "blocksTile": false,
-      "isPassable": true,
+      "blocksTile": true,
+      "isPassable": false,
+      "castsLosShadows": true,
       "anchor": {
         "x": 0.5,
         "y": 0.5
@@ -179,7 +194,7 @@
         "type": "circle",
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.4,
-        "radiusFromMaxDimensionMultiplier": 0.36
+        "radiusFromMaxDimensionMultiplier": 0.5
       }
     },
     {
@@ -190,17 +205,21 @@
       "renderDepthOffset": 0,
       "blocksTile": false,
       "isPassable": true,
+      "castsLosShadows": true,
       "anchor": {
         "x": 0.5,
         "y": 0.5
       },
       "shadowBox": {
-        "type": "none"
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.5,
+        "radiusFromMaxDimensionMultiplier": 0.25
       },
       "touchBox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
+        "yOffsetFromHeightMultiplier": -0.5,
         "radiusFromMaxDimensionMultiplier": 0.5
       }
     },
@@ -217,12 +236,15 @@
         "y": 0.5
       },
       "shadowBox": {
-        "type": "none"
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.5,
+        "radiusFromMaxDimensionMultiplier": 0.24
       },
       "touchBox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
+        "yOffsetFromHeightMultiplier": -0.5,
         "radiusFromMaxDimensionMultiplier": 0.5
       }
     },
@@ -256,17 +278,21 @@
       "renderDepthOffset": 0,
       "blocksTile": false,
       "isPassable": true,
+      "castsLosShadows": true,
       "anchor": {
         "x": 0.5,
         "y": 0.5
       },
       "shadowBox": {
-        "type": "none"
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.5,
+        "radiusFromMaxDimensionMultiplier": 0.24
       },
       "touchBox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
+        "yOffsetFromHeightMultiplier": -0.5,
         "radiusFromMaxDimensionMultiplier": 0.5
       }
     }

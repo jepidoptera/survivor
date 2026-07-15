@@ -3179,7 +3179,7 @@
             for (let i = 0; i < nearbyEntries.length; i++) {
                 const entry = nearbyEntries[i];
                 const obj = entry && entry.obj;
-                const hitbox = entry && entry.hitbox;
+                const hitbox = (obj && (obj.touchBox || obj.shadowBox || obj.hitbox)) || (entry && entry.hitbox) || null;
                 const forceTouch = !!(entry && entry.forceTouch);
                 if (!obj || obj.gone || !hitbox) continue;
                 if (isDoorPlacedObject(obj)) continue;
@@ -3220,7 +3220,7 @@
                 continue;
             }
 
-            const latestHitbox = touchedObj.shadowBox || touchedObj.touchBox || touchedObj.hitbox || (touched && touched.hitbox) || null;
+            const latestHitbox = touchedObj.touchBox || touchedObj.shadowBox || touchedObj.hitbox || (touched && touched.hitbox) || null;
             const stillWithinDetachBuffer = latestHitbox
                 ? isPointInDoorHitbox(latestHitbox, wizardX, wizardY, detachRadius)
                 : false;

@@ -3,6 +3,7 @@ const path = require("node:path");
 const { afterEach, test } = require("node:test");
 
 const SCRIPTING_PATH = path.join(__dirname, "../public/assets/javascript/spells/scripting.js");
+const STATIC_OBJECTS_PATH = path.join(__dirname, "../public/assets/javascript/gameobjects/staticObjects.js");
 
 function loadScripting() {
     delete require.cache[require.resolve(SCRIPTING_PATH)];
@@ -13,10 +14,15 @@ function loadScripting() {
 
 afterEach(() => {
     delete require.cache[require.resolve(SCRIPTING_PATH)];
+    delete require.cache[require.resolve(STATIC_OBJECTS_PATH)];
     delete global.Scripting;
     delete global.Rendering;
     delete global.ensureLosShadowHitboxForObject;
     delete global.presentGameFrame;
+    delete global.StaticObject;
+    delete global.PIXI;
+    delete global.objectLayer;
+    delete global.CircleHitbox;
 });
 
 test("this.hasShadow controls the target LOS shadow flag", () => {
@@ -68,4 +74,39 @@ test("this.hasShadow=true creates LOS shadow geometry for hitbox-less targets", 
     assert.deepEqual(target.shadowBox, { type: "circle", x: 3, y: 4, radius: 0.5 });
     assert.equal(invalidated, true);
     assert.equal(presented, true);
+});
+
+test("scripted objects persist hasShadow=true in save data", () => {
+    global.PIXI = {
+        Texture: { WHITE: { id: "white" } },
+        Sprite: class {
+            constructor(texture) {
+                this.texture = texture;
+                this.anchor = { set() {} };
+            }
+        }
+    };
+    global.objectLayer = { addChild() {} };
+    global.CircleHitbox = class {
+        constructor(x, y, radius) {
+            this.type = "circle";
+            this.x = x;
+            this.y = y;
+            this.radius = radius;
+        }
+    };
+
+    require(STATIC_OBJECTS_PATH);
+    const obj = new global.StaticObject("flower", { x: 1, y: 2 }, 1, 1, [], {
+        worldToNode() {
+            return null;
+        }
+    });
+    obj.script = { playerTouches: "this.hasShadow=true" };
+    obj.hasShadow = true;
+
+    const saved = obj.saveJson();
+
+    assert.equal(saved.hasShadow, true);
+    assert.equal(saved.castsLosShadows, true);
 });
