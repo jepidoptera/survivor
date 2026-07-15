@@ -8,12 +8,16 @@
     const SCRIPT_INIT_KEY = "__init";
     const SCRIPT_EDITOR_PANEL_ID = "scriptEditorPanel";
     const SCRIPT_EDITOR_TEXTAREA_ID = "scriptEditorTextarea";
+    const SCRIPT_EDITOR_SCRIPT_TAB_ID = "scriptEditorScriptTab";
+    const SCRIPT_EDITOR_TERMINAL_TAB_ID = "scriptEditorTerminalTab";
     const SCRIPT_EDITOR_NAME_LABEL_ID = "scriptEditorNameLabel";
     const SCRIPT_EDITOR_NAME_INPUT_ID = "scriptEditorNameInput";
     const SCRIPT_EDITOR_TARGET_LABEL_ID = "scriptEditorTargetLabel";
     const SCRIPT_EDITOR_HELP_PANEL_ID = "scriptEditorHelpPanel";
     const SCRIPT_EDITOR_BACKDROP_ID = "scriptEditorBackdrop";
     const SCRIPT_EDITOR_COMPLETION_PANEL_ID = "scriptEditorCompletionPanel";
+    const SCRIPT_EDITOR_RUN_BUTTON_ID = "scriptEditorRunButton";
+    const SCRIPT_EDITOR_SAVE_BUTTON_ID = "scriptEditorSaveButton";
     const SCRIPT_EDITOR_INDENT = "   ";
     const SCRIPT_EDITOR_DEFAULT_TEMPLATE = [
         "playerExits {",
@@ -31,6 +35,9 @@
     let namedObjectRuntimeIdCounter = 1;
     const SCRIPT_BRIGHTNESS_FILTER_KEY = "__scriptBrightnessFilter";
     let scriptEditorTargetObject = null;
+    let scriptEditorActiveTab = "script";
+    let scriptEditorScriptDraftText = "";
+    let scriptEditorTerminalDraftText = "";
     let scriptEditorCompletionState = {
         active: false,
         replacementStart: 0,
@@ -163,6 +170,7 @@
             Object.freeze({ name: "delete", kind: "method", syntax: "this.delete()", description: "remove the target object" }),
             Object.freeze({ name: "fall", kind: "method", syntax: "this.fall(direction=\"away\", targetName=\"tree1\")", description: "make a tree or door fall toward or away from a named object" }),
             Object.freeze({ name: "drop", kind: "method", syntax: "this.drop(type=\"gold_coin\", size=1, distance=3, height=0, count=1)", description: "drop a powerup relative to this object; distance sets the drop radius in map units and height sets spawn z" }),
+            Object.freeze({ name: "hasShadow", kind: "property", syntax: "this.hasShadow=false", description: "set whether the object casts line-of-sight shadows" }),
             Object.freeze({ name: "height", kind: "property", syntax: "this.height=2", description: "set object or wall-section height" }),
             Object.freeze({ name: "hp", kind: "property", syntax: "this.hp=12", description: "set current HP; raises max HP if needed" }),
             Object.freeze({ name: "isOnFire", kind: "property", syntax: "this.isOnFire=true", description: "alias for onfire" }),
@@ -983,6 +991,7 @@
                 ? target.maxHp
                 : (Number.isFinite(target.maxHP) ? target.maxHP : null),
                 forceVisible: target.forceVisible === true,
+            hasShadow: target.hasShadow !== false && target.castsLosShadows !== false,
             visible: target.visible !== false,
             gone: target.gone === true,
             onfire: target.onfire === true || target.isOnFire === true,
@@ -4037,12 +4046,105 @@
         return errors;
     }
 
+    function collectScriptEditorTerminalEventBlockErrors(rawText) {
+        const text = String(rawText || "");
+        const errors = [];
+        let index = 0;
+        const len = text.length;
+        const isIdentStartCh = ch => /[A-Za-z_$]/.test(ch);
+        const isIdentPartCh = ch => /[A-Za-z0-9_$]/.test(ch);
+
+        while (index < len) {
+            while (index < len && /\s/.test(text[index])) index += 1;
+            if (index >= len) break;
+
+            const statementStart = index;
+            if (isIdentStartCh(text[index])) {
+                const identStart = index;
+                index += 1;
+                while (index < len && isIdentPartCh(text[index])) index += 1;
+                const ident = text.slice(identStart, index);
+                let look = index;
+                while (look < len && /\s/.test(text[look])) look += 1;
+                if (ident && text[look] === "{" && VALID_EVENT_BLOCK_NAMES.has(ident)) {
+                    errors.push({
+                        start: identStart,
+                        end: identStart + ident.length,
+                        message: "Terminal commands cannot use event blocks"
+                    });
+                }
+                index = statementStart;
+            }
+
+            let inQuote = null;
+            let escapeNext = false;
+            let depthParen = 0;
+            let depthBrace = 0;
+            let depthBracket = 0;
+            while (index < len) {
+                const ch = text[index];
+                if (escapeNext) {
+                    escapeNext = false;
+                    index += 1;
+                    continue;
+                }
+                if (ch === "\\") {
+                    if (inQuote) escapeNext = true;
+                    index += 1;
+                    continue;
+                }
+                if (inQuote) {
+                    if (ch === inQuote) inQuote = null;
+                    index += 1;
+                    continue;
+                }
+                if (ch === "\"" || ch === "'") {
+                    inQuote = ch;
+                    index += 1;
+                    continue;
+                }
+                if (ch === "(") depthParen += 1;
+                else if (ch === ")") depthParen = Math.max(0, depthParen - 1);
+                else if (ch === "{") depthBrace += 1;
+                else if (ch === "}") depthBrace = Math.max(0, depthBrace - 1);
+                else if (ch === "[") depthBracket += 1;
+                else if (ch === "]") depthBracket = Math.max(0, depthBracket - 1);
+                if (
+                    depthParen === 0 &&
+                    depthBrace === 0 &&
+                    depthBracket === 0 &&
+                    (ch === ";" || ch === "\n" || ch === "\r")
+                ) {
+                    break;
+                }
+                index += 1;
+            }
+            while (index < len && (text[index] === ";" || text[index] === "\n" || text[index] === "\r")) index += 1;
+        }
+
+        return errors;
+    }
+
+    function validateScriptEditorTerminalInput(rawText) {
+        const text = String(rawText || "");
+        if (!text.trim().length) return [];
+        const errors = validateScript(text).concat(collectScriptEditorTerminalEventBlockErrors(text));
+        return errors.sort((a, b) => a.start - b.start);
+    }
+
+    function getScriptEditorValidationErrors(rawText) {
+        return scriptEditorActiveTab === "terminal"
+            ? validateScriptEditorTerminalInput(rawText)
+            : validateScript(rawText);
+    }
+
     function updateScriptEditorHighlights() {
+        if (typeof $ !== "function") return;
         const $ta = $(`#${SCRIPT_EDITOR_TEXTAREA_ID}`);
         const $bd = $(`#${SCRIPT_EDITOR_BACKDROP_ID}`);
         if (!$ta.length || !$bd.length) return;
         const text = String($ta.val() || "");
-        const errs = validateScript(text);
+        const errs = getScriptEditorValidationErrors(text);
         if (errs.length === 0) {
             $bd.html(scriptEditorEscapeHtml(text) + "\n");
             return;
@@ -4595,7 +4697,139 @@
         return true;
     }
 
+    function syncScriptEditorDraftFromTextarea() {
+        const textarea = getScriptEditorTextareaElement();
+        if (!textarea) return;
+        if (scriptEditorActiveTab === "terminal") {
+            scriptEditorTerminalDraftText = textarea.value;
+        } else {
+            scriptEditorScriptDraftText = textarea.value;
+        }
+    }
+
+    function updateScriptEditorTabUi() {
+        const $panel = $(`#${SCRIPT_EDITOR_PANEL_ID}`);
+        if (!$panel.length) return;
+        const isTerminal = scriptEditorActiveTab === "terminal";
+        const activeTabCss = {
+            color: "#111",
+            background: "#ffd700",
+            border: "1px solid #caa700",
+            "font-weight": "bold"
+        };
+        const inactiveTabCss = {
+            color: "#ddd",
+            background: "#222",
+            border: "1px solid #555",
+            "font-weight": "normal"
+        };
+        $panel.find(`#${SCRIPT_EDITOR_SCRIPT_TAB_ID}`).css(isTerminal ? inactiveTabCss : activeTabCss);
+        $panel.find(`#${SCRIPT_EDITOR_TERMINAL_TAB_ID}`).css(isTerminal ? activeTabCss : inactiveTabCss);
+        $panel.find(`#${SCRIPT_EDITOR_NAME_LABEL_ID}`).toggle(!isTerminal);
+        $panel.find(`#${SCRIPT_EDITOR_SAVE_BUTTON_ID}`).toggle(!isTerminal);
+        $panel.find(`#${SCRIPT_EDITOR_RUN_BUTTON_ID}`).toggle(isTerminal);
+        const textarea = getScriptEditorTextareaElement();
+        if (textarea) {
+            textarea.setAttribute(
+                "placeholder",
+                isTerminal ? "this.message(\"hello\")" : SCRIPT_EDITOR_DEFAULT_TEMPLATE
+            );
+        }
+        updateScriptEditorHighlights();
+        hideScriptEditorCompletions();
+    }
+
+    function setScriptEditorActiveTab(nextTab) {
+        const normalizedTab = nextTab === "terminal" ? "terminal" : "script";
+        if (normalizedTab === scriptEditorActiveTab) {
+            updateScriptEditorTabUi();
+            return;
+        }
+        syncScriptEditorDraftFromTextarea();
+        scriptEditorActiveTab = normalizedTab;
+        const textarea = getScriptEditorTextareaElement();
+        if (textarea) {
+            textarea.value = scriptEditorActiveTab === "terminal"
+                ? scriptEditorTerminalDraftText
+                : scriptEditorScriptDraftText;
+        }
+        updateScriptEditorTabUi();
+        if (textarea) {
+            setTimeout(() => textarea.focus(), 0);
+        }
+    }
+
+    function buildScriptEditorExecutionContext() {
+        const target = scriptEditorTargetObject || null;
+        const wizardRef = global.wizard || null;
+        return {
+            map: (target && target.map) || (wizardRef && wizardRef.map) || global.map || null,
+            wizard: wizardRef,
+            player: wizardRef,
+            target,
+            locals: {}
+        };
+    }
+
+    function runScriptEditorTerminalCommand(rawText) {
+        const text = String(rawText || "").trim();
+        if (!text.length) {
+            showScriptEditorMessage("Terminal command is empty.");
+            return false;
+        }
+        const validationErrors = validateScriptEditorTerminalInput(text);
+        if (validationErrors.length > 0) {
+            showScriptEditorMessage(validationErrors[0].message || "Terminal command is not valid.");
+            updateScriptEditorHighlights();
+            return false;
+        }
+
+        const parsed = parseScriptEditorMixedFormat(text);
+        if (!parsed || typeof parsed !== "object") {
+            showScriptEditorMessage("Terminal command is not valid.");
+            return false;
+        }
+        const eventNames = Object.keys(parsed).filter(key => key !== SCRIPT_INIT_KEY);
+        if (eventNames.length > 0) {
+            showScriptEditorMessage("Terminal commands cannot use event blocks.");
+            return false;
+        }
+        const script = String(parsed[SCRIPT_INIT_KEY] || "").trim();
+        if (!script.length) {
+            showScriptEditorMessage("Terminal command is empty.");
+            return false;
+        }
+
+        const run = runScript(script, buildScriptEditorExecutionContext());
+        const finish = (changed) => {
+            showScriptEditorMessage(changed ? "Terminal command executed." : "Terminal command ran without changes.");
+            return !!changed;
+        };
+        if (run && isPromiseLike(run.promise)) {
+            showScriptEditorMessage("Terminal command running...");
+            return Promise.resolve(run.promise)
+                .then(() => finish(run.changed))
+                .catch(error => {
+                    console.error("Script editor terminal command failed:", error);
+                    showScriptEditorMessage("Terminal command failed. See console for details.");
+                    return false;
+                });
+        }
+        return finish(run && run.changed);
+    }
+
+    function executeScriptEditorTerminalPanel() {
+        if (scriptEditorActiveTab !== "terminal") {
+            setScriptEditorActiveTab("terminal");
+        }
+        const textarea = getScriptEditorTextareaElement();
+        const text = textarea ? textarea.value : "";
+        scriptEditorTerminalDraftText = text;
+        return runScriptEditorTerminalCommand(text);
+    }
+
     function closeScriptEditorPanel() {
+        syncScriptEditorDraftFromTextarea();
         scriptEditorTargetObject = null;
         hideScriptEditorCompletions();
         closeScriptEditorHelpPanel();
@@ -4603,6 +4837,10 @@
     }
 
     function saveScriptEditorPanel() {
+        if (scriptEditorActiveTab === "terminal") {
+            executeScriptEditorTerminalPanel();
+            return;
+        }
         if (!scriptEditorTargetObject) {
             closeScriptEditorPanel();
             return;
@@ -4684,7 +4922,7 @@
                 "font-size": "13px"
             });
         $nameRow.append($nameInput);
-        $editorContainer.css({ height: "calc(100% - 126px)" });
+        $editorContainer.css({ height: "calc(100% - 158px)" });
         $target.after($nameRow);
     }
 
@@ -4733,14 +4971,37 @@
                 "line-height": "1"
             })
             .on("click", () => openScriptEditorHelpPanel());
+        const makeTabButton = (id, label, tabName) => $("<button>")
+            .attr("id", id)
+            .attr("type", "button")
+            .text(label)
+            .css({
+                padding: "5px 10px",
+                color: "#ddd",
+                background: "#222",
+                border: "1px solid #555",
+                "border-radius": "4px",
+                cursor: "pointer"
+            })
+            .on("click", () => setScriptEditorActiveTab(tabName));
+        const $tabs = $("<div>")
+            .css({
+                display: "flex",
+                gap: "6px",
+                "align-items": "center"
+            })
+            .append(
+                makeTabButton(SCRIPT_EDITOR_SCRIPT_TAB_ID, "Script", "script"),
+                makeTabButton(SCRIPT_EDITOR_TERMINAL_TAB_ID, "Terminal", "terminal")
+            );
         const $header = $("<div>")
             .css({
                 display: "flex",
                 "align-items": "center",
-                "justify-content": "flex-end",
+                "justify-content": "space-between",
                 "margin-bottom": "6px"
             })
-            .append($help);
+            .append($tabs, $help);
         const $target = $("<div>")
             .attr("id", SCRIPT_EDITOR_TARGET_LABEL_ID)
             .text("No target selected")
@@ -4788,7 +5049,7 @@
             });
         $nameRow.append($nameInput);
 
-        const $editorContainer = $("<div>").css({ position: "relative", width: "100%", height: "calc(100% - 126px)" });
+        const $editorContainer = $("<div>").css({ position: "relative", width: "100%", height: "calc(100% - 158px)" });
         const $backdrop = $("<div>")
             .attr("id", SCRIPT_EDITOR_BACKDROP_ID)
             .css(Object.assign({
@@ -5015,6 +5276,7 @@
             })
             .on("click", () => closeScriptEditorPanel());
         const $save = $("<button>")
+            .attr("id", SCRIPT_EDITOR_SAVE_BUTTON_ID)
             .text("Save")
             .css({
                 padding: "6px 12px",
@@ -5026,9 +5288,23 @@
                 "font-weight": "bold"
             })
             .on("click", () => saveScriptEditorPanel());
-        $actions.append($cancel, $save);
+        const $run = $("<button>")
+            .attr("id", SCRIPT_EDITOR_RUN_BUTTON_ID)
+            .text("Run")
+            .css({
+                padding: "6px 12px",
+                color: "#111",
+                background: "#ffd700",
+                border: "1px solid #caa700",
+                "border-radius": "4px",
+                cursor: "pointer",
+                "font-weight": "bold"
+            })
+            .on("click", () => executeScriptEditorTerminalPanel());
+        $actions.append($cancel, $save, $run);
         $panel.append($header, $target, $nameRow, $editorContainer, $actions);
         $(document.body).append($panel);
+        updateScriptEditorTabUi();
         return $panel;
     }
 
@@ -5050,8 +5326,12 @@
             global.armSpacebarTypingGuardForElement(textareaEl);
         }
         scriptEditorTargetObject = target;
+        scriptEditorActiveTab = "script";
+        scriptEditorScriptDraftText = formatObjectScriptForEditor(target);
+        scriptEditorTerminalDraftText = "";
         $(`#${SCRIPT_EDITOR_NAME_INPUT_ID}`).val(getObjectScriptingName(target));
-        $(`#${SCRIPT_EDITOR_TEXTAREA_ID}`).val(formatObjectScriptForEditor(target));
+        $(`#${SCRIPT_EDITOR_TEXTAREA_ID}`).val(scriptEditorScriptDraftText);
+        updateScriptEditorTabUi();
         updateScriptEditorHighlights();
         hideScriptEditorCompletions();
         $panel.show();
@@ -5648,13 +5928,31 @@
                 if (target.fireSprite) target.fireSprite.visible = visible;
                 return true;
             },
-                forceVisible(value, context) {
-                    const target = context && context.target;
-                    if (!target) return false;
-                    target.forceVisible = !!value;
-                        target._forceVisible = target.forceVisible;
-                    return true;
-                },
+            forceVisible(value, context) {
+                const target = context && context.target;
+                if (!target) return false;
+                target.forceVisible = !!value;
+                    target._forceVisible = target.forceVisible;
+                return true;
+            },
+            hasShadow(value, context) {
+                const target = context && context.target;
+                if (!target) return false;
+                const enabled = !!value;
+                target._scriptHasShadowOverride = true;
+                target.hasShadow = enabled;
+                target.castsLosShadows = enabled;
+                if (enabled && typeof global.ensureLosShadowHitboxForObject === "function") {
+                    global.ensureLosShadowHitboxForObject(target);
+                }
+                if (global.Rendering && typeof global.Rendering.invalidateLosState === "function") {
+                    global.Rendering.invalidateLosState();
+                }
+                if (typeof global.presentGameFrame === "function") {
+                    global.presentGameFrame();
+                }
+                return true;
+            },
             brightness(value, context) {
                 const target = context && context.target;
                 const brightness = Number(value);
@@ -6725,6 +7023,7 @@
         ensureObjectScriptingName,
         applyTargetBrightness,
         validateScript,
+        runScriptEditorTerminalCommand,
         openScriptEditorForTarget,
         closeScriptEditorPanel,
         getNamedObjectByName,

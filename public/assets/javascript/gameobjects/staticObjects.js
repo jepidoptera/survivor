@@ -521,6 +521,33 @@ function buildHitboxFromSpec(spec, item, fallbackRadius, scaleContext) {
     return buildCircleHitboxFromSpec(spec, item, fallbackRadius, scaleContext);
 }
 
+function ensureLosShadowHitboxForObject(obj) {
+    if (!obj || typeof obj !== "object") return false;
+    if (obj.groundPlaneHitbox) return true;
+    if (typeof CircleHitbox !== "function") return false;
+    const x = Number(obj.x);
+    const y = Number(obj.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    const visualHitbox = obj.visualHitbox || null;
+    const visualRadius = Number(visualHitbox && visualHitbox.radius);
+    const fallbackRadius = Number.isFinite(obj.groundRadius)
+        ? Number(obj.groundRadius)
+        : (Number.isFinite(obj.visualRadius)
+            ? Number(obj.visualRadius)
+            : Math.max(Number(obj.width) || 0, Number(obj.height) || 0) * 0.2);
+    const radius = Math.max(
+        0.08,
+        Math.min(0.6, Number.isFinite(visualRadius) ? visualRadius : fallbackRadius)
+    );
+    obj.groundPlaneHitbox = new CircleHitbox(x, y, radius);
+    obj._scriptGeneratedLosShadowHitbox = true;
+    return true;
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.ensureLosShadowHitboxForObject = ensureLosShadowHitboxForObject;
+}
+
 function rotatePointAroundOrigin(px, py, ox, oy, radians) {
     const dx = px - ox;
     const dy = py - oy;
@@ -1733,6 +1760,16 @@ void main(void) {
         this.height = height;
         this.blocksTile = true;
         this.castsLosShadows = true;
+        Object.defineProperty(this, "hasShadow", {
+            configurable: true,
+            enumerable: true,
+            get() {
+                return this.castsLosShadows !== false;
+            },
+            set(value) {
+                this.castsLosShadows = !!value;
+            }
+        });
         this.flammable = true;
         this.groundRadius = 0.5;
         this.visualRadius = Math.max(width, height) / 2;
@@ -3886,6 +3923,10 @@ void main(void) {
         if (typeof this.scriptingName === "string" && this.scriptingName.trim().length > 0) {
             data.scriptingName = this.scriptingName.trim();
         }
+        if (typeof this.hasShadow === "boolean" && this.hasShadow !== true) {
+            data.hasShadow = this.hasShadow;
+            data.castsLosShadows = this.hasShadow;
+        }
         return data;
     }
 
@@ -4004,9 +4045,11 @@ void main(void) {
                         playerEnters: normalizeDoorEventScript(data.playerEnters),
                         playerExits: normalizeDoorEventScript(data.playerExits),
                         traversalPortalEdges: normalizeTraversalPortalSpecs(data.traversalPortalEdges),
-                        castsLosShadows: (typeof data.castsLosShadows === "boolean")
-                            ? data.castsLosShadows
-                            : undefined
+                        castsLosShadows: (typeof data.hasShadow === "boolean")
+                            ? data.hasShadow
+                            : (typeof data.castsLosShadows === "boolean")
+                                ? data.castsLosShadows
+                                : undefined
                     });
                     break;
                 case 'wall':
@@ -4036,8 +4079,14 @@ void main(void) {
                     });
             }
 
-            if (obj && typeof data.castsLosShadows === "boolean") {
-                obj.castsLosShadows = data.castsLosShadows;
+            const loadedHasShadow = (typeof data.hasShadow === "boolean")
+                ? data.hasShadow
+                : (typeof data.castsLosShadows === "boolean")
+                    ? data.castsLosShadows
+                    : null;
+            if (obj && loadedHasShadow !== null) {
+                obj.hasShadow = !!loadedHasShadow;
+                obj.castsLosShadows = !!loadedHasShadow;
             }
 
             if (obj) {
