@@ -1,14 +1,14 @@
 {
   "wizard": {
     "type": "wizard",
-    "x": -4.292204165163537,
-    "y": 135.64993886270122,
+    "x": -37.9748060792419,
+    "y": 125.46058352283991,
     "z": 0,
-    "currentLayer": 0,
-    "traversalLayer": 0,
-    "currentLayerBaseZ": 0,
-    "surfaceId": "floor_area:-2,-1:0",
-    "fragmentId": "floor_area:-2,-1:0:0",
+    "currentLayer": 1,
+    "traversalLayer": 1,
+    "currentLayerBaseZ": 5,
+    "surfaceId": "building:placed-9:surface:floor-fragment-41",
+    "fragmentId": "building:placed-9:floor:floor-fragment-41",
     "hp": 100,
     "maxHp": 100,
     "mp": 100,
@@ -27,24 +27,23 @@
     "currentSpell": "terrainedit",
     "activeAura": "healing",
     "activeAuras": [
-      "healing",
-      "speed"
+      "healing"
     ],
     "unlockedMagic": [],
     "skillpoints": 0,
     "spellLevels": {},
     "selectedFlooringTexture": "/assets/images/flooring/dirt.jpg",
-    "selectedTerrainType": "water",
+    "selectedTerrainType": "mowedgrass",
     "selectedTreeTextureVariant": "random",
-    "selectedPlaceableCategory": "flowers",
-    "selectedPlaceableTexturePath": "/assets/images/flowers/yellow%20flower.png",
+    "selectedPlaceableCategory": "roof",
+    "selectedPlaceableTexturePath": "/assets/images/roofs/slate.png",
     "selectedPlaceableByCategory": {
       "flowers": "/assets/images/flowers/yellow%20flower.png",
       "windows": "/assets/images/windows/very%20plain%20arch.png",
       "doors": "/assets/images/doors/door2.png",
       "furniture": "/assets/images/furniture/armor.png",
       "signs": "/assets/images/signs/princess.png",
-      "roof": "/assets/images/roofs/smallshingles.png"
+      "roof": "/assets/images/roofs/slate.png"
     },
     "selectedPlaceableRenderOffset": 0,
     "selectedPlaceableRenderOffsetByTexture": {
@@ -72,7 +71,7 @@
       "/assets/images/flowers/lily%20plant.png": 0,
       "/assets/images/flowers/yellow%20flower.png": 0
     },
-    "selectedPlaceableScale": 0.866,
+    "selectedPlaceableScale": 1,
     "selectedPlaceableScaleByTexture": {
       "/assets/images/doors/door5.png": 1,
       "/assets/images/windows/window.png": 0.997,
@@ -124,7 +123,7 @@
       "/assets/images/flowers/lily%20plant.png": 0,
       "/assets/images/flowers/yellow%20flower.png": 0
     },
-    "selectedPlaceableRotationAxis": "none",
+    "selectedPlaceableRotationAxis": "visual",
     "selectedPlaceableRotationAxisByTexture": {
       "/assets/images/doors/door5.png": "spatial",
       "/assets/images/windows/window.png": "spatial",
@@ -204,15 +203,15 @@
     },
     "selectedPowerupPlacementScale": 0.465,
     "selectedPowerupFileName": "lightning.png",
-    "selectedEditorCategory": "flowers",
-    "selectedFloorEditLevel": 0,
+    "selectedEditorCategory": "roof",
+    "selectedFloorEditLevel": 1,
     "selectedWallHeight": 6,
     "selectedWallThickness": 0.25,
     "selectedRoadWidth": 3,
     "selectedWallTexture": "/assets/images/walls/stonewall.png",
-    "selectedRoofOverhang": 0.6875,
-    "selectedRoofPeakHeight": 8.25,
-    "selectedRoofTextureRepeat": 0.1875,
+    "selectedRoofOverhang": 0.4375,
+    "selectedRoofPeakHeight": 0,
+    "selectedRoofTextureRepeat": 0.53125,
     "showEditorPanel": true,
     "showPerfReadout": true,
     "spells": [
@@ -291,8 +290,8 @@
     "_scriptFrozenInfinite": false,
     "_scriptFrozenRemainingMs": 0,
     "viewport": {
-      "x": -19.799931596494766,
-      "y": 114.35645402713669
+      "x": -53.4748060792419,
+      "y": 111.95644470489356
     }
   },
   "los": {
