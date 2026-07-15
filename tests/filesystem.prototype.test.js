@@ -28,7 +28,8 @@ const GLOBAL_KEYS = [
     "invalidateMinimap",
     "fetch",
     "__sectionGeometry",
-    "lastLoadGameStateError"
+    "lastLoadGameStateError",
+    "__loadedGameFramePresentationPending"
 ];
 
 const savedGlobals = new Map();
@@ -957,6 +958,103 @@ test("loadGameState strips generated outdoor ground support before wizard restor
     assert.ok(loadedWizardData);
     assert.equal(loadedWizardData.fragmentId, "");
     assert.equal(loadedWizardData.surfaceId, "");
+});
+
+test("prototype section load presents first frame only after async finalization", async () => {
+    const calls = {
+        present: 0,
+        updateBubble: 0
+    };
+    const map = createRectMap();
+    map.loadPrototypeSectionWorld = () => {
+        map._prototypeSectionState = {
+            sectionsByKey: new Map([["0,0", { key: "0,0" }]]),
+            sectionAssetsByKey: new Map([["0,0", { key: "0,0", _prototypeSectionHydrated: true }]]),
+            activeCenterKey: "0,0",
+            activeSectionKeys: new Set(["0,0"]),
+            activeBubbleSectionKeys: new Set(["0,0"]),
+            useSparseNodes: false
+        };
+        return true;
+    };
+    map.getPrototypeActiveSectionKeys = () => new Set(["0,0"]);
+    map.getPrototypeSectionAsset = (sectionKey) => (
+        map._prototypeSectionState.sectionAssetsByKey.get(sectionKey) || null
+    );
+    map.updatePrototypeSectionBubble = (_wizard, options = {}) => {
+        calls.updateBubble += 1;
+        assert.equal(options.force, true);
+        return false;
+    };
+    map.syncPrototypeWalls = () => false;
+    map.syncPrototypeObjects = () => false;
+    map.syncPrototypeAnimals = () => false;
+    map.syncPrototypePowerups = () => false;
+
+    let loadPhase = true;
+    globalThis.map = map;
+    globalThis.wizard = {
+        x: 0,
+        y: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        currentMovementSupport: { type: "ground", layer: 0, baseZ: 0 },
+        loadJson(data) {
+            this.x = Number(data.x) || 0;
+            this.y = Number(data.y) || 0;
+            this.currentLayer = Number(data.currentLayer) || 0;
+            this.traversalLayer = Number(data.traversalLayer) || 0;
+            this.currentLayerBaseZ = Number(data.currentLayerBaseZ) || 0;
+        },
+        hasPendingSavedMovementSupport() {
+            return false;
+        }
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.viewport = { x: 0, y: 0, width: 100, height: 100 };
+    globalThis.paused = false;
+    globalThis.projectiles = [];
+    globalThis.Road = { clearRuntimeCaches() {} };
+    globalThis.StaticObject = { loadJson() { return null; } };
+    globalThis.Animal = { loadJson() { return null; } };
+    globalThis.Powerup = { loadJson() { return null; } };
+    globalThis.presentGameFrame = () => {
+        if (loadPhase) throw new Error("presentGameFrame called before prototype sections finalized");
+        calls.present += 1;
+    };
+
+    const loaded = filesystem.loadGameState({
+        wizard: {
+            x: 12,
+            y: 34,
+            currentLayer: 0,
+            traversalLayer: 0,
+            currentLayerBaseZ: 0
+        },
+        animals: [],
+        powerups: [],
+        staticObjects: [],
+        prototypeSectionWorld: {
+            version: 1,
+            activeCenterKey: "0,0",
+            sections: []
+        }
+    });
+
+    assert.equal(loaded, true);
+    assert.equal(calls.present, 0);
+    assert.equal(globalThis.__loadedGameFramePresentationPending, true);
+
+    loadPhase = false;
+    const finalized = await filesystem.finalizeLoadedGameStateAsync();
+
+    assert.equal(finalized, true);
+    assert.equal(calls.updateBubble, 1);
+    assert.equal(calls.present, 1);
+    assert.equal(globalThis.__loadedGameFramePresentationPending, false);
 });
 
 test("loadGameState restores saved terrain tile membership to map nodes", () => {

@@ -267,13 +267,16 @@ class Iceball extends globalThis.Fireball {
 
     cast(targetX, targetY) {
         const iceballFrames = Iceball.getFrames();
+        const magicCost = Number.isFinite(this.magicCost)
+            ? Math.max(0, Number(this.magicCost))
+            : Iceball.MAGIC_COST;
 
-        if (!globalThis.Spell.canAffordMagicCost(Iceball.MAGIC_COST, wizard)) {
+        if (!globalThis.Spell.canAffordMagicCost(magicCost, wizard)) {
             globalThis.Spell.indicateInsufficientMagic();
             message("Not enough magic to cast Freeze!");
             return this;
         }
-        globalThis.Spell.spendMagicCost(Iceball.MAGIC_COST, wizard);
+        globalThis.Spell.spendMagicCost(magicCost, wizard);
         this.explosionFrames = iceballFrames || [];
         
         this.targetX = targetX;
@@ -508,7 +511,10 @@ class Iceball extends globalThis.Fireball {
         const impactDamage = this.damage * (wasAlreadyFrozen ? 1.5 : 1);
         this.extinguishBurningTarget(target);
         const maxMp = this.getTargetMaxMp(target);
-        const freezeSeconds = 1 + (maxMp > 0 ? (100 / maxMp) : 0);
+        const statDuration = Number(this.freezeDurationSeconds);
+        const freezeSeconds = Number.isFinite(statDuration) && statDuration > 0
+            ? statDuration
+            : 1 + (maxMp > 0 ? (100 / maxMp) : 0);
         const rawCasterDifficulty = (this.caster && Number.isFinite(this.caster.difficulty))
             ? Number(this.caster.difficulty)
             : ((typeof globalThis !== "undefined" && globalThis.wizard && Number.isFinite(globalThis.wizard.difficulty))

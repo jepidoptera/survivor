@@ -3186,11 +3186,15 @@ async function finalizeLoadedGameStateAsync() {
             await prepareLoadedWizardMovementSupportRuntime();
             wizard.restoreSavedMovementSupport();
         }
+        if (consumeLoadedGameFramePresentationPending()) {
+            presentLoadedGameFrame("finalizeLoadedGameStateAsync");
+        }
         return true;
     } catch (e) {
         console.error("Error finalizing loaded wizard movement support:", e);
         if (typeof globalThis !== "undefined") {
             globalThis.lastLoadGameStateError = e;
+            globalThis.__loadedGameFramePresentationPending = false;
         }
         return false;
     }
@@ -3256,6 +3260,40 @@ function refreshLoadedWizardBridgeMovementState() {
     });
 }
 
+function shouldDeferLoadedGameFramePresentation(mapRef) {
+    const state = mapRef && mapRef._prototypeSectionState;
+    return !!(
+        state &&
+        (
+            state.sectionsByKey instanceof Map ||
+            state.activeSectionKeys instanceof Set ||
+            state.activeBubbleSectionKeys instanceof Set ||
+            state.useSparseNodes === true
+        )
+    );
+}
+
+function setLoadedGameFramePresentationPending(pending) {
+    if (typeof globalThis === "undefined") return;
+    globalThis.__loadedGameFramePresentationPending = pending === true;
+}
+
+function consumeLoadedGameFramePresentationPending() {
+    if (typeof globalThis === "undefined") return false;
+    const pending = globalThis.__loadedGameFramePresentationPending === true;
+    globalThis.__loadedGameFramePresentationPending = false;
+    return pending;
+}
+
+function presentLoadedGameFrame(reason = "loadGameState") {
+    if (typeof globalThis === "undefined" || typeof globalThis.presentGameFrame !== "function") return false;
+    globalThis.presentGameFrame();
+    if (typeof globalThis.markPrototypeStartupPerf === "function") {
+        globalThis.markPrototypeStartupPerf("presentGameFrame-called", { reason });
+    }
+    return true;
+}
+
 function isRoadOrFloorTileObjectRecord(record) {
     if (!record || typeof record !== "object") return false;
     const type = typeof record.type === "string" ? record.type.trim().toLowerCase() : "";
@@ -3293,6 +3331,7 @@ function loadGameState(saveData) {
         }
         if (typeof globalThis !== "undefined") {
             globalThis.lastLoadGameStateError = null;
+            globalThis.__loadedGameFramePresentationPending = false;
         }
 
         // Suppress per-tile incremental clearance updates while bulk-loading
@@ -3828,11 +3867,13 @@ function loadGameState(saveData) {
             }
         }
 
-        if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
-            globalThis.presentGameFrame();
-            if (typeof globalThis.markPrototypeStartupPerf === "function") {
-                globalThis.markPrototypeStartupPerf("presentGameFrame-called");
+        if (hasPrototypeSectionWorld && shouldDeferLoadedGameFramePresentation(map)) {
+            setLoadedGameFramePresentationPending(true);
+            if (typeof globalThis !== "undefined" && typeof globalThis.markPrototypeStartupPerf === "function") {
+                globalThis.markPrototypeStartupPerf("presentGameFrame-deferred", { reason: "prototype-section-finalization" });
             }
+        } else {
+            presentLoadedGameFrame("loadGameState");
         }
 
         return true;
@@ -3847,6 +3888,7 @@ function loadGameState(saveData) {
         if (map) map._suppressClearanceUpdates = false;
         if (typeof globalThis !== "undefined") {
             globalThis.lastLoadGameStateError = e;
+            globalThis.__loadedGameFramePresentationPending = false;
         }
         return false;
     }

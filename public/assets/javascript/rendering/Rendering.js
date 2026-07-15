@@ -1665,6 +1665,7 @@ void main(void) {
             this.wizardGhostSprite = null;
             this.wizardShadowSprite = null;
             this.wizardShadowProxy = null;
+            this.wizardDrowningHatMaskGraphics = null;
             this.wizardWaterCroppedTextureCache = new WeakMap();
             this.placeObjectPreviewSprite = null;
             this.placeObjectPreviewTexturePath = "";
@@ -2538,6 +2539,13 @@ void main(void) {
             ) {
                 return dryState;
             }
+            if (
+                wizard &&
+                typeof wizard.getFlyingSpellLevel === "function" &&
+                wizard.getFlyingSpellLevel() >= 2
+            ) {
+                return dryState;
+            }
             const immersion = mapRef.getGroundTerrainWaterImmersionAtPoint(renderPos.x, renderPos.y, {
                 slope: WIZARD_WATER_DEPTH_SLOPE,
                 maxDepth: WIZARD_WATER_MAX_DEPTH_UNITS,
@@ -2607,6 +2615,38 @@ void main(void) {
             croppedTexture._wizardWaterSourceTexture = originalTexture;
             byRatio.set(key, croppedTexture);
             return croppedTexture;
+        }
+
+        ensureWizardDrowningHatMaskGraphics(parent) {
+            if (!parent) {
+                throw new Error("wizard drowning hat mask requires a parent container");
+            }
+            if (typeof PIXI === "undefined" || !PIXI || typeof PIXI.Graphics !== "function") {
+                throw new Error("wizard drowning hat mask requires Pixi graphics");
+            }
+            if (!this.wizardDrowningHatMaskGraphics) {
+                this.wizardDrowningHatMaskGraphics = new PIXI.Graphics();
+                this.wizardDrowningHatMaskGraphics.name = "renderingWizardDrowningHatMask";
+                this.wizardDrowningHatMaskGraphics.interactive = false;
+                this.wizardDrowningHatMaskGraphics.visible = false;
+            }
+            const maskGraphics = this.wizardDrowningHatMaskGraphics;
+            if (maskGraphics.parent !== parent) {
+                parent.addChild(maskGraphics);
+            }
+            return maskGraphics;
+        }
+
+        clearWizardDrowningHatMask(hat = null) {
+            if (hat && this.wizardDrowningHatMaskGraphics && hat.mask === this.wizardDrowningHatMaskGraphics) {
+                hat.mask = null;
+            }
+            if (!this.wizardDrowningHatMaskGraphics) return;
+            this.wizardDrowningHatMaskGraphics.clear();
+            this.wizardDrowningHatMaskGraphics.visible = false;
+            if (Object.prototype.hasOwnProperty.call(this.wizardDrowningHatMaskGraphics, "renderable")) {
+                this.wizardDrowningHatMaskGraphics.renderable = false;
+            }
         }
 
         projectWorldPointToCutawayPlane(x, y, z = 0) {
@@ -11697,14 +11737,17 @@ void main(void) {
         collectViewportCandidateSectionKeys(ctx, mapRef, viewportBounds) {
             const sectionKeys = new Set();
             const state = mapRef && mapRef._prototypeSectionState ? mapRef._prototypeSectionState : null;
-            if (!state || !(state.activeSectionKeys instanceof Set) || !(state.sectionsByKey instanceof Map) || !viewportBounds) {
+            const activeSectionKeys = mapRef && typeof mapRef.getPrototypeActiveSectionKeys === "function"
+                ? mapRef.getPrototypeActiveSectionKeys()
+                : (state && state.activeSectionKeys instanceof Set ? state.activeSectionKeys : null);
+            if (!state || !(activeSectionKeys instanceof Set) || !(state.sectionsByKey instanceof Map) || !viewportBounds) {
                 this.setFrameMetric("floorViewportSectionsConsidered", 0);
                 this.setFrameMetric("floorViewportSectionsInFrame", 0);
                 return sectionKeys;
             }
             let considered = 0;
             let inFrame = 0;
-            state.activeSectionKeys.forEach((sectionKey) => {
+            activeSectionKeys.forEach((sectionKey) => {
                 const section = state.sectionsByKey.get(sectionKey) || null;
                 if (!section) return;
                 considered += 1;
@@ -14732,13 +14775,9 @@ void main(void) {
             const sourceSectionKeys = viewportSectionKeys instanceof Set && viewportSectionKeys.size > 0
                 ? viewportSectionKeys
                 : (
-                    state.activeSectionKeys instanceof Set
-                        ? state.activeSectionKeys
-                        : (
-                            typeof map.getPrototypeActiveSectionKeys === "function"
-                                ? map.getPrototypeActiveSectionKeys()
-                                : null
-                        )
+                    typeof map.getPrototypeActiveSectionKeys === "function"
+                        ? map.getPrototypeActiveSectionKeys()
+                        : (state.activeSectionKeys instanceof Set ? state.activeSectionKeys : null)
                 );
             const out = [];
             if (!(sourceSectionKeys instanceof Set) || sourceSectionKeys.size === 0) return out;
@@ -20857,10 +20896,11 @@ void main(void) {
             const deathAnimationProgress = deathAnimationActive && typeof wizard.getAdventureDeathAnimationProgress === "function"
                 ? wizard.getAdventureDeathAnimationProgress(renderNowMs)
                 : 0;
+            const drowningDeathActive = deathAnimationActive && wizard && wizard._adventureDeathCause === "drowning";
             const ghostSprite = this.ensureWizardGhostSprite();
             const wizardBodyFullWorldHeight = 1 / Math.max(1e-6, Math.abs(Number(this.camera.xyratio) || 1));
             const wizardAirborneForWater = wizard.isJumping === true || wizardVisualLocalZ > 0.05;
-            const wizardWaterImmersion = deathAnimationActive || wizardAirborneForWater
+            const wizardWaterImmersion = (deathAnimationActive && !drowningDeathActive) || wizardAirborneForWater
                 ? null
                 : this.getWizardWaterImmersionState(mapRef, renderPos, wizardLayer, wizard);
             const wizardWaterRenderState = this.getWizardWaterBodyRenderState(
@@ -20907,11 +20947,11 @@ void main(void) {
                 wizardSprite.anchor.set(0.5, 0.5);
                 wizardSprite.x = pGround.x;
                 wizardSprite.y = wizardCenterY;
-                wizardSprite.rotation = Math.PI / 2;
+                wizardSprite.rotation = drowningDeathActive ? 0 : Math.PI / 2;
                 wizardSprite.alpha = wizardAlpha;
-                wizardSprite.visible = true;
+                wizardSprite.visible = !drowningDeathActive;
                 if (Object.prototype.hasOwnProperty.call(wizardSprite, "renderable")) {
-                    wizardSprite.renderable = true;
+                    wizardSprite.renderable = !drowningDeathActive;
                 }
 
                 if (ghostSprite) {
@@ -21061,18 +21101,63 @@ void main(void) {
                     overlayContainer.addChild(hat);
                 }
                 const hatLiftPx = WIZARD_HAT_LIFT_UNITS * this.camera.viewscale * this.camera.xyratio;
+                let hatAlpha = wizardAlpha;
+                let drowningHatWaterlineY = NaN;
                 if (deathAnimationActive) {
-                    const hatYOffset = (Number.isFinite(wizard.hatRenderYOffsetUnits) ? wizard.hatRenderYOffsetUnits : 0)
-                        * this.camera.viewscale * this.camera.xyratio;
-                    const bodyCenterToHatOriginY = (this.camera.viewscale * 0.25) - hatYOffset;
-                    const deathRotation = Math.PI / 2;
-                    const cosTheta = Math.cos(deathRotation);
-                    const sinTheta = Math.sin(deathRotation);
-                    const rotatedHatOffsetX = 0 * cosTheta - bodyCenterToHatOriginY * sinTheta;
-                    const rotatedHatOffsetY = 0 * sinTheta + bodyCenterToHatOriginY * cosTheta;
-                    hat.x = pGround.x + rotatedHatOffsetX;
-                    hat.y = wizardCenterY + rotatedHatOffsetY - hatLiftPx;
-                    hat.rotation = deathRotation;
+                    if (drowningDeathActive) {
+                        const hatYOffset = (Number.isFinite(wizard.hatRenderYOffsetUnits) ? wizard.hatRenderYOffsetUnits : 0)
+                            * this.camera.viewscale * this.camera.xyratio;
+                        const baseHatY = pGround.y - jumpOffsetPx - hatYOffset - hatLiftPx;
+                        const hatRenderScale = Number.isFinite(wizard.hatRenderScale) ? Math.max(0.05, wizard.hatRenderScale) : 1;
+                        const hatLocalVisibleHeightPx = this.camera.viewscale * hatRenderScale * 0.5;
+                        let drownedHatStartY = baseHatY;
+                        if (wizardWaterRenderState.inWater) {
+                            let renderedBodyTopY = NaN;
+                            const bodyWorldPositions = wizard._depthBillboardWorldPositions;
+                            if (bodyWorldPositions && bodyWorldPositions.length >= 12) {
+                                for (let i = 2; i < bodyWorldPositions.length; i += 3) {
+                                    const sx = Number(bodyWorldPositions[i - 2]);
+                                    const sy = Number(bodyWorldPositions[i - 1]);
+                                    const sz = Number(bodyWorldPositions[i]);
+                                    if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(sz)) continue;
+                                    const projected = this.camera.worldToScreen(sx, sy, sz + wizardLayerBaseZ);
+                                    if (!projected || !Number.isFinite(projected.y)) continue;
+                                    renderedBodyTopY = Number.isFinite(renderedBodyTopY)
+                                        ? Math.min(renderedBodyTopY, projected.y)
+                                        : projected.y;
+                                }
+                            }
+                            if (!Number.isFinite(renderedBodyTopY)) {
+                                renderedBodyTopY = pGround.y - jumpOffsetPx + wizardWaterLowerBodyScreenPx
+                                    - (this.camera.viewscale * wizardWaterRenderState.visibleRatio);
+                            }
+                            const dryBodyTopY = pGround.y - jumpOffsetPx + wizardWaterLowerBodyScreenPx
+                                - this.camera.viewscale;
+                            drownedHatStartY = renderedBodyTopY + (baseHatY - dryBodyTopY);
+                        }
+                        drowningHatWaterlineY = drownedHatStartY - hatLocalVisibleHeightPx;
+                        const deathDurationMs = Number.isFinite(wizard._adventureDeathAnimationDurationMs)
+                            ? Math.max(1, Number(wizard._adventureDeathAnimationDurationMs))
+                            : 4000;
+                        const sinkProgressLinear = Math.max(0, Math.min(1, deathAnimationProgress * deathDurationMs / 1500));
+                        const sinkProgress = sinkProgressLinear * sinkProgressLinear;
+                        const sinkDistance = hatLocalVisibleHeightPx + 2;
+                        hat.x = pGround.x;
+                        hat.y = drownedHatStartY + sinkDistance * sinkProgress;
+                        hat.rotation = 0;
+                    } else {
+                        const hatYOffset = (Number.isFinite(wizard.hatRenderYOffsetUnits) ? wizard.hatRenderYOffsetUnits : 0)
+                            * this.camera.viewscale * this.camera.xyratio;
+                        const bodyCenterToHatOriginY = (this.camera.viewscale * 0.25) - hatYOffset;
+                        const deathRotation = Math.PI / 2;
+                        const cosTheta = Math.cos(deathRotation);
+                        const sinTheta = Math.sin(deathRotation);
+                        const rotatedHatOffsetX = 0 * cosTheta - bodyCenterToHatOriginY * sinTheta;
+                        const rotatedHatOffsetY = 0 * sinTheta + bodyCenterToHatOriginY * cosTheta;
+                        hat.x = pGround.x + rotatedHatOffsetX;
+                        hat.y = wizardCenterY + rotatedHatOffsetY - hatLiftPx;
+                        hat.rotation = deathRotation;
+                    }
                 } else {
                     hat.x = pGround.x;
                     const hatYOffset = (Number.isFinite(wizard.hatRenderYOffsetUnits) ? wizard.hatRenderYOffsetUnits : 0)
@@ -21112,12 +21197,36 @@ void main(void) {
                     const s = (this.camera.viewscale / hatRes) * hatRenderScale;
                     hat.scale.set(s, s);
                 }
-                hat.alpha = wizardAlpha;
+                hat.alpha = hatAlpha;
                 hat.visible = true;
                 if (hat.parent && hat.parent.children[hat.parent.children.length - 1] !== hat) {
                     hat.parent.setChildIndex(hat, hat.parent.children.length - 1);
                 }
                 this.promoteInteriorPresentationDisplayObject(hat, ctx, BUILDING_INTERIOR_WIZARD_HAT_Z);
+                if (drowningDeathActive) {
+                    if (!Number.isFinite(drowningHatWaterlineY)) {
+                        throw new Error("wizard drowning hat mask requires a finite waterline");
+                    }
+                    const maskGraphics = this.ensureWizardDrowningHatMaskGraphics(hat.parent);
+                    const screenSize = this.getRendererScreenSize(ctx);
+                    const pad = Math.max(screenSize.width, screenSize.height, this.camera.viewscale * 4, 1);
+                    maskGraphics.clear();
+                    maskGraphics.beginFill(0xffffff, 1);
+                    maskGraphics.drawRect(-pad, -pad, screenSize.width + (pad * 2), drowningHatWaterlineY + pad);
+                    maskGraphics.endFill();
+                    maskGraphics.visible = true;
+                    if (Object.prototype.hasOwnProperty.call(maskGraphics, "renderable")) {
+                        maskGraphics.renderable = true;
+                    }
+                    hat.mask = maskGraphics;
+                    if (hat.parent && hat.parent.children[hat.parent.children.length - 1] !== hat) {
+                        hat.parent.setChildIndex(hat, hat.parent.children.length - 1);
+                    }
+                } else {
+                    this.clearWizardDrowningHatMask(hat);
+                }
+            } else {
+                this.clearWizardDrowningHatMask();
             }
         }
 

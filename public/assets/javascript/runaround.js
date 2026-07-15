@@ -3243,7 +3243,7 @@ jQuery(() => {
     function isVirtualCursorOverMenuArea() {
         const hovered = getVirtualCursorHoveredElement();
         if (!hovered || typeof hovered.closest !== "function") return false;
-        return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #inventorySelector, #selectedInventory, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector");
+        return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #spellLevelPanel, #selectedSpellLevel, #spellLevelSelector, #inventorySelector, #selectedInventory, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector");
     }
 
     function updateRangeInputFromClientX(rangeInput, clientX, emitChange = false) {
@@ -5983,11 +5983,15 @@ jQuery(() => {
 
     function closeHudMenus(options = {}) {
         const closeSpell = options.spell !== false;
+        const closeSpellLevel = options.spellLevel !== false;
         const closeAura = options.aura !== false;
         const closeEditor = options.editor !== false;
         if (closeSpell) {
             $("#spellMenu").addClass("hidden");
             clearSpellMenuKeyboardFocus();
+        }
+        if (closeSpellLevel) {
+            closeSpellLevelPanel();
         }
         if (closeAura) {
             $("#auraMenu").addClass("hidden");
@@ -5998,6 +6002,19 @@ jQuery(() => {
         }
     }
 
+    function isSpellLevelPanelVisible() {
+        const panel = document.getElementById("spellLevelPanel");
+        return !!(panel && !panel.classList.contains("hidden"));
+    }
+
+    function closeSpellLevelPanel() {
+        if (typeof SpellSystem !== "undefined" && typeof SpellSystem.hideSpellLevelPanel === "function") {
+            SpellSystem.hideSpellLevelPanel();
+            return;
+        }
+        $("#spellLevelPanel").addClass("hidden");
+    }
+
     function isSpellMenuPointerTarget(target) {
         return !!(
             target &&
@@ -6006,11 +6023,22 @@ jQuery(() => {
         );
     }
 
+    function isSpellLevelPointerTarget(target) {
+        return !!(
+            target &&
+            typeof target.closest === "function" &&
+            target.closest("#spellLevelPanel, #selectedSpellLevel")
+        );
+    }
+
     $(document).on("mousedown.spellMenuDismiss touchstart.spellMenuDismiss", event => {
-        if ($("#spellMenu").hasClass("hidden")) return;
-        if (isSpellMenuPointerTarget(event.target)) return;
-        $("#spellMenu").addClass("hidden");
-        clearSpellMenuKeyboardFocus();
+        if (!$("#spellMenu").hasClass("hidden") && !isSpellMenuPointerTarget(event.target)) {
+            $("#spellMenu").addClass("hidden");
+            clearSpellMenuKeyboardFocus();
+        }
+        if (isSpellLevelPanelVisible() && !isSpellLevelPointerTarget(event.target)) {
+            closeSpellLevelPanel();
+        }
     });
 
     $("#selectedSpell").click(() => {
@@ -6323,7 +6351,7 @@ jQuery(() => {
     app.view.addEventListener("wheel", event => {
         const overMenu = pointerLockActive
             ? isVirtualCursorOverMenuArea()
-            : !!(event.target && typeof event.target.closest === "function" && event.target.closest("#spellMenu, #selectedSpell, #spellSelector, #inventorySelector, #selectedInventory, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector, #statusBars"));
+            : !!(event.target && typeof event.target.closest === "function" && event.target.closest("#spellMenu, #selectedSpell, #spellSelector, #spellLevelPanel, #selectedSpellLevel, #spellLevelSelector, #inventorySelector, #selectedInventory, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector, #statusBars"));
         if (overMenu) return;
 
         const zoomModifierHeld = !!keysPressed["z"];
@@ -6383,6 +6411,9 @@ jQuery(() => {
             const selectedSpellEl = hovered && typeof hovered.closest === "function"
                 ? hovered.closest("#selectedSpell")
                 : null;
+            const selectedSpellLevelEl = hovered && typeof hovered.closest === "function"
+                ? hovered.closest("#selectedSpellLevel")
+                : null;
             const selectedInventoryEl = hovered && typeof hovered.closest === "function"
                 ? hovered.closest("#selectedInventory")
                 : null;
@@ -6393,9 +6424,9 @@ jQuery(() => {
                 ? hovered.closest("#selectedEditor")
                 : null;
             const menuInteractiveEl = hovered && typeof hovered.closest === "function"
-                ? hovered.closest("#spellMenu .spellIcon, #spellMenu button, #spellMenu input, #spellMenu label, #auraMenu .auraIcon, #auraMenu button, #auraMenu input, #auraMenu label, #editorMenu .spellIcon, #editorMenu button, #editorMenu input, #editorMenu label")
+                ? hovered.closest("#spellMenu .spellIcon, #spellMenu button, #spellMenu input, #spellMenu label, #spellLevelPanel .spellLevelListItem, #spellLevelPanel button, #spellLevelPanel input, #spellLevelPanel label, #auraMenu .auraIcon, #auraMenu button, #auraMenu input, #auraMenu label, #editorMenu .spellIcon, #editorMenu button, #editorMenu input, #editorMenu label")
                 : null;
-            const forwardTarget = menuInteractiveEl || selectedSpellEl || selectedInventoryEl || selectedAuraEl || selectedEditorEl;
+            const forwardTarget = menuInteractiveEl || selectedSpellEl || selectedSpellLevelEl || selectedInventoryEl || selectedAuraEl || selectedEditorEl;
             const isRightClick = (event.button === 2);
             if (forwardTarget) {
                 event.preventDefault();
@@ -6732,6 +6763,7 @@ jQuery(() => {
     $(document).keydown(event => {
         const keyLower = event.key.toLowerCase();
         const spellMenuVisible = !$("#spellMenu").hasClass("hidden");
+        const spellLevelPanelVisible = isSpellLevelPanelVisible();
         const auraMenuVisible = !$("#auraMenu").hasClass("hidden");
         const auraSelectorVisible = !$("#auraSelector").hasClass("hidden");
         const editorMenuVisible = !$("#editorMenu").hasClass("hidden");
@@ -6961,9 +6993,10 @@ jQuery(() => {
             return;
         }
 
-        if (event.key === "Escape" && (spellMenuVisible || auraMenuVisible || editorMenuVisible)) {
+        if (event.key === "Escape" && (spellMenuVisible || spellLevelPanelVisible || auraMenuVisible || editorMenuVisible)) {
             event.preventDefault();
             $("#spellMenu").addClass("hidden");
+            closeSpellLevelPanel();
             $("#auraMenu").addClass("hidden");
             $("#editorMenu").addClass("hidden");
             clearSpellMenuKeyboardFocus();

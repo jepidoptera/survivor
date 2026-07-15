@@ -448,6 +448,19 @@ const SpellSystem = (() => {
         freeze: "iceball",
         attacksquirrel: "squirrels"
     };
+    const SPELL_LEVEL_RUNTIME_NAMES = new Set([
+        "freeze",
+        "teleport",
+        "vanish",
+        "spikes",
+        "shield",
+        "maze",
+        "attacksquirrel",
+        "healing",
+        "invisibility",
+        "omnivision",
+        "flying"
+    ]);
 
     const MAGIC_TICK_MS = 50;
     const HEALING_AURA_EFFECT_MULTIPLIER = 2;
@@ -1278,6 +1291,9 @@ const SpellSystem = (() => {
     function getWizardSpellLevel(wizardRef, spellId) {
         if (!wizardRef || typeof spellId !== "string") return 0;
         const id = spellId.trim().toLowerCase();
+        if (typeof wizardRef.isGodMode === "function" && wizardRef.isGodMode()) {
+            return SPELL_LEVEL_MAX;
+        }
         const spellLevels = normalizeWizardSpellLevels(wizardRef);
         if (Object.prototype.hasOwnProperty.call(spellLevels, id)) {
             return clampSpellLevel(spellLevels[id]);
@@ -1324,10 +1340,115 @@ const SpellSystem = (() => {
         return selected || spellLevelDefinitions[0];
     }
 
+    function getSpellLevelDefinitionById(spellId, options = {}) {
+        const id = typeof spellId === "string" ? spellId.trim().toLowerCase() : "";
+        if (!id) return null;
+        if (!Array.isArray(spellLevelDefinitions)) {
+            if (options.required === true) {
+                throw new Error(`spell level data not loaded for ${id}`);
+            }
+            return null;
+        }
+        const definition = spellLevelDefinitions.find(spell => spell.id === id) || null;
+        if (!definition && options.required === true) {
+            throw new Error(`missing spell level data for ${id}`);
+        }
+        return definition;
+    }
+
+    function getCurrentSpellLevelStats(wizardRef, magicName, options = {}) {
+        if (!wizardRef || typeof magicName !== "string") return null;
+        const normalizedName = magicName.trim().toLowerCase();
+        if (!normalizedName) return null;
+        const spellId = getSpellLevelIdForMagicName(normalizedName);
+        const shouldRequire = options.required === false
+            ? false
+            : (options.required === true || SPELL_LEVEL_RUNTIME_NAMES.has(normalizedName));
+        const definition = getSpellLevelDefinitionById(spellId, { required: shouldRequire });
+        if (!definition) return null;
+        const level = getWizardSpellLevel(wizardRef, spellId);
+        if (level <= 0) return null;
+        const stats = definition.levels[level - 1];
+        if (!stats) {
+            throw new Error(`missing spell level stats for ${spellId} level ${level}`);
+        }
+        return stats;
+    }
+
+    function readFiniteStat(stats, key, fallback = null) {
+        const value = stats && Object.prototype.hasOwnProperty.call(stats, key)
+            ? Number(stats[key])
+            : NaN;
+        return Number.isFinite(value) ? value : fallback;
+    }
+
+    function applySpellLevelStatsToProjectile(wizardRef, spellName, projectile) {
+        if (!wizardRef || !projectile || typeof spellName !== "string") return null;
+        const stats = getCurrentSpellLevelStats(wizardRef, spellName);
+        if (!stats) return null;
+
+        const manaCost = readFiniteStat(stats, "manaCost");
+        if (manaCost !== null) projectile.magicCost = Math.max(0, manaCost);
+
+        const damage = readFiniteStat(stats, "damage");
+        if (damage !== null) projectile.damage = Math.max(0, damage);
+
+        const power = readFiniteStat(stats, "power");
+        if (power !== null) projectile.power = Math.max(0, power);
+
+        const range = readFiniteStat(stats, "range");
+        if (range !== null && range > 0) {
+            projectile.range = range;
+            projectile.maxRange = range;
+        }
+
+        const castDelay = readFiniteStat(stats, "castDelay");
+        if (castDelay !== null) projectile.delayTime = Math.max(0, castDelay);
+
+        const projectileSpeed = readFiniteStat(stats, "projectileSpeed");
+        if (projectileSpeed !== null && projectileSpeed > 0) projectile.speed = projectileSpeed;
+
+        const duration = readFiniteStat(stats, "duration");
+        if (duration !== null && duration >= 0) {
+            projectile.duration = duration;
+            projectile.effectDuration = duration;
+            projectile.freezeDurationSeconds = duration;
+            projectile.summonDurationMs = duration * 1000;
+        }
+
+        projectile.spellLevelStats = stats;
+        return stats;
+    }
+
+    function clampWorldTargetToRange(wizardRef, worldX, worldY, range) {
+        const maxRange = Number(range);
+        if (!wizardRef || !Number.isFinite(maxRange) || maxRange <= 0) {
+            return { x: worldX, y: worldY, clamped: false };
+        }
+        let dx = Number(worldX) - Number(wizardRef.x);
+        let dy = Number(worldY) - Number(wizardRef.y);
+        const mapRef = wizardRef.map || null;
+        if (mapRef && typeof mapRef.shortestDeltaX === "function") {
+            dx = mapRef.shortestDeltaX(wizardRef.x, worldX);
+        }
+        if (mapRef && typeof mapRef.shortestDeltaY === "function") {
+            dy = mapRef.shortestDeltaY(wizardRef.y, worldY);
+        }
+        const dist = Math.hypot(dx, dy);
+        if (!(dist > maxRange)) return { x: worldX, y: worldY, clamped: false };
+        const fraction = maxRange / dist;
+        let x = Number(wizardRef.x) + dx * fraction;
+        let y = Number(wizardRef.y) + dy * fraction;
+        if (mapRef && typeof mapRef.wrapWorldX === "function") x = mapRef.wrapWorldX(x);
+        if (mapRef && typeof mapRef.wrapWorldY === "function") y = mapRef.wrapWorldY(y);
+        return { x, y, clamped: true };
+    }
+
     function appendSpellLevelStats($container, levelData) {
         const stats = [
             ["manaCost", "Mana cost"],
             ["costPerSecond", "Cost per second"],
+            ["power", "Power"],
             ["damage", "Damage"],
             ["range", "Range"],
             ["castDelay", "Cast delay"],
@@ -1509,14 +1630,29 @@ const SpellSystem = (() => {
     function getAuraMagicDrainPerSecond(auraName) {
         const aura = getAuraDefinition(auraName);
         if (!aura || !Number.isFinite(aura.magicPerSecond)) return 0;
-        const baseDrainPerSecond = Math.max(0, Number(aura.magicPerSecond));
+        const wizardRef = (typeof globalThis !== "undefined" && globalThis.wizard)
+            ? globalThis.wizard
+            : null;
+        const stats = getCurrentSpellLevelStats(wizardRef, aura.name, { required: false });
+        const statDrain = readFiniteStat(stats, "costPerSecond");
+        const baseDrainPerSecond = statDrain !== null
+            ? Math.max(0, statDrain)
+            : Math.max(0, Number(aura.magicPerSecond));
         if (aura.name === "healing") {
-            return baseDrainPerSecond * HEALING_AURA_EFFECT_MULTIPLIER;
+            return baseDrainPerSecond;
         }
         return baseDrainPerSecond;
     }
 
     function getHealingAuraHpMultiplier() {
+        const wizardRef = (typeof globalThis !== "undefined" && globalThis.wizard)
+            ? globalThis.wizard
+            : null;
+        const stats = getCurrentSpellLevelStats(wizardRef, "healing", { required: false });
+        const duration = readFiniteStat(stats, "duration");
+        if (duration !== null && duration > 0) {
+            return Math.max(1, duration * HEALING_AURA_EFFECT_MULTIPLIER);
+        }
         return Math.max(1, Number.isFinite(healingAuraHpMultiplier) ? healingAuraHpMultiplier : 5);
     }
 
@@ -1529,31 +1665,39 @@ const SpellSystem = (() => {
 
     function castShieldSpell(wizardRef) {
         if (!wizardRef) return false;
-        if (!canAffordMagicCost(wizardRef, SHIELD_SPELL_MAGIC_COST)) {
+        const stats = getCurrentSpellLevelStats(wizardRef, "shield");
+        const magicCost = Math.max(0, readFiniteStat(stats, "manaCost", SHIELD_SPELL_MAGIC_COST));
+        const shieldHp = Math.max(0, readFiniteStat(stats, "power", SHIELD_SPELL_HP));
+        const shieldDuration = readFiniteStat(stats, "duration");
+        const castDelay = Math.max(0.05, readFiniteStat(stats, "castDelay", Number(wizardRef.cooldownTime) || 0.1));
+
+        if (!canAffordMagicCost(wizardRef, magicCost)) {
             if (globalThis.Spell && typeof globalThis.Spell.indicateInsufficientMagic === "function") {
                 globalThis.Spell.indicateInsufficientMagic();
             }
             return false;
         }
 
-        if (!spendMagicCost(wizardRef, SHIELD_SPELL_MAGIC_COST)) {
+        if (!spendMagicCost(wizardRef, magicCost)) {
             return false;
         }
 
+        if (shieldDuration !== null && shieldDuration > 0) {
+            wizardRef.shieldDecayPerSecond = shieldHp / shieldDuration;
+        }
         if (typeof wizardRef.applyShieldSpell === "function") {
-            wizardRef.applyShieldSpell(SHIELD_SPELL_HP);
+            wizardRef.applyShieldSpell(shieldHp);
         } else {
-            wizardRef.shieldHp = SHIELD_SPELL_HP;
-            wizardRef.maxShieldHp = SHIELD_SPELL_HP;
+            wizardRef.shieldHp = shieldHp;
+            wizardRef.maxShieldHp = shieldHp;
         }
 
-        const delayTime = Math.max(0.05, Number(wizardRef.cooldownTime) || 0.1);
         wizardRef.castDelay = true;
         wizardRef.casting = true;
         setTimeout(() => {
             wizardRef.castDelay = false;
             wizardRef.casting = false;
-        }, 1000 * delayTime);
+        }, 1000 * castDelay);
         return true;
     }
 
@@ -4085,7 +4229,9 @@ const SpellSystem = (() => {
     function getMaxSelectableVanishTargets(wizardRef) {
         if (editorMode) return 9999;
         const magic = (wizardRef && Number.isFinite(wizardRef.magic)) ? Number(wizardRef.magic) : 0;
-        const perCastCost = Math.max(1, Number(VANISH_MAGIC_COST_PER_CAST) || 1);
+        const stats = getCurrentSpellLevelStats(wizardRef, "vanish");
+        const statCost = readFiniteStat(stats, "manaCost");
+        const perCastCost = Math.max(1, statCost !== null ? statCost : (Number(VANISH_MAGIC_COST_PER_CAST) || 1));
         return Math.max(0, Math.floor(magic / perCastCost));
     }
 
@@ -4473,9 +4619,10 @@ const SpellSystem = (() => {
             if (target && !target.gone && !target.vanishing) {
                 const ProjectileClass = getSpellClassForName(vanishSpellName) || globalThis.Vanish;
                 const projectile = new ProjectileClass();
+                applySpellLevelStatsToProjectile(wizardRef, vanishSpellName, projectile);
                 const requiredMagic = (vanishSpellName === "editorvanish")
                     ? 0
-                    : Math.max(VANISH_MAGIC_COST_PER_CAST, Number.isFinite(projectile.magicCost) ? Number(projectile.magicCost) : 0);
+                    : Math.max(0, Number.isFinite(projectile.magicCost) ? Number(projectile.magicCost) : VANISH_MAGIC_COST_PER_CAST);
                 if (!canAffordMagicCost(wizardRef, requiredMagic)) {
                     if (globalThis.Spell && typeof globalThis.Spell.indicateInsufficientMagic === "function") {
                         globalThis.Spell.indicateInsufficientMagic();
@@ -8396,8 +8543,18 @@ const SpellSystem = (() => {
             }
         }
 
-        const resolvedX = Number.isFinite(targetPoint && targetPoint.x) ? Number(targetPoint.x) : worldX;
-        const resolvedY = Number.isFinite(targetPoint && targetPoint.y) ? Number(targetPoint.y) : worldY;
+        const rawResolvedX = Number.isFinite(targetPoint && targetPoint.x) ? Number(targetPoint.x) : worldX;
+        const rawResolvedY = Number.isFinite(targetPoint && targetPoint.y) ? Number(targetPoint.y) : worldY;
+        const rangedTarget = clampWorldTargetToRange(wizardRef, rawResolvedX, rawResolvedY, options && options.maxRange);
+        const resolvedX = rangedTarget.x;
+        const resolvedY = rangedTarget.y;
+        if (rangedTarget.clamped) {
+            floorTarget = null;
+            targetLayer = currentLayer;
+            targetBaseZ = Number.isFinite(wizardRef && wizardRef.currentLayerBaseZ)
+                ? Number(wizardRef.currentLayerBaseZ)
+                : (currentLayer === 0 ? 0 : targetBaseZ);
+        }
         const wrappedX = mapRef && typeof mapRef.wrapWorldX === "function" && Number.isFinite(resolvedX)
             ? mapRef.wrapWorldX(resolvedX)
             : resolvedX;
@@ -10591,8 +10748,12 @@ const SpellSystem = (() => {
 
         if (wizardRef.currentSpell === "teleport") {
             const projectile = new globalThis.Teleport();
+            applySpellLevelStatsToProjectile(wizardRef, "teleport", projectile);
             const delayTime = projectile.delayTime || wizardRef.cooldownTime;
-            const teleportTarget = resolveVisibleFloorTarget(wizardRef, worldX, worldY, castOptions);
+            const teleportTarget = resolveVisibleFloorTarget(wizardRef, worldX, worldY, {
+                ...castOptions,
+                maxRange: projectile.range
+            });
             if (typeof console !== "undefined" && typeof console.log === "function") {
                 const floorFragment = teleportTarget && teleportTarget.floorTarget && teleportTarget.floorTarget.fragment
                     ? teleportTarget.floorTarget.fragment
@@ -10753,6 +10914,10 @@ const SpellSystem = (() => {
         }
 
         if (wizardRef.currentSpell === "maze") {
+            const mazeStats = getCurrentSpellLevelStats(wizardRef, "maze");
+            const mazeMagicCost = Math.max(0, readFiniteStat(mazeStats, "manaCost", 0));
+            const mazeRange = readFiniteStat(mazeStats, "range");
+            const mazeCastDelay = Math.max(0.05, readFiniteStat(mazeStats, "castDelay", Number(wizardRef.cooldownTime) || 0.1));
             // Set castDelay immediately to prevent double-fire from
             // spacebar-up quick-cast arriving while pathfinding runs.
             wizardRef.castDelay = true;
@@ -10783,8 +10948,9 @@ const SpellSystem = (() => {
                 return;
             }
 
-            const wrappedX = typeof mapRef.wrapWorldX === "function" ? mapRef.wrapWorldX(worldX) : worldX;
-            const wrappedY = typeof mapRef.wrapWorldY === "function" ? mapRef.wrapWorldY(worldY) : worldY;
+            const rangedMazeTarget = clampWorldTargetToRange(wizardRef, worldX, worldY, mazeRange);
+            const wrappedX = typeof mapRef.wrapWorldX === "function" ? mapRef.wrapWorldX(rangedMazeTarget.x) : rangedMazeTarget.x;
+            const wrappedY = typeof mapRef.wrapWorldY === "function" ? mapRef.wrapWorldY(rangedMazeTarget.y) : rangedMazeTarget.y;
 
             // worldToNode may snap to a wall tile when the wizard is
             // standing right against a wall.  If that happens, search
@@ -10856,6 +11022,18 @@ const SpellSystem = (() => {
                 return;
             }
 
+            if (!canAffordMagicCost(wizardRef, mazeMagicCost)) {
+                if (globalThis.Spell && typeof globalThis.Spell.indicateInsufficientMagic === "function") {
+                    globalThis.Spell.indicateInsufficientMagic();
+                }
+                wizardRef.castDelay = false;
+                return;
+            }
+            if (!spendMagicCost(wizardRef, mazeMagicCost)) {
+                wizardRef.castDelay = false;
+                return;
+            }
+
             // Remove all existing maze-marker buttons before placing new ones.
             const pList = (typeof globalThis !== "undefined" && Array.isArray(globalThis.powerups))
                 ? globalThis.powerups : [];
@@ -10922,13 +11100,12 @@ const SpellSystem = (() => {
                 previousUniqueNode = node;
             }
 
-            const delayTime = Math.max(0.05, Number(wizardRef.cooldownTime) || 0.1);
             wizardRef.castDelay = true;
             wizardRef.casting = true;
             setTimeout(() => {
                 wizardRef.castDelay = false;
                 wizardRef.casting = false;
-            }, 1000 * delayTime);
+            }, 1000 * mazeCastDelay);
             return;
         }
 
@@ -11004,6 +11181,7 @@ const SpellSystem = (() => {
         }
 
         if (!projectile) return;
+        applySpellLevelStatsToProjectile(wizardRef, wizardRef.currentSpell, projectile);
         const casterZ = getSpellCasterWorldBaseZ(wizardRef);
         projectile.visualStartZ = casterZ;
         projectile.visualBaseZ = casterZ;
@@ -13071,6 +13249,9 @@ const SpellSystem = (() => {
         getUnlockedAuraNames(wizardRef);
         getWizardSkillPoints(wizardRef);
         normalizeWizardSpellLevels(wizardRef);
+        fetchSpellLevelDefinitions().catch(error => {
+            console.error("[spell levels] failed to preload spell stats", error);
+        });
         bindSpellLevelPanelControls(wizardRef);
         wizardRef.spells = buildSpellList(wizardRef);
         wizardRef.selectedSpellName = getSelectedSpellName(wizardRef);
@@ -13303,6 +13484,7 @@ const SpellSystem = (() => {
         getWizardSpellLevel,
         setWizardSpellLevel,
         levelUpWizardSpell,
+        getCurrentSpellLevelStats,
         getWizardSkillPoints,
         setWizardSkillPoints,
         refreshSpellLevelPanel,

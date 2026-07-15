@@ -338,6 +338,12 @@
         return farthest;
     }
 
+    function getPrototypeDistanceToSectionCenter(state, sectionKey, worldX, worldY) {
+        if (!state || typeof sectionKey !== "string" || sectionKey.length === 0) return Infinity;
+        const centerWorld = getSectionCenterWorldForCoord(state, parseSectionKey(sectionKey));
+        return Math.hypot((Number(worldX) || 0) - centerWorld.x, (Number(worldY) || 0) - centerWorld.y);
+    }
+
     function shouldSwitchPrototypeBubbleTriplet(state, currentKeys, candidateKeys, worldX, worldY, options = {}) {
         if (!(candidateKeys instanceof Set) || candidateKeys.size === 0) return false;
         if (!(currentKeys instanceof Set) || currentKeys.size === 0) return true;
@@ -349,6 +355,25 @@
         });
         if (!overlaps) return true;
         const hysteresis = Math.max(0, Number(state.bubbleHysteresisMeters) || 0);
+        const candidateRepresentativeKey = typeof options.candidateRepresentativeKey === "string" ? options.candidateRepresentativeKey : "";
+        const currentRepresentativeKey = typeof options.currentRepresentativeKey === "string" ? options.currentRepresentativeKey : "";
+        if (
+            candidateRepresentativeKey &&
+            currentRepresentativeKey &&
+            candidateRepresentativeKey !== currentRepresentativeKey
+        ) {
+            const candidateCenterDistance = getPrototypeDistanceToSectionCenter(state, candidateRepresentativeKey, worldX, worldY);
+            const currentCenterDistance = getPrototypeDistanceToSectionCenter(state, currentRepresentativeKey, worldX, worldY);
+            const switchCenterRadius = Math.max(0, Number(state.bubbleSwitchCenterRadiusMeters) || 0);
+            if (
+                !Number.isFinite(candidateCenterDistance) ||
+                !Number.isFinite(currentCenterDistance) ||
+                candidateCenterDistance > switchCenterRadius ||
+                candidateCenterDistance + hysteresis >= currentCenterDistance
+            ) {
+                return false;
+            }
+        }
         const currentFarthest = getPrototypeSectionSetFarthestDistance(state, currentKeys, worldX, worldY);
         const candidateFarthest = getPrototypeSectionSetFarthestDistance(state, candidateKeys, worldX, worldY);
         return candidateFarthest + hysteresis < currentFarthest;
@@ -2034,7 +2059,14 @@
         const currentKeys = state.activeSectionKeys instanceof Set
             ? new Set(state.activeSectionKeys)
             : new Set();
-        if (!shouldSwitchPrototypeBubbleTriplet(state, currentKeys, candidateKeys, state.bubbleFocusWorldX, state.bubbleFocusWorldY, { force })) {
+        const currentRepresentativeKey = typeof state.activeCenterKey === "string" && state.activeCenterKey.length > 0
+            ? state.activeCenterKey
+            : (typeof state.bubbleFocusSectionKey === "string" ? state.bubbleFocusSectionKey : "");
+        if (!shouldSwitchPrototypeBubbleTriplet(state, currentKeys, candidateKeys, state.bubbleFocusWorldX, state.bubbleFocusWorldY, {
+            force,
+            candidateRepresentativeKey: representativeKey,
+            currentRepresentativeKey
+        })) {
             return false;
         }
         const changed = setActiveSectionBubble(map, candidateKeys, representativeKey);

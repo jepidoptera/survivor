@@ -267,6 +267,7 @@ class Wizard extends Character {
         this._adventureDeathAnimationActive = false;
         this._adventureDeathAnimationStartedAtMs = null;
         this._adventureDeathAnimationDurationMs = 4000;
+        this._adventureDeathCause = "";
         this.magic = 100;
         this.maxMagic = 100;
         this.gameMode = WIZARD_GAME_MODE_GOD;
@@ -439,6 +440,7 @@ class Wizard extends Character {
     clearAdventureDeathAnimation() {
         this._adventureDeathAnimationActive = false;
         this._adventureDeathAnimationStartedAtMs = null;
+        this._adventureDeathCause = "";
     }
     getAdventureDeathAnimationProgress(nowMs = null) {
         if (!this._adventureDeathAnimationActive) return 0;
@@ -460,12 +462,15 @@ class Wizard extends Character {
         if (!this._adventureDeathAnimationActive) return false;
         return this.getAdventureDeathAnimationProgress(nowMs) < 1;
     }
-    queueAdventureRespawn() {
+    queueAdventureRespawn(options = {}) {
         if (this._adventureRespawnPending) return true;
         const deathAnimationMs = 4000;
         this._adventureRespawnPending = true;
         this.hp = 0;
         this.dead = true;
+        this._adventureDeathCause = (options && typeof options.cause === "string")
+            ? options.cause
+            : "";
         this.startAdventureDeathAnimation(deathAnimationMs);
         if (typeof pause === "function") {
             pause();
@@ -493,7 +498,7 @@ class Wizard extends Character {
         }, deathAnimationMs);
         return true;
     }
-    updateAdventureDeathState() {
+    updateAdventureDeathState(options = {}) {
         if (!this.isAdventureMode()) {
             this._adventureRespawnPending = false;
             this.dead = false;
@@ -507,7 +512,7 @@ class Wizard extends Character {
             return false;
         }
         this.hp = 0;
-        return this.queueAdventureRespawn();
+        return this.queueAdventureRespawn(options);
     }
     startJump() {
         if (typeof this.isFrozen === "function" && this.isFrozen()) return;
@@ -892,6 +897,8 @@ class Wizard extends Character {
         ) {
             return 1;
         }
+        const flyingLevel = this.getFlyingSpellLevel();
+        if (flyingLevel >= 2) return 1;
         if (typeof this.map.getGroundTerrainWaterImmersionAtPoint !== "function") return 1;
         const immersion = this.map.getGroundTerrainWaterImmersionAtPoint(this.x, this.y, {
             slope: WIZARD_WATER_MOVEMENT_DEPTH_SLOPE,
@@ -905,8 +912,47 @@ class Wizard extends Character {
         const fullDepth = Number.isFinite(Number(this.waterFullSubmergedDepthUnits))
             ? Math.max(1e-6, Number(this.waterFullSubmergedDepthUnits))
             : WIZARD_WATER_FULL_SUBMERGED_DEPTH_UNITS;
+        const maxDepth = Number.isFinite(Number(immersion.maxDepth))
+            ? Math.max(0, Number(immersion.maxDepth))
+            : WIZARD_WATER_MAX_DEPTH_UNITS;
+        if (flyingLevel <= 0 && maxDepth > 0 && submergedDepth >= maxDepth - 1e-6) {
+            this.drownAtMaxWaterDepth();
+            return 0;
+        }
         const submergedRatio = Math.max(0, Math.min(1, submergedDepth / fullDepth));
         return 1 - submergedRatio * (1 - WIZARD_FULLY_SUBMERGED_SPEED_MULTIPLIER);
+    }
+
+    getFlyingSpellLevel() {
+        const spellSystem = (typeof globalThis !== "undefined" && globalThis.SpellSystem)
+            ? globalThis.SpellSystem
+            : null;
+        if (!spellSystem || typeof spellSystem.getWizardSpellLevel !== "function") return 0;
+        return spellSystem.getWizardSpellLevel(this, "flying");
+    }
+
+    drownAtMaxWaterDepth() {
+        if (this.dead || this._adventureRespawnPending) return false;
+        this.hp = 0;
+        if (typeof this.updateStatusBars === "function") {
+            this.updateStatusBars();
+        }
+        if (typeof message === "function") {
+            message("You drowned.");
+        }
+        if (
+            typeof this.isAdventureMode === "function" &&
+            this.isAdventureMode() &&
+            typeof this.updateAdventureDeathState === "function"
+        ) {
+            return this.updateAdventureDeathState({ cause: "drowning" });
+        }
+        if (typeof this.die === "function") {
+            this.die();
+        } else {
+            this.dead = true;
+        }
+        return true;
     }
 
     getVectorMovementEnvironmentSpeedMultiplier(options = {}) {
