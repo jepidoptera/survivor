@@ -78,16 +78,6 @@
         return { minX, minY, maxX, maxY };
     }
 
-    function boundsIntersect(a, b, epsilon = 0) {
-        if (!a || !b) return false;
-        return (
-            a.maxX >= b.minX - epsilon &&
-            a.maxY >= b.minY - epsilon &&
-            a.minX <= b.maxX + epsilon &&
-            a.minY <= b.maxY + epsilon
-        );
-    }
-
     function getScreenSize(rendererAdapter, ctx) {
         if (rendererAdapter && typeof rendererAdapter.getRendererScreenSize === "function") {
             return rendererAdapter.getRendererScreenSize(ctx);
@@ -160,6 +150,13 @@
             this.losDepthTexture = null;
             this.losDepthBins = 0;
             this.frameId = 0;
+            this.chunkMaskIndexCache = {
+                sourceSignature: "",
+                baseZSignature: "",
+                chunkStates: new Map(),
+                indexedChunks: 0,
+                rebuilt: false
+            };
         }
 
         ensurePixiAvailable() {
@@ -227,15 +224,21 @@
                 const outer = normalizePointList(entry.outer);
                 if (outer.length < 3) continue;
                 if (Number.isFinite(entry.alpha) && Number(entry.alpha) <= 0) continue;
+                const baseZ = Number.isFinite(entry.baseZ) ? Number(entry.baseZ) : 0;
+                const mode = addRoots ? "add" : "remove";
+                const sourceSignature = typeof entry._grassBladeMaskSignature === "string" && entry._grassBladeMaskSignature.length > 0
+                    ? `${mode}|${signatureNumber(baseZ)}|${entry._grassBladeMaskSignature}`
+                    : "";
                 out.push({
                     source: entry,
-                    mode: addRoots ? "add" : "remove",
+                    mode,
                     outer,
                     bounds: getPointListBounds(outer),
                     holes: Array.isArray(entry.holes)
                         ? entry.holes.map(normalizePointList).filter((hole) => hole.length >= 3)
                         : [],
-                    baseZ: Number.isFinite(entry.baseZ) ? Number(entry.baseZ) : 0
+                    baseZ,
+                    signature: sourceSignature
                 });
             }
             return out;
@@ -273,7 +276,8 @@
                     outer,
                     bounds: getPointListBounds(outer),
                     holes: [],
-                    baseZ: this.roadPathBaseZ(roadPath, rendererAdapter)
+                    baseZ: this.roadPathBaseZ(roadPath, rendererAdapter),
+                    signature: ""
                 });
             };
             if (rendererAdapter && typeof rendererAdapter.collectRoadPathRenderObjects === "function") {
@@ -309,35 +313,6 @@
             return baseZ;
         }
 
-        getChunkWorldBounds(cx, cy) {
-            const x = Number(cx) * CHUNK_SIZE_WORLD;
-            const y = Number(cy) * CHUNK_SIZE_WORLD;
-            if (!Number.isFinite(x) || !Number.isFinite(y)) {
-                throw new Error("grass blade chunk bounds require finite chunk coordinates");
-            }
-            return {
-                minX: x,
-                minY: y,
-                maxX: x + CHUNK_SIZE_WORLD,
-                maxY: y + CHUNK_SIZE_WORLD
-            };
-        }
-
-        getMaskEntriesForChunk(maskEntries, cx, cy) {
-            if (!Array.isArray(maskEntries)) {
-                throw new Error("grass blade chunk mask requires mask entries");
-            }
-            const chunkBounds = this.getChunkWorldBounds(cx, cy);
-            const out = [];
-            for (let i = 0; i < maskEntries.length; i++) {
-                const entry = maskEntries[i];
-                if (!entry) continue;
-                const entryBounds = entry.bounds || getPointListBounds(entry.outer);
-                if (boundsIntersect(entryBounds, chunkBounds, 1e-9)) out.push(entry);
-            }
-            return out;
-        }
-
         drawChunkMaskRing(graphics, ring, chunk) {
             if (!chunk || !Number.isFinite(chunk.originX) || !Number.isFinite(chunk.originY)) {
                 throw new Error("grass blade chunk mask requires finite chunk origin");
@@ -358,6 +333,7 @@
 
         maskEntrySignature(entry) {
             if (!entry) return "";
+            if (typeof entry.signature === "string" && entry.signature.length > 0) return entry.signature;
             const parts = [
                 entry.mode === "remove" ? "remove" : "add",
                 signatureNumber(entry.baseZ),
@@ -376,14 +352,120 @@
             return parts.join("|");
         }
 
-        buildChunkMaskSignature(maskEntries, baseZ) {
-            const entrySignatures = Array.isArray(maskEntries)
-                ? maskEntries.map(entry => this.maskEntrySignature(entry)).sort()
-                : [];
+        getEmptyChunkMaskState(baseZ) {
+            return {
+                localEntries: [],
+                signature: [
+                    signatureNumber(baseZ),
+                    ""
+                ].join("::")
+            };
+        }
+
+        buildMaskEntriesSourceSignature(maskEntries, baseZ) {
+            if (!Array.isArray(maskEntries)) {
+                throw new Error("grass blade mask source signature requires mask entries");
+            }
+            const entrySignatures = [];
+            for (let i = 0; i < maskEntries.length; i++) {
+                const entry = maskEntries[i];
+                if (!entry) continue;
+                entrySignatures.push(this.maskEntrySignature(entry));
+            }
+            entrySignatures.sort();
             return [
                 signatureNumber(baseZ),
                 entrySignatures.join("~")
             ].join("::");
+        }
+
+        buildPersistentChunkMaskIndex(maskEntries, baseZ) {
+            if (!Array.isArray(maskEntries)) {
+                throw new Error("grass blade chunk mask index requires mask entries");
+            }
+            const sourceSignature = this.buildMaskEntriesSourceSignature(maskEntries, baseZ);
+            const baseZSignature = signatureNumber(baseZ);
+            const cache = this.chunkMaskIndexCache || null;
+            if (
+                cache &&
+                cache.sourceSignature === sourceSignature &&
+                cache.baseZSignature === baseZSignature &&
+                cache.chunkStates instanceof Map
+            ) {
+                cache.rebuilt = false;
+                return cache;
+            }
+            const chunkStates = new Map();
+            const epsilon = 1e-9;
+            const chunkSize = CHUNK_SIZE_WORLD;
+            for (let i = 0; i < maskEntries.length; i++) {
+                const entry = maskEntries[i];
+                if (!entry) continue;
+                const entryBounds = entry.bounds || getPointListBounds(entry.outer);
+                if (!entryBounds) continue;
+                const minCx = Math.floor((entryBounds.minX - epsilon) / chunkSize);
+                const maxCx = Math.floor((entryBounds.maxX + epsilon) / chunkSize);
+                const minCy = Math.floor((entryBounds.minY - epsilon) / chunkSize);
+                const maxCy = Math.floor((entryBounds.maxY + epsilon) / chunkSize);
+                if (
+                    !Number.isFinite(minCx) ||
+                    !Number.isFinite(maxCx) ||
+                    !Number.isFinite(minCy) ||
+                    !Number.isFinite(maxCy)
+                ) {
+                    throw new Error("grass blade chunk mask index received non-finite entry bounds");
+                }
+                const entrySignature = this.maskEntrySignature(entry);
+                for (let cy = minCy; cy <= maxCy; cy++) {
+                    for (let cx = minCx; cx <= maxCx; cx++) {
+                        const key = `${cx},${cy}`;
+                        let state = chunkStates.get(key);
+                        if (!state) {
+                            state = {
+                                localEntries: [],
+                                entrySignatures: []
+                            };
+                            chunkStates.set(key, state);
+                        }
+                        state.localEntries.push(entry);
+                        state.entrySignatures.push(entrySignature);
+                    }
+                }
+            }
+            chunkStates.forEach((state) => {
+                state.entrySignatures.sort();
+                state.signature = [
+                    baseZSignature,
+                    state.entrySignatures.join("~")
+                ].join("::");
+            });
+            const nextCache = {
+                sourceSignature,
+                baseZSignature,
+                chunkStates,
+                indexedChunks: chunkStates.size,
+                rebuilt: true
+            };
+            this.chunkMaskIndexCache = nextCache;
+            return nextCache;
+        }
+
+        buildVisibleChunkMaskPlanFromIndex(maskIndex, visible, baseZ) {
+            if (!maskIndex || !(maskIndex.chunkStates instanceof Map)) {
+                throw new Error("grass blade visible chunk mask plan requires a chunk mask index");
+            }
+            if (!Array.isArray(visible)) {
+                throw new Error("grass blade visible chunk mask plan requires visible chunks");
+            }
+            const chunkStates = new Map();
+            for (let i = 0; i < visible.length; i++) {
+                const item = visible[i];
+                if (!item || typeof item.key !== "string") {
+                    throw new Error("grass blade indexed visible chunk plan received an invalid chunk record");
+                }
+                chunkStates.set(item.key, maskIndex.chunkStates.get(item.key) || this.getEmptyChunkMaskState(baseZ));
+            }
+            return chunkStates;
         }
 
         ensureChunkMaskTexture(chunk) {
@@ -848,15 +930,13 @@
             const camera = rendererAdapter && rendererAdapter.camera ? rendererAdapter.camera : {};
             const visible = this.visibleChunkKeys(camera, width, height);
             const visibleKeySet = new Set(visible.map(item => item.key));
-            const visibleChunkState = new Map();
-            for (let i = 0; i < visible.length; i++) {
-                const item = visible[i];
-                const localEntries = this.getMaskEntriesForChunk(maskEntries, item.cx, item.cy);
-                visibleChunkState.set(item.key, {
-                    localEntries,
-                    signature: this.buildChunkMaskSignature(localEntries, baseZ)
-                });
-            }
+            const perfNow = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now.bind(performance)
+                : null;
+            const planStartMs = perfNow ? perfNow() : 0;
+            const maskIndex = this.buildPersistentChunkMaskIndex(maskEntries, baseZ);
+            const visibleChunkState = this.buildVisibleChunkMaskPlanFromIndex(maskIndex, visible, baseZ);
+            const planMs = perfNow ? (perfNow() - planStartMs) : 0;
             this.chunks.forEach((chunk, key) => {
                 if (chunk && chunk.mesh) chunk.mesh.visible = false;
                 if (visibleKeySet.has(key)) chunk.lastSeenFrame = this.frameId;
@@ -872,12 +952,14 @@
             const shadowState = this.prepareShadowState(rendererAdapter, ctx);
             let visibleChunks = 0;
             let visibleBlades = 0;
+            let chunkEntryRefs = 0;
             let masksRebuilt = 0;
             let maskMs = 0;
             this.chunks.forEach((chunk, key) => {
                 if (!visibleKeySet.has(key) || !chunk || !chunk.mesh) return;
                 const chunkState = visibleChunkState.get(key);
                 if (!chunkState) throw new Error(`grass blade visible chunk ${key} is missing mask state`);
+                chunkEntryRefs += Array.isArray(chunkState.localEntries) ? chunkState.localEntries.length : 0;
                 const maskResult = this.updateChunkMask(rendererAdapter, ctx, chunk, chunkState.localEntries, baseZ, chunkState.signature);
                 if (!maskResult || !maskResult.texture) throw new Error("grass blade chunk mask update did not return a texture");
                 if (maskResult.rebuilt === true) masksRebuilt += 1;
@@ -897,6 +979,11 @@
                 rendered: visibleChunks > 0 ? 1 : 0,
                 enabled: true,
                 roots: maskEntries.filter(entry => entry && entry.mode === "add").length,
+                maskEntries: maskEntries.length,
+                maskPlanMs: planMs,
+                maskIndexRebuilt: maskIndex && maskIndex.rebuilt === true ? 1 : 0,
+                maskIndexedChunks: Number(maskIndex && maskIndex.indexedChunks) || 0,
+                chunkEntryRefs,
                 layers: GRASS_BLADE_LAYER_CONFIGS.length,
                 chunks: visibleChunks,
                 chunksBuilt: built,

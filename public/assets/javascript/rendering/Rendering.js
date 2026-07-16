@@ -18668,6 +18668,11 @@ void main(void) {
                     `edgeFadeSkip:${buildFloorVisualClipBoundarySignature(source.edgeFadeSkipRings)}`,
                     `skipClipBoundaryFade:${source.skipClipBoundaryFade === true ? 1 : 0}`
                 ].join(":");
+                source._grassBladeMaskSignature = [
+                    typeof source.key === "string" ? source.key : "",
+                    Number.isFinite(source.baseZ) ? Number(source.baseZ).toFixed(4) : "NaN",
+                    signature
+                ].join("|");
                 if (
                     !entry ||
                     entry.signature !== signature ||
@@ -18881,6 +18886,11 @@ void main(void) {
                 this.setFrameMetric("grassDepthChunksBuilt", 0);
                 this.setFrameMetric("grassDepthChunksPending", 0);
                 this.setFrameMetric("grassDepthBlades", 0);
+                this.setFrameMetric("grassDepthMaskEntries", 0);
+                this.setFrameMetric("grassDepthMaskPlanMs", 0);
+                this.setFrameMetric("grassDepthChunkEntryRefs", 0);
+                this.setFrameMetric("grassDepthMaskIndexRebuilt", 0);
+                this.setFrameMetric("grassDepthMaskIndexedChunks", 0);
                 return false;
             }
             if (!this.grassDepthRenderer) {
@@ -18907,6 +18917,11 @@ void main(void) {
             this.setFrameMetric("grassDepthChunksBuilt", Number(result && result.chunksBuilt) || 0);
             this.setFrameMetric("grassDepthChunksPending", Number(result && result.chunksPending) || 0);
             this.setFrameMetric("grassDepthBlades", Number(result && result.blades) || 0);
+            this.setFrameMetric("grassDepthMaskEntries", Number(result && result.maskEntries) || 0);
+            this.setFrameMetric("grassDepthMaskPlanMs", Number(result && result.maskPlanMs) || 0);
+            this.setFrameMetric("grassDepthChunkEntryRefs", Number(result && result.chunkEntryRefs) || 0);
+            this.setFrameMetric("grassDepthMaskIndexRebuilt", Number(result && result.maskIndexRebuilt) || 0);
+            this.setFrameMetric("grassDepthMaskIndexedChunks", Number(result && result.maskIndexedChunks) || 0);
             return !!(result && result.rendered);
         }
 
