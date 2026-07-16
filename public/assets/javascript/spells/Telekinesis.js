@@ -1,4 +1,4 @@
-class MoveObject extends globalThis.Spell {
+class Telekinesis extends globalThis.Spell {
 	static supportsObjectTargeting = true;
 
 	static isValidObjectTarget(target, wizardRef = null) {
@@ -22,4 +22,5 @@ class MoveObject extends globalThis.Spell {
 	}
 }
 
-globalThis.MoveObject = MoveObject;
+globalThis.Telekinesis = Telekinesis;
+globalThis.MoveObject = Telekinesis;

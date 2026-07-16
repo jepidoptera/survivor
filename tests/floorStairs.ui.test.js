@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const FloorStairs = require("../public/assets/javascript/spells/FloorStairs.js");
+const FloorStairs = require("../public/assets/javascript/spells/editor/FloorStairs.js");
 
 test("FloorStairs buildFootprint creates a rectangular stair footprint", () => {
     const footprint = FloorStairs.buildFootprint(

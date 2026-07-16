@@ -1576,7 +1576,7 @@ test("deleted floor fragments prune attached object records before runtime unreg
         "utf8"
     );
     const floorEditSource = fs.readFileSync(
-        path.join(__dirname, "../public/assets/javascript/spells/FloorFragmentEdit.js"),
+        path.join(__dirname, "../public/assets/javascript/spells/editor/FloorFragmentEdit.js"),
         "utf8"
     );
 

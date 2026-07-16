@@ -6,8 +6,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { createSectionWorldBlockingHelpers } = require("../public/assets/javascript/prototypes/sectionWorldBlocking.js");
-const FloorFragmentEdit = require("../public/assets/javascript/spells/FloorFragmentEdit.js");
-const FloorStairs = require("../public/assets/javascript/spells/FloorStairs.js");
+const FloorFragmentEdit = require("../public/assets/javascript/spells/editor/FloorFragmentEdit.js");
+const FloorStairs = require("../public/assets/javascript/spells/editor/FloorStairs.js");
 
 // ---------------------------------------------------------------------------
 // Load GameMap and Character from the same vm context as movement tests.

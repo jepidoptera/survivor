@@ -2366,7 +2366,7 @@ test("terrain polygon tile assignment paints hexes even when only their centers 
 });
 
 test("terrain double-click polygon tile assignment is wired through the terrain painter", () => {
-    const spellSource = fs.readFileSync(path.join(__dirname, "../public/assets/javascript/spells.js"), "utf8");
+    const spellSource = fs.readFileSync(path.join(__dirname, "../public/assets/javascript/spells/SpellSystem.js"), "utf8");
     assert.match(spellSource, /function assignTerrainPolygonTilesAtWorldPoint/);
     assert.match(spellSource, /target\.terrainType !== selectedTerrainType/);
     assert.match(spellSource, /assignGroundTerrainTilesFullyInsidePolygonAtPoint/);
@@ -2377,7 +2377,7 @@ test("terrain double-click polygon tile assignment is wired through the terrain 
 });
 
 test("terrain paint spell path does not reset level 0 ground caches", () => {
-    const source = fs.readFileSync(path.join(__dirname, "../public/assets/javascript/spells.js"), "utf8");
+    const source = fs.readFileSync(path.join(__dirname, "../public/assets/javascript/spells/SpellSystem.js"), "utf8");
     const paintStart = source.indexOf("function paintTerrainAtWorldPoint");
     assert.notEqual(paintStart, -1);
     const paintEnd = source.indexOf("function isVisibleFloorInteriorViewActive", paintStart);

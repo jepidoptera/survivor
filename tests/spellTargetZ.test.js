@@ -52,9 +52,9 @@ function loadSpellContext() {
     const files = [
         path.join(__dirname, "../public/assets/javascript/gameobjects/hitbox.js"),
         path.join(__dirname, "../public/assets/javascript/shared/FloorSupport.js"),
-        path.join(__dirname, "../public/assets/javascript/spells/FloorFragmentEdit.js"),
+        path.join(__dirname, "../public/assets/javascript/spells/editor/FloorFragmentEdit.js"),
         path.join(__dirname, "../public/assets/javascript/spells/Spell.js"),
-        path.join(__dirname, "../public/assets/javascript/spells.js")
+        path.join(__dirname, "../public/assets/javascript/spells/SpellSystem.js")
     ];
     for (const filePath of files) {
         vm.runInContext(fs.readFileSync(filePath, "utf8"), context, { filename: filePath });
@@ -1049,8 +1049,8 @@ function loadSpawnAnimalContext() {
     const files = [
         path.join(__dirname, "../public/assets/javascript/shared/FloorSupport.js"),
         path.join(__dirname, "../public/assets/javascript/spells/Spell.js"),
-        path.join(__dirname, "../public/assets/javascript/spells/PlaceObject.js"),
-        path.join(__dirname, "../public/assets/javascript/spells/SpawnAnimal.js")
+        path.join(__dirname, "../public/assets/javascript/spells/editor/PlaceObject.js"),
+        path.join(__dirname, "../public/assets/javascript/spells/editor/SpawnAnimal.js")
     ];
     for (const filePath of files) {
         vm.runInContext(fs.readFileSync(filePath, "utf8"), context, { filename: filePath });
@@ -1123,10 +1123,10 @@ function loadPlaceObjectContext() {
     vm.createContext(context);
     const files = [
         path.join(__dirname, "../public/assets/javascript/shared/FloorSupport.js"),
-        path.join(__dirname, "../public/assets/javascript/spells/FloorFragmentEdit.js"),
+        path.join(__dirname, "../public/assets/javascript/spells/editor/FloorFragmentEdit.js"),
         path.join(__dirname, "../public/assets/javascript/spells/Spell.js"),
-        path.join(__dirname, "../public/assets/javascript/spells/PlaceObject.js"),
-        path.join(__dirname, "../public/assets/javascript/spells.js")
+        path.join(__dirname, "../public/assets/javascript/spells/editor/PlaceObject.js"),
+        path.join(__dirname, "../public/assets/javascript/spells/SpellSystem.js")
     ];
     for (const filePath of files) {
         vm.runInContext(fs.readFileSync(filePath, "utf8"), context, { filename: filePath });

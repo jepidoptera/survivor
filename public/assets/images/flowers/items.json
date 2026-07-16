@@ -204,7 +204,7 @@
       "height": 1,
       "renderDepthOffset": 0,
       "blocksTile": false,
-      "isPassable": true,
+      "isPassable": false,
       "castsLosShadows": true,
       "anchor": {
         "x": 0.5,
@@ -230,7 +230,7 @@
       "height": 1,
       "renderDepthOffset": 0,
       "blocksTile": false,
-      "isPassable": true,
+      "isPassable": false,
       "anchor": {
         "x": 0.5,
         "y": 0.5

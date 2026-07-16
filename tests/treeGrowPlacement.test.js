@@ -90,8 +90,8 @@ function installTreeGrowHarness(nodeObjects = []) {
     };
     globalThis.keysPressed = {};
 
-    delete require.cache[require.resolve("../public/assets/javascript/spells/TreeGrow.js")];
-    require("../public/assets/javascript/spells/TreeGrow.js");
+    delete require.cache[require.resolve("../public/assets/javascript/spells/editor/TreeGrow.js")];
+    require("../public/assets/javascript/spells/editor/TreeGrow.js");
 
     return {
         TreeGrow: globalThis.TreeGrow,

@@ -25,6 +25,15 @@ test("webgl2 depth billboard shader writes depth for ordinary billboards", () =>
     assert.match(source, /if \(uBuildingExteriorDepthMetricUse > 0\.5\)[\s\S]*gl_FragDepth = nd;/);
 });
 
+test("legacy split door composite layers are ignored", () => {
+    const source = fs.readFileSync(STATIC_OBJECTS_MODULE_PATH, "utf8");
+
+    assert.match(source, /function isLegacySplitDoorCompositeLayers\(layers\)/);
+    assert.match(source, /if \(isLegacySplitDoorCompositeLayers\(normalized\)\) return null;/);
+    assert.match(source, /const renderableCompositeLayers = isLegacySplitDoorCompositeLayers\(this\.compositeLayers\)/);
+    assert.doesNotMatch(source, /if \(!this\.compositeLayers && this\.isDoorObject\(\)\)/);
+});
+
 class FakeTexture {
     constructor(baseTexture = null, frame = null) {
         this.baseTexture = baseTexture || {

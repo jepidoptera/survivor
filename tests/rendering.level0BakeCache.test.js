@@ -3242,7 +3242,7 @@ test("building exterior fade keeps bottom-floor doors live", () => {
     assert.equal(upperDoor._cutawayCompositeFrame, renderer._layerCutawayFrameId);
 });
 
-test("building exterior fade renders bottom-floor prototype doors separately", () => {
+test("placed building exterior fade does not render bottom-floor prototype doors separately", () => {
     let updateThis = null;
     let updateOptions = null;
     const mesh = { visible: false, renderable: false, parent: null };
@@ -3273,7 +3273,7 @@ test("building exterior fade renders bottom-floor prototype doors separately", (
         updateThis = this;
         updateOptions = options;
         this._compositeUnderlayMesh = this._ensureCompositeUnderlayMesh();
-        this._compositeUnderlayShouldRender = true;
+        this._compositeUnderlayShouldRender = false;
         this._depthBillboardMesh = mesh;
         return mesh;
     };
@@ -3328,7 +3328,11 @@ test("building exterior fade renders bottom-floor prototype doors separately", (
         }
     };
     const trigger = {
-        building: { minLevel: 0 },
+        building: {
+            minLevel: 0,
+            _prototypeBuildingPlacement: { id: "building:placed-house" }
+        },
+        buildingId: "building:placed-house",
         activeInteriorRegion: null,
         renderCache: {
             renderItems: [{ item: bottomDoor, level: 0 }]
@@ -3337,6 +3341,10 @@ test("building exterior fade renders bottom-floor prototype doors separately", (
     const cutawayState = { active: true, triggers: [trigger] };
     const foregroundPlan = renderer.buildBuildingInteriorRenderPlan({}, cutawayState);
     const currentDisplayObjects = new Set();
+    let hiddenActiveIds = null;
+    renderer.hideUnusedPrototypeBuildingExteriorGroundDoors = (activeIds) => {
+        hiddenActiveIds = new Set(activeIds);
+    };
 
     const rendered = renderer.renderPrototypeBuildingExteriorGroundDoors(
         { _renderingLayerCutawayState: cutawayState },
@@ -3346,19 +3354,17 @@ test("building exterior fade renders bottom-floor prototype doors separately", (
         currentDisplayObjects
     );
 
-    assert.equal(rendered.includes(underlayMesh), true);
-    assert.equal(rendered.includes(mesh), true);
-    assert.equal(container.children.includes(underlayMesh), true);
-    assert.equal(container.children.includes(mesh), true);
-    assert.equal(currentDisplayObjects.has(underlayMesh), true);
-    assert.equal(currentDisplayObjects.has(mesh), true);
-    assert.equal(updateThis.texturePath, "/assets/images/doors/door1.png");
-    assert.equal(updateThis.mountedWallSectionUnitId, 0);
-    assert.equal(updateThis._renderLayerBaseZ, 0);
-    assert.equal(updateThis.pixiSprite.alpha, 1);
-    assert.equal(updateOptions.forceMountedWallSide, "front");
-    assert.equal(updateOptions.drawOnlyMountedWallSide, true);
-    assert.equal(picked.some(entry => entry.displayObj === mesh && entry.item === bottomDoor && entry.forceInclude), true);
+    assert.equal(foregroundPlan.items.has(bottomDoor), false);
+    assert.equal(rendered.includes(underlayMesh), false);
+    assert.equal(rendered.includes(mesh), false);
+    assert.equal(container.children.includes(underlayMesh), false);
+    assert.equal(container.children.includes(mesh), false);
+    assert.equal(currentDisplayObjects.has(underlayMesh), false);
+    assert.equal(currentDisplayObjects.has(mesh), false);
+    assert.equal(updateThis, null);
+    assert.equal(updateOptions, null);
+    assert.deepEqual([...hiddenActiveIds], []);
+    assert.equal(picked.length, 0);
 });
 
 test("building interior render plan ignores generic floor cutaway triggers", () => {
@@ -3652,7 +3658,7 @@ test("building doorway transition latches interior presentation until threshold 
     assert.equal(!!clearedState._doorwayPresentationTransition, false);
 });
 
-test("building doorway transition latches exterior presentation when entering", () => {
+test("building doorway transition uses interior presentation when entering", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
     const mountedWall = {
@@ -3725,7 +3731,7 @@ test("building doorway transition latches exterior presentation when entering", 
         hiddenSurfaceIds: new Set(["house"]),
         hiddenFragmentIds: new Set(["house-l1"])
     };
-    const latchedExterior = renderer.updateBuildingDoorwayPresentationTransition(
+    const interiorPresentation = renderer.updateBuildingDoorwayPresentationTransition(
         {},
         interiorState,
         map,
@@ -3733,12 +3739,12 @@ test("building doorway transition latches exterior presentation when entering", 
         1100
     );
 
-    assert.equal(latchedExterior.active, false);
-    assert.equal(latchedExterior.triggers.length, 0);
-    assert.equal(!!latchedExterior._doorwayPresentationTransition, true);
-    assert.equal(latchedExterior._doorwayPresentationTransition.presentationWizard.y, 0.2);
+    assert.equal(interiorPresentation.active, true);
+    assert.equal(interiorPresentation.triggers.length, 1);
+    assert.equal(!!interiorPresentation._doorwayPresentationTransition, true);
+    assert.equal(interiorPresentation._doorwayPresentationTransition.presentationWizard.y, -0.2);
 
-    const stillLatchedExterior = renderer.updateBuildingDoorwayPresentationTransition(
+    const stillInteriorPresentation = renderer.updateBuildingDoorwayPresentationTransition(
         {},
         { ...interiorState, wizardY: -0.6 },
         map,
@@ -3746,8 +3752,8 @@ test("building doorway transition latches exterior presentation when entering", 
         1200
     );
 
-    assert.equal(stillLatchedExterior.active, false);
-    assert.equal(stillLatchedExterior.triggers.length, 0);
+    assert.equal(stillInteriorPresentation.active, true);
+    assert.equal(stillInteriorPresentation.triggers.length, 1);
 
     const committedInterior = renderer.updateBuildingDoorwayPresentationTransition(
         {},
@@ -3879,8 +3885,10 @@ test("prototype building doorway transitions into interior presentation after en
         wizard: { x: 5, y: -0.2, currentLayer: 0, currentLayerBaseZ: 0 },
         renderNowMs: 1100
     });
-    assert.equal(thresholdState.active, false);
-    assert.equal(thresholdState.triggers.length, 0);
+    assert.equal(thresholdState.active, true);
+    assert.equal(thresholdState.triggers.length, 1);
+    assert.equal(thresholdState.triggers[0].buildingId, "building:placed-test-house");
+    assert.equal(!!thresholdState.triggers[0].activeInteriorRegion, true);
     assert.equal(!!thresholdState._doorwayPresentationTransition, true);
 
     const interiorState = renderer.getLayerCutawayState({

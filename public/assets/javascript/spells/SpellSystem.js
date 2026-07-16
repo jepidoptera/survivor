@@ -7,19 +7,17 @@ let spellKeyBindings = {
     "M": "maze",
     "V": "vanish",
     "D": "shield",
-    "T": "treegrow",
-    "G": "triggerarea",
-    "ET": "editscript",
     "J": "teleport",
-    "FW": "firewall",
-    "A": "spawnanimal"
+    "FW": "firewall"
 };
 
 let editorKeyBindings = {
     "B": "wall",
     "R": "buildroad",
     "T": "terrainedit",
-    "M": "moveobject",
+    "G": "triggerarea",
+    "ET": "editscript",
+    "A": "spawnanimal",
     "N": "nodeinspector"
 };
 
@@ -406,23 +404,23 @@ const SpellSystem = (() => {
         { name: "lightning", icon: "/assets/images/magic/lightning.png" },
         { name: "spikes", icon: "/assets/images/magic/spike.png" },
         { name: "attacksquirrel", icon: "/assets/images/animals/squirrel.png" },
+        { name: "telekinesis", icon: "/assets/images/thumbnails/move.png" },
         { name: "maze", icon: "/assets/images/thumbnails/maze.png" },
         { name: "vanish", icon: "/assets/images/thumbnails/vanish.png" },
         { name: "teleport", icon: "/assets/images/magic/teleport.png" },
         { name: "shield", icon: "/assets/images/thumbnails/aura.png" },
-        { name: "treegrow", icon: "/assets/images/thumbnails/tree.png" },
-        { name: "triggerarea", icon: "/assets/images/thumbnails/wall.png" },
-        { name: "editscript", icon: "/assets/images/thumbnails/edit.png" },
-        { name: "firewall", icon: "/assets/images/thumbnails/firewall.png" },
-        { name: "spawnanimal", icon: "/assets/images/animals/squirrel.png" }
+        { name: "firewall", icon: "/assets/images/thumbnails/firewall.png" }
     ];
     const EDITOR_TOOL_DEFS = [
         { name: "wall", icon: "/assets/images/thumbnails/wall.png" },
         { name: "buildroad", icon: "/assets/images/thumbnails/road.png" },
         { name: "terrainedit", icon: TERRAIN_EDITOR_ICON, title: "Terrain" },
         { name: "flooredit", icon: "/assets/images/thumbnails/layers.png" },
-        { name: "moveobject", icon: "/assets/images/thumbnails/move.png" },
         { name: "editorvanish", icon: "/assets/images/thumbnails/vanish.png" },
+        { name: "treegrow", icon: "/assets/images/thumbnails/tree.png" },
+        { name: "triggerarea", icon: "/assets/images/thumbnails/wall.png" },
+        { name: "editscript", icon: "/assets/images/thumbnails/edit.png" },
+        { name: "spawnanimal", icon: "/assets/images/animals/squirrel.png" },
         { name: "nodeinspector", icon: "/assets/images/thumbnails/maze.png", debugOnly: true }
     ];
     const FLOOR_EDIT_TOOL_DEFS = [
@@ -448,13 +446,16 @@ const SpellSystem = (() => {
     };
     const SPELL_LEVEL_ID_BY_MAGIC_NAME = {
         freeze: "iceball",
-        attacksquirrel: "squirrels"
+        attacksquirrel: "squirrels",
+        moveobject: "telekinesis"
     };
     const SPELL_LEVEL_RUNTIME_NAMES = new Set([
         "freeze",
         "teleport",
         "vanish",
         "spikes",
+        "telekinesis",
+        "moveobject",
         "shield",
         "maze",
         "attacksquirrel",
@@ -593,9 +594,10 @@ const SpellSystem = (() => {
         freeze: "Iceball",
         lightning: "Lightning",
         spikes: "Spikes",
+        telekinesis: "Telekinesis",
+        moveobject: "MoveObject",
         vanish: "Vanish",
         editorvanish: "EditorVanish",
-        moveobject: "MoveObject",
         editscript: "EditScript",
         triggerarea: "TriggerAreaSpell"
     };
@@ -1942,6 +1944,19 @@ const SpellSystem = (() => {
         return (fallbackCategory === "doors" || fallbackCategory === "windows") ? "spatial" : "visual";
     }
 
+    function isLegacySplitDoorCompositeLayers(layers) {
+        if (!Array.isArray(layers) || layers.length !== 2) return false;
+        const first = layers[0] && Array.isArray(layers[0].uRegion) ? layers[0].uRegion : null;
+        const second = layers[1] && Array.isArray(layers[1].uRegion) ? layers[1].uRegion : null;
+        if (!first || !second || first.length < 2 || second.length < 2) return false;
+        return (
+            Math.abs(Number(first[0]) - 0) < 1e-6 &&
+            Math.abs(Number(first[1]) - 0.5) < 1e-6 &&
+            Math.abs(Number(second[0]) - 0.5) < 1e-6 &&
+            Math.abs(Number(second[1]) - 1) < 1e-6
+        );
+    }
+
     async function refreshSelectedPlaceableMetadata(wizardRef) {
         if (!wizardRef) return null;
         normalizePlaceableSelections(wizardRef);
@@ -1988,16 +2003,17 @@ const SpellSystem = (() => {
         if (!wizardRef.selectedPlaceableCompositeLayersByTexture || typeof wizardRef.selectedPlaceableCompositeLayersByTexture !== "object") {
             wizardRef.selectedPlaceableCompositeLayersByTexture = {};
         }
-        if (meta && Array.isArray(meta.compositeLayers) && meta.compositeLayers.length >= 2) {
-            wizardRef.selectedPlaceableCompositeLayersByTexture[texturePath] = meta.compositeLayers.map(layer => ({
+        const selectedCompositeLayers = meta && Array.isArray(meta.compositeLayers) && meta.compositeLayers.length >= 2
+            ? meta.compositeLayers.map(layer => ({
                 name: String((layer && layer.name) || ""),
                 uRegion: (Array.isArray(layer && layer.uRegion) && layer.uRegion.length >= 2)
                     ? [Number(layer.uRegion[0]) || 0, Number(layer.uRegion[1]) || 1]
                     : [0, 1]
-            }));
-        } else {
-            wizardRef.selectedPlaceableCompositeLayersByTexture[texturePath] = null;
-        }
+            }))
+            : null;
+        wizardRef.selectedPlaceableCompositeLayersByTexture[texturePath] = isLegacySplitDoorCompositeLayers(selectedCompositeLayers)
+            ? null
+            : selectedCompositeLayers;
         if (wizardRef.selectedPlaceableTexturePath === texturePath) {
             wizardRef.selectedPlaceableCompositeLayers = wizardRef.selectedPlaceableCompositeLayersByTexture[texturePath];
         }
@@ -2459,7 +2475,21 @@ const SpellSystem = (() => {
     }
 
     function isEditorToolName(spellName) {
-        return spellName === "wall" || spellName === "buildroad" || spellName === "terrainedit" || spellName === "flooredit" || isFloorEditorToolName(spellName) || spellName === "moveobject" || spellName === "editorvanish" || spellName === "placeobject" || spellName === "placebuilding" || spellName === "blackdiamond" || spellName === "nodeinspector";
+        return spellName === "wall" ||
+            spellName === "buildroad" ||
+            spellName === "terrainedit" ||
+            spellName === "flooredit" ||
+            isFloorEditorToolName(spellName) ||
+            spellName === "moveobject" ||
+            spellName === "editorvanish" ||
+            spellName === "placeobject" ||
+            spellName === "placebuilding" ||
+            spellName === "blackdiamond" ||
+            spellName === "treegrow" ||
+            spellName === "triggerarea" ||
+            spellName === "editscript" ||
+            spellName === "spawnanimal" ||
+            spellName === "nodeinspector";
     }
 
     function isFloorEditorToolName(spellName) {
@@ -2467,7 +2497,7 @@ const SpellSystem = (() => {
     }
 
     function isMoveObjectToolName(spellName) {
-        return spellName === "moveobject";
+        return spellName === "telekinesis" || spellName === "moveobject";
     }
 
     function isVanishToolName(spellName) {
@@ -7382,6 +7412,7 @@ const SpellSystem = (() => {
         const triggerAreaTargetingEnabled = !!(
             debugEnabled ||
             activeSpell === "editscript" ||
+            activeSpell === "telekinesis" ||
             activeSpell === "moveobject" ||
             activeSpell === "triggerarea"
         );

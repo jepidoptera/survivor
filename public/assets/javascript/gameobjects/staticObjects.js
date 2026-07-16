@@ -253,9 +253,23 @@ function cloneCompositeLayers(layers) {
     return out.length > 0 ? out : null;
 }
 
+function isLegacySplitDoorCompositeLayers(layers) {
+    if (!Array.isArray(layers) || layers.length !== 2) return false;
+    const first = layers[0] && Array.isArray(layers[0].uRegion) ? layers[0].uRegion : null;
+    const second = layers[1] && Array.isArray(layers[1].uRegion) ? layers[1].uRegion : null;
+    if (!first || !second || first.length < 2 || second.length < 2) return false;
+    return (
+        Math.abs(Number(first[0]) - 0) < 1e-6 &&
+        Math.abs(Number(first[1]) - 0.5) < 1e-6 &&
+        Math.abs(Number(second[0]) - 0.5) < 1e-6 &&
+        Math.abs(Number(second[1]) - 1) < 1e-6
+    );
+}
+
 function resolveDoorCompositeLayersForState(layers, options = {}) {
     const normalized = cloneCompositeLayers(layers);
     if (!normalized || normalized.length === 0) return null;
+    if (isLegacySplitDoorCompositeLayers(normalized)) return null;
     const leafOnly = !!(options && options.leafOnly);
     if (!leafOnly) return normalized;
     if (normalized.length >= 2) {
@@ -2442,6 +2456,7 @@ void main(void) {
             !this.isFallenDoorEffect &&
             Array.isArray(this.compositeLayers) &&
             this.compositeLayers.length >= 2 &&
+            !isLegacySplitDoorCompositeLayers(this.compositeLayers) &&
             typeof this.getDoorHitShakeScreenOffset === "function"
         ) ? this.getDoorHitShakeScreenOffset() : null;
         const shakeDx = (doorHitShakeOffset && Number.isFinite(doorHitShakeOffset.x)) ? Number(doorHitShakeOffset.x) : 0;
@@ -2717,9 +2732,12 @@ void main(void) {
         this._compositeUnderlayShouldRender = false;
 
         // --- Composite layers ---
-        if (Array.isArray(this.compositeLayers) && this.compositeLayers.length >= 1) {
-            const archLayer = this.compositeLayers[0];
-            const doorLayer = this.compositeLayers.length >= 2 ? this.compositeLayers[1] : null;
+        const renderableCompositeLayers = isLegacySplitDoorCompositeLayers(this.compositeLayers)
+            ? null
+            : this.compositeLayers;
+        if (Array.isArray(renderableCompositeLayers) && renderableCompositeLayers.length >= 1) {
+            const archLayer = renderableCompositeLayers[0];
+            const doorLayer = renderableCompositeLayers.length >= 2 ? renderableCompositeLayers[1] : null;
             const archZOffset = -1.5;
 
             if (this.isOpen) {
@@ -5062,8 +5080,11 @@ class Tree extends StaticObject {
         }
         this.updateDepthBillboardUvsForTexture(mesh, sourceTexture, false);
         
-        if (Array.isArray(this.compositeLayers) && this.compositeLayers[0]) {
-            StaticObject._setCompositeLayerUvs(mesh, sourceTexture, this.compositeLayers[0].uRegion, false);
+        const renderableBurnCompositeLayers = isLegacySplitDoorCompositeLayers(this.compositeLayers)
+            ? null
+            : this.compositeLayers;
+        if (Array.isArray(renderableBurnCompositeLayers) && renderableBurnCompositeLayers[0]) {
+            StaticObject._setCompositeLayerUvs(mesh, sourceTexture, renderableBurnCompositeLayers[0].uRegion, false);
         }
 
         const worldX = Number.isFinite(this.x) ? Number(this.x) : 0;
@@ -5379,14 +5400,6 @@ class PlacedObject extends StaticObject {
         this.compositeLayers = resolveDoorCompositeLayersForState(options.compositeLayers, {
             leafOnly: this.isFallenDoorEffect
         });
-        if (!this.compositeLayers && this.isDoorObject()) {
-            this.compositeLayers = resolveDoorCompositeLayersForState([
-                { name: "arch", uRegion: [0, 0.5] },
-                { name: "door", uRegion: [0.5, 1] }
-            ], {
-                leafOnly: this.isFallenDoorEffect
-            });
-        }
         if (this.isFallenDoorEffect) {
             this.updateFallenDoorVisibilityHitbox();
         }
@@ -6313,8 +6326,11 @@ class PlacedObject extends StaticObject {
             return null;
         }
 
-        const leafLayer = Array.isArray(this.compositeLayers) && this.compositeLayers[0]
-            ? this.compositeLayers[0]
+        const renderableDoorCompositeLayers = isLegacySplitDoorCompositeLayers(this.compositeLayers)
+            ? null
+            : this.compositeLayers;
+        const leafLayer = Array.isArray(renderableDoorCompositeLayers) && renderableDoorCompositeLayers[0]
+            ? renderableDoorCompositeLayers[0]
             : null;
         if (leafLayer) {
             StaticObject._setCompositeLayerUvs(mesh, sourceTexture, leafLayer.uRegion, false);

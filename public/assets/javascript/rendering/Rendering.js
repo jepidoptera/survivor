@@ -3367,13 +3367,7 @@ void main(void) {
                 this.rememberBuildingDoorwayStablePresentationState(state);
                 return state;
             }
-            const previousState = this.lastBuildingDoorwayPresentationState || null;
-            const shouldLatchPreviousExterior = !!(
-                previousState &&
-                !this.cutawayStateHasActiveInteriorRegion(previousState) &&
-                this.cutawayStateHasActiveInteriorRegion(state)
-            );
-            const sourceState = shouldLatchPreviousExterior ? previousState : state;
+            const sourceState = state;
             const sourceLayer = this.getLayerIndexFromValue(sourceState && sourceState.wizardLayer, this.getLayerIndexFromValue(state.wizardLayer, 0));
             const presentationWizard = {
                 x: Number.isFinite(sourceState && sourceState.wizardX) ? Number(sourceState.wizardX) : Number(state.wizardX),
@@ -8758,6 +8752,7 @@ void main(void) {
         shouldRenderBuildingExteriorGroundDoorItem(item, entry, trigger, ctx, wizardRef) {
             if (!item || item.gone || item.vanishing) return false;
             if (!trigger || !trigger.building || trigger.activeInteriorRegion) return false;
+            if (trigger.building._prototypeBuildingPlacement) return false;
             if (!this.isBuildingCutawayDoorItem(item)) return false;
             if (item === wizardRef) return false;
             if (!this.isScriptVisible(item)) return false;
@@ -23963,7 +23958,11 @@ void main(void) {
             previewItem._renderLayerBaseZ = placementLayerBaseZ;
             
             if (wizard.selectedPlaceableCompositeLayersByTexture && wizard.selectedPlaceableCompositeLayersByTexture[texturePath]) {
-                previewItem.compositeLayers = wizard.selectedPlaceableCompositeLayersByTexture[texturePath];
+                previewItem.compositeLayers = this.getRenderableDoorCompositeLayers({
+                    category: selectedCategory,
+                    type: selectedCategory === "doors" ? "door" : "",
+                    compositeLayers: wizard.selectedPlaceableCompositeLayersByTexture[texturePath]
+                });
             } else {
                 previewItem.compositeLayers = null;
             }
@@ -24690,6 +24689,25 @@ void main(void) {
             return proxy;
         }
 
+        isLegacySplitDoorCompositeLayers(layers) {
+            if (!Array.isArray(layers) || layers.length !== 2) return false;
+            const first = layers[0] && Array.isArray(layers[0].uRegion) ? layers[0].uRegion : null;
+            const second = layers[1] && Array.isArray(layers[1].uRegion) ? layers[1].uRegion : null;
+            if (!first || !second || first.length < 2 || second.length < 2) return false;
+            return (
+                Math.abs(Number(first[0]) - 0) < 1e-6 &&
+                Math.abs(Number(first[1]) - 0.5) < 1e-6 &&
+                Math.abs(Number(second[0]) - 0.5) < 1e-6 &&
+                Math.abs(Number(second[1]) - 1) < 1e-6
+            );
+        }
+
+        getRenderableDoorCompositeLayers(item) {
+            const layers = Array.isArray(item && item.compositeLayers) ? item.compositeLayers : null;
+            if (!layers) return null;
+            return this.isLegacySplitDoorCompositeLayers(layers) ? null : layers;
+        }
+
         configurePrototypeBuildingExteriorDoorProxy(proxy, item, entry, trigger, ctx = null) {
             if (!proxy || !item) return null;
             const level = Number.isFinite(entry && entry.level)
@@ -24710,7 +24728,7 @@ void main(void) {
             proxy.rotation = proxy.placementRotation;
             proxy.placeableAnchorX = Number.isFinite(item.placeableAnchorX) ? Number(item.placeableAnchorX) : 0.5;
             proxy.placeableAnchorY = Number.isFinite(item.placeableAnchorY) ? Number(item.placeableAnchorY) : 1;
-            proxy.compositeLayers = Array.isArray(item.compositeLayers) ? item.compositeLayers : null;
+            proxy.compositeLayers = this.getRenderableDoorCompositeLayers(item);
             proxy.isOpen = item.isOpen === true;
             proxy._doorLockedOpen = item._doorLockedOpen === true;
             proxy.isFallenDoorEffect = false;
