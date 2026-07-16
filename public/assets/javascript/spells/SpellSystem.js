@@ -14,7 +14,8 @@ let spellKeyBindings = {
 let editorKeyBindings = {
     "B": "wall",
     "R": "buildroad",
-    "T": "terrainedit",
+    "Shift+T": "terrainedit",
+    "T": "treegrow",
     "G": "triggerarea",
     "ET": "editscript",
     "A": "spawnanimal",
@@ -435,8 +436,10 @@ const SpellSystem = (() => {
         { name: "omnivision", icon: "/assets/images/thumbnails/eye.png", key: "O", magicPerSecond: 10 },
         { name: "speed", icon: "/assets/images/thumbnails/speed.png", key: "P", magicPerSecond: 10 },
         { name: "healing", icon: "/assets/images/thumbnails/cross.png", key: "H", magicPerSecond: 10 },
+        { name: "flying", icon: "/assets/images/powerups/wingboots.png", magicPerSecond: 8 },
         { name: "invisibility", icon: "/assets/images/magic/invisible.png", key: "U", magicPerSecond: 12 }
     ];
+    const SPELL_MENU_AURA_NAMES = new Set(["speed", "healing", "flying"]);
     const SPELL_LEVEL_DATA_URL = "/assets/data/spell-levels.json";
     const SPELL_LEVEL_MIN = 0;
     const SPELL_LEVEL_MAX = 7;
@@ -1093,6 +1096,14 @@ const SpellSystem = (() => {
     function getAvailableAuraDefinitions(wizardRef) {
         const unlocked = new Set(getUnlockedAuraNames(wizardRef));
         return AURA_DEFS.filter(aura => unlocked.has(aura.name));
+    }
+
+    function getSpellMenuAuraDefinitions(wizardRef) {
+        const availableAuras = getAvailableAuraDefinitions(wizardRef);
+        if (shouldFoldAurasIntoSpellList(wizardRef)) {
+            return availableAuras;
+        }
+        return availableAuras.filter(aura => SPELL_MENU_AURA_NAMES.has(aura.name));
     }
 
     function shouldFoldAurasIntoSpellList(wizardRef) {
@@ -11273,10 +11284,7 @@ const SpellSystem = (() => {
             }
             return {...spell, key};
         });
-        if (!shouldFoldAurasIntoSpellList(wizardRef)) {
-            return spells;
-        }
-        const auraSpells = getAvailableAuraDefinitions(wizardRef).map(aura => ({
+        const auraSpells = getSpellMenuAuraDefinitions(wizardRef).map(aura => ({
             ...aura,
             key: aura.key
         }));
@@ -11864,14 +11872,35 @@ const SpellSystem = (() => {
         }).catch(error => console.error("[building placement] failed to list saves", error));
     }
 
-    function renderEditorCategorySelector(wizardRef) {
-        const $grid = $("#editorGrid");
+    function renderEditorCategorySelector(wizardRef, targetSelector = "#editorGrid") {
+        const renderInSpellMenu = targetSelector === "#spellGrid";
+        const $grid = $(targetSelector);
         $grid.empty();
         $grid.css({
             display: "",
             "flex-direction": "",
             gap: ""
         });
+
+        if (renderInSpellMenu) {
+            const backButton = $("<div>")
+                .addClass("spellIcon")
+                .css({
+                    "display": "flex",
+                    "align-items": "center",
+                    "justify-content": "center",
+                    "font-size": "13px",
+                    "font-weight": "bold",
+                    "color": "#ffffff",
+                    "background": "rgba(20,20,20,0.9)"
+                })
+                .text("Back")
+                .click(() => {
+                    spellMenuMode = "main";
+                    refreshSpellSelector(wizardRef);
+                });
+            $grid.append(backButton);
+        }
 
         // Render editor tools (wall, road, vanish) first
         const editorTools = buildEditorToolList(wizardRef);
@@ -11897,7 +11926,11 @@ const SpellSystem = (() => {
                         return;
                     }
                     setCurrentSpell(wizardRef, tool.name);
-                    refreshEditorSelector(wizardRef);
+                    if (renderInSpellMenu) {
+                        refreshSpellSelector(wizardRef);
+                    } else {
+                        refreshEditorSelector(wizardRef);
+                    }
                     $("#spellMenu").addClass("hidden");
                 });
             if (tool.name === "terrainedit" || tool.name === "flooredit") {
@@ -11983,7 +12016,11 @@ const SpellSystem = (() => {
                         refreshSelectedPlaceableMetadata(wizardRef);
                         setCurrentSpell(wizardRef, "placeobject");
                     }
-                    refreshEditorSelector(wizardRef);
+                    if (renderInSpellMenu) {
+                        refreshSpellSelector(wizardRef);
+                    } else {
+                        refreshEditorSelector(wizardRef);
+                    }
                     $("#spellMenu").addClass("hidden");
                 })
                 .on("contextmenu", event => {
@@ -12050,7 +12087,7 @@ const SpellSystem = (() => {
             })
             .text("Back")
             .click(() => {
-                spellMenuMode = "main";
+                spellMenuMode = "editor";
                 refreshSpellSelector(wizardRef);
             });
         $grid.append(backButton);
@@ -12077,7 +12114,7 @@ const SpellSystem = (() => {
                             setSelectedPowerupFileName(wizardRef, file);
                             wizardRef.selectedEditorCategory = "powerups";
                             setCurrentSpell(wizardRef, "blackdiamond");
-                            spellMenuMode = "main";
+                            spellMenuMode = "editor";
                             refreshSpellSelector(wizardRef);
                             $("#spellMenu").addClass("hidden");
                         });
@@ -12131,7 +12168,7 @@ const SpellSystem = (() => {
                             setSelectedBuildingSaveName(wizardRef, name);
                             setCurrentSpell(wizardRef, "placebuilding");
                             fetchBuildingEditorSaveData(name).catch(error => console.error("[building placement] failed to load save", error));
-                            spellMenuMode = "main";
+                            spellMenuMode = "editor";
                             refreshSpellSelector(wizardRef);
                             $("#spellMenu").addClass("hidden");
                         });
@@ -12191,7 +12228,7 @@ const SpellSystem = (() => {
                     normalizePlaceableSelections(wizardRef);
                     refreshSelectedPlaceableMetadata(wizardRef);
                     setCurrentSpell(wizardRef, "placeobject");
-                    spellMenuMode = "main";
+                    spellMenuMode = "editor";
                     refreshSpellSelector(wizardRef);
                     $("#spellMenu").addClass("hidden");
                 });
@@ -12328,9 +12365,9 @@ const SpellSystem = (() => {
 
     function openEditorSelector(wizardRef) {
         if (!canUseEditorFeatures(wizardRef)) return;
-        // Editor options are now merged into the spell menu; show main spell menu
-        spellMenuMode = "main";
-        showMainSpellMenu(wizardRef);
+        spellMenuMode = "editor";
+        refreshSpellSelector(wizardRef);
+        $("#editorMenu").addClass("hidden");
         $("#spellMenu").removeClass("hidden");
     }
 
@@ -12358,7 +12395,7 @@ const SpellSystem = (() => {
                 "border-radius": "4px"
             })
             .on("click", () => {
-                spellMenuMode = "main";
+                spellMenuMode = "editor";
                 refreshSpellSelector(wizardRef);
             });
         $grid.append($back);
@@ -12497,7 +12534,7 @@ const SpellSystem = (() => {
             })
             .text("Back")
             .click(() => {
-                spellMenuMode = "main";
+                spellMenuMode = "editor";
                 refreshSpellSelector(wizardRef);
             });
         const selectedLevel = getSelectedFloorEditLevel(wizardRef);
@@ -12626,7 +12663,7 @@ const SpellSystem = (() => {
                 "border-radius": "4px"
             })
             .on("click", () => {
-                spellMenuMode = "main";
+                spellMenuMode = "editor";
                 refreshSpellSelector(wizardRef);
             });
         $grid.append($back);
@@ -12920,6 +12957,10 @@ const SpellSystem = (() => {
             renderEditorItemSelector(wizardRef, editorMenuCategory || normalizeSelectedEditorCategory(wizardRef));
             return;
         }
+        if (spellMenuMode === "editor") {
+            renderEditorCategorySelector(wizardRef, "#spellGrid");
+            return;
+        }
         $spellGrid.css({
             display: "",
             "flex-direction": "",
@@ -13000,171 +13041,36 @@ const SpellSystem = (() => {
             $spellGrid.append(spellIcon);
         });
 
-        // If editor mode is active, append editor tools and category icons at the bottom
         if (canUseEditorFeatures(wizardRef) && editorMode) {
-            // Separator
-            $spellGrid.append(
-                $("<div>").css({
-                    "width": "100%",
-                    "height": "1px",
-                    "background": "rgba(255,255,255,0.3)",
-                    "margin": "4px 0",
-                    "grid-column": "1 / -1"
-                })
-            );
-
-            // Editor tools (wall, road, vanish)
-            const editorTools = buildEditorToolList(wizardRef);
-            editorTools.forEach(tool => {
-                const toolCss = {
-                    "background-image": `url('${tool.icon}')`,
+            const editorIcon = $("<div>")
+                .addClass("spellIcon")
+                .css({
+                    "background-image": `url('${EDITOR_MENU_ICON}')`,
                     "background-size": "cover",
                     "background-position": "center center",
                     "position": "relative"
-                };
-                const toolIcon = $("<div>")
-                    .addClass("spellIcon")
-                    .css(toolCss)
-                    .attr("data-spell", tool.name)
-                    .attr("title", tool.name)
-                    .click(() => {
-                        if (tool.name === "terrainedit") {
-                            openTerrainSelector(wizardRef);
-                            return;
-                        }
-                        if (tool.name === "flooredit") {
-                            openFloorEditingSelector(wizardRef);
-                            return;
-                        }
-                        setCurrentSpell(wizardRef, tool.name);
-                        refreshSpellSelector(wizardRef);
-                        $("#spellMenu").addClass("hidden");
-                    });
-                if (tool.name === "terrainedit" || tool.name === "flooredit") {
-                    toolIcon.attr("data-opens-submenu", "true");
-                }
-                if (tool.name === "buildroad") {
-                    toolIcon.on("contextmenu", event => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        openFlooringSelector(wizardRef);
-                    });
-                } else if (tool.name === "terrainedit") {
-                    toolIcon.on("contextmenu", event => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        openTerrainSelector(wizardRef);
-                    });
-                } else if (tool.name === "wall") {
-                    toolIcon.on("contextmenu", event => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        openWallSelector(wizardRef);
-                    });
-                } else if (tool.name === "flooredit") {
-                    toolIcon.on("contextmenu", event => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        openFloorEditingSelector(wizardRef);
-                    });
-                }
-                if (tool.key) {
-                    const keyLabel = $("<span>")
-                        .addClass("spellKeyBinding")
-                        .text(tool.key)
-                        .css({
-                            "position": "absolute",
-                            "top": "4px",
-                            "left": "4px",
-                            "color": "white",
-                            "font-size": "12px",
-                            "font-weight": "bold",
-                            "pointer-events": "none",
-                            "text-shadow": "1px 1px 2px rgba(0, 0, 0, 0.8)",
-                            "z-index": "10"
-                        });
-                    toolIcon.append(keyLabel);
-                }
-                if (tool.name === wizardRef.currentSpell || (tool.name === "flooredit" && isFloorEditorToolName(wizardRef.currentSpell))) {
-                    toolIcon.addClass("selected");
-                }
-                $spellGrid.append(toolIcon);
-            });
-
-            // Editor categories (placeable objects, powerups)
-            const selectedEditorCategory = normalizeSelectedEditorCategory(wizardRef);
-            EDITOR_CATEGORIES.forEach(category => {
-                const selectedTexture = category === "powerups"
-                    ? getPowerupEditorCategoryIcon(wizardRef)
-                    : (category === "buildings" ? BUILDING_EDITOR_ICON : getSelectedPlaceableTextureForCategory(wizardRef, category));
-                const catIcon = $("<div>")
-                    .addClass("spellIcon")
-                    .css({
-                        "background-image": `url('${selectedTexture}')`,
-                        "background-size": "cover",
-                        "background-position": "center center"
-                    })
-                    .attr("title", category)
-                    .click(() => {
-                        if (category === "powerups") {
-                            wizardRef.selectedEditorCategory = "powerups";
-                            setCurrentSpell(wizardRef, "blackdiamond");
-                        } else if (category === "buildings") {
-                            wizardRef.selectedEditorCategory = "buildings";
-                            setCurrentSpell(wizardRef, "placebuilding");
-                            fetchBuildingEditorSaves().then(items => {
-                                if (!getSelectedBuildingSaveName(wizardRef) && items.length > 0) {
-                                    setSelectedBuildingSaveName(wizardRef, items[0].name);
-                                }
-                            }).catch(error => console.error("[building placement] failed to list saves", error));
-                        } else {
-                            setSelectedPlaceableCategory(wizardRef, category);
-                            wizardRef.selectedEditorCategory = category;
-                            refreshSelectedPlaceableMetadata(wizardRef);
-                            setCurrentSpell(wizardRef, "placeobject");
-                        }
-                        refreshSpellSelector(wizardRef);
-                        $("#spellMenu").addClass("hidden");
-                    })
-                    .on("contextmenu", event => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        if (category === "buildings") {
-                            openBuildingSelector(wizardRef);
-                            return;
-                        }
-                        if (category === "powerups") {
-                            wizardRef.selectedEditorCategory = "powerups";
-                            setCurrentSpell(wizardRef, "blackdiamond");
-                        } else {
-                            setSelectedPlaceableCategory(wizardRef, category);
-                            wizardRef.selectedEditorCategory = category;
-                            refreshSelectedPlaceableMetadata(wizardRef);
-                            setCurrentSpell(wizardRef, "placeobject");
-                        }
-                        spellMenuMode = "editor-items";
-                        editorMenuCategory = category;
-                        renderEditorItemSelector(wizardRef, category);
-                        if (category !== "powerups") {
-                            fetchPlaceableImages({ forceRefresh: true }).then(() => {
-                                if (spellMenuMode === "editor-items" && editorMenuCategory === category) {
-                                    renderEditorItemSelector(wizardRef, category);
-                                }
-                            });
-                        }
-                    });
-                if (category === "buildings") {
-                    catIcon.attr("data-spell", "placebuilding");
-                    catIcon.attr("data-opens-submenu", "true");
-                }
-                if (category !== "powerups" && category !== "buildings") {
-                    applyCompositeLayersToThumbnail(catIcon, category, selectedTexture);
-                }
-                if (selectedEditorCategory === category) {
-                    catIcon.addClass("selected");
-                }
-                $spellGrid.append(catIcon);
-            });
+                })
+                .attr("title", "Editor")
+                .attr("data-opens-submenu", "true")
+                .click(() => {
+                    openEditorSelector(wizardRef);
+                });
+            const keyLabel = $("<span>")
+                .addClass("spellKeyBinding")
+                .text("E")
+                .css({
+                    "position": "absolute",
+                    "top": "4px",
+                    "left": "4px",
+                    "color": "white",
+                    "font-size": "12px",
+                    "font-weight": "bold",
+                    "pointer-events": "none",
+                    "text-shadow": "1px 1px 2px rgba(0, 0, 0, 0.8)",
+                    "z-index": "10"
+                });
+            editorIcon.append(keyLabel);
+            $spellGrid.append(editorIcon);
         }
     }
 
@@ -13375,6 +13281,18 @@ const SpellSystem = (() => {
         openEditorSelector(wizardRef);
     }
 
+    function isEditorMenuOpen() {
+        return spellMenuMode === "editor";
+    }
+
+    function returnToSpellMenu(wizardRef) {
+        if (!wizardRef) return false;
+        spellMenuMode = "main";
+        refreshSpellSelector(wizardRef);
+        $("#spellMenu").removeClass("hidden");
+        return true;
+    }
+
     function showEditorSubmenuForSelectedCategory(wizardRef) {
         if (!wizardRef) return;
         if (!canUseEditorFeatures(wizardRef)) return;
@@ -13509,6 +13427,8 @@ const SpellSystem = (() => {
         showTriggerAreaMenu,
         showBuildingMenu,
         showEditorMenu,
+        isEditorMenuOpen,
+        returnToSpellMenu,
         showEditorSubmenuForSelectedCategory,
         showPlaceableMenu,
         showSpellLevelPanel,

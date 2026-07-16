@@ -6119,16 +6119,23 @@ jQuery(() => {
 
     $("#selectedEditor").click(() => {
         if (!wizard || $("#editorSelector").hasClass("hidden")) return;
-        const wasHidden = $("#editorMenu").hasClass("hidden");
-        if (wasHidden) {
-            closeHudMenus({ spell: true, aura: true, editor: false });
+        const editorSpellMenuVisible = !!(
+            !$("#spellMenu").hasClass("hidden") &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.isEditorMenuOpen === "function" &&
+            SpellSystem.isEditorMenuOpen()
+        );
+        if (editorSpellMenuVisible) {
+            $("#spellMenu").addClass("hidden");
+            $("#editorMenu").addClass("hidden");
+            clearSpellMenuKeyboardFocus();
+            clearEditorMenuKeyboardFocus();
+        } else {
+            closeHudMenus({ spell: false, aura: true, editor: true });
             if (typeof SpellSystem !== "undefined" && typeof SpellSystem.showEditorMenu === "function") {
                 SpellSystem.showEditorMenu(wizard);
-            } else {
-                $("#editorMenu").removeClass("hidden");
+                initSpellMenuKeyboardFocus();
             }
-        } else {
-            $("#editorMenu").addClass("hidden");
         }
     });
 
@@ -6795,8 +6802,65 @@ jQuery(() => {
             typeof globalThis.isTextEntryElement === "function" &&
             globalThis.isTextEntryElement(event.target)
         );
+        const getEditorHotkeyName = () => {
+            if (!event || typeof event.key !== "string" || event.key.length !== 1) return "";
+            const key = event.key.toUpperCase();
+            return event.shiftKey ? `Shift+${key}` : key;
+        };
+        const isEditorSpellMenuOpen = !!(
+            spellMenuVisible &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.isEditorMenuOpen === "function" &&
+            SpellSystem.isEditorMenuOpen()
+        );
 
         if (isTextEntryTarget) {
+            return;
+        }
+
+        if (
+            wizard &&
+            !event.repeat &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey &&
+            keyLower === "e" &&
+            !isEditorSpellMenuOpen &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.isEditorMode === "function" &&
+            SpellSystem.isEditorMode() &&
+            typeof SpellSystem.showEditorMenu === "function"
+        ) {
+            event.preventDefault();
+            SpellSystem.showEditorMenu(wizard);
+            initSpellMenuKeyboardFocus();
+            return;
+        }
+
+        if (
+            wizard &&
+            isEditorSpellMenuOpen &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey &&
+            !event.repeat &&
+            event.key !== " " &&
+            event.key.length === 1
+        ) {
+            const editorHotkey = getEditorHotkeyName();
+            if (
+                editorHotkey &&
+                typeof editorKeyBindings !== "undefined" &&
+                Object.keys(editorKeyBindings).includes(editorHotkey) &&
+                typeof SpellSystem !== "undefined" &&
+                typeof SpellSystem.setCurrentSpell === "function"
+            ) {
+                event.preventDefault();
+                SpellSystem.setCurrentSpell(wizard, editorKeyBindings[editorHotkey]);
+                updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
+                return;
+            }
+            event.preventDefault();
             return;
         }
 
@@ -6869,6 +6933,23 @@ jQuery(() => {
             SpellSystem.handleTerrainBrushRadiusHotkey(wizard, event.key)
         ) {
             event.preventDefault();
+            return;
+        }
+
+        if (
+            wizard &&
+            isEditorSpellMenuOpen &&
+            (
+                event.key === "Escape" ||
+                event.key === "Backspace" ||
+                (event.key === "Tab" && event.shiftKey)
+            ) &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.returnToSpellMenu === "function"
+        ) {
+            event.preventDefault();
+            SpellSystem.returnToSpellMenu(wizard);
+            initSpellMenuKeyboardFocus();
             return;
         }
 
@@ -7460,9 +7541,9 @@ jQuery(() => {
                 typeof SpellSystem.setCurrentSpell === "function" &&
                 typeof wizard.isGodMode === "function" && wizard.isGodMode()
             );
-            if (inEditorMode && typeof editorKeyBindings !== "undefined" && Object.keys(editorKeyBindings).includes(event.key.toUpperCase())) {
+            if (inEditorMode && typeof editorKeyBindings !== "undefined" && Object.keys(editorKeyBindings).includes(getEditorHotkeyName())) {
                 // In editor mode, prefer editor key bindings for shared keys
-                SpellSystem.setCurrentSpell(wizard, editorKeyBindings[event.key.toUpperCase()]);
+                SpellSystem.setCurrentSpell(wizard, editorKeyBindings[getEditorHotkeyName()]);
             } else if (shouldUseLayerTool) {
                 SpellSystem.setCurrentSpell(wizard, "flooredit");
             } else if (shouldUseEditorVanish) {
@@ -7475,11 +7556,11 @@ jQuery(() => {
         } else if (
             !hasNonShiftHotkeyModifier &&
             typeof editorKeyBindings !== "undefined" &&
-            Object.keys(editorKeyBindings).includes(event.key.toUpperCase())
+            Object.keys(editorKeyBindings).includes(getEditorHotkeyName())
         ) {
             const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
             if (inEditorMode) {
-                SpellSystem.setCurrentSpell(wizard, editorKeyBindings[event.key.toUpperCase()]);
+                SpellSystem.setCurrentSpell(wizard, editorKeyBindings[getEditorHotkeyName()]);
                 updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
             }
         }
