@@ -9947,6 +9947,28 @@ void main(void) {
             });
         }
 
+        getVisibleNodeRenderKey(node) {
+            if (!node) return "";
+            if (typeof node.id === "string" && node.id.length > 0) return node.id;
+            const xindex = Number.isFinite(node.xindex) ? Number(node.xindex) : 0;
+            const yindex = Number.isFinite(node.yindex) ? Number(node.yindex) : 0;
+            const layer = Number.isFinite(node.traversalLayer) ? Number(node.traversalLayer) : 0;
+            if (
+                typeof node._renderingVisibleNodeKey === "string" &&
+                node._renderingVisibleNodeKeyX === xindex &&
+                node._renderingVisibleNodeKeyY === yindex &&
+                node._renderingVisibleNodeKeyLayer === layer
+            ) {
+                return node._renderingVisibleNodeKey;
+            }
+            const key = `${xindex},${yindex},${layer}`;
+            node._renderingVisibleNodeKey = key;
+            node._renderingVisibleNodeKeyX = xindex;
+            node._renderingVisibleNodeKeyY = yindex;
+            node._renderingVisibleNodeKeyLayer = layer;
+            return key;
+        }
+
         resolvePlacedObjectLodTexturePath(item) {
             if (!item || !this.isPlacedObjectEntity(item)) return null;
             const basePath = (typeof item.texturePath === "string" && item.texturePath.length > 0)
@@ -11317,9 +11339,7 @@ void main(void) {
                     for (let i = 0; i < wall.nodes.length; i++) {
                         const node = wall.nodes[i];
                         if (!node) continue;
-                        const key = typeof node.id === "string" && node.id.length > 0
-                            ? node.id
-                            : `${node.xindex},${node.yindex},${Number.isFinite(node.traversalLayer) ? Number(node.traversalLayer) : 0}`;
+                        const key = this.getVisibleNodeRenderKey(node);
                         if (visibleNodeKeys.has(key)) return true;
                     }
                     return false;
@@ -12070,9 +12090,7 @@ void main(void) {
                     for (let i = 0; i < visibleNodes.length; i++) {
                         const node = visibleNodes[i];
                         if (!node) continue;
-                        const key = typeof node.id === "string" && node.id.length > 0
-                            ? node.id
-                            : `${node.xindex},${node.yindex},${Number.isFinite(node.traversalLayer) ? Number(node.traversalLayer) : 0}`;
+                        const key = this.getVisibleNodeRenderKey(node);
                         seenNodeKeys.add(key);
                     }
                 }
@@ -12169,9 +12187,7 @@ void main(void) {
                     skippedOffscreen += 1;
                     return;
                 }
-                const key = typeof node.id === "string" && node.id.length > 0
-                    ? node.id
-                    : `${node.xindex},${node.yindex},${Number.isFinite(node.traversalLayer) ? Number(node.traversalLayer) : 0}`;
+                const key = this.getVisibleNodeRenderKey(node);
                 if (seenNodeKeys.has(key)) {
                     skippedDuplicate += 1;
                     return;
@@ -12293,9 +12309,7 @@ void main(void) {
             const addVisibleNode = _mapWraps
                 ? (node) => {
                     if (!node) return false;
-                    const key = typeof node.id === "string" && node.id.length > 0
-                        ? node.id
-                        : `${node.xindex},${node.yindex},${Number.isFinite(node.traversalLayer) ? Number(node.traversalLayer) : 0}`;
+                    const key = this.getVisibleNodeRenderKey(node);
                     if (seenNodeKeys.has(key)) return false;
                     seenNodeKeys.add(key);
                     nodes.push(node);
@@ -12303,32 +12317,68 @@ void main(void) {
                 }
                 : (node) => {
                     if (!node) return false;
-                    const key = typeof node.id === "string" && node.id.length > 0
-                        ? node.id
-                        : `${node.xindex},${node.yindex},${Number.isFinite(node.traversalLayer) ? Number(node.traversalLayer) : 0}`;
+                    const key = this.getVisibleNodeRenderKey(node);
                     seenNodeKeys.add(key);
                     nodes.push(node);
                     return true;
                 };
 
-            this.forEachWrappedNodeInViewport(
-                map,
-                xPadding,
-                yPadding,
-                (node) => {
+            const processViewportNode = (node) => {
+                if (shouldRenderNode && !shouldRenderNode(node)) {
+                    skippedByRenderFilter += 1;
+                    return;
+                }
+                if (!shouldRenderFloorLevel(node)) {
+                    skippedByRenderFilter += 1;
+                    return;
+                }
+                if (addVisibleNode(node)) {
+                    wrappedNodes += 1;
+                }
+            };
+            if (typeof map.getVisibleNodesInViewport === "function") {
+                const viewportNodes = map.getVisibleNodesInViewport(ctx.camera || this.camera || {}, xPadding, yPadding);
+                if (!Array.isArray(viewportNodes)) {
+                    throw new Error("prototype visible node query must return an array");
+                }
+                for (let i = 0; i < viewportNodes.length; i++) {
+                    const node = viewportNodes[i];
+                    if (!node) continue;
                     if (shouldRenderNode && !shouldRenderNode(node)) {
                         skippedByRenderFilter += 1;
-                        return;
+                        continue;
                     }
                     if (!shouldRenderFloorLevel(node)) {
                         skippedByRenderFilter += 1;
-                        return;
+                        continue;
                     }
                     if (addVisibleNode(node)) {
                         wrappedNodes += 1;
                     }
-                },
-                ctx.camera
+                }
+            } else {
+                this.forEachWrappedNodeInViewport(
+                    map,
+                    xPadding,
+                    yPadding,
+                    processViewportNode,
+                    ctx.camera
+                );
+            }
+            const visibleNodeBucketStats = (map && typeof map.getVisibleNodeBucketIndexStats === "function")
+                ? map.getVisibleNodeBucketIndexStats()
+                : null;
+            this.setFrameMetric(
+                "visibleNodeBucketCandidates",
+                visibleNodeBucketStats && Number.isFinite(visibleNodeBucketStats.candidates)
+                    ? Number(visibleNodeBucketStats.candidates)
+                    : 0
+            );
+            this.setFrameMetric(
+                "visibleNodeBucketCount",
+                visibleNodeBucketStats && Number.isFinite(visibleNodeBucketStats.bucketCount)
+                    ? Number(visibleNodeBucketStats.bucketCount)
+                    : 0
             );
             if (isolateFloorLevel && collectSyntheticFloorNodes) {
                 this.collectVisibleFloorNodes(ctx, selectedFloorLevel, shouldRenderNode, shouldRenderFloorLevel, addVisibleNode);

@@ -16,6 +16,12 @@
         return loadedNodes;
     }
 
+    function invalidateVisibleNodeBucketIndex(state) {
+        if (!state || typeof state !== "object") return;
+        state.visibleNodeBucketIndexDirty = true;
+        state.visibleNodeBucketIndexVersion = (Number(state.visibleNodeBucketIndexVersion) || 0) + 1;
+    }
+
     function updatePrototypeActiveBuildingSelection(map, activeSectionKeys) {
         const buildingState = map && map._prototypeBuildingState;
         if (!buildingState || typeof map.setPrototypeBuildingDesiredPlacementIds !== "function") return null;
@@ -226,6 +232,7 @@
                 state.loadedNodes = state.loadedNodes.filter((node) => node && node._prototypeSectionActive === true);
             }
             sortPrototypeLoadedNodes(state.loadedNodes);
+            invalidateVisibleNodeBucketIndex(state);
             rebuildLoadedMs += layoutNow() - rebuildLoadedStart;
             const seamStart = layoutNow();
             updatePrototypeSeamSegmentsForSections(state, new Set([...keysToActivate, ...keysToDeactivate]));
@@ -348,6 +355,7 @@
                 state.loadedNodesByCoordKey.set(`${node.xindex},${node.yindex}`, node);
             }
         }
+        invalidateVisibleNodeBucketIndex(state);
 
         const nextActualKeys = transition.targetActiveKeys instanceof Set
             ? new Set(transition.targetActiveKeys)
@@ -421,6 +429,7 @@
             state.loadedNodeKeySet.has(`${node.xindex},${node.yindex}`)
         ));
         sortPrototypeLoadedNodes(state.loadedNodes);
+        invalidateVisibleNodeBucketIndex(state);
         rebuildLoadedMs += layoutNow() - rebuildLoadedStart;
 
         const changedSectionKeys = transition.changedSectionKeys instanceof Set

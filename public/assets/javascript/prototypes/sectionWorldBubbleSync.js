@@ -29,6 +29,12 @@
             return task;
         };
 
+        const invalidateVisibleNodeBucketIndex = (stateRef) => {
+            if (!stateRef || typeof stateRef !== "object") return;
+            stateRef.visibleNodeBucketIndexDirty = true;
+            stateRef.visibleNodeBucketIndexVersion = (Number(stateRef.visibleNodeBucketIndexVersion) || 0) + 1;
+        };
+
         const isPromiseLike = (value) => !!(
             value &&
             (typeof value === "object" || typeof value === "function") &&
@@ -1099,6 +1105,7 @@
                                 }
                                 stats.activatedNodeCount += 1;
                             }
+                            invalidateVisibleNodeBucketIndex(state);
                             stats.activateMs += prototypeNow() - start;
                         }));
                     }
@@ -1129,6 +1136,7 @@
                             state.loadedNodeKeySet.delete(`${node.xindex},${node.yindex}`);
                             stats.deactivatedNodeCount += 1;
                         }
+                        invalidateVisibleNodeBucketIndex(state);
                         stats.deactivateMs += prototypeNow() - start;
                     }));
                 }
@@ -1170,6 +1178,7 @@
                                     }
                                     stats.reactivateOverlapCount += 1;
                                 }
+                                invalidateVisibleNodeBucketIndex(state);
                                 stats.reactivateOverlapMs += prototypeNow() - t0;
                             }));
                         }
@@ -1208,6 +1217,7 @@
                     if (typeof sortPrototypeLoadedNodes === "function") {
                         sortPrototypeLoadedNodes(state.loadedNodes);
                     }
+                    invalidateVisibleNodeBucketIndex(state);
                     stats.rebuildLoadedMs += prototypeNow() - t0;
                 }));
                 prependPrototypeTasks(session, rebuildTasks);

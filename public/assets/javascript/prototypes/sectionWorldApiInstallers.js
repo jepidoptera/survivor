@@ -1256,6 +1256,64 @@
             }
             return out;
         };
+        const visibleNodeBucketWorldSize = 8;
+        const rebuildVisibleNodeBucketIndex = (state, mapRef) => {
+            if (!state || !Array.isArray(state.loadedNodes)) {
+                throw new Error("visible node bucket index requires prototype loadedNodes");
+            }
+            const bucketSize = visibleNodeBucketWorldSize;
+            const buckets = new Map();
+            const loadedNodes = state.loadedNodes;
+            for (let i = 0; i < loadedNodes.length; i++) {
+                const node = loadedNodes[i];
+                if (!node) continue;
+                const nodeX = Number(node.x);
+                const nodeY = Number(node.y);
+                if (!Number.isFinite(nodeX) || !Number.isFinite(nodeY)) {
+                    throw new Error("visible node bucket index cannot index a node with non-finite world coordinates");
+                }
+                const nodeBaseZ = typeof mapRef.getNodeBaseZ === "function"
+                    ? mapRef.getNodeBaseZ(node)
+                    : (Number.isFinite(node.baseZ) ? Number(node.baseZ) : 0);
+                if (!Number.isFinite(nodeBaseZ)) {
+                    throw new Error("visible node bucket index cannot index a node with non-finite baseZ");
+                }
+                const bucketX = Math.floor(nodeX / bucketSize);
+                const bucketY = Math.floor((nodeY - nodeBaseZ) / bucketSize);
+                const bucketKey = `${bucketX},${bucketY}`;
+                let bucket = buckets.get(bucketKey);
+                if (!bucket) {
+                    bucket = [];
+                    buckets.set(bucketKey, bucket);
+                }
+                bucket.push(node);
+            }
+            state.visibleNodeBucketIndex = {
+                buckets,
+                bucketSize,
+                loadedNodesRef: loadedNodes,
+                loadedNodeCount: loadedNodes.length
+            };
+            state.visibleNodeBucketIndexBuiltVersion = Number(state.visibleNodeBucketIndexVersion) || 0;
+            state.visibleNodeBucketIndexDirty = false;
+            return state.visibleNodeBucketIndex;
+        };
+        const getVisibleNodeBucketIndex = (state, mapRef) => {
+            const index = state && state.visibleNodeBucketIndex;
+            const version = Number(state && state.visibleNodeBucketIndexVersion) || 0;
+            if (
+                index &&
+                state.visibleNodeBucketIndexDirty !== true &&
+                state.visibleNodeBucketIndexBuiltVersion === version &&
+                index.loadedNodesRef === state.loadedNodes &&
+                index.loadedNodeCount === state.loadedNodes.length &&
+                index.bucketSize === visibleNodeBucketWorldSize &&
+                index.buckets instanceof Map
+            ) {
+                return index;
+            }
+            return rebuildVisibleNodeBucketIndex(state, mapRef);
+        };
         map.getVisibleNodesInViewport = function getVisibleNodesInViewport(camera, xPadding = 0, yPadding = 0) {
             const state = this._prototypeSectionState;
             const loadedNodes = (state && Array.isArray(state.loadedNodes)) ? state.loadedNodes : [];
@@ -1288,18 +1346,46 @@
             ) {
                 throw new Error("Cannot collect visible prototype nodes with a non-finite screen-space viewport.");
             }
-            for (let i = 0; i < loadedNodes.length; i++) {
-                const node = loadedNodes[i];
-                if (!node) continue;
-                if (node.x < minX || node.x > maxX) continue;
-                const nodeBaseZ = typeof this.getNodeBaseZ === "function"
-                    ? this.getNodeBaseZ(node)
-                    : (Number.isFinite(node.baseZ) ? Number(node.baseZ) : 0);
-                const projectedY = Number(node.y) - (nodeBaseZ - cameraZ);
-                if (projectedY < minProjectedY || projectedY > maxProjectedY) continue;
-                visible.push(node);
+            const index = getVisibleNodeBucketIndex(state, this);
+            const buckets = index.buckets;
+            const bucketSize = index.bucketSize;
+            const minBucketX = Math.floor(minX / bucketSize);
+            const maxBucketX = Math.floor(maxX / bucketSize);
+            const minBucketY = Math.floor((minProjectedY - cameraZ) / bucketSize);
+            const maxBucketY = Math.floor((maxProjectedY - cameraZ) / bucketSize);
+            let candidates = 0;
+            for (let bx = minBucketX; bx <= maxBucketX; bx++) {
+                for (let by = minBucketY; by <= maxBucketY; by++) {
+                    const bucket = buckets.get(`${bx},${by}`);
+                    if (!Array.isArray(bucket)) continue;
+                    for (let i = 0; i < bucket.length; i++) {
+                        const node = bucket[i];
+                        candidates += 1;
+                        if (!node) continue;
+                        if (node.x < minX || node.x > maxX) continue;
+                        const nodeBaseZ = typeof this.getNodeBaseZ === "function"
+                            ? this.getNodeBaseZ(node)
+                            : (Number.isFinite(node.baseZ) ? Number(node.baseZ) : 0);
+                        const projectedY = Number(node.y) - (nodeBaseZ - cameraZ);
+                        if (projectedY < minProjectedY || projectedY > maxProjectedY) continue;
+                        visible.push(node);
+                    }
+                }
             }
+            state.visibleNodeBucketLastCandidates = candidates;
             return visible;
+        };
+        map.getVisibleNodeBucketIndexStats = function getVisibleNodeBucketIndexStats() {
+            const state = this._prototypeSectionState;
+            const index = state && state.visibleNodeBucketIndex;
+            return {
+                bucketSize: index && Number.isFinite(index.bucketSize) ? Number(index.bucketSize) : visibleNodeBucketWorldSize,
+                bucketCount: index && index.buckets instanceof Map ? index.buckets.size : 0,
+                candidates: Number(state && state.visibleNodeBucketLastCandidates) || 0,
+                dirty: !!(state && state.visibleNodeBucketIndexDirty === true),
+                version: Number(state && state.visibleNodeBucketIndexVersion) || 0,
+                builtVersion: Number(state && state.visibleNodeBucketIndexBuiltVersion) || 0
+            };
         };
         map._baseWorldToNode = (typeof map.worldToNode === "function") ? map.worldToNode.bind(map) : null;
         map._baseWorldToNodeOrMidpoint = (typeof map.worldToNodeOrMidpoint === "function") ? map.worldToNodeOrMidpoint.bind(map) : null;
