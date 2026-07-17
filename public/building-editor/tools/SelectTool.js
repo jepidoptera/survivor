@@ -638,8 +638,8 @@ export class SelectTool {
         object.x = Number(placement.faceCenter.x);
         object.y = Number(placement.faceCenter.y);
         object.z = floorElevation + Number(placement.zOffset);
-        object.groundPlaneHitboxOverridePoints = Array.isArray(placement.groundPlaneHitboxOverridePoints)
-            ? placement.groundPlaneHitboxOverridePoints.map((point) => ({ x: Number(point.x), y: Number(point.y) }))
+        object.shadowBoxOverridePoints = Array.isArray(placement.shadowBoxOverridePoints)
+            ? placement.shadowBoxOverridePoints.map((point) => ({ x: Number(point.x), y: Number(point.y) }))
             : undefined;
         return object;
     }
@@ -779,7 +779,7 @@ export class SelectTool {
         const category = String(object.category || "").trim().toLowerCase();
         const halfWidth = width * 0.5;
         const hitboxHalfThickness = Math.max(0.001, wallThickness * 0.5) * (category === "doors" ? 1.1 : 1);
-        object.groundPlaneHitboxOverridePoints = [
+        object.shadowBoxOverridePoints = [
             { x: Number(center.x) - ux * halfWidth + nx * hitboxHalfThickness, y: Number(center.y) - uy * halfWidth + ny * hitboxHalfThickness },
             { x: Number(center.x) + ux * halfWidth + nx * hitboxHalfThickness, y: Number(center.y) + uy * halfWidth + ny * hitboxHalfThickness },
             { x: Number(center.x) + ux * halfWidth - nx * hitboxHalfThickness, y: Number(center.y) + uy * halfWidth - ny * hitboxHalfThickness },

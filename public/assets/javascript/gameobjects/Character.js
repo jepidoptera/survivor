@@ -223,8 +223,8 @@ class Character {
         // Computed dynamically via getter from current this.size.
         
         // Create hitboxes
-        this.visualHitbox = new CircleHitbox(this.x, this.y, this.visualRadius);
-        this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
+        this.touchBox = new CircleHitbox(this.x, this.y, this.visualRadius);
+        this.shadowBox = new CircleHitbox(this.x, this.y, this.groundRadius);
         this._recordVisitedNode(this.node, "spawn");
 
         if (this.map && typeof this.map.registerGameObject === "function") {
@@ -423,18 +423,18 @@ class Character {
     
     updateHitboxes() {
         // Update hitbox positions to match character position
-        if (this.visualHitbox) {
-            this.visualHitbox.x = this.x;
-            this.visualHitbox.y = this.y;
+        if (this.touchBox) {
+            this.touchBox.x = this.x;
+            this.touchBox.y = this.y;
             if (Number.isFinite(this.visualRadius)) {
-                this.visualHitbox.radius = this.visualRadius;
+                this.touchBox.radius = this.visualRadius;
             }
         }
-        if (this.groundPlaneHitbox) {
-            this.groundPlaneHitbox.x = this.x;
-            this.groundPlaneHitbox.y = this.y;
+        if (this.shadowBox) {
+            this.shadowBox.x = this.x;
+            this.shadowBox.y = this.y;
             if (Number.isFinite(this.groundRadius)) {
-                this.groundPlaneHitbox.radius = this.groundRadius;
+                this.shadowBox.radius = this.groundRadius;
             }
         }
     }
@@ -473,7 +473,7 @@ class Character {
 
     _buildHitboxDebugCandidateSummary(entity, sampleX, sampleY, sampleRadius, options = {}) {
         if (!entity) return null;
-        const hitbox = entity.groundPlaneHitbox || entity.visualHitbox || entity.hitbox || null;
+        const hitbox = entity.shadowBox || entity.touchBox || entity.hitbox || null;
         const entityRadius = Number.isFinite(entity.groundRadius)
             ? Math.max(0, Number(entity.groundRadius))
             : (Number.isFinite(entity.visualRadius) ? Math.max(0, Number(entity.visualRadius)) : 0);
@@ -597,8 +597,8 @@ class Character {
             : this.getStrikeDistance(target, options.strikeRange);
         if (!Number.isFinite(strikeDistance) || strikeDistance < 0) return false;
 
-        const ownHitbox = this.groundPlaneHitbox || this.visualHitbox || null;
-        const targetHitbox = target.groundPlaneHitbox || target.visualHitbox || null;
+        const ownHitbox = this.shadowBox || this.touchBox || null;
+        const targetHitbox = target.shadowBox || target.touchBox || null;
         if (
             ownHitbox &&
             targetHitbox &&
@@ -1021,7 +1021,7 @@ class Character {
     }
 
     doesObjectBlockVectorMovement(obj, _options = {}) {
-        if (!obj || obj === this || obj.gone || !obj.groundPlaneHitbox) return false;
+        if (!obj || obj === this || obj.gone || !obj.shadowBox) return false;
         if (typeof globalThis !== "undefined" && typeof globalThis.doesObjectBlockPassage === "function") {
             return !!globalThis.doesObjectBlockPassage(obj);
         }
@@ -1132,7 +1132,7 @@ class Character {
         if (!otherCharacter || otherCharacter === this) return false;
         if (otherCharacter === options.target || otherCharacter === options.ignoreCharacter) return false;
         if (otherCharacter.gone || otherCharacter.dead) return false;
-        return !!otherCharacter.groundPlaneHitbox;
+        return !!otherCharacter.shadowBox;
     }
 
     isUsingHitboxMovement() {
@@ -1346,7 +1346,7 @@ class Character {
         const nearbyCharacters = Array.isArray(movementContext.nearbyCharacters)
             ? movementContext.nearbyCharacters
             : [];
-        if (nearbyCharacters.length === 0 || !this.groundPlaneHitbox) return;
+        if (nearbyCharacters.length === 0 || !this.shadowBox) return;
 
         let changed = false;
         const interactionLog = (this._hitboxCollisionDebug && Array.isArray(this._hitboxCollisionDebug.dynamicCharacterInteractions))
@@ -1355,9 +1355,9 @@ class Character {
 
         for (let i = 0; i < nearbyCharacters.length; i++) {
             const other = nearbyCharacters[i];
-            if (!this.doesCharacterBlockVectorMovement(other, options) || !other.groundPlaneHitbox) continue;
+            if (!this.doesCharacterBlockVectorMovement(other, options) || !other.shadowBox) continue;
 
-            const collision = other.groundPlaneHitbox.intersects(this.groundPlaneHitbox);
+            const collision = other.shadowBox.intersects(this.shadowBox);
             if (!collision || collision.pushX === undefined || collision.pushY === undefined) continue;
 
             const overlap = Math.hypot(collision.pushX, collision.pushY);
@@ -1534,9 +1534,9 @@ class Character {
             ? this._hitboxCollisionDebug.staticCollisions
             : [];
         const shouldTestObjectHitbox = (obj, hitbox) => {
-            if (!obj || !obj.groundPlaneHitbox || typeof obj.groundPlaneHitbox.intersects !== "function") return false;
-            if (typeof obj.groundPlaneHitbox.getBounds !== "function") return true;
-            const bounds = obj.groundPlaneHitbox.getBounds();
+            if (!obj || !obj.shadowBox || typeof obj.shadowBox.intersects !== "function") return false;
+            if (typeof obj.shadowBox.getBounds !== "function") return true;
+            const bounds = obj.shadowBox.getBounds();
             if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y) ||
                 !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) {
                 return true;
@@ -1559,8 +1559,8 @@ class Character {
                     pushY: -(velocityY / velocityLen) * 0.05
                 };
             }
-            if (obj && obj.groundPlaneHitbox && typeof obj.groundPlaneHitbox.getBounds === "function") {
-                const bounds = obj.groundPlaneHitbox.getBounds();
+            if (obj && obj.shadowBox && typeof obj.shadowBox.getBounds === "function") {
+                const bounds = obj.shadowBox.getBounds();
                 if (bounds && Number.isFinite(bounds.x) && Number.isFinite(bounds.y) &&
                     Number.isFinite(bounds.width) && Number.isFinite(bounds.height)) {
                     const centerX = bounds.x + bounds.width * 0.5;
@@ -1583,7 +1583,7 @@ class Character {
         };
         const resolveCollision = (obj, hitbox) => {
             if (!shouldTestObjectHitbox(obj, hitbox)) return null;
-            const collision = obj.groundPlaneHitbox.intersects(hitbox);
+            const collision = obj.shadowBox.intersects(hitbox);
             if (!collision || collision.pushX === undefined) return null;
             let pushX = Number(collision.pushX) || 0;
             let pushY = Number(collision.pushY) || 0;
@@ -1606,7 +1606,8 @@ class Character {
                 ...options,
                 actor: this,
                 traversalLayer: this.getCurrentMovementLayer(options),
-                terrainCollisionPolygons: nearbyTerrainPolygons
+                terrainCollisionPolygons: nearbyTerrainPolygons,
+                bridgeRoads: nearbyBridgeRoads
             });
         };
         const addTerrainCollision = (collision, iteration, sampleX, sampleY) => {
@@ -2658,8 +2659,8 @@ class Character {
             }
             for (let j = 0; j < nearbyObjects.length; j++) {
                 const obj = nearbyObjects[j];
-                if (!obj || !obj.groundPlaneHitbox) continue;
-                const collision = obj.groundPlaneHitbox.intersects(testHitbox);
+                if (!obj || !obj.shadowBox) continue;
+                const collision = obj.shadowBox.intersects(testHitbox);
                 if (collision && collision.pushX !== undefined) {
                     return false;
                 }

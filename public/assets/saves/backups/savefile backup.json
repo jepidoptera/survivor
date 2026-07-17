@@ -60209,7 +60209,7 @@
         24
       ]
     ],
-    "groundPlaneHitbox": {
+    "shadowBox": {
       "points": [
         {
           "x": 182.37531489055476,

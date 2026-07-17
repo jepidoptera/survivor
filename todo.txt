@@ -53,19 +53,20 @@ X choose spells from menu on startup
    -spikes
    -shield
    -maze
-   -invisibility
+   -invisibility:
+      level 1: 
    -omnivision
-   /imps? squirrels?
+   /squirrels?
     phase through walls
-   /move
+   /telekinesis
     flying:
-     level 1: swimming
-     level 2: walking on water
-     level 3: super jump
-     level 4: gravity cushion
-     level 5: falling with style
-     level 6: gliding
-     level 7: flying
+    X level 1: swimming
+    X level 2: walking on water
+      level 3: super jump
+      level 4: gravity cushion
+      level 5: falling with style
+      level 6: gliding
+      level 7: flying
 
 
 X invisibility aura
@@ -81,7 +82,8 @@ X see-through windows
 X revamp close combat - use hitboxes instead of hex tiles
 X infinite map extent
 
-  phase through walls
+
+X wizard drowns if he can't swim
 X placing a roof should designate a building
 X new building menu toolset
 X when a building is created, make a new floor fragment at the ground level.
@@ -170,6 +172,12 @@ X save generated building-owned floor nodes in building files so startup can reu
   npcs can't cross fragments
   powerups come back once you leave the area
 / delete legacy top-level saveData.staticObjects path; section-world saves should have one object persistence source, not duplicate old/prototype payloads (remove legacy loading capability, don't need it)
+X animals running through walls into buildings
+X npcs can't cross bridges
+  npcs are unreliable on upper floors (and maybe other places too)
+  loaded sections aren't determined right
+X grass flickers while moving or zooming
+  significant discontinuity when going into a building through a door.
 
 
 

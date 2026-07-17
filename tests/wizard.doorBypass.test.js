@@ -328,7 +328,7 @@ test("wizard movement context includes direct prototype building blockers withou
         height: 3,
         isPassable: false,
         gone: false,
-        groundPlaneHitbox: new PolygonHitbox([
+        shadowBox: new PolygonHitbox([
             { x: -1, y: -1 },
             { x: 1, y: -1 },
             { x: 1, y: 1 },
@@ -387,7 +387,7 @@ test("wizard does not bypass wall collisions just because the current position i
     const wizard = Object.create(Wizard.prototype);
     const context = {
         nearbyDoors: [createDoorEntry(doorHitbox, true)],
-        nearbyObjects: [{ groundPlaneHitbox: wallHitbox, isPassable: false }],
+        nearbyObjects: [{ shadowBox: wallHitbox, isPassable: false }],
         isPointInDoorHitboxFn(hitbox, x, y, radius = 0) {
             const probe = { type: "circle", x, y, radius };
             if (typeof hitbox.intersects === "function") {
@@ -419,7 +419,7 @@ test("wizard still bypasses wall collisions when the candidate position remains 
     const wizard = Object.create(Wizard.prototype);
     const context = {
         nearbyDoors: [createDoorEntry(doorHitbox, true)],
-        nearbyObjects: [{ groundPlaneHitbox: wallHitbox, isPassable: false }],
+        nearbyObjects: [{ shadowBox: wallHitbox, isPassable: false }],
         isPointInDoorHitboxFn(hitbox, x, y, radius = 0) {
             const probe = { type: "circle", x, y, radius };
             if (typeof hitbox.intersects === "function") {
@@ -459,7 +459,7 @@ test("wizard cannot keep bypassing by clipping the door endcap while sliding int
                 width: 3
             }
         }],
-        nearbyObjects: [{ groundPlaneHitbox: wallHitbox, isPassable: false }],
+        nearbyObjects: [{ shadowBox: wallHitbox, isPassable: false }],
         isPointInDoorHitboxFn(hitbox, x, y, radius = 0) {
             const probe = { type: "circle", x, y, radius };
             if (typeof hitbox.intersects === "function") {
@@ -513,7 +513,7 @@ test("wizard can still bypass through a narrow mounted door opening", () => {
                 width: 0.42
             }
         }],
-        nearbyObjects: [{ groundPlaneHitbox: wallHitbox, isPassable: false }],
+        nearbyObjects: [{ shadowBox: wallHitbox, isPassable: false }],
         isPointInDoorHitboxFn(hitbox, x, y, radius = 0) {
             const probe = { type: "circle", x, y, radius };
             if (typeof hitbox.intersects === "function") {
@@ -1059,7 +1059,7 @@ test("wizard can enter a thin mounted door opening before the center reaches the
                 width: 0.75
             }
         }],
-        nearbyObjects: [{ groundPlaneHitbox: wallHitbox, isPassable: false }],
+        nearbyObjects: [{ shadowBox: wallHitbox, isPassable: false }],
         isPointInDoorHitboxFn(hitbox, x, y, radius = 0) {
             const probe = { type: "circle", x, y, radius };
             if (typeof hitbox.intersects === "function") {

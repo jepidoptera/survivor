@@ -90,8 +90,8 @@ function installTreeGrowHarness(nodeObjects = []) {
     };
     globalThis.keysPressed = {};
 
-    delete require.cache[require.resolve("../public/assets/javascript/spells/TreeGrow.js")];
-    require("../public/assets/javascript/spells/TreeGrow.js");
+    delete require.cache[require.resolve("../public/assets/javascript/spells/editor/TreeGrow.js")];
+    require("../public/assets/javascript/spells/editor/TreeGrow.js");
 
     return {
         TreeGrow: globalThis.TreeGrow,
@@ -114,7 +114,7 @@ test("tree placement ignores passable node occupants", () => {
         type: "buildingExteriorProxy",
         blocksTile: false,
         isPassable: true,
-        groundPlaneHitbox: new CircleHitbox(10, 20, 50)
+        shadowBox: new CircleHitbox(10, 20, 50)
     }]);
     try {
         const spell = new harness.TreeGrow();
@@ -132,7 +132,7 @@ test("tree placement allows non-overlapping blocking hitboxes in the same node",
         type: "wallSection",
         isPassable: false,
         blocksTile: false,
-        groundPlaneHitbox: new PolygonHitbox([
+        shadowBox: new PolygonHitbox([
             { x: 12, y: 22 },
             { x: 13, y: 22 },
             { x: 13, y: 23 },
@@ -155,7 +155,7 @@ test("tree placement rejects actual blocking hitbox overlap", () => {
         type: "wallSection",
         isPassable: false,
         blocksTile: false,
-        groundPlaneHitbox: new PolygonHitbox([
+        shadowBox: new PolygonHitbox([
             { x: 9.75, y: 19.75 },
             { x: 10.25, y: 19.75 },
             { x: 10.25, y: 20.25 },

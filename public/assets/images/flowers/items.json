@@ -7,20 +7,23 @@
     "renderDepthOffset": 0,
     "blocksTile": false,
     "isPassable": true,
-    "castsLosShadows": true,
+    "castsLosShadows": false,
     "rotationAxis": "none",
     "anchor": {
         "x": 0.5,
         "y": 0.5
       },
     "spellTargetPoint": [0.5, 0.5],
-    "groundPlaneHitbox": {
-      "type": "none"
-    },
-    "visualHitbox": {
+    "shadowBox": {
       "type": "circle",
       "xOffset": 0,
-      "yOffsetFromHeightMultiplier": -0.25,
+      "yOffsetFromHeightMultiplier": -0.4,
+      "radiusFromMaxDimensionMultiplier": 0.24
+    },
+    "touchBox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffsetFromHeightMultiplier": -0.4,
       "radiusFromMaxDimensionMultiplier": 0.5
     }
   },
@@ -37,10 +40,10 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "none"
       },
-      "visualHitbox": {
+      "touchBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.25,
@@ -55,17 +58,21 @@
       "renderDepthOffset": 0,
       "blocksTile": false,
       "isPassable": true,
+      "castsLosShadows": true,
       "anchor": {
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
-        "type": "none"
-      },
-      "visualHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.24
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.4,
         "radiusFromMaxDimensionMultiplier": 0.5
       }
     },
@@ -81,10 +88,10 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "none"
       },
-      "visualHitbox": {
+      "touchBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.25,
@@ -98,18 +105,22 @@
       "height": 1,
       "renderDepthOffset": 0,
       "blocksTile": false,
+      "castsLosShadows": true,
       "isPassable": true,
       "anchor": {
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
-        "type": "none"
-      },
-      "visualHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.24
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.4,
         "radiusFromMaxDimensionMultiplier": 0.5
       }
     },
@@ -125,13 +136,16 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
-        "type": "none"
-      },
-      "visualHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.24
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.4,
         "radiusFromMaxDimensionMultiplier": 0.5
       }
     },
@@ -147,10 +161,10 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "none"
       },
-      "visualHitbox": {
+      "touchBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.25,
@@ -163,17 +177,23 @@
       "width": 1,
       "height": 1,
       "renderDepthOffset": 0,
-      "blocksTile": false,
-      "isPassable": true,
+      "blocksTile": true,
+      "isPassable": false,
+      "castsLosShadows": true,
       "anchor": {
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": "none",
-      "visualHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.24
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.4,
         "radiusFromMaxDimensionMultiplier": 0.5
       }
     },
@@ -184,18 +204,22 @@
       "height": 1,
       "renderDepthOffset": 0,
       "blocksTile": false,
-      "isPassable": true,
+      "isPassable": false,
+      "castsLosShadows": true,
       "anchor": {
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
-        "type": "none"
-      },
-      "visualHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
+        "yOffsetFromHeightMultiplier": -0.5,
+        "radiusFromMaxDimensionMultiplier": 0.25
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.5,
         "radiusFromMaxDimensionMultiplier": 0.5
       }
     },
@@ -206,18 +230,21 @@
       "height": 1,
       "renderDepthOffset": 0,
       "blocksTile": false,
-      "isPassable": true,
+      "isPassable": false,
       "anchor": {
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
-        "type": "none"
-      },
-      "visualHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
+        "yOffsetFromHeightMultiplier": -0.5,
+        "radiusFromMaxDimensionMultiplier": 0.24
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.5,
         "radiusFromMaxDimensionMultiplier": 0.5
       }
     },
@@ -233,10 +260,10 @@
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "none"
       },
-      "visualHitbox": {
+      "touchBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.25,
@@ -251,17 +278,21 @@
       "renderDepthOffset": 0,
       "blocksTile": false,
       "isPassable": true,
+      "castsLosShadows": true,
       "anchor": {
         "x": 0.5,
         "y": 0.5
       },
-      "groundPlaneHitbox": {
-        "type": "none"
-      },
-      "visualHitbox": {
+      "shadowBox": {
         "type": "circle",
         "xOffset": 0,
-        "yOffsetFromHeightMultiplier": -0.25,
+        "yOffsetFromHeightMultiplier": -0.5,
+        "radiusFromMaxDimensionMultiplier": 0.24
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.5,
         "radiusFromMaxDimensionMultiplier": 0.5
       }
     }

@@ -18,6 +18,8 @@
             this.image.src = "./assets/images/animals/squirrel.png";
             this.speed = 7;
             this.range = 9999;
+            this.damage = 0;
+            this.magicCost = 0;
             this.gravity = 0;
             this.size = 0;
             this.apparentSize = 0;
@@ -31,6 +33,19 @@
         cast(targetX, targetY) {
             const caster = global.wizard || null;
             if (!caster) return this;
+            const magicCost = Number.isFinite(this.magicCost) ? Math.max(0, Number(this.magicCost)) : 0;
+            if (global.Spell && typeof global.Spell.canAffordMagicCost === "function" && !global.Spell.canAffordMagicCost(magicCost, caster)) {
+                if (typeof global.Spell.indicateInsufficientMagic === "function") {
+                    global.Spell.indicateInsufficientMagic();
+                }
+                if (typeof global.message === "function") {
+                    global.message("Not enough magic to cast Attack Squirrel!");
+                }
+                return this;
+            }
+            if (global.Spell && typeof global.Spell.spendMagicCost === "function") {
+                global.Spell.spendMagicCost(magicCost, caster);
+            }
             AttackSquirrel.debugLog("cast", {
                 casterX: Number(caster.x),
                 casterY: Number(caster.y),
@@ -73,6 +88,16 @@
                 launchDx = Number(caster.direction && caster.direction.x) || 1;
                 launchDy = Number(caster.direction && caster.direction.y) || 0;
             }
+            const maxRange = Number.isFinite(this.range) ? Math.max(0.001, Number(this.range)) : 9999;
+            if (launchDistance > maxRange) {
+                const fraction = maxRange / launchDistance;
+                worldX = casterX + launchDx * fraction;
+                worldY = casterY + launchDy * fraction;
+                if (typeof mapRef.wrapWorldX === "function") worldX = mapRef.wrapWorldX(worldX);
+                if (typeof mapRef.wrapWorldY === "function") worldY = mapRef.wrapWorldY(worldY);
+                launchDx *= fraction;
+                launchDy *= fraction;
+            }
             const launchLength = Math.max(1e-6, Math.hypot(launchDx, launchDy));
             let startX = casterX + (launchDx / launchLength) * 0.65;
             let startY = casterY + (launchDy / launchLength) * 0.65;
@@ -99,8 +124,13 @@
             if (typeof squirrel.configureAsPlayerSummon === "function") {
                 squirrel.configureAsPlayerSummon({
                     caster,
-                    durationMs: AttackSquirrel.SUMMON_DURATION_MS
+                    durationMs: Number.isFinite(this.summonDurationMs)
+                        ? Math.max(0, Number(this.summonDurationMs))
+                        : AttackSquirrel.SUMMON_DURATION_MS
                 });
+            }
+            if (Number.isFinite(this.damage) && this.damage > 0) {
+                squirrel.damage = Number(this.damage);
             }
             if (typeof squirrel.launchAsPlayerSummon === "function") {
                 squirrel.launchAsPlayerSummon({

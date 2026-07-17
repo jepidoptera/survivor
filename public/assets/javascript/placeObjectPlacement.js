@@ -304,7 +304,7 @@
             snappedY,
             snappedZ,
             snappedRotationDeg: rotDeg,
-            wallGroundHitboxPoints: [wrapPoint(mapRef, p1), wrapPoint(mapRef, p2), wrapPoint(mapRef, p3), wrapPoint(mapRef, p4)],
+            wallShadowBoxPoints: [wrapPoint(mapRef, p1), wrapPoint(mapRef, p2), wrapPoint(mapRef, p3), wrapPoint(mapRef, p4)],
             wallHeight,
             wallBottomZ,
             wallAnchorZ,

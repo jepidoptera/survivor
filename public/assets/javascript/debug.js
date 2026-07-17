@@ -6,9 +6,75 @@ let debugMode = false; // Toggle all debug graphics (hitboxes, grid, animal mark
 if (typeof globalThis !== "undefined") {
     globalThis.debugMode = debugMode;
 }
-let showTerrainPaintDiagnostics = true; // Terrain-colored polygon outlines plus pink/yellow terrain edit diagnostics.
+const TERRAIN_POLYGON_OUTLINES_STORAGE_KEY = "survivor-terrain-polygon-outlines";
+const STORED_TERRAIN_MARKERS_STORAGE_KEY = "survivor-stored-terrain-markers";
+
+function getDebugLocalStorage() {
+    if (typeof globalThis === "undefined") return null;
+    try {
+        return globalThis.localStorage || null;
+    } catch (err) {
+        return null;
+    }
+}
+
+function readStoredTerrainPolygonOutlinesVisible(defaultValue = true) {
+    const storage = getDebugLocalStorage();
+    if (!storage || typeof storage.getItem !== "function") return !!defaultValue;
+    let raw = null;
+    try {
+        raw = storage.getItem(TERRAIN_POLYGON_OUTLINES_STORAGE_KEY);
+    } catch (err) {
+        return !!defaultValue;
+    }
+    if (raw === "1" || raw === "true") return true;
+    if (raw === "0" || raw === "false") return false;
+    return !!defaultValue;
+}
+
+function writeStoredTerrainPolygonOutlinesVisible(enabled) {
+    const storage = getDebugLocalStorage();
+    if (!storage || typeof storage.setItem !== "function") return false;
+    try {
+        storage.setItem(TERRAIN_POLYGON_OUTLINES_STORAGE_KEY, enabled ? "1" : "0");
+        return true;
+    } catch (err) {
+        return false;
+    }
+}
+
+function readStoredTerrainMarkersVisible(defaultValue = false) {
+    const storage = getDebugLocalStorage();
+    if (!storage || typeof storage.getItem !== "function") return !!defaultValue;
+    let raw = null;
+    try {
+        raw = storage.getItem(STORED_TERRAIN_MARKERS_STORAGE_KEY);
+    } catch (err) {
+        return !!defaultValue;
+    }
+    if (raw === "1" || raw === "true") return true;
+    if (raw === "0" || raw === "false") return false;
+    return !!defaultValue;
+}
+
+function writeStoredTerrainMarkersVisible(enabled) {
+    const storage = getDebugLocalStorage();
+    if (!storage || typeof storage.setItem !== "function") return false;
+    try {
+        storage.setItem(STORED_TERRAIN_MARKERS_STORAGE_KEY, enabled ? "1" : "0");
+        return true;
+    } catch (err) {
+        return false;
+    }
+}
+
+let showTerrainPaintDiagnostics = readStoredTerrainPolygonOutlinesVisible(true); // Terrain-colored polygon outlines.
+let showTerrainPaintRepairPaths = false; // Pink/yellow terrain edit repair-path diagnostics.
+let showStoredTerrainMarkers = readStoredTerrainMarkersVisible(false); // Per-node stored groundTextureId terrain markers.
 if (typeof globalThis !== "undefined") {
     globalThis.debugTerrainPolygonDiagnostics = showTerrainPaintDiagnostics;
+    globalThis.debugTerrainPaintRepairPaths = showTerrainPaintRepairPaths;
+    globalThis.debugStoredTerrainMarkers = showStoredTerrainMarkers;
 }
 const debugFreezePrototypeInteriorInvalidationFrame = false;
 if (typeof globalThis !== "undefined") {
@@ -868,12 +934,50 @@ function setLosDebugFillEnabled(enabled) {
     return losDebugFillEnabled;
 }
 
-function setTerrainPaintDiagnosticsVisible(enabled) {
+function setTerrainPaintDiagnosticsVisible(enabled, options = {}) {
     showTerrainPaintDiagnostics = !!enabled;
     if (typeof globalThis !== "undefined") {
         globalThis.debugTerrainPolygonDiagnostics = showTerrainPaintDiagnostics;
     }
+    if (!(options && options.skipPersist === true)) {
+        writeStoredTerrainPolygonOutlinesVisible(showTerrainPaintDiagnostics);
+    }
     return showTerrainPaintDiagnostics;
+}
+
+function setTerrainPaintRepairPathsVisible(enabled) {
+    showTerrainPaintRepairPaths = !!enabled;
+    if (typeof globalThis !== "undefined") {
+        globalThis.debugTerrainPaintRepairPaths = showTerrainPaintRepairPaths;
+    }
+    return showTerrainPaintRepairPaths;
+}
+
+function setStoredTerrainMarkersVisible(enabled, options = {}) {
+    showStoredTerrainMarkers = !!enabled;
+    if (typeof globalThis !== "undefined") {
+        globalThis.debugStoredTerrainMarkers = showStoredTerrainMarkers;
+    }
+    if (!(options && options.skipPersist === true)) {
+        writeStoredTerrainMarkersVisible(showStoredTerrainMarkers);
+    }
+    return showStoredTerrainMarkers;
+}
+
+function toggleTerrainPaintRepairPaths() {
+    return setTerrainPaintRepairPathsVisible(!showTerrainPaintRepairPaths);
+}
+
+function toggleStoredTerrainMarkers() {
+    return setStoredTerrainMarkersVisible(!showStoredTerrainMarkers);
+}
+
+function setTerrainPolygonOutlinesVisible(enabled) {
+    return setTerrainPaintDiagnosticsVisible(enabled);
+}
+
+function toggleTerrainPolygonOutlines() {
+    return setTerrainPolygonOutlinesVisible(!showTerrainPaintDiagnostics);
 }
 
 function setPickerScreenVisible(enabled) {
@@ -947,6 +1051,8 @@ class DebugViewSettings {
         });
         this._defineBooleanSetting("showLosFill", () => losDebugFillEnabled, value => setLosDebugFillEnabled(value));
         this._defineBooleanSetting("showTerrainPaintDiagnostics", () => showTerrainPaintDiagnostics, value => setTerrainPaintDiagnosticsVisible(value));
+        this._defineBooleanSetting("showTerrainPaintRepairPaths", () => showTerrainPaintRepairPaths, value => setTerrainPaintRepairPathsVisible(value));
+        this._defineBooleanSetting("showStoredTerrainMarkers", () => showStoredTerrainMarkers, value => setStoredTerrainMarkersVisible(value));
         this._defineBooleanSetting("showPickerScreen", () => !!(typeof globalThis !== "undefined" && globalThis.renderingShowPickerScreen), value => setPickerScreenVisible(value));
         this._defineBooleanSetting("showSectionWorldSeams", () => getSectionWorldSeamsVisible(), value => setSectionWorldSeamsVisible(value));
         this._defineBooleanSetting("showSectionSeams", () => getSectionWorldSeamsVisible(), value => setSectionWorldSeamsVisible(value));
@@ -983,6 +1089,8 @@ class DebugViewSettings {
             showVisualHitboxes: this.showVisualHitboxes,
             showLosFill: this.showLosFill,
             showTerrainPaintDiagnostics: this.showTerrainPaintDiagnostics,
+            showTerrainPaintRepairPaths: this.showTerrainPaintRepairPaths,
+            showStoredTerrainMarkers: this.showStoredTerrainMarkers,
             showPickerScreen: this.showPickerScreen,
             showSectionWorldSeams: this.showSectionWorldSeams,
             showSectionSeams: this.showSectionSeams,
@@ -1099,6 +1207,28 @@ if (typeof globalThis !== "undefined") {
         toggleTerrainPaintDiagnostics: () => {
             debugViewSettings.showTerrainPaintDiagnostics = !debugViewSettings.showTerrainPaintDiagnostics;
             return debugViewSettings.showTerrainPaintDiagnostics;
+        },
+        setTerrainPaintRepairPathsVisible: visible => {
+            debugViewSettings.showTerrainPaintRepairPaths = !!visible;
+            return debugViewSettings.showTerrainPaintRepairPaths;
+        },
+        toggleTerrainPaintRepairPaths: () => {
+            debugViewSettings.showTerrainPaintRepairPaths = !debugViewSettings.showTerrainPaintRepairPaths;
+            return debugViewSettings.showTerrainPaintRepairPaths;
+        },
+        setStoredTerrainMarkersVisible: visible => {
+            debugViewSettings.showStoredTerrainMarkers = !!visible;
+            return debugViewSettings.showStoredTerrainMarkers;
+        },
+        toggleStoredTerrainMarkers: () => {
+            debugViewSettings.showStoredTerrainMarkers = !debugViewSettings.showStoredTerrainMarkers;
+            return debugViewSettings.showStoredTerrainMarkers;
+        },
+        setTerrainPolygonOutlinesVisible: visible => setTerrainPolygonOutlinesVisible(visible),
+        toggleTerrainPolygonOutlines: () => toggleTerrainPolygonOutlines(),
+        terrainPolygonOutlines(visible) {
+            if (arguments.length === 0) return debugViewSettings.showTerrainPaintDiagnostics;
+            return setTerrainPolygonOutlinesVisible(visible);
         }
     };
     globalThis.DebugView = debugView;
@@ -1115,6 +1245,16 @@ if (typeof globalThis !== "undefined") {
     globalThis.setPerfInstrumentationEnabled = setPerfInstrumentationEnabled;
     globalThis.describePerfInstrumentation = describePerfInstrumentation;
     globalThis.setTerrainPaintDiagnosticsVisible = setTerrainPaintDiagnosticsVisible;
+    globalThis.setTerrainPaintRepairPathsVisible = setTerrainPaintRepairPathsVisible;
+    globalThis.toggleTerrainPaintRepairPaths = toggleTerrainPaintRepairPaths;
+    globalThis.setStoredTerrainMarkersVisible = setStoredTerrainMarkersVisible;
+    globalThis.toggleStoredTerrainMarkers = toggleStoredTerrainMarkers;
+    globalThis.setTerrainPolygonOutlinesVisible = setTerrainPolygonOutlinesVisible;
+    globalThis.toggleTerrainPolygonOutlines = toggleTerrainPolygonOutlines;
+    globalThis.terrainPolygonOutlines = function terrainPolygonOutlines(visible) {
+        if (arguments.length === 0) return debugViewSettings.showTerrainPaintDiagnostics;
+        return setTerrainPolygonOutlinesVisible(visible);
+    };
 }
 
 if (typeof globalThis !== "undefined" && typeof globalThis.setLosDebugFillEnabled !== "function") {
@@ -1375,17 +1515,17 @@ function drawHexGrid(redraw = true) {
 
 function drawGroundPlaneHitboxes(redraw = true) {
     if (!debugMode) {
-        if (groundPlaneHitboxGraphics) groundPlaneHitboxGraphics.visible = false;
+        if (shadowBoxGraphics) shadowBoxGraphics.visible = false;
         return;
     }
     if (!redraw) return;
 
-    if (!groundPlaneHitboxGraphics) {
-        groundPlaneHitboxGraphics = new PIXI.Graphics();
-        hitboxLayer.addChild(groundPlaneHitboxGraphics);
+    if (!shadowBoxGraphics) {
+        shadowBoxGraphics = new PIXI.Graphics();
+        hitboxLayer.addChild(shadowBoxGraphics);
     }
-    groundPlaneHitboxGraphics.visible = true;
-    groundPlaneHitboxGraphics.clear();
+    shadowBoxGraphics.visible = true;
+    shadowBoxGraphics.clear();
 
     const { topLeftNode, bottomRightNode } = getViewportNodeCorners();
     if (!topLeftNode || !bottomRightNode) return;
@@ -1402,7 +1542,7 @@ function drawGroundPlaneHitboxes(redraw = true) {
             const node = map.nodes[x][y];
             if (node.objects && node.objects.length > 0) {
                 node.objects.forEach(obj => {
-                    if (obj.groundPlaneHitbox) {
+                    if (obj.shadowBox) {
                         objectsWithGroundHitboxes.add(obj);
                     }
                 });
@@ -1410,18 +1550,18 @@ function drawGroundPlaneHitboxes(redraw = true) {
         }
     }
 
-    if (wizard && wizard.groundPlaneHitbox) {
+    if (wizard && wizard.shadowBox) {
         objectsWithGroundHitboxes.add(wizard);
     }
 
     animals.forEach(animal => {
-        if (animal && !animal.dead && !animal.gone && !animal.vanishing && animal._onScreen && animal.groundPlaneHitbox) {
+        if (animal && !animal.dead && !animal.gone && !animal.vanishing && animal._onScreen && animal.shadowBox) {
             objectsWithGroundHitboxes.add(animal);
         }
     });
 
     objectsWithGroundHitboxes.forEach(obj => {
-        const hitbox = obj.groundPlaneHitbox;
+        const hitbox = obj.shadowBox;
         const hitboxZ = resolveDebugHitboxWorldZ(obj);
         const isWindow = (
             obj &&
@@ -1429,21 +1569,21 @@ function drawGroundPlaneHitboxes(redraw = true) {
             typeof obj.category === "string" &&
             obj.category.trim().toLowerCase() === "windows"
         );
-        groundPlaneHitboxGraphics.lineStyle(2, isWindow ? 0xff00aa : 0x000000, 0.8);
+        shadowBoxGraphics.lineStyle(2, isWindow ? 0xff00aa : 0x000000, 0.8);
 
         if (hitbox instanceof CircleHitbox) {
             const center = worldToScreen({x: hitbox.x, y: hitbox.y, z: hitboxZ});
             const radiusX = hitbox.radius * viewscale;
             const radiusY = hitbox.radius * viewscale * xyratio;
-            groundPlaneHitboxGraphics.drawEllipse(center.x, center.y, radiusX, radiusY);
+            shadowBoxGraphics.drawEllipse(center.x, center.y, radiusX, radiusY);
         } else if (hitbox instanceof PolygonHitbox) {
             const screenPoints = hitbox.points.map(v => worldToScreen({x: v.x, y: v.y, z: hitboxZ}));
             if (screenPoints.length > 0) {
-                groundPlaneHitboxGraphics.moveTo(screenPoints[0].x, screenPoints[0].y);
+                shadowBoxGraphics.moveTo(screenPoints[0].x, screenPoints[0].y);
                 for (let i = 1; i < screenPoints.length; i++) {
-                    groundPlaneHitboxGraphics.lineTo(screenPoints[i].x, screenPoints[i].y);
+                    shadowBoxGraphics.lineTo(screenPoints[i].x, screenPoints[i].y);
                 }
-                groundPlaneHitboxGraphics.closePath();
+                shadowBoxGraphics.closePath();
             }
         }
     });
@@ -1566,7 +1706,7 @@ function drawHitboxes(redraw = true) {
         if (showVisualHitboxes && onscreenObjects.size > 0) {
             onscreenObjects.forEach((obj) => {
                 if (!obj) return;
-                const hitbox = obj.visualHitbox || obj.hitbox;
+                const hitbox = obj.touchBox || obj.hitbox;
                 if (!hitbox) return;
 
                 if (hitbox instanceof PolygonHitbox) {
@@ -1618,9 +1758,9 @@ function drawHitboxes(redraw = true) {
 
     if (wizard) {
         if (showVisualHitboxes) {
-            drawDebugHitboxShape(wizard.visualHitbox, 0x00ffff, 0.95, wizard);
+            drawDebugHitboxShape(wizard.touchBox, 0x00ffff, 0.95, wizard);
         }
-        drawDebugHitboxShape(wizard.groundPlaneHitbox, 0xffffff, 0.95, wizard);
+        drawDebugHitboxShape(wizard.shadowBox, 0xffffff, 0.95, wizard);
 
         if (Number.isFinite(wizard.x) && Number.isFinite(wizard.y)) {
             const center = worldToScreen({x: wizard.x, y: wizard.y, z: resolveDebugHitboxWorldZ(wizard)});
@@ -1636,8 +1776,8 @@ function drawHitboxes(redraw = true) {
         onscreenObjects.forEach(obj => {
             if (!obj || obj.type !== "firewall") return;
             const fireHitbox = showVisualHitboxes
-                ? (obj.visualHitbox || obj.groundPlaneHitbox || obj.hitbox)
-                : (obj.groundPlaneHitbox || obj.hitbox);
+                ? (obj.touchBox || obj.shadowBox || obj.hitbox)
+                : (obj.shadowBox || obj.hitbox);
             drawDebugHitboxShape(fireHitbox, 0xff3300, 0.95, obj);
         });
     }

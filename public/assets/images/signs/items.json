@@ -12,8 +12,8 @@
       "x": 0.5,
       "y": 1
     },
-    "groundPlaneHitbox": "none",
-    "visualHitbox": {
+    "shadowBox": "none",
+    "touchBox": {
       "type": "circle",
       "xOffset": 0,
       "yOffsetFromHeightMultiplier": -0.2,

@@ -40,11 +40,14 @@ test("grass depth shader samples root mask and writes seed depth per fragment", 
     const source = fs.readFileSync(shaderPath, "utf8");
     assert.match(source, /texture\(uRootMask,\s*maskUv\)\.r/);
     assert.match(source, /uniform vec2 uSeedCameraWorld;/);
+    assert.match(source, /uniform vec2 uRootMaskSize;/);
+    assert.match(source, /uniform vec2 uRootMaskWorldOrigin;/);
     assert.match(source, /const int MAX_GRASS_DEPTH_STEPS = 80;/);
     assert.match(source, /const int MAX_GRASS_HALF_WIDTH_STEPS = 6;/);
     assert.doesNotMatch(source, /BLADE_TOP_DEPTH_BIAS/);
     assert.match(source, /uniform float uBladeBaseHalfWidthPx;/);
-    assert.match(source, /vec2 maskUv = seedScreen \/ screenSize;/);
+    assert.match(source, /vec2 maskUv = rootMaskUvForWorld\(seedScreenToWorld\(seedScreen\)\);/);
+    assert.match(source, /vec2 rootMaskUvForWorld\(vec2 seedWorld\)/);
     assert.match(source, /seedScreenToSnappedWorld\(seedScreen\)/);
     assert.match(source, /bestSeedScreen = seedScreen;/);
     assert.match(source, /uniform vec4 uTint;/);
@@ -120,6 +123,8 @@ test("grass depth renderer creates two texture layers that share mask and depth 
     assert.match(renderer, /GRASS_DEPTH_LAYER_CONFIGS\.map/);
     assert.match(renderer, /mesh\.name = `grassDepthScreenMesh:\$\{layerName\}`;/);
     assert.match(renderer, /uniforms\.uRootMask = rootMask;/);
+    assert.match(renderer, /uniforms\.uRootMaskSize\[0\] = rootMaskWindow\.width;/);
+    assert.match(renderer, /uniforms\.uRootMaskWorldOrigin\[0\] = rootMaskWindow\.originX;/);
     assert.match(renderer, /uniforms\.uDepthRange\[0\] = DEPTH_FAR_METRIC;/);
     assert.match(renderer, /uniforms\.uSeedWorldScale\[0\] = seedWorldScale;/);
     assert.match(renderer, /uniforms\.uSeedWorldScale\[1\] = seedWorldScale;/);
@@ -210,7 +215,7 @@ test("grass depth subtracts road path outline polygons from grass roots", () => 
     assert.equal(entries[0].baseZ, 0);
 });
 
-test("grass depth root mask signature is stable until camera or roots change", () => {
+test("grass depth root mask signature survives small camera moves inside overscan window", () => {
     const context = loadGrassDepthContext();
     const renderer = new context.RenderingGrassDepth.Renderer();
     const entries = renderer.collectGrassMaskEntries([
@@ -231,11 +236,14 @@ test("grass depth root mask signature is stable until camera or roots change", (
     const second = renderer.buildRootMaskSignature(adapter, entries, 800, 600, 0);
     assert.equal(first, second);
     adapter.camera.x += 1;
-    const moved = renderer.buildRootMaskSignature(adapter, entries, 800, 600, 0);
-    assert.notEqual(first, moved);
+    const smallMove = renderer.buildRootMaskSignature(adapter, entries, 800, 600, 0);
+    assert.equal(first, smallMove);
+    adapter.camera.x += 30;
+    const movedBeyondOverscan = renderer.buildRootMaskSignature(adapter, entries, 800, 600, 0);
+    assert.notEqual(first, movedBeyondOverscan);
     entries[0].outer[0].x += 1;
     const changedRoots = renderer.buildRootMaskSignature(adapter, entries, 800, 600, 0);
-    assert.notEqual(moved, changedRoots);
+    assert.notEqual(movedBeyondOverscan, changedRoots);
 });
 
 test("game views no longer load the legacy grass depth module", () => {

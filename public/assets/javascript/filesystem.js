@@ -533,6 +533,7 @@ function getGroundTerrainTypeForTextureIdForLoad(mapRef, textureId, label) {
     if (id === 52) return "desert";
     if (id === 53) return "water";
     if (id === 54) return "mud";
+    if (id === 55) return "mowedgrass";
     throw new Error(`${label} cannot resolve terrain type without map.getGroundTerrainDef`);
 }
 
@@ -1275,12 +1276,61 @@ function splitRoadPathSavePointsAtSectionPolygon(points, polygon) {
     return deduped;
 }
 
-function cloneRoadPathSaveRecordForPoints(record, points, sectionKey, pieceIndex) {
+function createRoadPathSaveSnapId(prefix = "road-snap") {
+    const roadPathApi = typeof globalThis !== "undefined" ? globalThis.RoadPath : null;
+    if (roadPathApi && typeof roadPathApi.createSnapId === "function") {
+        return roadPathApi.createSnapId(prefix);
+    }
+    return `${prefix}:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function roadPathSavePointKey(point) {
+    const roadPathApi = typeof globalThis !== "undefined" ? globalThis.RoadPath : null;
+    if (roadPathApi && typeof roadPathApi.pointKey === "function") {
+        return roadPathApi.pointKey(point);
+    }
+    const x = Number(point && point.x);
+    const y = Number(point && point.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        throw new Error("road path save snap point requires finite x/y coordinates");
+    }
+    return `${x.toFixed(6)},${y.toFixed(6)}`;
+}
+
+function getRoadPathSaveEndpointSnapIds(record) {
+    const roadPathApi = typeof globalThis !== "undefined" ? globalThis.RoadPath : null;
+    if (roadPathApi && typeof roadPathApi.endpointSnapIdsFromData === "function") {
+        return roadPathApi.endpointSnapIdsFromData(record);
+    }
+    return {
+        start: (
+            record &&
+            record.endpointSnapIds &&
+            typeof record.endpointSnapIds.start === "string" &&
+            record.endpointSnapIds.start.trim().length > 0
+        ) ? record.endpointSnapIds.start.trim() : (typeof (record && record.startSnapId) === "string" ? record.startSnapId : ""),
+        end: (
+            record &&
+            record.endpointSnapIds &&
+            typeof record.endpointSnapIds.end === "string" &&
+            record.endpointSnapIds.end.trim().length > 0
+        ) ? record.endpointSnapIds.end.trim() : (typeof (record && record.endSnapId) === "string" ? record.endSnapId : "")
+    };
+}
+
+function cloneRoadPathSaveRecordForPoints(record, points, sectionKey, pieceIndex, splitMetadata = null) {
     const cloned = clonePrototypeSectionWorldObjectRecord(record);
     cloned.points = points.map((point, index) => normalizeRoadPathSavePoint(point, `road path split ${pieceIndex} point ${index}`));
     delete cloned.pathPoints;
     cloned.x = cloned.points[0].x;
     cloned.y = cloned.points[0].y;
+    if (splitMetadata && splitMetadata.snapIdsByPointKey instanceof Map) {
+        cloned.roadNetworkId = splitMetadata.roadNetworkId;
+        cloned.endpointSnapIds = {
+            start: splitMetadata.snapIdsByPointKey.get(roadPathSavePointKey(cloned.points[0])) || createRoadPathSaveSnapId("road-snap"),
+            end: splitMetadata.snapIdsByPointKey.get(roadPathSavePointKey(cloned.points[cloned.points.length - 1])) || createRoadPathSaveSnapId("road-snap")
+        };
+    }
     if (typeof cloned.scriptingName === "string" && cloned.scriptingName.length > 0) {
         cloned.scriptingName = `${cloned.scriptingName}_${sectionKey.replace(/[^A-Za-z0-9_$]/g, "_")}_${pieceIndex}`;
     }
@@ -1299,6 +1349,13 @@ function splitRoadPathSaveRecordBySection(mapRef, record, ownerSectionKey) {
     if (points.length < 2) {
         throw new Error(`Cannot save road path in section ${ownerSectionKey}; at least two points are required.`);
     }
+    const baseEndpointSnapIds = getRoadPathSaveEndpointSnapIds(record);
+    const roadNetworkId = (typeof record.roadNetworkId === "string" && record.roadNetworkId.trim().length > 0)
+        ? record.roadNetworkId.trim()
+        : createRoadPathSaveSnapId("road-network");
+    const snapIdsByPointKey = new Map();
+    snapIdsByPointKey.set(roadPathSavePointKey(points[0]), baseEndpointSnapIds.start || createRoadPathSaveSnapId("road-snap"));
+    snapIdsByPointKey.set(roadPathSavePointKey(points[points.length - 1]), baseEndpointSnapIds.end || createRoadPathSaveSnapId("road-snap"));
     if (!mapRef || typeof mapRef.getPrototypeSectionAsset !== "function") {
         throw new Error("Cannot split road path for save; section asset lookup is unavailable.");
     }
@@ -1385,7 +1442,10 @@ function splitRoadPathSaveRecordBySection(mapRef, record, ownerSectionKey) {
             "split span"
         );
         pushSpan(sectionKey, a, b);
+        const bKey = roadPathSavePointKey(b);
+        if (!snapIdsByPointKey.has(bKey)) snapIdsByPointKey.set(bKey, createRoadPathSaveSnapId("road-snap"));
     }
+    const splitMetadata = { roadNetworkId, snapIdsByPointKey };
     const pieces = [];
     for (let pieceIndex = 0; pieceIndex < sequentialPieces.length; pieceIndex++) {
         const piece = sequentialPieces[pieceIndex];
@@ -1399,7 +1459,7 @@ function splitRoadPathSaveRecordBySection(mapRef, record, ownerSectionKey) {
         if (deduped.length < 2) continue;
         pieces.push({
             sectionKey: piece.sectionKey,
-            record: cloneRoadPathSaveRecordForPoints(record, deduped, piece.sectionKey, pieceIndex)
+            record: cloneRoadPathSaveRecordForPoints(record, deduped, piece.sectionKey, pieceIndex, splitMetadata)
         });
     }
     if (pieces.length === 0) {
@@ -3127,11 +3187,15 @@ async function finalizeLoadedGameStateAsync() {
             await prepareLoadedWizardMovementSupportRuntime();
             wizard.restoreSavedMovementSupport();
         }
+        if (consumeLoadedGameFramePresentationPending()) {
+            presentLoadedGameFrame("finalizeLoadedGameStateAsync");
+        }
         return true;
     } catch (e) {
         console.error("Error finalizing loaded wizard movement support:", e);
         if (typeof globalThis !== "undefined") {
             globalThis.lastLoadGameStateError = e;
+            globalThis.__loadedGameFramePresentationPending = false;
         }
         return false;
     }
@@ -3197,6 +3261,40 @@ function refreshLoadedWizardBridgeMovementState() {
     });
 }
 
+function shouldDeferLoadedGameFramePresentation(mapRef) {
+    const state = mapRef && mapRef._prototypeSectionState;
+    return !!(
+        state &&
+        (
+            state.sectionsByKey instanceof Map ||
+            state.activeSectionKeys instanceof Set ||
+            state.activeBubbleSectionKeys instanceof Set ||
+            state.useSparseNodes === true
+        )
+    );
+}
+
+function setLoadedGameFramePresentationPending(pending) {
+    if (typeof globalThis === "undefined") return;
+    globalThis.__loadedGameFramePresentationPending = pending === true;
+}
+
+function consumeLoadedGameFramePresentationPending() {
+    if (typeof globalThis === "undefined") return false;
+    const pending = globalThis.__loadedGameFramePresentationPending === true;
+    globalThis.__loadedGameFramePresentationPending = false;
+    return pending;
+}
+
+function presentLoadedGameFrame(reason = "loadGameState") {
+    if (typeof globalThis === "undefined" || typeof globalThis.presentGameFrame !== "function") return false;
+    globalThis.presentGameFrame();
+    if (typeof globalThis.markPrototypeStartupPerf === "function") {
+        globalThis.markPrototypeStartupPerf("presentGameFrame-called", { reason });
+    }
+    return true;
+}
+
 function isRoadOrFloorTileObjectRecord(record) {
     if (!record || typeof record !== "object") return false;
     const type = typeof record.type === "string" ? record.type.trim().toLowerCase() : "";
@@ -3234,6 +3332,7 @@ function loadGameState(saveData) {
         }
         if (typeof globalThis !== "undefined") {
             globalThis.lastLoadGameStateError = null;
+            globalThis.__loadedGameFramePresentationPending = false;
         }
 
         // Suppress per-tile incremental clearance updates while bulk-loading
@@ -3700,7 +3799,7 @@ function loadGameState(saveData) {
                 for (let i = 0; i < mapObjects.length; i++) {
                     const obj = mapObjects[i];
                     if (!obj || obj.gone || obj.vanishing) continue;
-                    const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+                    const hitbox = obj.shadowBox || obj.touchBox || obj.hitbox || null;
                     if (!hitbox) continue;
                     if (obj.type === "triggerArea" || obj.isTriggerArea === true) {
                         if (!usePrototypeTriggerRegistry) {
@@ -3725,7 +3824,7 @@ function loadGameState(saveData) {
                     const obj = mapPowerups[i];
                     if (!obj || obj.gone || obj.vanishing || obj.collected) continue;
                     if (obj.map && wizard.map && obj.map !== wizard.map) continue;
-                    const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+                    const hitbox = obj.shadowBox || obj.touchBox || obj.hitbox || null;
                     if (!hitbox) continue;
                     touchEntries.push({ obj, hitbox, forceTouch: false });
                 }
@@ -3738,7 +3837,7 @@ function loadGameState(saveData) {
                     if (!obj || obj === wizard || obj.gone || obj.vanishing) continue;
                     if (touchObjects.has(obj)) continue;
                     if (obj.map && wizard.map && obj.map !== wizard.map) continue;
-                    const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox || null;
+                    const hitbox = obj.shadowBox || obj.touchBox || obj.hitbox || null;
                     if (!hitbox) continue;
                     const hasTouchScript = (
                         typeof scriptingApi.hasEventScriptForTarget === "function" &&
@@ -3769,11 +3868,13 @@ function loadGameState(saveData) {
             }
         }
 
-        if (typeof globalThis !== "undefined" && typeof globalThis.presentGameFrame === "function") {
-            globalThis.presentGameFrame();
-            if (typeof globalThis.markPrototypeStartupPerf === "function") {
-                globalThis.markPrototypeStartupPerf("presentGameFrame-called");
+        if (hasPrototypeSectionWorld && shouldDeferLoadedGameFramePresentation(map)) {
+            setLoadedGameFramePresentationPending(true);
+            if (typeof globalThis !== "undefined" && typeof globalThis.markPrototypeStartupPerf === "function") {
+                globalThis.markPrototypeStartupPerf("presentGameFrame-deferred", { reason: "prototype-section-finalization" });
             }
+        } else {
+            presentLoadedGameFrame("loadGameState");
         }
 
         return true;
@@ -3788,6 +3889,7 @@ function loadGameState(saveData) {
         if (map) map._suppressClearanceUpdates = false;
         if (typeof globalThis !== "undefined") {
             globalThis.lastLoadGameStateError = e;
+            globalThis.__loadedGameFramePresentationPending = false;
         }
         return false;
     }

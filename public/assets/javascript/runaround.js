@@ -82,13 +82,6 @@ let auraMenuKeyboardIndex = -1;
 let editorMenuKeyboardIndex = -1;
 let suppressNextCanvasMenuClose = false;
 let suppressNextTriggerAreaToolClick = false;
-let suppressNextTerrainPaintClick = false;
-let suppressNextTerrainPaintClickTimer = null;
-let terrainPaintDragState = {
-    active: false,
-    lastWorldX: NaN,
-    lastWorldY: NaN
-};
 let triggerAreaCameraDetachWasActive = false;
 const TRIGGER_AREA_EDGE_PAN_SPEED_UNITS_PER_SEC = 10;
 const DETACHED_CAMERA_PAN_SPEED_UNITS_PER_SEC = 18;
@@ -113,113 +106,6 @@ function getCanvasWorldPointFromMouseEvent(event) {
     mousePos.worldX = worldCoors.x;
     mousePos.worldY = worldCoors.y;
     return { x: worldCoors.x, y: worldCoors.y };
-}
-
-function getTerrainPaintSampleStepWorldUnits() {
-    const mapRef = wizard && wizard.map ? wizard.map : null;
-    const hexWidth = Number(mapRef && mapRef.hexWidth);
-    const hexHeight = Number(mapRef && mapRef.hexHeight);
-    const base = Math.min(
-        Number.isFinite(hexWidth) && hexWidth > 0 ? hexWidth : 1,
-        Number.isFinite(hexHeight) && hexHeight > 0 ? hexHeight : 1
-    );
-    return Math.max(0.05, base * 0.35);
-}
-
-function paintTerrainBrushPoint(worldX, worldY) {
-    if (
-        !wizard ||
-        wizard.currentSpell !== "terrainedit" ||
-        typeof SpellSystem === "undefined" ||
-        typeof SpellSystem.paintTerrainAtWorldPoint !== "function" ||
-        !Number.isFinite(worldX) ||
-        !Number.isFinite(worldY)
-    ) {
-        return false;
-    }
-    return !!SpellSystem.paintTerrainAtWorldPoint(wizard, worldX, worldY);
-}
-
-function paintTerrainBrushSegment(worldX, worldY) {
-    if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return false;
-    const lastX = terrainPaintDragState.lastWorldX;
-    const lastY = terrainPaintDragState.lastWorldY;
-    if (!Number.isFinite(lastX) || !Number.isFinite(lastY)) {
-        terrainPaintDragState.lastWorldX = worldX;
-        terrainPaintDragState.lastWorldY = worldY;
-        return paintTerrainBrushPoint(worldX, worldY);
-    }
-    const dx = worldX - lastX;
-    const dy = worldY - lastY;
-    const distance = Math.hypot(dx, dy);
-    const step = getTerrainPaintSampleStepWorldUnits();
-    const samples = Math.max(1, Math.ceil(distance / step));
-    let changed = false;
-    for (let i = 1; i <= samples; i++) {
-        const t = i / samples;
-        if (paintTerrainBrushPoint(lastX + dx * t, lastY + dy * t)) {
-            changed = true;
-        }
-    }
-    terrainPaintDragState.lastWorldX = worldX;
-    terrainPaintDragState.lastWorldY = worldY;
-    return changed;
-}
-
-function beginTerrainPaintDrag(event) {
-    if (
-        !wizard ||
-        wizard.currentSpell !== "terrainedit" ||
-        event.button !== 0 ||
-        typeof SpellSystem === "undefined" ||
-        typeof SpellSystem.paintTerrainAtWorldPoint !== "function"
-    ) {
-        return false;
-    }
-    const world = getCanvasWorldPointFromMouseEvent(event);
-    if (!Number.isFinite(world.x) || !Number.isFinite(world.y)) return false;
-    terrainPaintDragState.active = true;
-    terrainPaintDragState.lastWorldX = NaN;
-    terrainPaintDragState.lastWorldY = NaN;
-    suppressNextTerrainPaintClick = true;
-    if (suppressNextTerrainPaintClickTimer) {
-        clearTimeout(suppressNextTerrainPaintClickTimer);
-    }
-    suppressNextTerrainPaintClickTimer = setTimeout(() => {
-        suppressNextTerrainPaintClick = false;
-        suppressNextTerrainPaintClickTimer = null;
-    }, 300);
-    paintTerrainBrushSegment(world.x, world.y);
-    return true;
-}
-
-function updateTerrainPaintDrag(event) {
-    if (!terrainPaintDragState.active) return false;
-    if (!wizard || wizard.currentSpell !== "terrainedit") {
-        terrainPaintDragState.active = false;
-        terrainPaintDragState.lastWorldX = NaN;
-        terrainPaintDragState.lastWorldY = NaN;
-        return false;
-    }
-    const world = getCanvasWorldPointFromMouseEvent(event);
-    paintTerrainBrushSegment(world.x, world.y);
-    return true;
-}
-
-function endTerrainPaintDrag() {
-    if (!terrainPaintDragState.active) return false;
-    terrainPaintDragState.active = false;
-    terrainPaintDragState.lastWorldX = NaN;
-    terrainPaintDragState.lastWorldY = NaN;
-    suppressNextTerrainPaintClick = true;
-    if (suppressNextTerrainPaintClickTimer) {
-        clearTimeout(suppressNextTerrainPaintClickTimer);
-    }
-    suppressNextTerrainPaintClickTimer = setTimeout(() => {
-        suppressNextTerrainPaintClick = false;
-        suppressNextTerrainPaintClickTimer = null;
-    }, 300);
-    return true;
 }
 
 if (typeof globalThis !== "undefined") {
@@ -601,7 +487,7 @@ app.stage.addChild(cursorLayer);
 let landTileSprite = null;
 let gridGraphics = null;
 let hitboxGraphics = null;
-let groundPlaneHitboxGraphics = null;
+let shadowBoxGraphics = null;
 let wizardBoundaryGraphics = null;
 let wizardFrames = []; // Array of frame textures for wizard animation
 /** @type {Wizard|null} */
@@ -1764,13 +1650,19 @@ jQuery(() => {
         if (!directive || typeof directive !== "object") return null;
         const rawSource = String(directive.source || "").trim().toLowerCase();
         const source = rawSource === "prototype-indexeddb" ? "section-indexeddb" : rawSource;
-        if (source !== "server" && source !== "section-indexeddb") return null;
+        if (source !== "server" && source !== "section-indexeddb" && source !== "section-server") return null;
         const normalized = { source };
         if (source === "server" && typeof directive.fileName === "string" && directive.fileName.trim().length > 0) {
             normalized.fileName = directive.fileName.trim();
         }
+        if (source === "server" && typeof directive.slot === "string" && directive.slot.trim().length > 0) {
+            normalized.slot = directive.slot.trim();
+        }
         if (source === "section-indexeddb" && typeof directive.key === "string" && directive.key.trim().length > 0) {
             normalized.key = directive.key.trim();
+        }
+        if (source === "section-server" && typeof directive.slot === "string" && directive.slot.trim().length > 0) {
+            normalized.slot = directive.slot.trim();
         }
         return normalized;
     }
@@ -3351,7 +3243,7 @@ jQuery(() => {
     function isVirtualCursorOverMenuArea() {
         const hovered = getVirtualCursorHoveredElement();
         if (!hovered || typeof hovered.closest !== "function") return false;
-        return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #inventorySelector, #selectedInventory, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector");
+        return !!hovered.closest("#spellMenu, #selectedSpell, #spellSelector, #spellLevelPanel, #selectedSpellLevel, #spellLevelSelector, #inventorySelector, #selectedInventory, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector");
     }
 
     function updateRangeInputFromClientX(rangeInput, clientX, emitChange = false) {
@@ -5105,7 +4997,30 @@ jQuery(() => {
                 : getLayerBaseZ(wizardLayer);
             wizard.prevJumpHeight = Number.isFinite(wizard.jumpHeight) ? wizard.jumpHeight : 0;
             const isFalling = !!(wizard._floorFallState && wizard._floorFallState.active);
-            if (!isFalling) {
+            const drowningMomentumNowMs = performance.now();
+            const drowningMomentumActive = !!(
+                wizard.dead &&
+                typeof wizard.isDrowningMomentumActive === "function" &&
+                wizard.isDrowningMomentumActive(drowningMomentumNowMs)
+            );
+            if (drowningMomentumActive) {
+                movementSectionStartMs = movementPerfNow();
+                if (typeof wizard.applyDrowningMomentumForFrame === "function") {
+                    wizard.applyDrowningMomentumForFrame(drowningMomentumNowMs);
+                }
+                wizard.moveDirection(wizard.movementVector, {
+                    lockMovementVector: true,
+                    allowUnsupportedPosition: true,
+                    preserveDrowningMomentum: true
+                });
+                movementPerfRecord("movement.step.moveDirection.drowning", movementSectionStartMs);
+            } else if (wizard.dead) {
+                wizard.moving = false;
+                if (wizard.movementVector && typeof wizard.movementVector === "object") {
+                    wizard.movementVector.x = 0;
+                    wizard.movementVector.y = 0;
+                }
+            } else if (!isFalling) {
                 movementSectionStartMs = movementPerfNow();
                 wizard.moveDirection(moveVector, moveOptions);
                 movementPerfRecord("movement.step.moveDirection", movementSectionStartMs);
@@ -5940,6 +5855,99 @@ jQuery(() => {
             return true;
         }
 
+        if (source === "section-server") {
+            const slot = (typeof directive.slot === "string") ? directive.slot.trim() : "";
+            const loadedPath = slot.length > 0 ? `/assets/saves/${slot}/` : "";
+            if (!slot.length) {
+                message("Section-world server save load is missing a slot");
+                console.error("Startup section-world server load failed: missing slot", directive);
+                return true;
+            }
+            if (!map || typeof map.loadPrototypeSectionWorld !== "function" || typeof fetch !== "function") {
+                message("Section-world server save load is unavailable");
+                console.error(`Startup section-world server load failed for ${loadedPath}: loader unavailable`);
+                return true;
+            }
+            beginPrototypeStartupPerf("autoload-section-world-server-save", { slot });
+            try {
+                const qs = new URLSearchParams();
+                qs.set("slot", slot);
+                qs.set("_ts", String(Date.now()));
+                const response = await fetch(`/api/sectionworld?${qs.toString()}`, { method: "GET", cache: "no-store" });
+                let bundle = null;
+                try {
+                    bundle = await response.json();
+                } catch (error) {
+                    throw new Error(`section-world server save response was not JSON: ${error && error.message ? error.message : error}`);
+                }
+                if (!response.ok || !bundle || bundle.ok !== true) {
+                    const reason = bundle && bundle.reason ? String(bundle.reason) : `HTTP ${response.status}`;
+                    message(`Failed to load ${loadedPath} (${reason})`);
+                    console.error(`Startup section-world server load failed for ${loadedPath}:`, bundle);
+                    finishPrototypeStartupPerf("startup-perf-failed", { slot, reason });
+                    return true;
+                }
+                const manifest = (bundle && bundle.manifest && typeof bundle.manifest === "object") ? bundle.manifest : null;
+                const sectionWorldBundle = (
+                    manifest &&
+                    typeof manifest.activeCenterKey === "string" &&
+                    manifest.activeCenterKey.length > 0 &&
+                    typeof bundle.activeCenterKey !== "string"
+                ) ? { ...bundle, activeCenterKey: manifest.activeCenterKey } : bundle;
+                if (map.loadPrototypeSectionWorld(sectionWorldBundle) !== true) {
+                    const reason = "section-world-apply-failed";
+                    message(`Failed to load ${loadedPath} (${reason})`);
+                    console.error(`Startup section-world server load failed for ${loadedPath}: map.loadPrototypeSectionWorld returned false`);
+                    finishPrototypeStartupPerf("startup-perf-failed", { slot, reason });
+                    return true;
+                }
+                if (typeof map.syncPrototypeWalls === "function") {
+                    map.syncPrototypeWalls();
+                }
+                if (typeof map.syncPrototypeObjects === "function") {
+                    map.syncPrototypeObjects();
+                }
+                if (typeof map.syncPrototypeAnimals === "function") {
+                    map.syncPrototypeAnimals();
+                }
+                if (typeof map.syncPrototypePowerups === "function") {
+                    map.syncPrototypePowerups();
+                }
+                if (manifest && manifest.wizard && typeof manifest.wizard === "object" && wizard && typeof wizard.loadJson === "function") {
+                    ensureViewportGeometryForRestore("section-world server save wizard load");
+                    wizard.loadJson(cloneWizardLoadDataForRuntime(manifest.wizard));
+                }
+                const savedMazeMode = (
+                    manifest &&
+                    manifest.los &&
+                    typeof manifest.los === "object" &&
+                    typeof manifest.los.mazeMode === "boolean"
+                ) ? manifest.los.mazeMode : null;
+                if (typeof applySavedLosMazeModeValue === "function") {
+                    applySavedLosMazeModeValue(savedMazeMode);
+                }
+                if (map && typeof map.updatePrototypeSectionBubble === "function") {
+                    map.updatePrototypeSectionBubble(wizard, { force: true });
+                }
+                restoreWizardSavedMovementSupportAfterBubble(wizard);
+                if (typeof centerViewport === "function") {
+                    centerViewport(wizard, 0, 0);
+                }
+                if (wizard && typeof wizard.updateStatusBars === "function") {
+                    wizard.updateStatusBars();
+                }
+                setLastSaveReloadDirective({ source: "section-server", slot });
+                message(`Loaded ${loadedPath}`);
+                console.log(`Startup loaded section-world server save from ${loadedPath}`);
+            } catch (error) {
+                const reason = error && error.message ? error.message : "network-failed";
+                message(`Failed to load ${loadedPath} (${reason})`);
+                console.error(`Startup section-world server load failed for ${loadedPath}:`, error);
+                finishPrototypeStartupPerf("startup-perf-failed", { slot, reason });
+            }
+            return true;
+        }
+
         if (source === "server") {
             if (typeof loadGameStateFromServerFile !== "function") {
                 message("Server file load is unavailable");
@@ -5998,11 +6006,15 @@ jQuery(() => {
 
     function closeHudMenus(options = {}) {
         const closeSpell = options.spell !== false;
+        const closeSpellLevel = options.spellLevel !== false;
         const closeAura = options.aura !== false;
         const closeEditor = options.editor !== false;
         if (closeSpell) {
             $("#spellMenu").addClass("hidden");
             clearSpellMenuKeyboardFocus();
+        }
+        if (closeSpellLevel) {
+            closeSpellLevelPanel();
         }
         if (closeAura) {
             $("#auraMenu").addClass("hidden");
@@ -6013,6 +6025,19 @@ jQuery(() => {
         }
     }
 
+    function isSpellLevelPanelVisible() {
+        const panel = document.getElementById("spellLevelPanel");
+        return !!(panel && !panel.classList.contains("hidden"));
+    }
+
+    function closeSpellLevelPanel() {
+        if (typeof SpellSystem !== "undefined" && typeof SpellSystem.hideSpellLevelPanel === "function") {
+            SpellSystem.hideSpellLevelPanel();
+            return;
+        }
+        $("#spellLevelPanel").addClass("hidden");
+    }
+
     function isSpellMenuPointerTarget(target) {
         return !!(
             target &&
@@ -6021,11 +6046,22 @@ jQuery(() => {
         );
     }
 
+    function isSpellLevelPointerTarget(target) {
+        return !!(
+            target &&
+            typeof target.closest === "function" &&
+            target.closest("#spellLevelPanel, #selectedSpellLevel")
+        );
+    }
+
     $(document).on("mousedown.spellMenuDismiss touchstart.spellMenuDismiss", event => {
-        if ($("#spellMenu").hasClass("hidden")) return;
-        if (isSpellMenuPointerTarget(event.target)) return;
-        $("#spellMenu").addClass("hidden");
-        clearSpellMenuKeyboardFocus();
+        if (!$("#spellMenu").hasClass("hidden") && !isSpellMenuPointerTarget(event.target)) {
+            $("#spellMenu").addClass("hidden");
+            clearSpellMenuKeyboardFocus();
+        }
+        if (isSpellLevelPanelVisible() && !isSpellLevelPointerTarget(event.target)) {
+            closeSpellLevelPanel();
+        }
     });
 
     $("#selectedSpell").click(() => {
@@ -6083,16 +6119,23 @@ jQuery(() => {
 
     $("#selectedEditor").click(() => {
         if (!wizard || $("#editorSelector").hasClass("hidden")) return;
-        const wasHidden = $("#editorMenu").hasClass("hidden");
-        if (wasHidden) {
-            closeHudMenus({ spell: true, aura: true, editor: false });
+        const editorSpellMenuVisible = !!(
+            !$("#spellMenu").hasClass("hidden") &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.isEditorMenuOpen === "function" &&
+            SpellSystem.isEditorMenuOpen()
+        );
+        if (editorSpellMenuVisible) {
+            $("#spellMenu").addClass("hidden");
+            $("#editorMenu").addClass("hidden");
+            clearSpellMenuKeyboardFocus();
+            clearEditorMenuKeyboardFocus();
+        } else {
+            closeHudMenus({ spell: false, aura: true, editor: true });
             if (typeof SpellSystem !== "undefined" && typeof SpellSystem.showEditorMenu === "function") {
                 SpellSystem.showEditorMenu(wizard);
-            } else {
-                $("#editorMenu").removeClass("hidden");
+                initSpellMenuKeyboardFocus();
             }
-        } else {
-            $("#editorMenu").addClass("hidden");
         }
     });
 
@@ -6280,13 +6323,24 @@ jQuery(() => {
             mousePos.y = dest.y;
         }
 
-        if (updateTerrainPaintDrag(event)) {
-            event.preventDefault();
-        }
-
         // Update cursor immediately (don't wait for render loop)
         updateCursor();
 
+        const terrainPaintButtonDown = !!(event.buttons & 1);
+        if (
+            terrainPaintButtonDown &&
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.autoPaintTerrainAtWorldPoint === "function"
+        ) {
+            SpellSystem.autoPaintTerrainAtWorldPoint(wizard, mousePos.worldX, mousePos.worldY);
+        } else if (
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.resetTerrainAutoPaint === "function"
+        ) {
+            SpellSystem.resetTerrainAutoPaint(wizard);
+        }
         if (
             wizard &&
             typeof SpellSystem !== "undefined" &&
@@ -6324,17 +6378,10 @@ jQuery(() => {
         }
     })
 
-    document.addEventListener("mousemove", event => {
-        if (!terrainPaintDragState.active) return;
-        if (updateTerrainPaintDrag(event)) {
-            event.preventDefault();
-        }
-    });
-
     app.view.addEventListener("wheel", event => {
         const overMenu = pointerLockActive
             ? isVirtualCursorOverMenuArea()
-            : !!(event.target && typeof event.target.closest === "function" && event.target.closest("#spellMenu, #selectedSpell, #spellSelector, #inventorySelector, #selectedInventory, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector, #statusBars"));
+            : !!(event.target && typeof event.target.closest === "function" && event.target.closest("#spellMenu, #selectedSpell, #spellSelector, #spellLevelPanel, #selectedSpellLevel, #spellLevelSelector, #inventorySelector, #selectedInventory, #auraMenu, #selectedAura, #auraSelector, #activeAuraIcons, #editorMenu, #selectedEditor, #editorSelector, #statusBars"));
         if (overMenu) return;
 
         const zoomModifierHeld = !!keysPressed["z"];
@@ -6394,6 +6441,9 @@ jQuery(() => {
             const selectedSpellEl = hovered && typeof hovered.closest === "function"
                 ? hovered.closest("#selectedSpell")
                 : null;
+            const selectedSpellLevelEl = hovered && typeof hovered.closest === "function"
+                ? hovered.closest("#selectedSpellLevel")
+                : null;
             const selectedInventoryEl = hovered && typeof hovered.closest === "function"
                 ? hovered.closest("#selectedInventory")
                 : null;
@@ -6404,9 +6454,9 @@ jQuery(() => {
                 ? hovered.closest("#selectedEditor")
                 : null;
             const menuInteractiveEl = hovered && typeof hovered.closest === "function"
-                ? hovered.closest("#spellMenu .spellIcon, #spellMenu button, #spellMenu input, #spellMenu label, #auraMenu .auraIcon, #auraMenu button, #auraMenu input, #auraMenu label, #editorMenu .spellIcon, #editorMenu button, #editorMenu input, #editorMenu label")
+                ? hovered.closest("#spellMenu .spellIcon, #spellMenu button, #spellMenu input, #spellMenu label, #spellLevelPanel .spellLevelListItem, #spellLevelPanel button, #spellLevelPanel input, #spellLevelPanel label, #auraMenu .auraIcon, #auraMenu button, #auraMenu input, #auraMenu label, #editorMenu .spellIcon, #editorMenu button, #editorMenu input, #editorMenu label")
                 : null;
-            const forwardTarget = menuInteractiveEl || selectedSpellEl || selectedInventoryEl || selectedAuraEl || selectedEditorEl;
+            const forwardTarget = menuInteractiveEl || selectedSpellEl || selectedSpellLevelEl || selectedInventoryEl || selectedAuraEl || selectedEditorEl;
             const isRightClick = (event.button === 2);
             if (forwardTarget) {
                 event.preventDefault();
@@ -6447,10 +6497,6 @@ jQuery(() => {
         if (!pointerLockActive) {
             requestGameplayPointerLock(event);
         }
-        if (beginTerrainPaintDrag(event)) {
-            event.preventDefault();
-            return;
-        }
         if (
             event.button === 0 &&
             wizard &&
@@ -6463,6 +6509,12 @@ jQuery(() => {
             const worldCoors = (Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
                 ? { x: mousePos.worldX, y: mousePos.worldY }
                 : screenToWorld(screenX, screenY);
+            if (
+                wizard.currentSpell === "terrainedit" &&
+                typeof SpellSystem.autoPaintTerrainAtWorldPoint === "function"
+            ) {
+                SpellSystem.autoPaintTerrainAtWorldPoint(wizard, worldCoors.x, worldCoors.y);
+            }
             if (
                 wizard.currentSpell === "floorstair" &&
                 typeof SpellSystem.beginFloorStairPlacement === "function" &&
@@ -6571,6 +6623,14 @@ jQuery(() => {
     });
 
     app.view.addEventListener("mouseup", event => {
+        if (
+            event.button === 0 &&
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.finishTerrainAutoPaint === "function"
+        ) {
+            SpellSystem.finishTerrainAutoPaint(wizard);
+        }
         if (pointerLockActive && pointerLockRangeDragInput) {
             event.preventDefault();
             event.stopPropagation();
@@ -6583,10 +6643,6 @@ jQuery(() => {
                 button: event.button
             }));
             pointerLockRangeDragInput = null;
-            return;
-        }
-        if (event.button === 0 && endTerrainPaintDrag()) {
-            event.preventDefault();
             return;
         }
         if (
@@ -6639,31 +6695,15 @@ jQuery(() => {
         SpellSystem.completeDragSpell(wizard, wizard.currentSpell, worldCoors.x, worldCoors.y);
     });
 
-    document.addEventListener("mouseup", event => {
-        if (event.button === 0 && endTerrainPaintDrag()) {
-            event.preventDefault();
-        }
-    });
-
     app.view.addEventListener("click", event => {
         if (suppressNextTriggerAreaToolClick) {
             suppressNextTriggerAreaToolClick = false;
             event.preventDefault();
             return;
         }
-        if (suppressNextTerrainPaintClick) {
-            suppressNextTerrainPaintClick = false;
-            if (suppressNextTerrainPaintClickTimer) {
-                clearTimeout(suppressNextTerrainPaintClickTimer);
-                suppressNextTerrainPaintClickTimer = null;
-            }
-            event.preventDefault();
-            return;
-        }
         const castWithSpace = !!keysPressed[" "];
         const castWithEditorKey = isEditorPlacementSpellActive() && isEditorPlacementKeyHeld();
-        const castWithTerrainPaintTool = !!(wizard && wizard.currentSpell === "terrainedit");
-        if (!castWithSpace && !castWithEditorKey && !castWithTerrainPaintTool) return;
+        if (!castWithSpace && !castWithEditorKey) return;
 
         event.preventDefault();
         let castScreenX = null;
@@ -6681,7 +6721,8 @@ jQuery(() => {
         wizard.destination = null;
         wizard.path = [];
         wizard.travelFrames = 0;
-        const isExactClickCast = wizard.currentSpell === "triggerarea" || wizard.currentSpell === "terrainedit";
+        const isExactClickCast = wizard.currentSpell === "triggerarea" ||
+            wizard.currentSpell === "terrainedit";
         const castWorldX = isExactClickCast ? worldCoors.x : aim.worldX;
         const castWorldY = isExactClickCast ? worldCoors.y : aim.worldY;
         // Turn and cast at exact click coordinates.
@@ -6714,23 +6755,34 @@ jQuery(() => {
     app.view.addEventListener("dblclick", event => {
         if (
             !wizard ||
-            typeof SpellSystem === "undefined" ||
-            typeof SpellSystem.paintFloorPolygonAtWorldPoint !== "function"
+            typeof SpellSystem === "undefined"
         ) return;
         let paintScreenX = null;
         let paintScreenY = null;
-        const worldCoors = (pointerLockActive && Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
-            ? {x: mousePos.worldX, y: mousePos.worldY}
-            : (() => {
-                const rect = app.view.getBoundingClientRect();
-                paintScreenX = event.clientX - rect.left;
-                paintScreenY = event.clientY - rect.top;
-                return screenToWorld(paintScreenX, paintScreenY);
-            })();
-        if (SpellSystem.paintFloorPolygonAtWorldPoint(wizard, worldCoors.x, worldCoors.y, {
-            screenX: paintScreenX,
+	        const worldCoors = (pointerLockActive && Number.isFinite(mousePos.worldX) && Number.isFinite(mousePos.worldY))
+	            ? {x: mousePos.worldX, y: mousePos.worldY}
+	            : (() => {
+	                const rect = app.view.getBoundingClientRect();
+	                paintScreenX = event.clientX - rect.left;
+	                paintScreenY = event.clientY - rect.top;
+	                return screenToWorld(paintScreenX, paintScreenY);
+	            })();
+	        if (
+	            wizard.currentSpell === "terrainedit" &&
+	            typeof SpellSystem.assignTerrainPolygonTilesAtWorldPoint === "function" &&
+	            SpellSystem.assignTerrainPolygonTilesAtWorldPoint(wizard, worldCoors.x, worldCoors.y)
+	        ) {
+	            event.preventDefault();
+	            event.stopPropagation();
+	            return;
+	        }
+	        if (
+	            typeof SpellSystem.paintFloorPolygonAtWorldPoint === "function" &&
+	            SpellSystem.paintFloorPolygonAtWorldPoint(wizard, worldCoors.x, worldCoors.y, {
+	            screenX: paintScreenX,
             screenY: paintScreenY
-        })) {
+        })
+        ) {
             event.preventDefault();
             event.stopPropagation();
         }
@@ -6741,6 +6793,7 @@ jQuery(() => {
     $(document).keydown(event => {
         const keyLower = event.key.toLowerCase();
         const spellMenuVisible = !$("#spellMenu").hasClass("hidden");
+        const spellLevelPanelVisible = isSpellLevelPanelVisible();
         const auraMenuVisible = !$("#auraMenu").hasClass("hidden");
         const auraSelectorVisible = !$("#auraSelector").hasClass("hidden");
         const editorMenuVisible = !$("#editorMenu").hasClass("hidden");
@@ -6749,8 +6802,65 @@ jQuery(() => {
             typeof globalThis.isTextEntryElement === "function" &&
             globalThis.isTextEntryElement(event.target)
         );
+        const getEditorHotkeyName = () => {
+            if (!event || typeof event.key !== "string" || event.key.length !== 1) return "";
+            const key = event.key.toUpperCase();
+            return event.shiftKey ? `Shift+${key}` : key;
+        };
+        const isEditorSpellMenuOpen = !!(
+            spellMenuVisible &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.isEditorMenuOpen === "function" &&
+            SpellSystem.isEditorMenuOpen()
+        );
 
         if (isTextEntryTarget) {
+            return;
+        }
+
+        if (
+            wizard &&
+            !event.repeat &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey &&
+            keyLower === "e" &&
+            !isEditorSpellMenuOpen &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.isEditorMode === "function" &&
+            SpellSystem.isEditorMode() &&
+            typeof SpellSystem.showEditorMenu === "function"
+        ) {
+            event.preventDefault();
+            SpellSystem.showEditorMenu(wizard);
+            initSpellMenuKeyboardFocus();
+            return;
+        }
+
+        if (
+            wizard &&
+            isEditorSpellMenuOpen &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey &&
+            !event.repeat &&
+            event.key !== " " &&
+            event.key.length === 1
+        ) {
+            const editorHotkey = getEditorHotkeyName();
+            if (
+                editorHotkey &&
+                typeof editorKeyBindings !== "undefined" &&
+                Object.keys(editorKeyBindings).includes(editorHotkey) &&
+                typeof SpellSystem !== "undefined" &&
+                typeof SpellSystem.setCurrentSpell === "function"
+            ) {
+                event.preventDefault();
+                SpellSystem.setCurrentSpell(wizard, editorKeyBindings[editorHotkey]);
+                updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
+                return;
+            }
+            event.preventDefault();
             return;
         }
 
@@ -6798,7 +6908,7 @@ jQuery(() => {
             !event.metaKey &&
             !event.repeat &&
             wizard &&
-            ["w", "m", "d", "g"].includes(keyLower) &&
+            ["w", "m", "d", "g", "l"].includes(keyLower) &&
             typeof SpellSystem !== "undefined" &&
             typeof SpellSystem.isEditorMode === "function" &&
             SpellSystem.isEditorMode() &&
@@ -6806,10 +6916,40 @@ jQuery(() => {
         ) {
             const terrainType = keyLower === "w"
                 ? "water"
-                : (keyLower === "m" ? "mud" : (keyLower === "d" ? "desert" : "grass"));
+                : (keyLower === "m" ? "mud" : (keyLower === "d" ? "desert" : (keyLower === "l" ? "mowedgrass" : "grass")));
             event.preventDefault();
             SpellSystem.selectTerrainType(wizard, terrainType);
             updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
+            return;
+        }
+
+        if (
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey &&
+            wizard &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.handleTerrainBrushRadiusHotkey === "function" &&
+            SpellSystem.handleTerrainBrushRadiusHotkey(wizard, event.key)
+        ) {
+            event.preventDefault();
+            return;
+        }
+
+        if (
+            wizard &&
+            isEditorSpellMenuOpen &&
+            (
+                event.key === "Escape" ||
+                event.key === "Backspace" ||
+                (event.key === "Tab" && event.shiftKey)
+            ) &&
+            typeof SpellSystem !== "undefined" &&
+            typeof SpellSystem.returnToSpellMenu === "function"
+        ) {
+            event.preventDefault();
+            SpellSystem.returnToSpellMenu(wizard);
+            initSpellMenuKeyboardFocus();
             return;
         }
 
@@ -6957,9 +7097,10 @@ jQuery(() => {
             return;
         }
 
-        if (event.key === "Escape" && (spellMenuVisible || auraMenuVisible || editorMenuVisible)) {
+        if (event.key === "Escape" && (spellMenuVisible || spellLevelPanelVisible || auraMenuVisible || editorMenuVisible)) {
             event.preventDefault();
             $("#spellMenu").addClass("hidden");
+            closeSpellLevelPanel();
             $("#auraMenu").addClass("hidden");
             $("#editorMenu").addClass("hidden");
             clearSpellMenuKeyboardFocus();
@@ -7400,9 +7541,9 @@ jQuery(() => {
                 typeof SpellSystem.setCurrentSpell === "function" &&
                 typeof wizard.isGodMode === "function" && wizard.isGodMode()
             );
-            if (inEditorMode && typeof editorKeyBindings !== "undefined" && Object.keys(editorKeyBindings).includes(event.key.toUpperCase())) {
+            if (inEditorMode && typeof editorKeyBindings !== "undefined" && Object.keys(editorKeyBindings).includes(getEditorHotkeyName())) {
                 // In editor mode, prefer editor key bindings for shared keys
-                SpellSystem.setCurrentSpell(wizard, editorKeyBindings[event.key.toUpperCase()]);
+                SpellSystem.setCurrentSpell(wizard, editorKeyBindings[getEditorHotkeyName()]);
             } else if (shouldUseLayerTool) {
                 SpellSystem.setCurrentSpell(wizard, "flooredit");
             } else if (shouldUseEditorVanish) {
@@ -7415,11 +7556,11 @@ jQuery(() => {
         } else if (
             !hasNonShiftHotkeyModifier &&
             typeof editorKeyBindings !== "undefined" &&
-            Object.keys(editorKeyBindings).includes(event.key.toUpperCase())
+            Object.keys(editorKeyBindings).includes(getEditorHotkeyName())
         ) {
             const inEditorMode = (typeof SpellSystem !== "undefined" && typeof SpellSystem.isEditorMode === "function" && SpellSystem.isEditorMode());
             if (inEditorMode) {
-                SpellSystem.setCurrentSpell(wizard, editorKeyBindings[event.key.toUpperCase()]);
+                SpellSystem.setCurrentSpell(wizard, editorKeyBindings[getEditorHotkeyName()]);
                 updateEditorPlacementActiveState(isEditorPlacementKeyHeld());
             }
         }
@@ -7462,7 +7603,7 @@ jQuery(() => {
             console.log('Hex grid:', showHexGrid ? 'ON' : 'OFF');
         }
 
-        // Save game to fixed server path with Ctrl+Shift+S
+        // Save section-world to the maps server slot with Ctrl+Shift+S.
         if ((event.key === 's' || event.key === 'S') && event.ctrlKey && event.shiftKey) {
             event.preventDefault();
             if (typeof saveSectionWorldToServerSlot === "function") {
@@ -7484,13 +7625,13 @@ jQuery(() => {
             return;
         }
 
-        // Load game from fixed server path with Ctrl+Shift+L
+        // Load section-world from the same maps slot used by Ctrl+Shift+S.
         if ((event.key === 'l' || event.key === 'L') && event.ctrlKey && event.shiftKey) {
             event.preventDefault();
-            if (reloadWithStartupLoadDirective({ source: "server" })) {
-                message('Reloading and loading /assets/saves/savefile.json...');
+            if (reloadWithStartupLoadDirective({ source: "section-server", slot: "maps" })) {
+                message('Reloading and loading /assets/saves/maps/...');
             } else {
-                message('Failed to queue reload for server save load');
+                message('Failed to queue reload for section-world server save load');
             }
             return;
         }

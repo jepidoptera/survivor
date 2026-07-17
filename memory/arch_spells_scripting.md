@@ -32,16 +32,16 @@ Magic cost is NOT deducted in god mode. Check `Spell.canAffordMagicCost` before 
 | `Rock.js` | Rock projectile |
 | `Spikes.js` | Ground spike placement |
 | `Teleport.js` | Player teleportation |
-| `TreeGrow.js` | Grow/place trees |
-| `BuildRoad.js` | Paint road tiles |
-| `PlaceObject.js` | Place/edit world objects (editor tool) |
-| `MoveObject.js` | Move existing objects |
+| `editor/TreeGrow.js` | Grow/place trees |
+| `editor/BuildRoad.js` | Paint road tiles |
+| `editor/PlaceObject.js` | Place/edit world objects (editor tool) |
+| `Telekinesis.js` | Move existing objects |
 | `Vanish.js` | Delete/remove objects |
-| `SpawnAnimal.js` | Spawn animals |
+| `editor/SpawnAnimal.js` | Spawn animals |
 | `AttackSquirrel.js` | Attack spell variant |
-| `TriggerArea.js` | Place/edit trigger areas |
-| `NodeInspector.js` | Debug: inspect map nodes |
-| `EditScript.js` | Open script editor on object |
+| `editor/TriggerArea.js` | Place/edit trigger areas |
+| `editor/NodeInspector.js` | Debug: inspect map nodes |
+| `editor/EditScript.js` | Open script editor on object |
 | `scripting.js` | Scripting runtime (not a spell) |
 
 ## PlaceObject.js (Editor Spell)

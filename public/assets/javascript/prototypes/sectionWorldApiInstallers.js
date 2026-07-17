@@ -683,6 +683,37 @@
             if (points.length < 2) {
                 throw new Error(`Cannot export road path in section ${ownerSectionKey}; at least two points are required.`);
             }
+            const roadPathApi = runtimeGlobalScope && runtimeGlobalScope.RoadPath ? runtimeGlobalScope.RoadPath : null;
+            const createRoadSnapId = (prefix = "road-snap") => (
+                roadPathApi && typeof roadPathApi.createSnapId === "function"
+                    ? roadPathApi.createSnapId(prefix)
+                    : `${prefix}:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+            );
+            const pointKey = (point) => (
+                roadPathApi && typeof roadPathApi.pointKey === "function"
+                    ? roadPathApi.pointKey(point)
+                    : `${Number(point.x).toFixed(6)},${Number(point.y).toFixed(6)}`
+            );
+            const baseEndpointSnapIds = roadPathApi && typeof roadPathApi.endpointSnapIdsFromData === "function"
+                ? roadPathApi.endpointSnapIdsFromData(record)
+                : {
+                    start: (
+                        record.endpointSnapIds &&
+                        typeof record.endpointSnapIds.start === "string" &&
+                        record.endpointSnapIds.start.trim().length > 0
+                    ) ? record.endpointSnapIds.start.trim() : (typeof record.startSnapId === "string" ? record.startSnapId : ""),
+                    end: (
+                        record.endpointSnapIds &&
+                        typeof record.endpointSnapIds.end === "string" &&
+                        record.endpointSnapIds.end.trim().length > 0
+                    ) ? record.endpointSnapIds.end.trim() : (typeof record.endSnapId === "string" ? record.endSnapId : "")
+                };
+            const baseRoadNetworkId = (typeof record.roadNetworkId === "string" && record.roadNetworkId.trim().length > 0)
+                ? record.roadNetworkId.trim()
+                : createRoadSnapId("road-network");
+            const snapIdsByPointKey = new Map();
+            snapIdsByPointKey.set(pointKey(points[0]), baseEndpointSnapIds.start || createRoadSnapId("road-snap"));
+            snapIdsByPointKey.set(pointKey(points[points.length - 1]), baseEndpointSnapIds.end || createRoadSnapId("road-snap"));
             if (!mapRef || typeof mapRef.getPrototypeSectionAsset !== "function") {
                 throw new Error("Cannot split exported road path; section asset lookup is unavailable.");
             }
@@ -751,6 +782,8 @@
                 } else {
                     sequentialPieces.push({ sectionKey, points: [a, b] });
                 }
+                const bKey = pointKey(b);
+                if (!snapIdsByPointKey.has(bKey)) snapIdsByPointKey.set(bKey, createRoadSnapId("road-snap"));
             }
             const pieces = [];
             for (let i = 0; i < sequentialPieces.length; i++) {
@@ -760,6 +793,11 @@
                 delete cloned.pathPoints;
                 cloned.x = cloned.points[0].x;
                 cloned.y = cloned.points[0].y;
+                cloned.roadNetworkId = baseRoadNetworkId;
+                cloned.endpointSnapIds = {
+                    start: snapIdsByPointKey.get(pointKey(cloned.points[0])) || createRoadSnapId("road-snap"),
+                    end: snapIdsByPointKey.get(pointKey(cloned.points[cloned.points.length - 1])) || createRoadSnapId("road-snap")
+                };
                 if (i > 0) delete cloned.id;
                 pieces.push({ sectionKey: piece.sectionKey, record: cloned });
             }
@@ -787,6 +825,10 @@
             const fillTexturePath = typeof record.fillTexturePath === "string" ? record.fillTexturePath : "";
             const textureId = typeof record.textureId === "string" ? record.textureId : "";
             const scriptingName = typeof record.scriptingName === "string" ? record.scriptingName : "";
+            const roadNetworkId = typeof record.roadNetworkId === "string" ? record.roadNetworkId : "";
+            const endpointSnapIds = record.endpointSnapIds && typeof record.endpointSnapIds === "object"
+                ? `${record.endpointSnapIds.start || ""},${record.endpointSnapIds.end || ""}`
+                : "";
             return [
                 "roadPath",
                 points,
@@ -794,7 +836,9 @@
                 layer,
                 fillTexturePath,
                 textureId,
-                scriptingName
+                scriptingName,
+                roadNetworkId,
+                endpointSnapIds
             ].join("::");
         };
         const pushCanonicalObjectRecord = (recordsBySectionKey, roadSignaturesBySectionKey, sectionKey, record) => {
@@ -887,6 +931,9 @@
         };
         map.canonicalizePrototypeRoadPathSectionRecords = function canonicalizePrototypeRoadPathSectionRecordsForMap(sectionKeys = null) {
             return canonicalizePrototypeRoadPathSectionRecords(this, sectionKeys);
+        };
+        runtimeGlobalScope.splitRoadPathSaveRecordBySection = function splitRoadPathSaveRecordBySection(mapRef, record, ownerSectionKey) {
+            return splitRoadPathExportRecord(mapRef, record, ownerSectionKey);
         };
         map.exportPrototypeSectionAssets = function exportPrototypeSectionAssets(sectionKeys = null) {
             const state = this._prototypeSectionState;
@@ -1209,6 +1256,64 @@
             }
             return out;
         };
+        const visibleNodeBucketWorldSize = 8;
+        const rebuildVisibleNodeBucketIndex = (state, mapRef) => {
+            if (!state || !Array.isArray(state.loadedNodes)) {
+                throw new Error("visible node bucket index requires prototype loadedNodes");
+            }
+            const bucketSize = visibleNodeBucketWorldSize;
+            const buckets = new Map();
+            const loadedNodes = state.loadedNodes;
+            for (let i = 0; i < loadedNodes.length; i++) {
+                const node = loadedNodes[i];
+                if (!node) continue;
+                const nodeX = Number(node.x);
+                const nodeY = Number(node.y);
+                if (!Number.isFinite(nodeX) || !Number.isFinite(nodeY)) {
+                    throw new Error("visible node bucket index cannot index a node with non-finite world coordinates");
+                }
+                const nodeBaseZ = typeof mapRef.getNodeBaseZ === "function"
+                    ? mapRef.getNodeBaseZ(node)
+                    : (Number.isFinite(node.baseZ) ? Number(node.baseZ) : 0);
+                if (!Number.isFinite(nodeBaseZ)) {
+                    throw new Error("visible node bucket index cannot index a node with non-finite baseZ");
+                }
+                const bucketX = Math.floor(nodeX / bucketSize);
+                const bucketY = Math.floor((nodeY - nodeBaseZ) / bucketSize);
+                const bucketKey = `${bucketX},${bucketY}`;
+                let bucket = buckets.get(bucketKey);
+                if (!bucket) {
+                    bucket = [];
+                    buckets.set(bucketKey, bucket);
+                }
+                bucket.push(node);
+            }
+            state.visibleNodeBucketIndex = {
+                buckets,
+                bucketSize,
+                loadedNodesRef: loadedNodes,
+                loadedNodeCount: loadedNodes.length
+            };
+            state.visibleNodeBucketIndexBuiltVersion = Number(state.visibleNodeBucketIndexVersion) || 0;
+            state.visibleNodeBucketIndexDirty = false;
+            return state.visibleNodeBucketIndex;
+        };
+        const getVisibleNodeBucketIndex = (state, mapRef) => {
+            const index = state && state.visibleNodeBucketIndex;
+            const version = Number(state && state.visibleNodeBucketIndexVersion) || 0;
+            if (
+                index &&
+                state.visibleNodeBucketIndexDirty !== true &&
+                state.visibleNodeBucketIndexBuiltVersion === version &&
+                index.loadedNodesRef === state.loadedNodes &&
+                index.loadedNodeCount === state.loadedNodes.length &&
+                index.bucketSize === visibleNodeBucketWorldSize &&
+                index.buckets instanceof Map
+            ) {
+                return index;
+            }
+            return rebuildVisibleNodeBucketIndex(state, mapRef);
+        };
         map.getVisibleNodesInViewport = function getVisibleNodesInViewport(camera, xPadding = 0, yPadding = 0) {
             const state = this._prototypeSectionState;
             const loadedNodes = (state && Array.isArray(state.loadedNodes)) ? state.loadedNodes : [];
@@ -1241,18 +1346,46 @@
             ) {
                 throw new Error("Cannot collect visible prototype nodes with a non-finite screen-space viewport.");
             }
-            for (let i = 0; i < loadedNodes.length; i++) {
-                const node = loadedNodes[i];
-                if (!node) continue;
-                if (node.x < minX || node.x > maxX) continue;
-                const nodeBaseZ = typeof this.getNodeBaseZ === "function"
-                    ? this.getNodeBaseZ(node)
-                    : (Number.isFinite(node.baseZ) ? Number(node.baseZ) : 0);
-                const projectedY = Number(node.y) - (nodeBaseZ - cameraZ);
-                if (projectedY < minProjectedY || projectedY > maxProjectedY) continue;
-                visible.push(node);
+            const index = getVisibleNodeBucketIndex(state, this);
+            const buckets = index.buckets;
+            const bucketSize = index.bucketSize;
+            const minBucketX = Math.floor(minX / bucketSize);
+            const maxBucketX = Math.floor(maxX / bucketSize);
+            const minBucketY = Math.floor((minProjectedY - cameraZ) / bucketSize);
+            const maxBucketY = Math.floor((maxProjectedY - cameraZ) / bucketSize);
+            let candidates = 0;
+            for (let bx = minBucketX; bx <= maxBucketX; bx++) {
+                for (let by = minBucketY; by <= maxBucketY; by++) {
+                    const bucket = buckets.get(`${bx},${by}`);
+                    if (!Array.isArray(bucket)) continue;
+                    for (let i = 0; i < bucket.length; i++) {
+                        const node = bucket[i];
+                        candidates += 1;
+                        if (!node) continue;
+                        if (node.x < minX || node.x > maxX) continue;
+                        const nodeBaseZ = typeof this.getNodeBaseZ === "function"
+                            ? this.getNodeBaseZ(node)
+                            : (Number.isFinite(node.baseZ) ? Number(node.baseZ) : 0);
+                        const projectedY = Number(node.y) - (nodeBaseZ - cameraZ);
+                        if (projectedY < minProjectedY || projectedY > maxProjectedY) continue;
+                        visible.push(node);
+                    }
+                }
             }
+            state.visibleNodeBucketLastCandidates = candidates;
             return visible;
+        };
+        map.getVisibleNodeBucketIndexStats = function getVisibleNodeBucketIndexStats() {
+            const state = this._prototypeSectionState;
+            const index = state && state.visibleNodeBucketIndex;
+            return {
+                bucketSize: index && Number.isFinite(index.bucketSize) ? Number(index.bucketSize) : visibleNodeBucketWorldSize,
+                bucketCount: index && index.buckets instanceof Map ? index.buckets.size : 0,
+                candidates: Number(state && state.visibleNodeBucketLastCandidates) || 0,
+                dirty: !!(state && state.visibleNodeBucketIndexDirty === true),
+                version: Number(state && state.visibleNodeBucketIndexVersion) || 0,
+                builtVersion: Number(state && state.visibleNodeBucketIndexBuiltVersion) || 0
+            };
         };
         map._baseWorldToNode = (typeof map.worldToNode === "function") ? map.worldToNode.bind(map) : null;
         map._baseWorldToNodeOrMidpoint = (typeof map.worldToNodeOrMidpoint === "function") ? map.worldToNodeOrMidpoint.bind(map) : null;

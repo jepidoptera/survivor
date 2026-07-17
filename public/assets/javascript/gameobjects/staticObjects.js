@@ -1,5 +1,40 @@
 const placeableMetadataByCategory = new Map();
 const placeableMetadataFetchPromises = new Map();
+
+const LEGACY_HITBOX_FIELD_MAPPINGS = Object.freeze([
+    Object.freeze({ oldKey: "groundPlaneHitbox", newKey: "shadowBox" }),
+    Object.freeze({ oldKey: "visualHitbox", newKey: "touchBox" }),
+    Object.freeze({ oldKey: "groundPlaneHitboxOverridePoints", newKey: "shadowBoxOverridePoints" }),
+    Object.freeze({ oldKey: "wallGroundHitboxPoints", newKey: "wallShadowBoxPoints" })
+]);
+
+function normalizeLegacyHitboxFieldsDeep(value, seen = null) {
+    if (!value || typeof value !== "object") return value;
+    const visited = seen || new Set();
+    if (visited.has(value)) return value;
+    visited.add(value);
+
+    for (let i = 0; i < LEGACY_HITBOX_FIELD_MAPPINGS.length; i++) {
+        const mapping = LEGACY_HITBOX_FIELD_MAPPINGS[i];
+        if (
+            Object.prototype.hasOwnProperty.call(value, mapping.oldKey) &&
+            !Object.prototype.hasOwnProperty.call(value, mapping.newKey)
+        ) {
+            value[mapping.newKey] = value[mapping.oldKey];
+        }
+    }
+
+    if (Array.isArray(value)) {
+        for (let i = 0; i < value.length; i++) {
+            normalizeLegacyHitboxFieldsDeep(value[i], visited);
+        }
+    } else {
+        for (const key of Object.keys(value)) {
+            normalizeLegacyHitboxFieldsDeep(value[key], visited);
+        }
+    }
+    return value;
+}
 const LEVEL0_ROAD_SURFACE_REBAKE_THROTTLE_MS = 1000;
 
 function destroyPixiDisplayObjectPreservingTexture(displayObj, options) {
@@ -218,9 +253,23 @@ function cloneCompositeLayers(layers) {
     return out.length > 0 ? out : null;
 }
 
+function isLegacySplitDoorCompositeLayers(layers) {
+    if (!Array.isArray(layers) || layers.length !== 2) return false;
+    const first = layers[0] && Array.isArray(layers[0].uRegion) ? layers[0].uRegion : null;
+    const second = layers[1] && Array.isArray(layers[1].uRegion) ? layers[1].uRegion : null;
+    if (!first || !second || first.length < 2 || second.length < 2) return false;
+    return (
+        Math.abs(Number(first[0]) - 0) < 1e-6 &&
+        Math.abs(Number(first[1]) - 0.5) < 1e-6 &&
+        Math.abs(Number(second[0]) - 0.5) < 1e-6 &&
+        Math.abs(Number(second[1]) - 1) < 1e-6
+    );
+}
+
 function resolveDoorCompositeLayersForState(layers, options = {}) {
     const normalized = cloneCompositeLayers(layers);
     if (!normalized || normalized.length === 0) return null;
+    if (isLegacySplitDoorCompositeLayers(normalized)) return null;
     const leafOnly = !!(options && options.leafOnly);
     if (!leafOnly) return normalized;
     if (normalized.length >= 2) {
@@ -330,6 +379,7 @@ async function fetchPlaceableMetadataForCategory(category) {
         .then(async response => {
             if (!response.ok) return null;
             const parsed = await response.json();
+            normalizeLegacyHitboxFieldsDeep(parsed);
             placeableMetadataByCategory.set(safeCategory, parsed);
             return parsed;
         })
@@ -519,6 +569,34 @@ function buildHitboxFromSpec(spec, item, fallbackRadius, scaleContext) {
         if (polygon) return polygon;
     }
     return buildCircleHitboxFromSpec(spec, item, fallbackRadius, scaleContext);
+}
+
+function ensureLosShadowHitboxForObject(obj) {
+    if (!obj || typeof obj !== "object") return false;
+    if (obj.shadowBox) return true;
+    if (typeof CircleHitbox !== "function") return false;
+    const x = Number(obj.x);
+    const y = Number(obj.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    const touchBox = obj.touchBox || null;
+    const visualRadius = Number(touchBox && touchBox.radius);
+    const fallbackRadius = Number.isFinite(obj.groundRadius)
+        ? Number(obj.groundRadius)
+        : (Number.isFinite(obj.visualRadius)
+            ? Number(obj.visualRadius)
+            : Math.max(Number(obj.width) || 0, Number(obj.height) || 0) * 0.2);
+    const radius = Math.max(
+        0.08,
+        Math.min(0.6, Number.isFinite(visualRadius) ? visualRadius : fallbackRadius)
+    );
+    obj.shadowBox = new CircleHitbox(x, y, radius);
+    obj._scriptGeneratedLosShadowHitbox = true;
+    return true;
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.normalizeLegacyHitboxFieldsDeep = normalizeLegacyHitboxFieldsDeep;
+    globalThis.ensureLosShadowHitboxForObject = ensureLosShadowHitboxForObject;
 }
 
 function rotatePointAroundOrigin(px, py, ox, oy, radians) {
@@ -1733,6 +1811,16 @@ void main(void) {
         this.height = height;
         this.blocksTile = true;
         this.castsLosShadows = true;
+        Object.defineProperty(this, "hasShadow", {
+            configurable: true,
+            enumerable: true,
+            get() {
+                return this.castsLosShadows !== false;
+            },
+            set(value) {
+                this.castsLosShadows = !!value;
+            }
+        });
         this.flammable = true;
         this.groundRadius = 0.5;
         this.visualRadius = Math.max(width, height) / 2;
@@ -1827,8 +1915,8 @@ void main(void) {
         this._animatedFrameSignature = "";
 
         const hitboxCreateStart = isTree ? getTreeDebugNow() : 0;
-        this.visualHitbox = new CircleHitbox(this.x, this.y, this.visualRadius);
-        this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
+        this.touchBox = new CircleHitbox(this.x, this.y, this.visualRadius);
+        this.shadowBox = new CircleHitbox(this.x, this.y, this.groundRadius);
         if (isTree) {
             recordTreePrototypeLoadDebug("staticCtorHitboxCreateMs", getTreeDebugNow() - hitboxCreateStart);
         }
@@ -2368,6 +2456,7 @@ void main(void) {
             !this.isFallenDoorEffect &&
             Array.isArray(this.compositeLayers) &&
             this.compositeLayers.length >= 2 &&
+            !isLegacySplitDoorCompositeLayers(this.compositeLayers) &&
             typeof this.getDoorHitShakeScreenOffset === "function"
         ) ? this.getDoorHitShakeScreenOffset() : null;
         const shakeDx = (doorHitShakeOffset && Number.isFinite(doorHitShakeOffset.x)) ? Number(doorHitShakeOffset.x) : 0;
@@ -2643,9 +2732,12 @@ void main(void) {
         this._compositeUnderlayShouldRender = false;
 
         // --- Composite layers ---
-        if (Array.isArray(this.compositeLayers) && this.compositeLayers.length >= 1) {
-            const archLayer = this.compositeLayers[0];
-            const doorLayer = this.compositeLayers.length >= 2 ? this.compositeLayers[1] : null;
+        const renderableCompositeLayers = isLegacySplitDoorCompositeLayers(this.compositeLayers)
+            ? null
+            : this.compositeLayers;
+        if (Array.isArray(renderableCompositeLayers) && renderableCompositeLayers.length >= 1) {
+            const archLayer = renderableCompositeLayers[0];
+            const doorLayer = renderableCompositeLayers.length >= 2 ? renderableCompositeLayers[1] : null;
             const archZOffset = -1.5;
 
             if (this.isOpen) {
@@ -2794,7 +2886,7 @@ void main(void) {
 
     refreshIndexedNodesFromHitbox(options = {}) {
         const mapRef = this.map || null;
-        const hitbox = this.groundPlaneHitbox || this.visualHitbox || null;
+        const hitbox = this.shadowBox || this.touchBox || null;
         if (!mapRef || typeof mapRef.worldToNode !== "function") return;
 
         const traversalLayer = Number.isFinite(options.traversalLayer)
@@ -3699,8 +3791,8 @@ void main(void) {
         this.isPassable = true;
         this.flammable = false;
         this.hitbox = null;
-        this.groundPlaneHitbox = null;
-        this.visualHitbox = null;
+        this.shadowBox = null;
+        this.touchBox = null;
         if (this.fireSprite && this.fireSprite.parent) {
             this.fireSprite.parent.removeChild(this.fireSprite);
         }
@@ -3886,11 +3978,24 @@ void main(void) {
         if (typeof this.scriptingName === "string" && this.scriptingName.trim().length > 0) {
             data.scriptingName = this.scriptingName.trim();
         }
+        const shouldPersistScriptedHasShadow = (
+            typeof this.hasShadow === "boolean" &&
+            (
+                this.hasShadow !== true ||
+                Object.prototype.hasOwnProperty.call(data, "script") ||
+                (typeof data.scriptingName === "string" && data.scriptingName.length > 0)
+            )
+        );
+        if (shouldPersistScriptedHasShadow) {
+            data.hasShadow = this.hasShadow;
+            data.castsLosShadows = this.hasShadow;
+        }
         return data;
     }
 
     static loadJson(data, map, options = {}) {
         if (!data || !data.type || !map) return null;
+        normalizeLegacyHitboxFieldsDeep(data);
 
         try {
             // TriggerArea uses coordinate-based polygon points, not a node, so skip
@@ -3991,8 +4096,8 @@ void main(void) {
                         mountedWallFacingSign: Number.isFinite(data.mountedWallFacingSign)
                             ? Number(data.mountedWallFacingSign)
                             : null,
-                        groundPlaneHitboxOverridePoints: Array.isArray(data.groundPlaneHitboxOverridePoints)
-                            ? data.groundPlaneHitboxOverridePoints
+                        shadowBoxOverridePoints: Array.isArray(data.shadowBoxOverridePoints)
+                            ? data.shadowBoxOverridePoints
                             : undefined,
                         isOpen: (typeof data.isOpen === 'boolean') ? data.isOpen : undefined,
                         isFallenDoorEffect: !!data.isFallenDoorEffect,
@@ -4004,9 +4109,11 @@ void main(void) {
                         playerEnters: normalizeDoorEventScript(data.playerEnters),
                         playerExits: normalizeDoorEventScript(data.playerExits),
                         traversalPortalEdges: normalizeTraversalPortalSpecs(data.traversalPortalEdges),
-                        castsLosShadows: (typeof data.castsLosShadows === "boolean")
-                            ? data.castsLosShadows
-                            : undefined
+                        castsLosShadows: (typeof data.hasShadow === "boolean")
+                            ? data.hasShadow
+                            : (typeof data.castsLosShadows === "boolean")
+                                ? data.castsLosShadows
+                                : undefined
                     });
                     break;
                 case 'wall':
@@ -4036,8 +4143,14 @@ void main(void) {
                     });
             }
 
-            if (obj && typeof data.castsLosShadows === "boolean") {
-                obj.castsLosShadows = data.castsLosShadows;
+            const loadedHasShadow = (typeof data.hasShadow === "boolean")
+                ? data.hasShadow
+                : (typeof data.castsLosShadows === "boolean")
+                    ? data.castsLosShadows
+                    : null;
+            if (obj && loadedHasShadow !== null) {
+                obj.hasShadow = !!loadedHasShadow;
+                obj.castsLosShadows = !!loadedHasShadow;
             }
 
             if (obj) {
@@ -4377,9 +4490,9 @@ class Tree extends StaticObject {
         this.maxHP = this.hp;
         this.maxHp = this.hp;
         this.visualRadius = this.baseVisualRadius;
-        this.visualHitbox = new CircleHitbox(this.x, this.y - this.height, this.visualRadius);
+        this.touchBox = new CircleHitbox(this.x, this.y - this.height, this.visualRadius);
         this.groundRadius = this.baseGroundRadius;
-        this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
+        this.shadowBox = new CircleHitbox(this.x, this.y, this.groundRadius);
         this.texturePath = this.resolveTreeTexturePath();
         if ((!this.texturePath || this.texturePath.length === 0) && this.pixiSprite) {
             this.texturePath = "/assets/images/trees/tree0.png";
@@ -4671,19 +4784,19 @@ class Tree extends StaticObject {
         if (this.fallenHitboxCreated) return;
 
         if (!this._treeMetadata || typeof this._treeMetadata !== "object") {
-            if (this.visualHitbox && this.visualHitbox.type === 'circle') {
-                this.visualHitbox.x = this.x;
-                this.visualHitbox.y = this.y - this.height;
-                this.visualHitbox.radius = this.visualRadius;
+            if (this.touchBox && this.touchBox.type === 'circle') {
+                this.touchBox.x = this.x;
+                this.touchBox.y = this.y - this.height;
+                this.touchBox.radius = this.visualRadius;
             } else {
-                this.visualHitbox = new CircleHitbox(this.x, this.y - this.height, this.visualRadius);
+                this.touchBox = new CircleHitbox(this.x, this.y - this.height, this.visualRadius);
             }
-            if (this.groundPlaneHitbox && this.groundPlaneHitbox.type === 'circle') {
-                this.groundPlaneHitbox.x = this.x;
-                this.groundPlaneHitbox.y = this.y;
-                this.groundPlaneHitbox.radius = this.groundRadius;
+            if (this.shadowBox && this.shadowBox.type === 'circle') {
+                this.shadowBox.x = this.x;
+                this.shadowBox.y = this.y;
+                this.shadowBox.radius = this.groundRadius;
             } else {
-                this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
+                this.shadowBox = new CircleHitbox(this.x, this.y, this.groundRadius);
             }
             return;
         }
@@ -4697,16 +4810,17 @@ class Tree extends StaticObject {
             : (Number.isFinite(meta.height) ? Number(meta.height) : this.baseHeight);
         const defaultGroundRadius = this.groundRadius;
         const defaultVisualRadius = this.visualRadius;
-        const groundScaleContext = resolveHitboxScaleContext(meta.groundPlaneHitbox, this, baseWidth, baseHeight);
-        const visualScaleContext = resolveHitboxScaleContext(meta.visualHitbox, this, baseWidth, baseHeight);
-        this.groundPlaneHitbox = buildHitboxFromSpec(meta.groundPlaneHitbox, this, defaultGroundRadius, groundScaleContext);
-        this.visualHitbox = buildHitboxFromSpec(meta.visualHitbox, this, defaultVisualRadius, visualScaleContext);
+        const groundScaleContext = resolveHitboxScaleContext(meta.shadowBox, this, baseWidth, baseHeight);
+        const visualScaleContext = resolveHitboxScaleContext(meta.touchBox, this, baseWidth, baseHeight);
+        this.shadowBox = buildHitboxFromSpec(meta.shadowBox, this, defaultGroundRadius, groundScaleContext);
+        this.touchBox = buildHitboxFromSpec(meta.touchBox, this, defaultVisualRadius, visualScaleContext);
     }
 
     applyTreeMetadata(metaEntry) {
         const applyStart = getTreeDebugNow();
         if (this.gone) return;
         if (!metaEntry || typeof metaEntry !== "object") return;
+        normalizeLegacyHitboxFieldsDeep(metaEntry);
         this._treeMetadata = metaEntry;
         this.configureSpriteAnimation(metaEntry);
         if (metaEntry.anchor && typeof metaEntry.anchor === "object" && this.pixiSprite && this.pixiSprite.anchor) {
@@ -4814,8 +4928,8 @@ class Tree extends StaticObject {
     createFallenTreeHitboxes() {
         const visualPoints = this.buildFallenTreeHitboxPoints("visual");
         const groundPoints = this.buildFallenTreeHitboxPoints("ground");
-        this.visualHitbox = new PolygonHitbox(visualPoints);
-        this.groundPlaneHitbox = new PolygonHitbox(groundPoints);
+        this.touchBox = new PolygonHitbox(visualPoints);
+        this.shadowBox = new PolygonHitbox(groundPoints);
         this.fallenHitboxCreated = true;
         this.clearVisibilityRegistration();
     }
@@ -4966,8 +5080,11 @@ class Tree extends StaticObject {
         }
         this.updateDepthBillboardUvsForTexture(mesh, sourceTexture, false);
         
-        if (Array.isArray(this.compositeLayers) && this.compositeLayers[0]) {
-            StaticObject._setCompositeLayerUvs(mesh, sourceTexture, this.compositeLayers[0].uRegion, false);
+        const renderableBurnCompositeLayers = isLegacySplitDoorCompositeLayers(this.compositeLayers)
+            ? null
+            : this.compositeLayers;
+        if (Array.isArray(renderableBurnCompositeLayers) && renderableBurnCompositeLayers[0]) {
+            StaticObject._setCompositeLayerUvs(mesh, sourceTexture, renderableBurnCompositeLayers[0].uRegion, false);
         }
 
         const worldX = Number.isFinite(this.x) ? Number(this.x) : 0;
@@ -5251,8 +5368,8 @@ class PlacedObject extends StaticObject {
         this.castsLosShadows = resolveCastsLosShadows(options.castsLosShadows, this.castsLosShadows);
         this.groundRadius = Math.max(0.12, width * 0.2);
         this.visualRadius = Math.max(width, height) * 0.5;
-        this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
-        this.visualHitbox = new CircleHitbox(this.x, this.y - this.height * 0.25, this.visualRadius);
+        this.shadowBox = new CircleHitbox(this.x, this.y, this.groundRadius);
+        this.touchBox = new CircleHitbox(this.x, this.y - this.height * 0.25, this.visualRadius);
         this.placeableAnchorX = Number.isFinite(options.placeableAnchorX)
             ? Number(options.placeableAnchorX)
             : 0.5;
@@ -5261,8 +5378,8 @@ class PlacedObject extends StaticObject {
             ? Number(options.placeableAnchorY)
             : defaultAnchorY;
         this.spellTargetPoint = normalizeSpellTargetPoint(options.spellTargetPoint, null);
-        this.groundPlaneHitboxOverridePoints = Array.isArray(options.groundPlaneHitboxOverridePoints)
-            ? options.groundPlaneHitboxOverridePoints
+        this.shadowBoxOverridePoints = Array.isArray(options.shadowBoxOverridePoints)
+            ? options.shadowBoxOverridePoints
                 .map(p => ({ x: Number(p && p.x), y: Number(p && p.y) }))
                 .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
             : null;
@@ -5283,14 +5400,6 @@ class PlacedObject extends StaticObject {
         this.compositeLayers = resolveDoorCompositeLayersForState(options.compositeLayers, {
             leafOnly: this.isFallenDoorEffect
         });
-        if (!this.compositeLayers && this.isDoorObject()) {
-            this.compositeLayers = resolveDoorCompositeLayersForState([
-                { name: "arch", uRegion: [0, 0.5] },
-                { name: "door", uRegion: [0.5, 1] }
-            ], {
-                leafOnly: this.isFallenDoorEffect
-            });
-        }
         if (this.isFallenDoorEffect) {
             this.updateFallenDoorVisibilityHitbox();
         }
@@ -5377,8 +5486,8 @@ class PlacedObject extends StaticObject {
         if (Number.isFinite(this.mountedWallFacingSign)) {
             data.mountedWallFacingSign = Number(this.mountedWallFacingSign);
         }
-        if (Array.isArray(this.groundPlaneHitboxOverridePoints) && this.groundPlaneHitboxOverridePoints.length >= 3) {
-            data.groundPlaneHitboxOverridePoints = this.groundPlaneHitboxOverridePoints.map(p => ({ x: p.x, y: p.y }));
+        if (Array.isArray(this.shadowBoxOverridePoints) && this.shadowBoxOverridePoints.length >= 3) {
+            data.shadowBoxOverridePoints = this.shadowBoxOverridePoints.map(p => ({ x: p.x, y: p.y }));
         }
         if (typeof this.playerEnters === "string" && this.playerEnters.trim().length > 0) {
             data.playerEnters = this.playerEnters.trim();
@@ -5708,6 +5817,7 @@ class PlacedObject extends StaticObject {
 
     applyPlaceableMetadata(metaEntry) {
         if (!metaEntry || typeof metaEntry !== 'object') return;
+        normalizeLegacyHitboxFieldsDeep(metaEntry);
         this._placedObjectMetadata = metaEntry;
         const explicit = this._placedObjectExplicit || {};
         this.configureSpriteAnimation(metaEntry);
@@ -5774,20 +5884,20 @@ class PlacedObject extends StaticObject {
         const baseHeight = Number.isFinite(metaEntry.hitboxBaseHeight)
             ? Number(metaEntry.hitboxBaseHeight)
             : (Number.isFinite(metaEntry.height) ? Number(metaEntry.height) : 1);
-        const groundScaleContext = resolveHitboxScaleContext(metaEntry.groundPlaneHitbox, this, baseWidth, baseHeight);
-        const visualScaleContext = resolveHitboxScaleContext(metaEntry.visualHitbox, this, baseWidth, baseHeight);
-        this.groundPlaneHitbox = buildHitboxFromSpec(metaEntry.groundPlaneHitbox, this, defaultGroundRadius, groundScaleContext);
-        this.visualHitbox = buildHitboxFromSpec(metaEntry.visualHitbox, this, defaultVisualRadius, visualScaleContext);
+        const groundScaleContext = resolveHitboxScaleContext(metaEntry.shadowBox, this, baseWidth, baseHeight);
+        const visualScaleContext = resolveHitboxScaleContext(metaEntry.touchBox, this, baseWidth, baseHeight);
+        this.shadowBox = buildHitboxFromSpec(metaEntry.shadowBox, this, defaultGroundRadius, groundScaleContext);
+        this.touchBox = buildHitboxFromSpec(metaEntry.touchBox, this, defaultVisualRadius, visualScaleContext);
         if ((this.rotationAxis === "spatial" || this.rotationAxis === "ground") && Number.isFinite(this.placementRotation)) {
             const pivot = (this.rotationAxis === "ground")
                 ? { x: this.x, y: this.y }
                 : (getPlacedObjectAnchorWorldPoint(this) || { x: this.x, y: this.y });
-            this.groundPlaneHitbox = rotateHitboxAroundOrigin(this.groundPlaneHitbox, pivot.x, pivot.y, this.placementRotation);
-            this.visualHitbox = rotateHitboxAroundOrigin(this.visualHitbox, pivot.x, pivot.y, this.placementRotation);
+            this.shadowBox = rotateHitboxAroundOrigin(this.shadowBox, pivot.x, pivot.y, this.placementRotation);
+            this.touchBox = rotateHitboxAroundOrigin(this.touchBox, pivot.x, pivot.y, this.placementRotation);
         }
-        if (Array.isArray(this.groundPlaneHitboxOverridePoints) && this.groundPlaneHitboxOverridePoints.length >= 3) {
-            this.groundPlaneHitbox = new PolygonHitbox(
-                this.groundPlaneHitboxOverridePoints.map(p => ({ x: p.x, y: p.y }))
+        if (Array.isArray(this.shadowBoxOverridePoints) && this.shadowBoxOverridePoints.length >= 3) {
+            this.shadowBox = new PolygonHitbox(
+                this.shadowBoxOverridePoints.map(p => ({ x: p.x, y: p.y }))
             );
         } else {
             const category = (typeof this.category === "string") ? this.category.trim().toLowerCase() : "";
@@ -5807,7 +5917,7 @@ class PlacedObject extends StaticObject {
                     thicknessMultiplier
                 });
                 if (fallbackWallHitbox) {
-                    this.groundPlaneHitbox = fallbackWallHitbox;
+                    this.shadowBox = fallbackWallHitbox;
                 }
             }
         }
@@ -5880,13 +5990,13 @@ class PlacedObject extends StaticObject {
     }
 
     refreshPlacementAfterLoadPositionRestore(options = {}) {
-        if (this.groundPlaneHitbox instanceof CircleHitbox) {
-            this.groundPlaneHitbox.x = this.x;
-            this.groundPlaneHitbox.y = this.y;
+        if (this.shadowBox instanceof CircleHitbox) {
+            this.shadowBox.x = this.x;
+            this.shadowBox.y = this.y;
         }
-        if (this.visualHitbox instanceof CircleHitbox) {
-            this.visualHitbox.x = this.x;
-            this.visualHitbox.y = this.y - this.height * 0.25;
+        if (this.touchBox instanceof CircleHitbox) {
+            this.touchBox.x = this.x;
+            this.touchBox.y = this.y - this.height * 0.25;
         }
         this.refreshIndexedNodesFromHitbox({
             fallbackNode: options && options.fallbackNode ? options.fallbackNode : null,
@@ -6086,8 +6196,8 @@ class PlacedObject extends StaticObject {
         const tr = { x: br.x + normalX * depthOffset, y: br.y + normalY * depthOffset };
         const tl = { x: bl.x + normalX * depthOffset, y: bl.y + normalY * depthOffset };
         const points = [bl, br, tr, tl];
-        this.groundPlaneHitbox = new PolygonHitbox(points.map(p => ({ x: p.x, y: p.y })));
-        this.visualHitbox = new PolygonHitbox(points.map(p => ({ x: p.x, y: p.y })));
+        this.shadowBox = new PolygonHitbox(points.map(p => ({ x: p.x, y: p.y })));
+        this.touchBox = new PolygonHitbox(points.map(p => ({ x: p.x, y: p.y })));
         const fallbackSamplePoint = {
             x: (bl.x + br.x + tr.x + tl.x) * 0.25,
             y: (bl.y + br.y + tr.y + tl.y) * 0.25
@@ -6216,8 +6326,11 @@ class PlacedObject extends StaticObject {
             return null;
         }
 
-        const leafLayer = Array.isArray(this.compositeLayers) && this.compositeLayers[0]
-            ? this.compositeLayers[0]
+        const renderableDoorCompositeLayers = isLegacySplitDoorCompositeLayers(this.compositeLayers)
+            ? null
+            : this.compositeLayers;
+        const leafLayer = Array.isArray(renderableDoorCompositeLayers) && renderableDoorCompositeLayers[0]
+            ? renderableDoorCompositeLayers[0]
             : null;
         if (leafLayer) {
             StaticObject._setCompositeLayerUvs(mesh, sourceTexture, leafLayer.uRegion, false);
@@ -6576,10 +6689,10 @@ class TriggerArea extends StaticObject {
         if (points.length < 3) return false;
 
         this.polygonPoints = points;
-        this.groundPlaneHitbox = new PolygonHitbox(points.map((p) => ({ x: p.x, y: p.y })));
-        this.visualHitbox = this.groundPlaneHitbox;
+        this.shadowBox = new PolygonHitbox(points.map((p) => ({ x: p.x, y: p.y })));
+        this.touchBox = this.shadowBox;
 
-        const bounds = this.groundPlaneHitbox.getBounds();
+        const bounds = this.shadowBox.getBounds();
         const minX = Number(bounds.x) || 0;
         const minY = Number(bounds.y) || 0;
         const width = Math.max(1e-4, Number(bounds.width) || 0);
@@ -6623,6 +6736,14 @@ class RoadPath extends StaticObject {
     static MIN_SEGMENT_LENGTH = 1e-5;
     static JOIN_PARALLEL_EPSILON = 1e-7;
     static MAX_TURN_RADIANS = Math.PI / 2;
+    static SNAP_POINT_EPSILON = 1e-6;
+
+    static createSnapId(prefix = "road-snap") {
+        const randomPart = (typeof crypto !== "undefined" && crypto && typeof crypto.randomUUID === "function")
+            ? crypto.randomUUID()
+            : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        return `${prefix}:${randomPart}`;
+    }
 
     static normalizePoint(raw, label = "road path point") {
         const x = Number(raw && raw.x);
@@ -6665,6 +6786,34 @@ class RoadPath extends StaticObject {
         }
         if (typeof texturePath === "string" && texturePath.length > 0) return texturePath;
         return "/assets/images/flooring/dirt.jpg";
+    }
+
+    static normalizeEndpointSnapIds(rawIds = null) {
+        if (!rawIds || typeof rawIds !== "object") return {};
+        const out = {};
+        if (typeof rawIds.start === "string" && rawIds.start.trim().length > 0) out.start = rawIds.start.trim();
+        if (typeof rawIds.end === "string" && rawIds.end.trim().length > 0) out.end = rawIds.end.trim();
+        return out;
+    }
+
+    static endpointSnapIdsFromData(data = {}) {
+        const ids = RoadPath.normalizeEndpointSnapIds(data.endpointSnapIds);
+        if (!ids.start && typeof data.startSnapId === "string" && data.startSnapId.trim().length > 0) {
+            ids.start = data.startSnapId.trim();
+        }
+        if (!ids.end && typeof data.endSnapId === "string" && data.endSnapId.trim().length > 0) {
+            ids.end = data.endSnapId.trim();
+        }
+        return ids;
+    }
+
+    static pointKey(point, precision = 6) {
+        const x = Number(point && point.x);
+        const y = Number(point && point.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error("road path snap point requires finite x/y coordinates");
+        }
+        return `${x.toFixed(precision)},${y.toFixed(precision)}`;
     }
 
     static lineIntersection(a0, a1, b0, b1, label = "road path join") {
@@ -6817,13 +6966,18 @@ class RoadPath extends StaticObject {
         this.width = geometry.width;
         this.height = geometry.width;
         this.fillTexturePath = RoadPath.normalizeFillTexturePath(options.fillTexturePath);
+        this.roadNetworkId = (typeof options.roadNetworkId === "string" && options.roadNetworkId.trim().length > 0)
+            ? options.roadNetworkId.trim()
+            : RoadPath.createSnapId("road-network");
+        this.endpointSnapIds = RoadPath.normalizeEndpointSnapIds(options.endpointSnapIds);
+        this.ensureEndpointSnapIds();
         this.generatedGeometry = geometry;
         this.segmentPolygons = geometry.segments.map(segment => segment.polygon.map(point => ({ ...point })));
         this.outlinePolygon = geometry.outline.map(point => ({ ...point }));
         this.visualRadius = Math.max(0.5, geometry.width * 0.5);
         this.groundRadius = this.visualRadius;
-        this.visualHitbox = new PolygonHitbox(this.outlinePolygon.map(point => ({ ...point })));
-        this.groundPlaneHitbox = this.visualHitbox;
+        this.touchBox = new PolygonHitbox(this.outlinePolygon.map(point => ({ ...point })));
+        this.shadowBox = this.touchBox;
         if (this.pixiSprite) {
             this.pixiSprite.visible = false;
             this.pixiSprite.renderable = false;
@@ -6834,12 +6988,22 @@ class RoadPath extends StaticObject {
             sampleSpacing: Math.max(0.5, Math.min(1.5, geometry.width * 0.5)),
             extraPoints: this.outlinePolygon
         });
+        if (this.map && typeof this.map.recomputeGroundTerrainPassabilityForRoad === "function") {
+            this.map.recomputeGroundTerrainPassabilityForRoad(this);
+        }
         if (this.map && Array.isArray(this.map.objects) && !this.map.objects.includes(this)) {
             this.map.objects.push(this);
         }
         if (!options.suppressLevel0RoadSurfaceDirty) {
             this.markLevel0RoadSurfaceDirty({ immediate: true });
         }
+    }
+
+    ensureEndpointSnapIds() {
+        this.endpointSnapIds = RoadPath.normalizeEndpointSnapIds(this.endpointSnapIds);
+        if (!this.endpointSnapIds.start) this.endpointSnapIds.start = RoadPath.createSnapId("road-snap");
+        if (!this.endpointSnapIds.end) this.endpointSnapIds.end = RoadPath.createSnapId("road-snap");
+        return this.endpointSnapIds;
     }
 
     getLevel0RoadSurfaceDirtyRect() {
@@ -6901,9 +7065,11 @@ class RoadPath extends StaticObject {
     setPathPoints(points, options = {}) {
         const updateIndexedNodes = !(options && options.updateIndexedNodes === false);
         const markSurfaceDirty = !(options && options.markSurfaceDirty === false);
+        const previousNodes = Array.isArray(this._indexedNodes) ? this._indexedNodes.slice() : [];
         if (markSurfaceDirty) this.markLevel0RoadSurfaceDirty({ immediate: true });
         const geometry = RoadPath.computeGeometry(points, this.roadWidth);
         this.pathPoints = geometry.points;
+        this.ensureEndpointSnapIds();
         this.width = geometry.width;
         this.height = geometry.width;
         this.generatedGeometry = geometry;
@@ -6911,14 +7077,17 @@ class RoadPath extends StaticObject {
         this.outlinePolygon = geometry.outline.map(point => ({ ...point }));
         this.x = this.pathPoints[0].x;
         this.y = this.pathPoints[0].y;
-        this.visualHitbox = new PolygonHitbox(this.outlinePolygon.map(point => ({ ...point })));
-        this.groundPlaneHitbox = this.visualHitbox;
+        this.touchBox = new PolygonHitbox(this.outlinePolygon.map(point => ({ ...point })));
+        this.shadowBox = this.touchBox;
         if (updateIndexedNodes) {
             this.refreshIndexedNodesFromHitbox({
                 forceExpanded: true,
                 sampleSpacing: Math.max(0.5, Math.min(1.5, this.roadWidth * 0.5)),
                 extraPoints: this.outlinePolygon
             });
+        }
+        if (this.map && typeof this.map.recomputeGroundTerrainPassabilityForRoad === "function") {
+            this.map.recomputeGroundTerrainPassabilityForRoad(this, previousNodes);
         }
         if (markSurfaceDirty) this.markLevel0RoadSurfaceDirty({ immediate: true });
         return true;
@@ -6927,6 +7096,14 @@ class RoadPath extends StaticObject {
     setWidth(width) {
         this.roadWidth = RoadPath.normalizeWidth(width);
         return this.setPathPoints(this.pathPoints);
+    }
+
+    removeFromNodes() {
+        const previousNodes = Array.isArray(this._indexedNodes) ? this._indexedNodes.slice() : (this.node ? [this.node] : []);
+        super.removeFromNodes();
+        if (this.map && typeof this.map.recomputeGroundTerrainPassabilityForRoad === "function") {
+            this.map.recomputeGroundTerrainPassabilityForRoad(this, previousNodes);
+        }
     }
 
     removeFromGame() {
@@ -6941,6 +7118,11 @@ class RoadPath extends StaticObject {
         data.points = points.map((point, index) => RoadPath.normalizePoint(point, `road path save point ${index}`));
         data.width = RoadPath.normalizeWidth(this.roadWidth);
         data.fillTexturePath = RoadPath.normalizeFillTexturePath(this.fillTexturePath);
+        data.roadNetworkId = (typeof this.roadNetworkId === "string" && this.roadNetworkId.length > 0)
+            ? this.roadNetworkId
+            : RoadPath.createSnapId("road-network");
+        this.roadNetworkId = data.roadNetworkId;
+        data.endpointSnapIds = RoadPath.normalizeEndpointSnapIds(this.ensureEndpointSnapIds());
         data.isPassable = true;
         data.blocksTile = false;
         data.castsLosShadows = false;
@@ -6949,6 +7131,7 @@ class RoadPath extends StaticObject {
 
     static loadJson(data, map, options = {}) {
         if (!data || typeof data !== "object" || !map) return null;
+        normalizeLegacyHitboxFieldsDeep(data);
         const rawPoints = Array.isArray(data.points)
             ? data.points
             : (Array.isArray(data.pathPoints) ? data.pathPoints : null);
@@ -6964,6 +7147,10 @@ class RoadPath extends StaticObject {
         const roadPath = new RoadPath(rawPoints, map, {
             width,
             fillTexturePath: data.fillTexturePath,
+            roadNetworkId: (typeof data.roadNetworkId === "string" && data.roadNetworkId.trim().length > 0)
+                ? data.roadNetworkId.trim()
+                : undefined,
+            endpointSnapIds: RoadPath.endpointSnapIdsFromData(data),
             traversalLayer,
             level: traversalLayer,
             suppressAutoScriptingName: !!options.suppressAutoScriptingName,
@@ -7911,8 +8098,8 @@ class Road extends StaticObject {
         this.groundRadius = 0.5;
         this.pixiSprite.anchor.set(0.5, 0.5); // Center the sprite on the node
         this.pixiSprite.visible = true;
-        this.visualHitbox = null;
-        this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, this.groundRadius);
+        this.touchBox = null;
+        this.shadowBox = new CircleHitbox(this.x, this.y, this.groundRadius);
         this.width = 1;
         this.height = 1;
         this.renderZ = 0;
@@ -7923,6 +8110,9 @@ class Road extends StaticObject {
         // Recount so this road is not treated as blocking.
         if (this.node && typeof this.node.recountBlockingObjects === 'function') {
             this.node.recountBlockingObjects();
+        }
+        if (this.map && typeof this.map.recomputeGroundTerrainPassabilityForRoad === 'function') {
+            this.map.recomputeGroundTerrainPassabilityForRoad(this);
         }
         
         const deferTextureRefresh = !!(options && options.deferTextureRefresh);
@@ -7959,7 +8149,11 @@ class Road extends StaticObject {
     removeFromNodes() {
         const deferNeighborRefresh = !!this._deferRoadNeighborRefresh;
         const node = this.getNode();
+        const previousNodes = Array.isArray(this._indexedNodes) ? this._indexedNodes.slice() : (node ? [node] : []);
         super.removeFromNodes();
+        if (this.map && typeof this.map.recomputeGroundTerrainPassabilityForRoad === 'function') {
+            this.map.recomputeGroundTerrainPassabilityForRoad(this, previousNodes);
+        }
 
         if (!deferNeighborRefresh) {
             const neighborNodes = node ? [1, 3, 5, 7, 9, 11]
@@ -7996,8 +8190,8 @@ class Road extends StaticObject {
         const geometryChanged = (
             this._roadLastGeometryMask !== mask ||
             this._resolvedRenderFillTexturePath !== activeFillTexturePath ||
-            !this.visualHitbox ||
-            !this.groundPlaneHitbox
+            !this.touchBox ||
+            !this.shadowBox
         );
         const metrics = Road._getTextureTileMetrics(activeFillTexturePath);
         const phaseX = (((this.x * Road._pixelsPerWorldUnit) % metrics.tileW) + metrics.tileW) % metrics.tileW;
@@ -8029,8 +8223,8 @@ class Road extends StaticObject {
         // polygon hitboxes when the road's actual connectivity or flooring changes.
         if (geometryChanged) {
             const hitboxCorners = keptCorners.map(pt => ({x: this.x + pt.x / radius / 2, y: this.y + pt.y / radius / 2}));
-            this.visualHitbox = new PolygonHitbox(hitboxCorners);
-            this.groundPlaneHitbox = new PolygonHitbox(hitboxCorners);
+            this.touchBox = new PolygonHitbox(hitboxCorners);
+            this.shadowBox = new PolygonHitbox(hitboxCorners);
             this._roadLastGeometryMask = mask;
         }
     }

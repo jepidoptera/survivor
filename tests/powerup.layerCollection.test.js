@@ -57,7 +57,7 @@ test("powerups do not intersect a wizard on a different floor layer", () => {
     powerup.currentLayer = 1;
     powerup.traversalLayer = 1;
     const wizard = {
-        groundPlaneHitbox: new TestCircleHitbox(5, 5, 0.5),
+        shadowBox: new TestCircleHitbox(5, 5, 0.5),
         currentMovementSupport: { type: "ground", layer: 0, baseZ: 0 },
         currentLayer: 0,
         traversalLayer: 0
@@ -75,7 +75,7 @@ test("powerups intersect a wizard on the matching floor layer and owner", () => 
     powerup.currentLayer = 1;
     powerup.traversalLayer = 1;
     const wizard = {
-        groundPlaneHitbox: new TestCircleHitbox(5, 5, 0.5),
+        shadowBox: new TestCircleHitbox(5, 5, 0.5),
         currentMovementSupport: support,
         currentLayer: 1,
         traversalLayer: 1
@@ -92,7 +92,7 @@ test("powerups do not intersect a wizard in a different owner scope on the same 
     powerup.currentLayer = 1;
     powerup.traversalLayer = 1;
     const wizard = {
-        groundPlaneHitbox: new TestCircleHitbox(5, 5, 0.5),
+        shadowBox: new TestCircleHitbox(5, 5, 0.5),
         currentMovementSupport: { type: "floor", layer: 1, baseZ: 3, ownerType: "building", ownerId: "building:tower" },
         currentLayer: 1,
         traversalLayer: 1

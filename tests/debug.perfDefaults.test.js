@@ -4,7 +4,25 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-function loadDebugContext() {
+function createLocalStorageMock(initial = {}) {
+    const store = new Map(Object.entries(initial));
+    return {
+        getItem(key) {
+            return store.has(String(key)) ? store.get(String(key)) : null;
+        },
+        setItem(key, value) {
+            store.set(String(key), String(value));
+        },
+        removeItem(key) {
+            store.delete(String(key));
+        },
+        snapshot() {
+            return Object.fromEntries(store.entries());
+        }
+    };
+}
+
+function loadDebugContext(options = {}) {
     let nowMs = 0;
     const context = {
         console: {
@@ -54,6 +72,9 @@ function loadDebugContext() {
     context.window = context;
     context.globalThis = context;
     context.Wizard = class Wizard extends context.Character {};
+    if (options.localStorage) {
+        context.localStorage = options.localStorage;
+    }
 
     vm.createContext(context);
     const debugSource = fs.readFileSync(
@@ -80,12 +101,40 @@ test("terrain paint diagnostic outlines stay on by default", () => {
     const context = loadDebugContext();
 
     assert.equal(context.debugTerrainPolygonDiagnostics, true);
+    assert.equal(context.debugTerrainPaintRepairPaths, false);
     assert.equal(context.DebugView.settings.showTerrainPaintDiagnostics, true);
+    assert.equal(context.DebugView.settings.showTerrainPaintRepairPaths, false);
 
     assert.equal(context.DebugView.setTerrainPaintDiagnosticsVisible(false), false);
     assert.equal(context.debugTerrainPolygonDiagnostics, false);
     assert.equal(context.DebugView.toggleTerrainPaintDiagnostics(), true);
     assert.equal(context.debugTerrainPolygonDiagnostics, true);
+    assert.equal(context.DebugView.toggleTerrainPaintRepairPaths(), true);
+    assert.equal(context.debugTerrainPaintRepairPaths, true);
+    assert.equal(context.DebugView.setTerrainPaintRepairPathsVisible(false), false);
+    assert.equal(context.debugTerrainPaintRepairPaths, false);
+});
+
+test("terrain polygon outline console command persists to localStorage", () => {
+    const localStorage = createLocalStorageMock();
+    const firstContext = loadDebugContext({ localStorage });
+
+    assert.equal(firstContext.terrainPolygonOutlines(), true);
+    assert.equal(firstContext.terrainPolygonOutlines(false), false);
+    assert.equal(firstContext.debugTerrainPolygonDiagnostics, false);
+    assert.equal(localStorage.getItem("survivor-terrain-polygon-outlines"), "0");
+
+    const secondContext = loadDebugContext({ localStorage });
+    assert.equal(secondContext.terrainPolygonOutlines(), false);
+    assert.equal(secondContext.debugTerrainPolygonDiagnostics, false);
+
+    assert.equal(secondContext.toggleTerrainPolygonOutlines(), true);
+    assert.equal(localStorage.getItem("survivor-terrain-polygon-outlines"), "1");
+
+    const thirdContext = loadDebugContext({ localStorage });
+    assert.equal(thirdContext.DebugView.terrainPolygonOutlines(), true);
+    assert.equal(thirdContext.DebugView.setTerrainPolygonOutlinesVisible(false), false);
+    assert.equal(localStorage.getItem("survivor-terrain-polygon-outlines"), "0");
 });
 
 test("debug hitbox projection keeps character z absolute on floor layers", () => {

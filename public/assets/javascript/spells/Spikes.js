@@ -16,8 +16,8 @@ class SpikeProjectile {
         this.hideProjectileSprite = false;
         this.rotateSpriteToMovement = true;
         this.spriteRotationOffset = Math.PI * 0.5;
-        this.speed = SpikeProjectile.SPEED;
-        this.damage = SpikeProjectile.DAMAGE;
+        this.speed = Number.isFinite(config.speed) ? Math.max(0.001, Number(config.speed)) : SpikeProjectile.SPEED;
+        this.damage = Number.isFinite(config.damage) ? Math.max(0, Number(config.damage)) : SpikeProjectile.DAMAGE;
         this.radius = SpikeProjectile.RADIUS;
         this.apparentSize = 22;
         this.x = Number(config.x) || 0;
@@ -31,15 +31,21 @@ class SpikeProjectile {
         this.source = config.source || null;
         this.map = config.map || null;
         this.ageMs = 0;
-        this.maxLifetimeMs = (SpikeProjectile.MAX_RANGE / Math.max(0.001, this.speed)) * 1000;
+        const maxRange = Number.isFinite(config.range) ? Math.max(0.001, Number(config.range)) : SpikeProjectile.MAX_RANGE;
+        const durationMs = Number.isFinite(config.duration) && Number(config.duration) > 0
+            ? Number(config.duration) * 1000
+            : null;
+        this.maxLifetimeMs = durationMs !== null
+            ? Math.min(durationMs, (maxRange / Math.max(0.001, this.speed)) * 1000)
+            : (maxRange / Math.max(0.001, this.speed)) * 1000;
         this.snowParticles = [];
         this._impactResolved = false;
         this._impactElapsedMs = 0;
         this._lastUpdateTime = 0;
         this._pausedAt = null;
         this.hitbox = new CircleHitbox(this.x, this.y, this.radius);
-        this.groundPlaneHitbox = this.hitbox;
-        this.visualHitbox = this.hitbox;
+        this.shadowBox = this.hitbox;
+        this.touchBox = this.hitbox;
         this.movement = {
             x: this.dirX * this.speed / Math.max(1, frameRate),
             y: this.dirY * this.speed / Math.max(1, frameRate),
@@ -165,9 +171,9 @@ class SpikeProjectile {
             animals.includes(target)
         );
         if (isAnimalTarget) {
-            return target.visualHitbox || target.groundPlaneHitbox || target.hitbox || null;
+            return target.touchBox || target.shadowBox || target.hitbox || null;
         }
-        return target.groundPlaneHitbox || target.visualHitbox || target.hitbox || null;
+        return target.shadowBox || target.touchBox || target.hitbox || null;
     }
 
     canDamageTarget(target) {
@@ -297,6 +303,10 @@ class Spikes extends globalThis.Spell {
         this.image.src = SpikeProjectile.IMAGE_PATH;
         this.delayTime = (Spikes.HOTKEY_DELAY_MS * 2) / 1000;
         this.magicCost = 25;
+        this.damage = SpikeProjectile.DAMAGE;
+        this.range = SpikeProjectile.MAX_RANGE;
+        this.speed = SpikeProjectile.SPEED;
+        this.duration = null;
     }
 
     cast(targetX, targetY) {
@@ -356,7 +366,11 @@ class Spikes extends globalThis.Spell {
                     map: mapRef,
                     visualBaseZ: casterWorldZ,
                     visualStartZ: casterWorldZ,
-                    currentLayer: casterLayer
+                    currentLayer: casterLayer,
+                    speed: this.speed,
+                    damage: this.damage,
+                    range: this.range,
+                    duration: this.duration
                 });
                 projectiles.push(projectile.cast());
             }, Math.round(index * Spikes.HOTKEY_DELAY_MS));

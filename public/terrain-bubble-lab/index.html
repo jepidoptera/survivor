@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Terrain Bubble Lab</title>
+    <link rel="stylesheet" href="/terrain-bubble-lab/styles.css?v=terrain-bubble-lab-20260706-9">
+</head>
+<body>
+    <main class="app-shell">
+        <section class="workbench" aria-label="Terrain bubble workbench">
+            <canvas id="bubbleCanvas"></canvas>
+        </section>
+        <aside class="side-panel" aria-label="Terrain bubble controls">
+            <div class="panel-section">
+                <h1>Terrain Bubble Lab</h1>
+                <div class="segmented" role="group" aria-label="Tool mode">
+                    <button type="button" class="mode-button is-active" data-mode="paint" title="Click a tile to set its terrain.">Paint</button>
+                    <button type="button" class="mode-button" data-mode="edit" title="Drag vertices, Shift-click edges to insert, Delete removes the selected vertex.">Edit</button>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h2>Terrain</h2>
+                <div class="terrain-list" id="terrainButtons"></div>
+            </div>
+
+            <div class="panel-section">
+                <h2>Polygons</h2>
+                <div class="button-row polygon-actions">
+                    <button type="button" id="regenerateButton">Generate</button>
+                    <button type="button" id="suggestButton">Suggest</button>
+                    <button type="button" id="clearSelectionButton">Clear</button>
+                </div>
+                <label class="field-label" for="suggestSolver">Suggest Solver</label>
+                <select id="suggestSolver" class="select-input">
+                    <option value="calculator">Calculator</option>
+                    <option value="binary-vertex">Binary Vertex</option>
+                    <option value="iso-contour">Iso Contour</option>
+                    <option value="deterministic">Deterministic Solver</option>
+                </select>
+                <button type="button" class="toggle-list-button" id="togglePolygonListButton"></button>
+                <div class="polygon-list" id="polygonList"></div>
+            </div>
+
+            <div class="panel-section">
+                <h2>Invariants</h2>
+                <div class="invariant-list" id="invariantList"></div>
+            </div>
+
+            <div class="panel-section">
+                <h2>Save Example</h2>
+                <label class="field-label" for="exampleName">Name</label>
+                <input id="exampleName" class="text-input" type="text" maxlength="80" placeholder="desert-water-corner">
+                <button type="button" class="primary-button" id="saveButton">Save</button>
+                <p class="status-line" id="statusLine"></p>
+            </div>
+
+            <div class="panel-section">
+                <h2>Library</h2>
+                <div class="button-row library-actions">
+                    <button type="button" id="newRandomExampleButton">New Random</button>
+                    <button type="button" id="retrainButton">Retrain</button>
+                </div>
+                <div class="example-list" id="exampleList"></div>
+            </div>
+
+            <div class="panel-section export-section">
+                <h2>Current JSON</h2>
+                <textarea id="jsonPreview" readonly spellcheck="false"></textarea>
+            </div>
+        </aside>
+    </main>
+    <script src="/terrain-bubble-lab/main.js?v=terrain-bubble-lab-20260709-1"></script>
+</body>
+</html>

@@ -472,6 +472,59 @@ test.afterEach(() => {
     restorePrototypeGlobals();
 });
 
+test("loadPrototypeSectionWorld rehydrates section terrain polygons with the section-aware normalizer", () => {
+    const map = createPrototypeMap();
+    attachPrototypeApis(map, createEmptyPrototypeState());
+    const sourcePolygon = {
+        type: "mud",
+        points: [
+            { x: 0, y: 0 },
+            { x: 1, y: 0 },
+            { x: 0, y: 1 }
+        ]
+    };
+    let sectionNormalizeCalls = 0;
+    map.normalizeGroundTerrainPolygons = () => {
+        throw new Error("generic terrain normalization should not hydrate section polygons");
+    };
+    map.normalizeGroundTerrainSectionSourcePolygons = (sectionKey, asset, polygons) => {
+        sectionNormalizeCalls += 1;
+        assert.equal(sectionKey, "0,0");
+        assert.equal(asset.key, "0,0");
+        assert.equal(polygons.length, 1);
+        assert.equal(polygons[0].type, "mud");
+        return polygons.map((polygon) => ({
+            type: polygon.type,
+            points: polygon.points.map(point => ({ x: Number(point.x), y: Number(point.y) }))
+        }));
+    };
+
+    const loaded = map.loadPrototypeSectionWorld(createPrototypeBundle({
+        sections: [{
+            id: "section-0,0",
+            key: "0,0",
+            coord: { q: 0, r: 0 },
+            centerAxial: { q: 0, r: 0 },
+            centerOffset: { x: 0, y: 0 },
+            neighborKeys: [],
+            tileCoordKeys: ["0,0"],
+            groundTextureId: 0,
+            groundTiles: { "0,0": 0 },
+            terrainPolygons: [sourcePolygon],
+            walls: [],
+            objects: [],
+            animals: [],
+            powerups: []
+        }]
+    }));
+
+    assert.equal(loaded, true);
+    assert.equal(sectionNormalizeCalls, 1);
+    const asset = map._prototypeSectionState.sectionAssetsByKey.get("0,0");
+    assert.equal(asset.terrainPolygons.length, 1);
+    assert.equal(asset.terrainPolygons[0].type, "mud");
+});
+
 test("prototype bubble object parking only keeps bounded high-cost static types", () => {
     assert.equal(getPrototypeParkedObjectCacheLimit("road"), 1536);
     assert.equal(getPrototypeParkedObjectCacheLimit("tree"), 768);

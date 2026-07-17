@@ -13,7 +13,7 @@
       "x": 0.5,
       "y": 1
     },
-    "groundPlaneHitbox": {
+    "shadowBox": {
       "type": "polygon",
       "points": [
         {
@@ -34,7 +34,7 @@
         }
       ]
     },
-    "visualHitbox": {
+    "touchBox": {
       "type": "circle",
       "xOffset": 0,
       "yOffsetFromHeightMultiplier": -0.25,
@@ -60,7 +60,7 @@
       "renderDepthOffset": 0,
       "blocksTile": false,
       "isPassable": true,
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "polygon",
         "points": [
           {
@@ -81,7 +81,7 @@
           }
         ]
       },
-      "visualHitbox": {
+      "touchBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.25,
@@ -119,7 +119,7 @@
       "renderDepthOffset": 0,
       "blocksTile": false,
       "isPassable": true,
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "polygon",
         "points": [
           {
@@ -140,7 +140,7 @@
           }
         ]
       },
-      "visualHitbox": {
+      "touchBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.25,
@@ -178,7 +178,7 @@
       "renderDepthOffset": 0,
       "blocksTile": false,
       "isPassable": true,
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "polygon",
         "points": [
           {
@@ -199,7 +199,7 @@
           }
         ]
       },
-      "visualHitbox": {
+      "touchBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.375,
@@ -237,7 +237,7 @@
       "renderDepthOffset": 0,
       "blocksTile": false,
       "isPassable": true,
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "polygon",
         "points": [
           {
@@ -258,7 +258,7 @@
           }
         ]
       },
-      "visualHitbox": {
+      "touchBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.375,
@@ -296,7 +296,7 @@
       "renderDepthOffset": 0,
       "blocksTile": false,
       "isPassable": true,
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "polygon",
         "points": [
           {
@@ -317,7 +317,7 @@
           }
         ]
       },
-      "visualHitbox": {
+      "touchBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.375,
@@ -355,7 +355,7 @@
       "renderDepthOffset": 0,
       "blocksTile": false,
       "isPassable": true,
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "polygon",
         "points": [
           {
@@ -376,7 +376,7 @@
           }
         ]
       },
-      "visualHitbox": {
+      "touchBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.375,
@@ -414,7 +414,7 @@
       "renderDepthOffset": 0,
       "blocksTile": false,
       "isPassable": true,
-      "groundPlaneHitbox": {
+      "shadowBox": {
         "type": "polygon",
         "points": [
           {
@@ -435,7 +435,7 @@
           }
         ]
       },
-      "visualHitbox": {
+      "touchBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.25,
@@ -473,7 +473,7 @@
       "renderDepthOffset": 0,
       "blocksTile": false,
       "isPassable": true,
-    "groundPlaneHitbox": {
+    "shadowBox": {
       "type": "polygon",
       "points": [
         {
@@ -494,7 +494,7 @@
         }
       ]
     },
-      "visualHitbox": {
+      "touchBox": {
         "type": "circle",
         "xOffset": 0,
         "yOffsetFromHeightMultiplier": -0.25,

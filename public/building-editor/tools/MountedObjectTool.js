@@ -117,7 +117,7 @@ export function mountedObjectPlacementAt(state, asset, worldPoint, threshold, op
         mountedWallFacingSign: candidate.mountedWallFacingSign,
         placementRotation: candidate.snappedRotationDeg,
         zOffset,
-        groundPlaneHitboxOverridePoints: candidate.wallGroundHitboxPoints,
+        shadowBoxOverridePoints: candidate.wallShadowBoxPoints,
         centerSnapActive: candidate.centerSnapActive,
         verticalCenterSnapActive: candidate.verticalCenterSnapActive,
         verticalPeerSnapActive: candidate.verticalPeerSnapActive,

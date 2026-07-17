@@ -100,6 +100,7 @@
             if (textureId === 52) return "desert";
             if (textureId === 53) return "water";
             if (textureId === 54) return "mud";
+            if (textureId === 55) return "mowedgrass";
             throw new Error(`${label} cannot resolve terrain type without map.getGroundTerrainDef`);
         }
 

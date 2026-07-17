@@ -153001,23 +153001,6 @@
       "chaseRadius": 11.709353557830626,
       "scriptingName": "eagleman3",
       "id": 208
-    },
-    {
-      "type": "deer",
-      "x": 138.81980000000001,
-      "y": 38.35000000000001,
-      "hp": 12.403006654094902,
-      "maxHp": 12.403006654094902,
-      "mp": 12.403006654094902,
-      "maxMp": 12.403006654094902,
-      "temperature": 0,
-      "baselineTemperature": 0,
-      "size": 1.2092541655707159,
-      "inventory": {},
-      "tint": 16777215,
-      "chaseRadius": -1,
-      "scriptingName": "deer23",
-      "id": 292
     }
   ],
   "powerups": [

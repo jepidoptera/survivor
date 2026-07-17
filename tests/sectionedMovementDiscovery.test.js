@@ -174,7 +174,7 @@ test("sparse section maps still return nearby blocking objects when one padded c
     const blockingRock = {
         gone: false,
         isPassable: false,
-        groundPlaneHitbox: createRectHitbox(activeNode.x - 0.5, activeNode.y - 0.5, activeNode.x + 0.5, activeNode.y + 0.5)
+        shadowBox: createRectHitbox(activeNode.x - 0.5, activeNode.y - 0.5, activeNode.x + 0.5, activeNode.y + 0.5)
     };
     activeNode.objects.push(blockingRock);
 
@@ -207,7 +207,7 @@ test("wizard still discovers nearby doors on sparse section maps when one padded
         gone: false,
         category: "doors",
         isPassable: true,
-        groundPlaneHitbox: doorHitbox
+        shadowBox: doorHitbox
     };
     activeNode.objects.push(door);
 
@@ -266,7 +266,7 @@ test("wizard movement discovers blockers on the wizard's current floor layer", (
         traversalLayer: 0,
         bottomZ: 0,
         height: 3,
-        groundPlaneHitbox: createRectHitbox(baseNode.x - 0.5, baseNode.y - 0.5, baseNode.x + 0.5, baseNode.y + 0.5)
+        shadowBox: createRectHitbox(baseNode.x - 0.5, baseNode.y - 0.5, baseNode.x + 0.5, baseNode.y + 0.5)
     };
     const upperWall = {
         gone: false,
@@ -274,7 +274,7 @@ test("wizard movement discovers blockers on the wizard's current floor layer", (
         traversalLayer: 1,
         bottomZ: 3,
         height: 3,
-        groundPlaneHitbox: createRectHitbox(upperNode.x - 0.5, upperNode.y - 0.5, upperNode.x + 0.5, upperNode.y + 0.5)
+        shadowBox: createRectHitbox(upperNode.x - 0.5, upperNode.y - 0.5, upperNode.x + 0.5, upperNode.y + 0.5)
     };
     baseNode.objects.push(groundWall);
     upperNode.objects.push(upperWall);
@@ -306,7 +306,7 @@ test("wizard can jump over short blockers on upper floor layers", () => {
         traversalLayer: 1,
         bottomZ: 3,
         height: 0.5,
-        groundPlaneHitbox: createRectHitbox(0, 0, 1, 1)
+        shadowBox: createRectHitbox(0, 0, 1, 1)
     };
     const tallerUpperWall = {
         gone: false,
@@ -314,7 +314,7 @@ test("wizard can jump over short blockers on upper floor layers", () => {
         traversalLayer: 1,
         bottomZ: 3,
         height: 1,
-        groundPlaneHitbox: createRectHitbox(0, 0, 1, 1)
+        shadowBox: createRectHitbox(0, 0, 1, 1)
     };
 
     assert.equal(wizard.doesObjectBlockVectorMovement(shortUpperWall), false);
@@ -362,7 +362,7 @@ test("wizard movement only collision-tests each upper-layer blocker once", () =>
         traversalLayer: 1,
         bottomZ: 3,
         height: 3,
-        groundPlaneHitbox: createRectHitbox(upperNode.x - 0.5, upperNode.y - 0.5, upperNode.x + 0.5, upperNode.y + 0.5)
+        shadowBox: createRectHitbox(upperNode.x - 0.5, upperNode.y - 0.5, upperNode.x + 0.5, upperNode.y + 0.5)
     };
     upperNode.objects.push(upperWall, upperWall);
 
@@ -389,7 +389,7 @@ test("wizard collision resolver pushes back from zero-vector wall overlaps", () 
     wizard.frameRate = 1;
 
     const wall = {
-        groundPlaneHitbox: {
+        shadowBox: {
             getBounds() {
                 return { x: 0.9, y: -1, width: 0.2, height: 2 };
             },
@@ -416,7 +416,7 @@ test("wizard collision resolver blocks movement swept through thin walls", () =>
     wizard.frameRate = 1;
 
     const wall = {
-        groundPlaneHitbox: new PolygonHitbox([
+        shadowBox: new PolygonHitbox([
             { x: 0.9, y: -1 },
             { x: 1.1, y: -1 },
             { x: 1.1, y: 1 },
@@ -442,7 +442,7 @@ test("wizard collision resolver does not push through a wall from an inside over
     wizard.frameRate = 1;
 
     const wall = {
-        groundPlaneHitbox: new PolygonHitbox([
+        shadowBox: new PolygonHitbox([
             { x: 0.9, y: -1 },
             { x: 1.1, y: -1 },
             { x: 1.1, y: 1 },

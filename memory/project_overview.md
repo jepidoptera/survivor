@@ -39,6 +39,6 @@ GitHub: `jepidoptera/The-Most-Badass-Project-Evah` (main branch: `master`, activ
 - `public/assets/javascript/gameobjects/staticObjects.js`
 - `public/assets/javascript/gameobjects/wallSectionUnit.js`
 - `public/assets/javascript/rendering/Rendering.js`
-- `public/assets/javascript/spells/PlaceObject.js`
+- `public/assets/javascript/spells/editor/PlaceObject.js`
 - `tests/movement.traversal.test.js`
 - `tests/rendering.level0BakeCache.test.js`

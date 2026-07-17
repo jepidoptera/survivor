@@ -563,6 +563,37 @@ test("building exterior bitmap rendering uses vertical texture anchor", () => {
     assert.equal(removedPlacementId, "building:placed-1");
 });
 
+test("transparent front mounted windows in building interior do not write depth", () => {
+    const RenderingImpl = loadRenderingImpl({
+        PIXI: {
+            State: class {},
+            Graphics: class {}
+        }
+    });
+    const renderer = new RenderingImpl();
+    const defaultState = {
+        depthTest: true,
+        depthMask: true,
+        blend: false,
+        culling: false
+    };
+    const mesh = { state: defaultState };
+    const windowItem = { type: "window", category: "windows" };
+
+    assert.equal(renderer.applyMountedWindowDepthState(mesh, windowItem, "front", 0.1), true);
+    assert.notEqual(mesh.state, defaultState);
+    assert.equal(mesh.state.depthTest, true);
+    assert.equal(mesh.state.depthMask, false);
+    assert.equal(mesh.state.blend, true);
+    assert.equal(mesh.state.culling, false);
+
+    assert.equal(renderer.applyMountedWindowDepthState(mesh, windowItem, "back", 0.1), false);
+    assert.equal(mesh.state, defaultState);
+
+    assert.equal(renderer.applyMountedWindowDepthState(mesh, windowItem, "front", 1), false);
+    assert.equal(mesh.state, defaultState);
+});
+
 test("building interior bitmap rendering projects a visible ground mesh", () => {
     let updateThis = null;
     let updateOptions = null;
@@ -2650,6 +2681,141 @@ test("terrain fade clipping failures render an approximation with diagnostic geo
     assert.equal(Array.isArray(warnings[0][1].clipRings), true);
 });
 
+test("terrain alpha fade skips section clip boundary edges", () => {
+    class FakeBuffer {
+        constructor(data) {
+            this.data = data;
+        }
+        update() {}
+    }
+    class FakeGeometry {
+        constructor() {
+            this.buffers = new Map();
+            this.index = null;
+        }
+        addAttribute(name, data) {
+            this.buffers.set(name, new FakeBuffer(data));
+            return this;
+        }
+        addIndex(data) {
+            this.index = new FakeBuffer(data);
+            return this;
+        }
+        getBuffer(name) {
+            return this.buffers.get(name) || null;
+        }
+    }
+    class FakeContainer {
+        constructor() {
+            this.children = [];
+            this.position = { set() {} };
+            this.scale = { set() {} };
+        }
+        addChild(child) {
+            if (!this.children.includes(child)) this.children.push(child);
+            child.parent = this;
+        }
+        addChildAt(child) {
+            this.addChild(child);
+        }
+        removeChild(child) {
+            const index = this.children.indexOf(child);
+            if (index >= 0) this.children.splice(index, 1);
+            if (child.parent === this) child.parent = null;
+        }
+    }
+    class FakeMesh {
+        constructor(geometry, shader) {
+            this.geometry = geometry;
+            this.shader = shader;
+            this.parent = null;
+            this.visible = false;
+            this.position = { set() {} };
+            this.scale = { set() {} };
+        }
+        destroy() {}
+    }
+    const fakePixi = {
+        Container: FakeContainer,
+        Geometry: FakeGeometry,
+        Mesh: FakeMesh,
+        Shader: { from: (_vs, _fs, uniforms) => ({ uniforms }) },
+        State: class {},
+        Texture: {
+            WHITE: { id: "white" },
+            from: (path) => ({ id: path, baseTexture: {} })
+        },
+        utils: {
+            earcut(vertices) {
+                const count = Math.floor(vertices.length / 2);
+                const indices = [];
+                for (let i = 1; i < count - 1; i++) indices.push(0, i, i + 1);
+                return indices;
+            }
+        }
+    };
+    const RenderingImpl = loadRenderingImpl({
+        PIXI: fakePixi,
+        app: { screen: { width: 800, height: 600 } }
+    });
+    const makeRenderer = (skipClipBoundaryFade) => {
+        const renderer = new RenderingImpl();
+        renderer.layers = { depthObjects: new FakeContainer() };
+        renderer.camera = { x: 0, y: 0, z: 0, viewscale: 1, xyratio: 1 };
+        renderer.collectFloorVisualEntries = () => [{
+            key: "fragment:section:0,0:terrain:mud:0:0:0",
+            level: 0,
+            baseZ: 0,
+            outer: [
+                { x: 1, y: 0 },
+                { x: 4, y: 0 },
+                { x: 4, y: 2 },
+                { x: 1, y: 2 }
+            ],
+            holes: [],
+            texture: null,
+            textureBounds: null,
+            textureRepeat: { x: 1, y: 1 },
+            texturePath: "/assets/images/mud.png",
+            tint: 0xffffff,
+            alpha: 1,
+            depthBias: 0.001,
+            isHoleOverlay: false,
+            terrainType: "mud",
+            edgeFadeWidth: 0.25,
+            edgeFadeClipRings: [],
+            edgeFadeClipSignature: "",
+            edgeFadeSkipRings: [[
+                { x: 0, y: 0 },
+                { x: 5, y: 0 },
+                { x: 5, y: 2 },
+                { x: 0, y: 2 }
+            ]],
+            skipClipBoundaryFade,
+            edgeFadeDiagnosticContext: {
+                terrainType: "mud",
+                sectionKey: "0,0"
+            }
+        }];
+        renderer.renderFloorVisualPolygons({});
+        return renderer.floorVisualMeshByKey.get("fragment:section:0,0:terrain:mud:0:0:0");
+    };
+
+    const withBoundaryFade = makeRenderer(false);
+    const withoutBoundaryFade = makeRenderer(true);
+
+    assert.ok(withBoundaryFade.triangulation.vertexCount > withoutBoundaryFade.triangulation.vertexCount);
+    const skippedPositions = Array.from(withoutBoundaryFade.mesh.geometry.getBuffer("aVertexPosition").data);
+    const skippedAlpha = Array.from(withoutBoundaryFade.mesh.geometry.getBuffer("aEdgeAlpha").data);
+    for (let i = 0; i < skippedAlpha.length; i++) {
+        const y = skippedPositions[i * 2 + 1];
+        assert.ok(
+            !(Math.abs(y - 2) <= 1e-7 && skippedAlpha[i] < 0.999),
+            "section boundary should not emit fade-band alpha vertices"
+        );
+    }
+});
+
 test("interior presentation foreground promotes spell and selection overlays", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -3076,7 +3242,7 @@ test("building exterior fade keeps bottom-floor doors live", () => {
     assert.equal(upperDoor._cutawayCompositeFrame, renderer._layerCutawayFrameId);
 });
 
-test("building exterior fade renders bottom-floor prototype doors separately", () => {
+test("placed building exterior fade does not render bottom-floor prototype doors separately", () => {
     let updateThis = null;
     let updateOptions = null;
     const mesh = { visible: false, renderable: false, parent: null };
@@ -3107,7 +3273,7 @@ test("building exterior fade renders bottom-floor prototype doors separately", (
         updateThis = this;
         updateOptions = options;
         this._compositeUnderlayMesh = this._ensureCompositeUnderlayMesh();
-        this._compositeUnderlayShouldRender = true;
+        this._compositeUnderlayShouldRender = false;
         this._depthBillboardMesh = mesh;
         return mesh;
     };
@@ -3162,7 +3328,11 @@ test("building exterior fade renders bottom-floor prototype doors separately", (
         }
     };
     const trigger = {
-        building: { minLevel: 0 },
+        building: {
+            minLevel: 0,
+            _prototypeBuildingPlacement: { id: "building:placed-house" }
+        },
+        buildingId: "building:placed-house",
         activeInteriorRegion: null,
         renderCache: {
             renderItems: [{ item: bottomDoor, level: 0 }]
@@ -3171,6 +3341,10 @@ test("building exterior fade renders bottom-floor prototype doors separately", (
     const cutawayState = { active: true, triggers: [trigger] };
     const foregroundPlan = renderer.buildBuildingInteriorRenderPlan({}, cutawayState);
     const currentDisplayObjects = new Set();
+    let hiddenActiveIds = null;
+    renderer.hideUnusedPrototypeBuildingExteriorGroundDoors = (activeIds) => {
+        hiddenActiveIds = new Set(activeIds);
+    };
 
     const rendered = renderer.renderPrototypeBuildingExteriorGroundDoors(
         { _renderingLayerCutawayState: cutawayState },
@@ -3180,19 +3354,17 @@ test("building exterior fade renders bottom-floor prototype doors separately", (
         currentDisplayObjects
     );
 
-    assert.equal(rendered.includes(underlayMesh), true);
-    assert.equal(rendered.includes(mesh), true);
-    assert.equal(container.children.includes(underlayMesh), true);
-    assert.equal(container.children.includes(mesh), true);
-    assert.equal(currentDisplayObjects.has(underlayMesh), true);
-    assert.equal(currentDisplayObjects.has(mesh), true);
-    assert.equal(updateThis.texturePath, "/assets/images/doors/door1.png");
-    assert.equal(updateThis.mountedWallSectionUnitId, 0);
-    assert.equal(updateThis._renderLayerBaseZ, 0);
-    assert.equal(updateThis.pixiSprite.alpha, 1);
-    assert.equal(updateOptions.forceMountedWallSide, "front");
-    assert.equal(updateOptions.drawOnlyMountedWallSide, true);
-    assert.equal(picked.some(entry => entry.displayObj === mesh && entry.item === bottomDoor && entry.forceInclude), true);
+    assert.equal(foregroundPlan.items.has(bottomDoor), false);
+    assert.equal(rendered.includes(underlayMesh), false);
+    assert.equal(rendered.includes(mesh), false);
+    assert.equal(container.children.includes(underlayMesh), false);
+    assert.equal(container.children.includes(mesh), false);
+    assert.equal(currentDisplayObjects.has(underlayMesh), false);
+    assert.equal(currentDisplayObjects.has(mesh), false);
+    assert.equal(updateThis, null);
+    assert.equal(updateOptions, null);
+    assert.deepEqual([...hiddenActiveIds], []);
+    assert.equal(picked.length, 0);
 });
 
 test("building interior render plan ignores generic floor cutaway triggers", () => {
@@ -3486,7 +3658,7 @@ test("building doorway transition latches interior presentation until threshold 
     assert.equal(!!clearedState._doorwayPresentationTransition, false);
 });
 
-test("building doorway transition latches exterior presentation when entering", () => {
+test("building doorway transition uses interior presentation when entering", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
     const mountedWall = {
@@ -3559,7 +3731,7 @@ test("building doorway transition latches exterior presentation when entering", 
         hiddenSurfaceIds: new Set(["house"]),
         hiddenFragmentIds: new Set(["house-l1"])
     };
-    const latchedExterior = renderer.updateBuildingDoorwayPresentationTransition(
+    const interiorPresentation = renderer.updateBuildingDoorwayPresentationTransition(
         {},
         interiorState,
         map,
@@ -3567,12 +3739,12 @@ test("building doorway transition latches exterior presentation when entering", 
         1100
     );
 
-    assert.equal(latchedExterior.active, false);
-    assert.equal(latchedExterior.triggers.length, 0);
-    assert.equal(!!latchedExterior._doorwayPresentationTransition, true);
-    assert.equal(latchedExterior._doorwayPresentationTransition.presentationWizard.y, 0.2);
+    assert.equal(interiorPresentation.active, true);
+    assert.equal(interiorPresentation.triggers.length, 1);
+    assert.equal(!!interiorPresentation._doorwayPresentationTransition, true);
+    assert.equal(interiorPresentation._doorwayPresentationTransition.presentationWizard.y, -0.2);
 
-    const stillLatchedExterior = renderer.updateBuildingDoorwayPresentationTransition(
+    const stillInteriorPresentation = renderer.updateBuildingDoorwayPresentationTransition(
         {},
         { ...interiorState, wizardY: -0.6 },
         map,
@@ -3580,8 +3752,8 @@ test("building doorway transition latches exterior presentation when entering", 
         1200
     );
 
-    assert.equal(stillLatchedExterior.active, false);
-    assert.equal(stillLatchedExterior.triggers.length, 0);
+    assert.equal(stillInteriorPresentation.active, true);
+    assert.equal(stillInteriorPresentation.triggers.length, 1);
 
     const committedInterior = renderer.updateBuildingDoorwayPresentationTransition(
         {},
@@ -3713,8 +3885,10 @@ test("prototype building doorway transitions into interior presentation after en
         wizard: { x: 5, y: -0.2, currentLayer: 0, currentLayerBaseZ: 0 },
         renderNowMs: 1100
     });
-    assert.equal(thresholdState.active, false);
-    assert.equal(thresholdState.triggers.length, 0);
+    assert.equal(thresholdState.active, true);
+    assert.equal(thresholdState.triggers.length, 1);
+    assert.equal(thresholdState.triggers[0].buildingId, "building:placed-test-house");
+    assert.equal(!!thresholdState.triggers[0].activeInteriorRegion, true);
     assert.equal(!!thresholdState._doorwayPresentationTransition, true);
 
     const interiorState = renderer.getLayerCutawayState({
@@ -7387,7 +7561,7 @@ test("building render cache includes roofs by footprint when wall ids are unavai
         ],
         faces: [[0, 1, 2], [0, 2, 3]],
         wallLoopSectionIds: [],
-        groundPlaneHitbox: {
+        shadowBox: {
             points: [
                 { x: 2, y: 2 },
                 { x: 8, y: 2 },
@@ -7897,6 +8071,39 @@ test("road path render collection uses active runtime records without node scann
     assert.equal(result.considered, 1);
 });
 
+test("road path endpoint continuity uses shared snap ids for seamless joins", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.getLayerIndexForNode = () => 0;
+    renderer.getLayerIndexForObject = () => 0;
+
+    const roadA = {
+        type: "roadPath",
+        fillTexturePath: "/assets/images/flooring/dirt.jpg",
+        endpointSnapIds: { start: "road-snap:a-start", end: "road-snap:shared" },
+        generatedGeometry: {
+            points: [{ x: 0, y: 0 }, { x: 5, y: 0 }],
+            outline: []
+        }
+    };
+    const roadB = {
+        type: "roadPath",
+        fillTexturePath: "/assets/images/flooring/dirt.jpg",
+        endpointSnapIds: { start: "road-snap:shared", end: "road-snap:b-end" },
+        generatedGeometry: {
+            points: [{ x: 5.01, y: 0 }, { x: 10, y: 0 }],
+            outline: []
+        }
+    };
+
+    const continuity = renderer.buildRoadPathEndpointContinuity([roadA, roadB]);
+
+    assert.equal(continuity.get(roadA).endConnected, true);
+    assert.equal(continuity.get(roadB).startConnected, true);
+    assert.equal(continuity.get(roadA).startConnected, false);
+    assert.equal(continuity.get(roadB).endConnected, false);
+});
+
 test("level 0 terrain polygon floor visuals use active section assets without floor fragments", () => {
     const RenderingImpl = loadRenderingImpl();
     const renderer = new RenderingImpl();
@@ -7947,6 +8154,65 @@ test("level 0 terrain polygon floor visuals use active section assets without fl
         point.y >= -0.0001 &&
         point.y <= 5.0001
     )), true);
+});
+
+test("level 0 terrain polygon floor visual collection reuses cached section entries", () => {
+    const RenderingImpl = loadRenderingImpl();
+    const renderer = new RenderingImpl();
+    renderer.camera = { x: 0, y: 0, z: 0, width: 20, height: 20 };
+    const asset = {
+        key: "0,0",
+        sectionPolygon: [
+            { x: 0, y: 0 },
+            { x: 5, y: 0 },
+            { x: 5, y: 5 },
+            { x: 0, y: 5 }
+        ],
+        terrainPolygons: [{
+            type: "water",
+            points: [
+                { x: -2, y: 2 },
+                { x: 8, y: 2 },
+                { x: 8, y: 8 },
+                { x: -2, y: 8 }
+            ]
+        }]
+    };
+    const map = {
+        floorsById: new Map(),
+        hexWidth: 1 / 0.866,
+        hexHeight: 1,
+        getGroundPolygonMaterialPathForType: type => `/assets/images/${type}.png`,
+        getGroundPolygonMaterialScaleForType: () => 1,
+        _prototypeSectionState: {
+            activeSectionKeys: new Set(["0,0"]),
+            sectionAssetsByKey: new Map([["0,0", asset]])
+        }
+    };
+    const ctx = {
+        map,
+        camera: renderer.camera,
+        viewport: { width: 20, height: 20 },
+        renderNowMs: 100
+    };
+
+    renderer.currentFrameMetrics = {};
+    const first = renderer.collectFloorVisualEntries(ctx);
+    const firstMetrics = renderer.currentFrameMetrics;
+    renderer.currentFrameMetrics = {};
+    ctx.renderNowMs = 250;
+    const second = renderer.collectFloorVisualEntries(ctx);
+    const secondMetrics = renderer.currentFrameMetrics;
+
+    assert.equal(first.length, 1);
+    assert.equal(second.length, 1);
+    assert.equal(firstMetrics.floorTerrainPolygonEntryCacheMisses, 1);
+    assert.equal(firstMetrics.floorTerrainPolygonEntryCacheHits || 0, 0);
+    assert.equal(secondMetrics.floorTerrainPolygonEntryCacheHits, 1);
+    assert.equal(secondMetrics.floorTerrainPolygonEntryCacheMisses || 0, 0);
+    assert.equal(first[0].key, second[0].key);
+    assert.equal(first[0].animationNowMs, 100);
+    assert.equal(second[0].animationNowMs, 250);
 });
 
 test("building cutaway-rendered floor fragments are not collected as floor visual polygons", () => {

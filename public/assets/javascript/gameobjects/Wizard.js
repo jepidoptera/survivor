@@ -4,6 +4,7 @@ const WIZARD_WATER_MOVEMENT_DEPTH_SLOPE = 2 / 3;
 const WIZARD_WATER_MAX_DEPTH_UNITS = 2 / 3;
 const WIZARD_WATER_FULL_SUBMERGED_DEPTH_UNITS = 2 / 3;
 const WIZARD_FULLY_SUBMERGED_SPEED_MULTIPLIER = 1 / 3;
+const WIZARD_DROWNING_MOMENTUM_DECAY_MS = 1500;
 
 const WIZARD_SHIELD_DEPTH_NEAR_METRIC = -128;
 const WIZARD_SHIELD_DEPTH_FAR_METRIC = 256;
@@ -267,6 +268,8 @@ class Wizard extends Character {
         this._adventureDeathAnimationActive = false;
         this._adventureDeathAnimationStartedAtMs = null;
         this._adventureDeathAnimationDurationMs = 4000;
+        this._adventureDeathCause = "";
+        this._drowningMomentumState = null;
         this.magic = 100;
         this.maxMagic = 100;
         this.gameMode = WIZARD_GAME_MODE_GOD;
@@ -439,6 +442,8 @@ class Wizard extends Character {
     clearAdventureDeathAnimation() {
         this._adventureDeathAnimationActive = false;
         this._adventureDeathAnimationStartedAtMs = null;
+        this._adventureDeathCause = "";
+        this._drowningMomentumState = null;
     }
     getAdventureDeathAnimationProgress(nowMs = null) {
         if (!this._adventureDeathAnimationActive) return 0;
@@ -460,14 +465,30 @@ class Wizard extends Character {
         if (!this._adventureDeathAnimationActive) return false;
         return this.getAdventureDeathAnimationProgress(nowMs) < 1;
     }
-    queueAdventureRespawn() {
+    queueAdventureRespawn(options = {}) {
         if (this._adventureRespawnPending) return true;
         const deathAnimationMs = 4000;
         this._adventureRespawnPending = true;
         this.hp = 0;
         this.dead = true;
+        this._adventureDeathCause = (options && typeof options.cause === "string")
+            ? options.cause
+            : "";
         this.startAdventureDeathAnimation(deathAnimationMs);
-        if (typeof pause === "function") {
+        const pauseDelayMs = Number.isFinite(Number(options && options.pauseDelayMs))
+            ? Math.max(0, Number(options.pauseDelayMs))
+            : 0;
+        if (typeof pause === "function" && pauseDelayMs > 0) {
+            setTimeout(() => {
+                if (
+                    this._adventureRespawnPending &&
+                    this._adventureDeathAnimationActive &&
+                    this._adventureDeathCause === ((options && typeof options.cause === "string") ? options.cause : "")
+                ) {
+                    pause();
+                }
+            }, pauseDelayMs);
+        } else if (typeof pause === "function") {
             pause();
         }
         if (typeof message === "function") {
@@ -493,7 +514,7 @@ class Wizard extends Character {
         }, deathAnimationMs);
         return true;
     }
-    updateAdventureDeathState() {
+    updateAdventureDeathState(options = {}) {
         if (!this.isAdventureMode()) {
             this._adventureRespawnPending = false;
             this.dead = false;
@@ -507,7 +528,61 @@ class Wizard extends Character {
             return false;
         }
         this.hp = 0;
-        return this.queueAdventureRespawn();
+        return this.queueAdventureRespawn(options);
+    }
+    startDrowningMomentumDecay(durationMs = WIZARD_DROWNING_MOMENTUM_DECAY_MS) {
+        const nowMs = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        const vector = this.movementVector && typeof this.movementVector === "object"
+            ? this.movementVector
+            : { x: 0, y: 0 };
+        const vx = Number.isFinite(Number(vector.x)) ? Number(vector.x) : 0;
+        const vy = Number.isFinite(Number(vector.y)) ? Number(vector.y) : 0;
+        this._drowningMomentumState = {
+            startedAtMs: nowMs,
+            durationMs: Number.isFinite(Number(durationMs)) ? Math.max(0, Number(durationMs)) : WIZARD_DROWNING_MOMENTUM_DECAY_MS,
+            velocityX: vx,
+            velocityY: vy
+        };
+        return this._drowningMomentumState;
+    }
+    getDrowningMomentumProgress(nowMs = null) {
+        const state = this._drowningMomentumState;
+        if (!state || typeof state !== "object") return 1;
+        const durationMs = Number.isFinite(Number(state.durationMs))
+            ? Math.max(0, Number(state.durationMs))
+            : WIZARD_DROWNING_MOMENTUM_DECAY_MS;
+        if (durationMs <= 0) return 1;
+        const currentMs = Number.isFinite(Number(nowMs))
+            ? Number(nowMs)
+            : ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now());
+        const startedAtMs = Number.isFinite(Number(state.startedAtMs)) ? Number(state.startedAtMs) : currentMs;
+        return Math.max(0, Math.min(1, (currentMs - startedAtMs) / durationMs));
+    }
+    isDrowningMomentumActive(nowMs = null) {
+        const state = this._drowningMomentumState;
+        if (!state || typeof state !== "object") return false;
+        if (this._adventureDeathCause !== "drowning") return false;
+        const speed = Math.hypot(Number(state.velocityX) || 0, Number(state.velocityY) || 0);
+        return speed > 1e-4 && this.getDrowningMomentumProgress(nowMs) < 1;
+    }
+    applyDrowningMomentumForFrame(nowMs = null) {
+        const state = this._drowningMomentumState;
+        if (!state || typeof state !== "object") return false;
+        const progress = this.getDrowningMomentumProgress(nowMs);
+        const remaining = Math.max(0, 1 - progress);
+        if (this.movementVector && typeof this.movementVector === "object") {
+            this.movementVector.x = (Number(state.velocityX) || 0) * remaining;
+            this.movementVector.y = (Number(state.velocityY) || 0) * remaining;
+        }
+        if (remaining <= 0) {
+            this._drowningMomentumState = null;
+            return false;
+        }
+        return true;
     }
     startJump() {
         if (typeof this.isFrozen === "function" && this.isFrozen()) return;
@@ -822,7 +897,7 @@ class Wizard extends Character {
         const isRoadObjectUnderWizard = (obj, node) => {
             if (!obj || obj.gone || obj.vanishing) return false;
             if (!objectMatchesLayer(obj, node)) return false;
-            const hitbox = obj.groundPlaneHitbox || obj.visualHitbox || null;
+            const hitbox = obj.shadowBox || obj.touchBox || null;
             if (obj.type === "road") return roadHitboxTouchesWizard(hitbox);
             if (obj.type === "roadPath") return roadHitboxTouchesWizard(hitbox);
             return false;
@@ -892,6 +967,8 @@ class Wizard extends Character {
         ) {
             return 1;
         }
+        const flyingLevel = this.getFlyingSpellLevel();
+        if (flyingLevel >= 2) return 1;
         if (typeof this.map.getGroundTerrainWaterImmersionAtPoint !== "function") return 1;
         const immersion = this.map.getGroundTerrainWaterImmersionAtPoint(this.x, this.y, {
             slope: WIZARD_WATER_MOVEMENT_DEPTH_SLOPE,
@@ -905,11 +982,55 @@ class Wizard extends Character {
         const fullDepth = Number.isFinite(Number(this.waterFullSubmergedDepthUnits))
             ? Math.max(1e-6, Number(this.waterFullSubmergedDepthUnits))
             : WIZARD_WATER_FULL_SUBMERGED_DEPTH_UNITS;
+        const maxDepth = Number.isFinite(Number(immersion.maxDepth))
+            ? Math.max(0, Number(immersion.maxDepth))
+            : WIZARD_WATER_MAX_DEPTH_UNITS;
+        if (flyingLevel <= 0 && maxDepth > 0 && submergedDepth >= maxDepth - 1e-6) {
+            this.drownAtMaxWaterDepth();
+            return 0;
+        }
         const submergedRatio = Math.max(0, Math.min(1, submergedDepth / fullDepth));
         return 1 - submergedRatio * (1 - WIZARD_FULLY_SUBMERGED_SPEED_MULTIPLIER);
     }
 
+    getFlyingSpellLevel() {
+        const spellSystem = (typeof globalThis !== "undefined" && globalThis.SpellSystem)
+            ? globalThis.SpellSystem
+            : null;
+        if (!spellSystem || typeof spellSystem.getWizardSpellLevel !== "function") return 0;
+        return spellSystem.getWizardSpellLevel(this, "flying");
+    }
+
+    drownAtMaxWaterDepth() {
+        if (this.dead || this._adventureRespawnPending) return false;
+        this.startDrowningMomentumDecay(WIZARD_DROWNING_MOMENTUM_DECAY_MS);
+        this.hp = 0;
+        if (typeof this.updateStatusBars === "function") {
+            this.updateStatusBars();
+        }
+        if (typeof message === "function") {
+            message("You drowned.");
+        }
+        if (
+            typeof this.isAdventureMode === "function" &&
+            this.isAdventureMode() &&
+            typeof this.updateAdventureDeathState === "function"
+        ) {
+            return this.updateAdventureDeathState({
+                cause: "drowning",
+                pauseDelayMs: WIZARD_DROWNING_MOMENTUM_DECAY_MS
+            });
+        }
+        if (typeof this.die === "function") {
+            this.die();
+        } else {
+            this.dead = true;
+        }
+        return true;
+    }
+
     getVectorMovementEnvironmentSpeedMultiplier(options = {}) {
+        if (options && options.preserveDrowningMomentum === true) return 1;
         const activeAuras = Array.isArray(this.activeAuras)
             ? this.activeAuras
             : (typeof this.activeAura === "string" ? [this.activeAura] : []);
@@ -1217,7 +1338,7 @@ class Wizard extends Character {
     }
 
     doesObjectBlockVectorMovement(obj, options = {}) {
-        if (!obj || obj === this || obj.gone || !obj.groundPlaneHitbox) return false;
+        if (!obj || obj === this || obj.gone || !obj.shadowBox) return false;
         if (!doesObjectBlockWizardMovement(obj)) return false;
 
         if (!Number.isFinite(this.currentLayerBaseZ)) {
@@ -1326,7 +1447,7 @@ class Wizard extends Character {
                     if (objLayer !== wizardLayer) continue;
                     const doorCandidate = !!(isDoorPlacedObjectFn && isDoorPlacedObjectFn(obj));
                     if (doorCandidate && !nearbyDoorSet.has(obj)) {
-                        const doorHitbox = obj.groundPlaneHitbox || obj.visualHitbox || obj.hitbox;
+                        const doorHitbox = obj.shadowBox || obj.touchBox || obj.hitbox;
                         if (doorHitbox && (typeof doorHitbox.containsPoint === "function" || typeof doorHitbox.intersects === "function")) {
                             const locked = isDoorLockedFn ? !!isDoorLockedFn(obj) : (obj.isPassable === false);
                             nearbyDoors.push({ obj, hitbox: doorHitbox, canTraverse: !locked });
@@ -1540,8 +1661,8 @@ class Wizard extends Character {
         const candidateHitbox = { type: "circle", x: newX, y: newY, radius: Math.max(0, Number(radius) || 0) };
         for (let i = 0; i < nearbyObjects.length; i++) {
             const obj = nearbyObjects[i];
-            if (!obj || !obj.groundPlaneHitbox || typeof obj.groundPlaneHitbox.intersects !== "function") continue;
-            const collision = obj.groundPlaneHitbox.intersects(candidateHitbox);
+            if (!obj || !obj.shadowBox || typeof obj.shadowBox.intersects !== "function") continue;
+            const collision = obj.shadowBox.intersects(candidateHitbox);
             if (collision && collision.pushX !== undefined) {
                 return false;
             }

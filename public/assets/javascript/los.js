@@ -150,7 +150,7 @@ const LOSSystem = (() => {
 
         for (const obj of candidates) {
             if (!obj || obj.gone || obj.vanishing) continue;
-            const hitbox = obj.groundPlaneHitbox;
+            const hitbox = obj.shadowBox;
             if (!hitbox) continue;
 
             if (typeof obj.generateLosOcclusionSpan === "function") {

@@ -322,6 +322,9 @@
                 hysteresisRatio: 0.1,
                 activeSectionLimit: 4,
                 bubbleHysteresisMeters: 10,
+                bubbleSwitchCenterRadiusMeters: Number.isFinite(Number(sectionStateSource.bubbleSwitchCenterRadiusMeters))
+                    ? Math.max(0, Number(sectionStateSource.bubbleSwitchCenterRadiusMeters))
+                    : Math.max(0, (Number(sectionStateSource.radius) || 0) * 0.5),
                 bubbleFocusWorldX: null,
                 bubbleFocusWorldY: null,
                 bubbleFocusSectionKey: "",
@@ -336,6 +339,11 @@
                 loadedNodes: [],
                 loadedNodeKeySet: new Set(),
                 loadedNodesByCoordKey: new Map(),
+                visibleNodeBucketIndex: null,
+                visibleNodeBucketIndexDirty: true,
+                visibleNodeBucketIndexVersion: 0,
+                visibleNodeBucketIndexBuiltVersion: -1,
+                visibleNodeBucketLastCandidates: 0,
                 seamSegmentsByPairKey: new Map(),
                 seamSegments: [],
                 nodesBySectionKey: new Map(),

@@ -15,6 +15,7 @@ const GLOBAL_KEYS = [
     "paused",
     "projectiles",
     "Road",
+    "RoadPath",
     "WallSectionUnit",
     "StaticObject",
     "Roof",
@@ -27,7 +28,8 @@ const GLOBAL_KEYS = [
     "invalidateMinimap",
     "fetch",
     "__sectionGeometry",
-    "lastLoadGameStateError"
+    "lastLoadGameStateError",
+    "__loadedGameFramePresentationPending"
 ];
 
 const savedGlobals = new Map();
@@ -333,6 +335,11 @@ test("saveGameState splits road paths on section edges", () => {
                 y: 0,
                 width: 4,
                 textureId: "road",
+                roadNetworkId: "road-network:test",
+                endpointSnapIds: {
+                    start: "road-snap:start",
+                    end: "road-snap:end"
+                },
                 points: [
                     { x: -5, y: 0 },
                     { x: 5, y: 0 }
@@ -421,6 +428,15 @@ test("saveGameState splits road paths on section edges", () => {
         { x: 0, y: 0 },
         { x: 5, y: 0 }
     ]);
+    const splitA = sectionsByKey.get("A").objects[0];
+    const splitB = sectionsByKey.get("B").objects[0];
+    assert.equal(splitA.roadNetworkId, "road-network:test");
+    assert.equal(splitB.roadNetworkId, "road-network:test");
+    assert.equal(splitA.endpointSnapIds.start, "road-snap:start");
+    assert.equal(splitB.endpointSnapIds.end, "road-snap:end");
+    assert.equal(splitA.endpointSnapIds.end, splitB.endpointSnapIds.start);
+    assert.notEqual(splitA.endpointSnapIds.end, "road-snap:start");
+    assert.notEqual(splitA.endpointSnapIds.end, "road-snap:end");
 });
 
 test("saveGameState splits road paths into inactive neighbor sections", () => {
@@ -442,6 +458,11 @@ test("saveGameState splits road paths into inactive neighbor sections", () => {
                 y: 0,
                 width: 4,
                 textureId: "road",
+                roadNetworkId: "road-network:inactive-neighbor",
+                endpointSnapIds: {
+                    start: "road-snap:inactive-start",
+                    end: "road-snap:inactive-end"
+                },
                 points: [
                     { x: -5, y: 0 },
                     { x: 5, y: 0 }
@@ -536,6 +557,9 @@ test("saveGameState splits road paths into inactive neighbor sections", () => {
         { x: 0, y: 0 },
         { x: 5, y: 0 }
     ]);
+    assert.equal(sectionsByKey.get("0,0").objects[0].endpointSnapIds.end, sectionsByKey.get("1,0").objects[0].endpointSnapIds.start);
+    assert.equal(sectionsByKey.get("0,0").objects[0].roadNetworkId, "road-network:inactive-neighbor");
+    assert.equal(sectionsByKey.get("1,0").objects[0].roadNetworkId, "road-network:inactive-neighbor");
 });
 
 test("exportPrototypeSectionAssets splits road paths into inactive neighbor sections", () => {
@@ -563,6 +587,11 @@ test("exportPrototypeSectionAssets splits road paths into inactive neighbor sect
                 y: 0,
                 width: 4,
                 textureId: "road",
+                roadNetworkId: "road-network:export",
+                endpointSnapIds: {
+                    start: "road-snap:export-start",
+                    end: "road-snap:export-end"
+                },
                 points: [
                     { x: -5, y: 0 },
                     { x: 5, y: 0 }
@@ -658,6 +687,9 @@ test("exportPrototypeSectionAssets splits road paths into inactive neighbor sect
         { x: 0, y: 0 },
         { x: 5, y: 0 }
     ]);
+    assert.equal(sectionsByKey.get("0,0").objects[0].endpointSnapIds.end, sectionsByKey.get("1,0").objects[0].endpointSnapIds.start);
+    assert.equal(sectionsByKey.get("0,0").objects[0].roadNetworkId, "road-network:export");
+    assert.equal(sectionsByKey.get("1,0").objects[0].roadNetworkId, "road-network:export");
     assert.deepEqual(sectionA.objects.map((record) => record.points), [
         [
             { x: -5, y: 0 },
@@ -926,6 +958,103 @@ test("loadGameState strips generated outdoor ground support before wizard restor
     assert.ok(loadedWizardData);
     assert.equal(loadedWizardData.fragmentId, "");
     assert.equal(loadedWizardData.surfaceId, "");
+});
+
+test("prototype section load presents first frame only after async finalization", async () => {
+    const calls = {
+        present: 0,
+        updateBubble: 0
+    };
+    const map = createRectMap();
+    map.loadPrototypeSectionWorld = () => {
+        map._prototypeSectionState = {
+            sectionsByKey: new Map([["0,0", { key: "0,0" }]]),
+            sectionAssetsByKey: new Map([["0,0", { key: "0,0", _prototypeSectionHydrated: true }]]),
+            activeCenterKey: "0,0",
+            activeSectionKeys: new Set(["0,0"]),
+            activeBubbleSectionKeys: new Set(["0,0"]),
+            useSparseNodes: false
+        };
+        return true;
+    };
+    map.getPrototypeActiveSectionKeys = () => new Set(["0,0"]);
+    map.getPrototypeSectionAsset = (sectionKey) => (
+        map._prototypeSectionState.sectionAssetsByKey.get(sectionKey) || null
+    );
+    map.updatePrototypeSectionBubble = (_wizard, options = {}) => {
+        calls.updateBubble += 1;
+        assert.equal(options.force, true);
+        return false;
+    };
+    map.syncPrototypeWalls = () => false;
+    map.syncPrototypeObjects = () => false;
+    map.syncPrototypeAnimals = () => false;
+    map.syncPrototypePowerups = () => false;
+
+    let loadPhase = true;
+    globalThis.map = map;
+    globalThis.wizard = {
+        x: 0,
+        y: 0,
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        currentMovementSupport: { type: "ground", layer: 0, baseZ: 0 },
+        loadJson(data) {
+            this.x = Number(data.x) || 0;
+            this.y = Number(data.y) || 0;
+            this.currentLayer = Number(data.currentLayer) || 0;
+            this.traversalLayer = Number(data.traversalLayer) || 0;
+            this.currentLayerBaseZ = Number(data.currentLayerBaseZ) || 0;
+        },
+        hasPendingSavedMovementSupport() {
+            return false;
+        }
+    };
+    globalThis.animals = [];
+    globalThis.powerups = [];
+    globalThis.roofs = [];
+    globalThis.viewport = { x: 0, y: 0, width: 100, height: 100 };
+    globalThis.paused = false;
+    globalThis.projectiles = [];
+    globalThis.Road = { clearRuntimeCaches() {} };
+    globalThis.StaticObject = { loadJson() { return null; } };
+    globalThis.Animal = { loadJson() { return null; } };
+    globalThis.Powerup = { loadJson() { return null; } };
+    globalThis.presentGameFrame = () => {
+        if (loadPhase) throw new Error("presentGameFrame called before prototype sections finalized");
+        calls.present += 1;
+    };
+
+    const loaded = filesystem.loadGameState({
+        wizard: {
+            x: 12,
+            y: 34,
+            currentLayer: 0,
+            traversalLayer: 0,
+            currentLayerBaseZ: 0
+        },
+        animals: [],
+        powerups: [],
+        staticObjects: [],
+        prototypeSectionWorld: {
+            version: 1,
+            activeCenterKey: "0,0",
+            sections: []
+        }
+    });
+
+    assert.equal(loaded, true);
+    assert.equal(calls.present, 0);
+    assert.equal(globalThis.__loadedGameFramePresentationPending, true);
+
+    loadPhase = false;
+    const finalized = await filesystem.finalizeLoadedGameStateAsync();
+
+    assert.equal(finalized, true);
+    assert.equal(calls.updateBubble, 1);
+    assert.equal(calls.present, 1);
+    assert.equal(globalThis.__loadedGameFramePresentationPending, false);
 });
 
 test("loadGameState restores saved terrain tile membership to map nodes", () => {
@@ -1854,4 +1983,71 @@ test("saveGameState stores prototype building placements at the world level with
     assert.deepEqual(saveData.prototypeSectionWorld.sections[0].buildingRefs, [
         { id: "building:test-house", shell: true }
     ]);
+});
+
+test("prototype visible node viewport query uses bucket index without changing projected visibility", () => {
+    const loadedNodes = [];
+    for (let x = 0; x < 100; x++) {
+        for (let y = 0; y < 100; y++) {
+            loadedNodes.push({
+                id: `${x},${y}`,
+                x,
+                y,
+                xindex: x,
+                yindex: y,
+                baseZ: x % 5 === 0 ? 6 : 0,
+                objects: [],
+                visibilityObjects: []
+            });
+        }
+    }
+    const state = {
+        loadedNodes,
+        loadedNodeKeySet: new Set(loadedNodes.map((node) => `${node.xindex},${node.yindex}`)),
+        loadedNodesByCoordKey: new Map(loadedNodes.map((node) => [`${node.xindex},${node.yindex}`, node])),
+        visibleNodeBucketIndex: null,
+        visibleNodeBucketIndexDirty: true,
+        visibleNodeBucketIndexVersion: 1,
+        visibleNodeBucketIndexBuiltVersion: -1
+    };
+    const map = {
+        _prototypeSectionState: state,
+        getNodeBaseZ(node) {
+            return Number.isFinite(node && node.baseZ) ? Number(node.baseZ) : 0;
+        }
+    };
+    sectionWorldApiInstallers.installSectionWorldTraversalApis(map, {
+        globalScope: globalThis
+    });
+
+    const camera = { x: 20, y: 20, z: 5, width: 12, height: 12 };
+    const expected = loadedNodes.filter((node) => {
+        if (node.x < camera.x || node.x > camera.x + camera.width) return false;
+        const projectedY = node.y - (node.baseZ - camera.z);
+        return projectedY >= camera.y && projectedY <= camera.y + camera.height;
+    }).map((node) => node.id).sort();
+    const actual = map.getVisibleNodesInViewport(camera, 0, 0).map((node) => node.id).sort();
+    assert.deepEqual(actual, expected);
+
+    const stats = map.getVisibleNodeBucketIndexStats();
+    assert.ok(stats.bucketCount > 0);
+    assert.ok(stats.candidates > actual.length);
+    assert.ok(stats.candidates < loadedNodes.length);
+
+    const added = {
+        id: "24,18,elevated",
+        x: 24,
+        y: 18,
+        xindex: 24,
+        yindex: 18,
+        baseZ: 3,
+        objects: [],
+        visibilityObjects: []
+    };
+    loadedNodes.push(added);
+    state.visibleNodeBucketIndexDirty = true;
+    state.visibleNodeBucketIndexVersion += 1;
+
+    const afterMutation = map.getVisibleNodesInViewport(camera, 0, 0).map((node) => node.id);
+    assert.ok(afterMutation.includes(added.id));
 });

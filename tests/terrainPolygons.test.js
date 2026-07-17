@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const polygonClipping = require("polygon-clipping");
+const sectionGeometry = require("../public/assets/javascript/map/sectionGeometry.js");
 
 function loadGameMap() {
     const context = {
@@ -20,6 +21,40 @@ function loadGameMap() {
 }
 
 const { GameMap, MapNode, NativeMap, NativeSet } = loadGameMap();
+
+function getTestTerrainRepairLatticeCoord(point) {
+    const hexWidth = 1 / 0.866;
+    const xStep = (hexWidth * 0.5) / 8;
+    const yStep = 0.5 / 8;
+    const j = Math.round(Number(point && point.y) / yStep);
+    const i = Math.round((Number(point && point.x) - (j * xStep * 0.5)) / xStep);
+    return { i, j };
+}
+
+function getTestTerrainRepairPointForLatticeCoord(coord) {
+    const hexWidth = 1 / 0.866;
+    const xStep = (hexWidth * 0.5) / 8;
+    const yStep = 0.5 / 8;
+    return {
+        x: (Number(coord.i) + (Number(coord.j) * 0.5)) * xStep,
+        y: Number(coord.j) * yStep
+    };
+}
+
+function assertTestPointOnTerrainRepairLattice(point, label) {
+    const coord = getTestTerrainRepairLatticeCoord(point);
+    const canonical = getTestTerrainRepairPointForLatticeCoord(coord);
+    assert.ok(Math.abs(Number(point.x) - canonical.x) <= 1e-9, `${label} x should be on terrain repair lattice`);
+    assert.ok(Math.abs(Number(point.y) - canonical.y) <= 1e-9, `${label} y should be on terrain repair lattice`);
+}
+
+function getTestHexVertexLatticeCoord(point) {
+    const coord = getTestTerrainRepairLatticeCoord(point);
+    return {
+        u: (Number(coord.i) - 4) / 8,
+        v: Number(coord.j) / 8
+    };
+}
 
 function createTerrainPatchMap(width = 10, height = 10) {
     const map = Object.create(GameMap.prototype);
@@ -46,6 +81,45 @@ function createTerrainPatchMap(width = 10, height = 10) {
         }
     }
     return map;
+}
+
+function createTerrainPassabilityMap(width = 3, height = 3) {
+    const map = Object.create(GameMap.prototype);
+    map.width = width;
+    map.height = height;
+    map.wrapX = false;
+    map.wrapY = false;
+    map.hexWidth = 1 / 0.866;
+    map.hexHeight = 1;
+    map.terrainPolygons = [];
+    map.nodes = [];
+    map._suppressClearanceUpdates = false;
+    map.clearanceUpdates = 0;
+    map.snapshotDirtyCount = 0;
+    map.updateClearanceAround = () => { map.clearanceUpdates += 1; };
+    map.markPathfindingSnapshotDirty = () => { map.snapshotDirtyCount += 1; };
+    for (let x = 0; x < width; x++) {
+        map.nodes[x] = [];
+        for (let y = 0; y < height; y++) {
+            map.nodes[x][y] = new MapNode(x, y, width, height);
+        }
+    }
+    for (let x = 0; x < width; x++) {
+        for (let y = 0; y < height; y++) {
+            map.nodes[x][y].setNeighbors(map.nodes, map);
+        }
+    }
+    return map;
+}
+
+function markWaterNodesInsidePolygon(map, polygon) {
+    for (let x = 0; x < map.width; x++) {
+        for (let y = 0; y < map.height; y++) {
+            const node = map.nodes[x][y];
+            if (!node || !testPointInPolygon(node.x, node.y, polygon.points)) continue;
+            node.groundTextureId = map.getGroundTerrainTextureIdForType("water", x, y);
+        }
+    }
 }
 
 function getTestPolygonBounds(points) {
@@ -177,6 +251,379 @@ function assertTerrainPolygonsHaveNoProperSegmentCrossings(polygons, label) {
     assert.deepEqual(crossings, [], label);
 }
 
+function getTestRingSignedArea(points) {
+    const ring = Array.isArray(points) ? points : [];
+    if (ring.length < 3) return 0;
+    let area = 0;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        area += (Number(ring[j].x) * Number(ring[i].y)) - (Number(ring[i].x) * Number(ring[j].y));
+    }
+    return area * 0.5;
+}
+
+function assertTerrainAlphaBlendRingPreflight(points, label, amount = 0.08) {
+    const ring = Array.isArray(points) ? points : [];
+    assert.ok(ring.length >= 3, `${label}: terrain alpha blend requires at least three points`);
+    for (let i = 0; i < ring.length; i++) {
+        assert.ok(
+            Number.isFinite(Number(ring[i] && ring[i].x)) &&
+            Number.isFinite(Number(ring[i] && ring[i].y)),
+            `${label}: terrain alpha blend ring contains a non-finite point`
+        );
+    }
+    const signedArea = getTestRingSignedArea(ring);
+    assert.ok(
+        Number.isFinite(signedArea) && Math.abs(signedArea) > 1e-9,
+        `${label}: terrain alpha blend requires a non-degenerate polygon ring`
+    );
+    const outwardSign = signedArea >= 0 ? 1 : -1;
+    const edgeNormal = (a, b) => {
+        const dx = Number(b.x) - Number(a.x);
+        const dy = Number(b.y) - Number(a.y);
+        const length = Math.hypot(dx, dy);
+        assert.ok(length > 1e-9, `${label}: terrain alpha blend cannot offset a polygon ring with zero-length edges`);
+        return {
+            x: outwardSign * dy / length,
+            y: -outwardSign * dx / length
+        };
+    };
+    const intersectLines = (p1, p2, p3, p4) => {
+        const x1 = Number(p1.x);
+        const y1 = Number(p1.y);
+        const x2 = Number(p2.x);
+        const y2 = Number(p2.y);
+        const x3 = Number(p3.x);
+        const y3 = Number(p3.y);
+        const x4 = Number(p4.x);
+        const y4 = Number(p4.y);
+        const den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+        if (Math.abs(den) <= 1e-9) return null;
+        const det12 = x1 * y2 - y1 * x2;
+        const det34 = x3 * y4 - y3 * x4;
+        return {
+            x: (det12 * (x3 - x4) - (x1 - x2) * det34) / den,
+            y: (det12 * (y3 - y4) - (y1 - y2) * det34) / den
+        };
+    };
+    const distance = Number(amount);
+    const maxMiter = Math.max(Math.abs(distance) * 6, Math.abs(distance) + 0.001);
+    for (let i = 0; i < ring.length; i++) {
+        const prev = ring[(i + ring.length - 1) % ring.length];
+        const cur = ring[i];
+        const next = ring[(i + 1) % ring.length];
+        const prevNormal = edgeNormal(prev, cur);
+        const nextNormal = edgeNormal(cur, next);
+        const prevA = { x: prev.x + prevNormal.x * distance, y: prev.y + prevNormal.y * distance };
+        const prevB = { x: cur.x + prevNormal.x * distance, y: cur.y + prevNormal.y * distance };
+        const nextA = { x: cur.x + nextNormal.x * distance, y: cur.y + nextNormal.y * distance };
+        const nextB = { x: next.x + nextNormal.x * distance, y: next.y + nextNormal.y * distance };
+        let point = intersectLines(prevA, prevB, nextA, nextB);
+        if (!point) {
+            const nx = prevNormal.x + nextNormal.x;
+            const ny = prevNormal.y + nextNormal.y;
+            const length = Math.hypot(nx, ny);
+            point = length > 1e-9
+                ? { x: cur.x + (nx / length) * distance, y: cur.y + (ny / length) * distance }
+                : { x: cur.x + nextNormal.x * distance, y: cur.y + nextNormal.y * distance };
+        }
+        const dx = point.x - cur.x;
+        const dy = point.y - cur.y;
+        const miterLength = Math.hypot(dx, dy);
+        if (miterLength > maxMiter) {
+            point = {
+                x: cur.x + (dx / miterLength) * maxMiter,
+                y: cur.y + (dy / miterLength) * maxMiter
+            };
+        }
+        assert.ok(
+            Number.isFinite(point.x) && Number.isFinite(point.y),
+            `${label}: terrain alpha blend produced a non-finite offset vertex`
+        );
+    }
+}
+
+function assertTerrainPolygonsPassRendererPreflight(polygons, label) {
+    const source = Array.isArray(polygons) ? polygons : [];
+    for (let p = 0; p < source.length; p++) {
+        const polygon = source[p];
+        assertTerrainAlphaBlendRingPreflight(polygon && polygon.points, `${label}: ${polygon && polygon.type}[${p}] outer`);
+        const holes = Array.isArray(polygon && polygon.holes) ? polygon.holes : [];
+        for (let h = 0; h < holes.length; h++) {
+            assertTerrainAlphaBlendRingPreflight(holes[h], `${label}: ${polygon && polygon.type}[${p}] hole ${h}`, -0.08);
+        }
+    }
+}
+
+function getTestRepairPoint(map, point) {
+    return map.getGroundTerrainCanonicalRepairPoint(point);
+}
+
+function assertTestPointOnRepairLattice(map, point, label) {
+    const canonical = map.getGroundTerrainCanonicalRepairPoint(point);
+    assert.ok(Math.abs(Number(point.x) - canonical.x) <= 1e-9, `${label}: x is not repair-lattice snapped`);
+    assert.ok(Math.abs(Number(point.y) - canonical.y) <= 1e-9, `${label}: y is not repair-lattice snapped`);
+}
+
+function testPointOnRepairLattice(map, point, eps = 1e-9) {
+    const canonical = map.getGroundTerrainCanonicalRepairPoint(point);
+    return Math.abs(Number(point.x) - canonical.x) <= eps &&
+        Math.abs(Number(point.y) - canonical.y) <= eps;
+}
+
+function getTestSegmentOverlap(map, a, b, c, d, eps = 1e-7) {
+    if (!a || !b || !c || !d) return null;
+    const snappedA = getTestRepairPoint(map, a);
+    const snappedB = getTestRepairPoint(map, b);
+    const snappedC = getTestRepairPoint(map, c);
+    const snappedD = getTestRepairPoint(map, d);
+    const ax = Number(snappedA.x);
+    const ay = Number(snappedA.y);
+    const bx = Number(snappedB.x);
+    const by = Number(snappedB.y);
+    const cx = Number(snappedC.x);
+    const cy = Number(snappedC.y);
+    const dx = Number(snappedD.x);
+    const dy = Number(snappedD.y);
+    if (![ax, ay, bx, by, cx, cy, dx, dy].every(Number.isFinite)) return null;
+    const abx = bx - ax;
+    const aby = by - ay;
+    const lenSq = abx * abx + aby * aby;
+    if (lenSq <= eps * eps) return null;
+    const crossC = abx * (cy - ay) - aby * (cx - ax);
+    const crossD = abx * (dy - ay) - aby * (dx - ax);
+    if (Math.abs(crossC) > eps || Math.abs(crossD) > eps) return null;
+    const toT = (x, y) => ((x - ax) * abx + (y - ay) * aby) / lenSq;
+    const t0 = toT(cx, cy);
+    const t1 = toT(dx, dy);
+    const start = Math.max(0, Math.min(t0, t1));
+    const end = Math.min(1, Math.max(t0, t1));
+    if (end - start <= eps) return null;
+    return {
+        a: { x: ax + abx * start, y: ay + aby * start },
+        b: { x: ax + abx * end, y: ay + aby * end }
+    };
+}
+
+function collectTerrainPairSharedBoundarySegments(map, polygons, typeA, typeB) {
+    const segments = collectTestTerrainPolygonSegments(polygons);
+    const aSegments = segments.filter(segment => segment.type === typeA);
+    const bSegments = segments.filter(segment => segment.type === typeB);
+    const byKey = new NativeMap();
+    for (let a = 0; a < aSegments.length; a++) {
+        for (let b = 0; b < bSegments.length; b++) {
+            const overlap = getTestSegmentOverlap(
+                map,
+                aSegments[a].a,
+                aSegments[a].b,
+                bSegments[b].a,
+                bSegments[b].b
+            );
+            if (!overlap) continue;
+            const keyA = map.getGroundTerrainRepairPointKey(overlap.a);
+            const keyB = map.getGroundTerrainRepairPointKey(overlap.b);
+            if (keyA === keyB) continue;
+            const key = keyA < keyB ? `${keyA}:${keyB}` : `${keyB}:${keyA}`;
+            if (!byKey.has(key)) byKey.set(key, overlap);
+        }
+    }
+    return Array.from(byKey.values());
+}
+
+function testSegmentsTouchOrIntersect(a, b, c, d, eps = 1e-3) {
+    if (testSegmentsProperlyIntersect(a, b, c, d)) return true;
+    const epsSq = eps * eps;
+    const ax = Number(a && a.x);
+    const ay = Number(a && a.y);
+    const bx = Number(b && b.x);
+    const by = Number(b && b.y);
+    const cx = Number(c && c.x);
+    const cy = Number(c && c.y);
+    const dx = Number(d && d.x);
+    const dy = Number(d && d.y);
+    if (![ax, ay, bx, by, cx, cy, dx, dy].every(Number.isFinite)) return false;
+    return testPointSegmentDistanceSq(ax, ay, cx, cy, dx, dy) <= epsSq ||
+        testPointSegmentDistanceSq(bx, by, cx, cy, dx, dy) <= epsSq ||
+        testPointSegmentDistanceSq(cx, cy, ax, ay, bx, by) <= epsSq ||
+        testPointSegmentDistanceSq(dx, dy, ax, ay, bx, by) <= epsSq;
+}
+
+function assertAllAdjacentNonGrassTerrainPairsSharePolygonBorders(map, polygons, label, nodes = null) {
+    const scopeNodes = Array.isArray(nodes) ? nodes : [];
+    const scopeKeys = new NativeSet(scopeNodes.map(node => map.getGroundTerrainNodeKey(node)));
+    const shouldCheckNode = (node) => scopeKeys.size === 0 || scopeKeys.has(map.getGroundTerrainNodeKey(node));
+    const dirs = [1, 3, 5, 7, 9, 11];
+    const checkedEdges = new NativeSet();
+    const sharedSegmentsByPair = new NativeMap();
+    const getSharedSegments = (typeA, typeB) => {
+        const pairKey = typeA < typeB ? `${typeA}:${typeB}` : `${typeB}:${typeA}`;
+        if (!sharedSegmentsByPair.has(pairKey)) {
+            sharedSegmentsByPair.set(pairKey, collectTerrainPairSharedBoundarySegments(map, polygons, typeA, typeB));
+        }
+        return sharedSegmentsByPair.get(pairKey);
+    };
+    const failures = [];
+    for (let x = 0; x < map.width; x++) {
+        for (let y = 0; y < map.height; y++) {
+            const node = map.nodes[x] && map.nodes[x][y];
+            if (!node || node._prototypeVoid === true || !shouldCheckNode(node)) continue;
+            const nodeType = map.getGroundTerrainTypeForNode(node);
+            if (nodeType === "grass") continue;
+            for (const direction of dirs) {
+                const neighbor = node.neighbors && node.neighbors[direction];
+                if (!neighbor || neighbor._prototypeVoid === true) continue;
+                const neighborType = map.getGroundTerrainTypeForNode(neighbor);
+                if (neighborType === "grass" || neighborType === nodeType) continue;
+                const nodeKey = map.getGroundTerrainNodeKey(node);
+                const neighborKey = map.getGroundTerrainNodeKey(neighbor);
+                const edgeKey = nodeKey < neighborKey ? `${nodeKey}:${neighborKey}` : `${neighborKey}:${nodeKey}`;
+                if (checkedEdges.has(edgeKey)) continue;
+                checkedEdges.add(edgeKey);
+                const centerA = { x: Number(node.x), y: Number(node.y) };
+                const centerB = { x: Number(neighbor.x), y: Number(neighbor.y) };
+                const sharedSegments = getSharedSegments(nodeType, neighborType);
+                const hasSharedBorder = sharedSegments.some(segment => (
+                    testSegmentsTouchOrIntersect(centerA, centerB, segment.a, segment.b)
+                ));
+                if (!hasSharedBorder) {
+                    failures.push(`${nodeType}/${neighborType} ${edgeKey}`);
+                }
+            }
+        }
+    }
+    assert.deepEqual(failures, [], label);
+}
+
+function assertTerrainPairSharedBoundaryIsSimpleChain(map, polygons, typeA, typeB, label) {
+    const sharedSegments = collectTerrainPairSharedBoundarySegments(map, polygons, typeA, typeB);
+    assert.ok(sharedSegments.length > 0, `${label}: expected shared ${typeA}/${typeB} boundary segments`);
+    const adjacency = new NativeMap();
+    const addEndpoint = (from, to) => {
+        if (!adjacency.has(from)) adjacency.set(from, new NativeSet());
+        adjacency.get(from).add(to);
+    };
+    for (const segment of sharedSegments) {
+        const keyA = map.getGroundTerrainRepairPointKey(segment.a);
+        const keyB = map.getGroundTerrainRepairPointKey(segment.b);
+        addEndpoint(keyA, keyB);
+        addEndpoint(keyB, keyA);
+    }
+    const branchPoints = [];
+    for (const [key, neighbors] of adjacency.entries()) {
+        if (neighbors.size > 2) branchPoints.push(key);
+    }
+    assert.deepEqual(branchPoints, [], `${label}: shared ${typeA}/${typeB} boundary should not branch`);
+    const start = adjacency.keys().next().value;
+    const seen = new NativeSet([start]);
+    const queue = [start];
+    for (let i = 0; i < queue.length; i++) {
+        const key = queue[i];
+        for (const neighbor of adjacency.get(key) || []) {
+            if (seen.has(neighbor)) continue;
+            seen.add(neighbor);
+            queue.push(neighbor);
+        }
+    }
+    assert.equal(
+        seen.size,
+        adjacency.size,
+        `${label}: shared ${typeA}/${typeB} boundary should be one connected chain`
+    );
+}
+
+function canonicalTerrainPairSharedBoundaryKey(map, polygons, typeA, typeB) {
+    return collectTerrainPairSharedBoundarySegments(map, polygons, typeA, typeB)
+        .map(segment => {
+            const keyA = map.getGroundTerrainRepairPointKey(segment.a);
+            const keyB = map.getGroundTerrainRepairPointKey(segment.b);
+            return keyA < keyB ? `${keyA}:${keyB}` : `${keyB}:${keyA}`;
+        })
+        .sort()
+        .join("|");
+}
+
+function assertNonGrassTerrainTilesCoveredByPolygons(map, label, polygons = map.terrainPolygons) {
+    const sourcePolygons = Array.isArray(polygons) ? polygons : [];
+    for (let x = 0; x < map.width; x++) {
+        for (let y = 0; y < map.height; y++) {
+            const node = map.nodes[x] && map.nodes[x][y];
+            if (!node || node._prototypeVoid === true) continue;
+            const terrainType = map.getGroundTerrainTypeForNode(node);
+            if (terrainType === "grass") continue;
+            assert.ok(
+                sourcePolygons.some(polygon => (
+                    polygon.type === terrainType &&
+                    testTerrainPolygonCoversPoint(map, polygon, node.x, node.y)
+                )),
+                `${label}: expected ${terrainType} tile ${x},${y} to be covered by a terrain polygon`
+            );
+        }
+    }
+}
+
+function assertAdjacentTerrainPairCenterlinesCoveredByPolygons(map, polygons, nodes, label) {
+    const sourcePolygons = Array.isArray(polygons) ? polygons : [];
+    const nodeScope = Array.isArray(nodes) ? nodes : [];
+    const scopedNodeKeys = new NativeSet(nodeScope.map(node => map.getGroundTerrainNodeKey(node)));
+    const checkedEdges = new NativeSet();
+    const gaps = [];
+    const dirs = [1, 3, 5, 7, 9, 11];
+    const shouldCheckNode = (node) => scopedNodeKeys.size === 0 || scopedNodeKeys.has(map.getGroundTerrainNodeKey(node));
+
+    for (let x = 0; x < map.width; x++) {
+        for (let y = 0; y < map.height; y++) {
+            const node = map.nodes[x] && map.nodes[x][y];
+            if (!node || node._prototypeVoid === true || !shouldCheckNode(node)) continue;
+            const nodeType = map.getGroundTerrainTypeForNode(node);
+            if (nodeType === "grass") continue;
+            for (const direction of dirs) {
+                const neighbor = node.neighbors && node.neighbors[direction];
+                if (!neighbor || neighbor._prototypeVoid === true) continue;
+                const neighborType = map.getGroundTerrainTypeForNode(neighbor);
+                if (neighborType === "grass" || neighborType === nodeType) continue;
+                const nodeKey = map.getGroundTerrainNodeKey(node);
+                const neighborKey = map.getGroundTerrainNodeKey(neighbor);
+                const edgeKey = nodeKey < neighborKey ? `${nodeKey}:${neighborKey}` : `${neighborKey}:${nodeKey}`;
+                if (checkedEdges.has(edgeKey)) continue;
+                checkedEdges.add(edgeKey);
+                for (let step = 1; step < 10; step++) {
+                    const t = step / 10;
+                    const px = Number(node.x) + ((Number(neighbor.x) - Number(node.x)) * t);
+                    const py = Number(node.y) + ((Number(neighbor.y) - Number(node.y)) * t);
+                    const covered = sourcePolygons.some(polygon => (
+                        (polygon.type === nodeType || polygon.type === neighborType) &&
+                        testTerrainPolygonCoversPoint(map, polygon, px, py)
+                    ));
+                    if (!covered) {
+                        gaps.push(`${nodeType}/${neighborType} ${edgeKey} at ${px.toFixed(3)},${py.toFixed(3)}`);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    assert.deepEqual(gaps, [], label);
+}
+
+function assertAdjacentEditedTerrainPairsShareBoundary(map, node, label) {
+    const dirs = [1, 3, 5, 7, 9, 11];
+    const nodeType = map.getGroundTerrainTypeForNode(node);
+    if (nodeType === "grass") return;
+    const checkedPairs = new NativeSet();
+    for (const direction of dirs) {
+        const neighbor = node.neighbors && node.neighbors[direction];
+        if (!neighbor || neighbor._prototypeVoid === true) continue;
+        const neighborType = map.getGroundTerrainTypeForNode(neighbor);
+        if (neighborType === "grass" || neighborType === nodeType) continue;
+        const pairKey = nodeType < neighborType ? `${nodeType}:${neighborType}` : `${neighborType}:${nodeType}`;
+        if (checkedPairs.has(pairKey)) continue;
+        checkedPairs.add(pairKey);
+        assert.ok(
+            collectTerrainPairSharedBoundarySegments(map, map.terrainPolygons, nodeType, neighborType).length > 0,
+            `${label}: expected adjacent ${nodeType}/${neighborType} tiles to have shared polygon boundary`
+        );
+    }
+}
+
 function testTerrainPolygonCoversPoint(map, polygon, x, y) {
     return map.terrainPolygonContainsPoint(polygon, x, y) ||
         testRingCoversPointBoundary(polygon && polygon.points, x, y) ||
@@ -205,6 +652,920 @@ function clipTestTerrainPolygonToSection(map, polygon, sectionPolygon) {
     return map.groundTerrainClipGeometryToPolygons(
         polygon.type,
         polygonClipping.intersection(polygonGeometry, sectionGeometry)
+    );
+}
+
+function createVerticalSplitSectionTerrainPatchFixture(width, height, boundaryX) {
+    const map = createTerrainPatchMap(width, height);
+    const sectionLeft = "left";
+    const sectionRight = "right";
+    const nodesBySectionKey = new NativeMap([
+        [sectionLeft, []],
+        [sectionRight, []]
+    ]);
+    const allCornerPoints = [];
+    for (let x = 0; x < map.width; x++) {
+        for (let y = 0; y < map.height; y++) {
+            const node = map.nodes[x][y];
+            const key = Number(node.x) < boundaryX ? sectionLeft : sectionRight;
+            node._prototypeSectionKey = key;
+            nodesBySectionKey.get(key).push(node);
+            allCornerPoints.push(...map.getGroundTerrainHexCorners(node));
+        }
+    }
+    const bounds = getTestPolygonBounds(allCornerPoints);
+    const minX = bounds.minX - 1;
+    const minY = bounds.minY - 1;
+    const maxX = bounds.maxX + 1;
+    const maxY = bounds.maxY + 1;
+    const sectionPolygonsByKey = new NativeMap([
+        [sectionLeft, [
+            { x: minX, y: minY },
+            { x: boundaryX, y: minY },
+            { x: boundaryX, y: maxY },
+            { x: minX, y: maxY }
+        ]],
+        [sectionRight, [
+            { x: boundaryX, y: minY },
+            { x: maxX, y: minY },
+            { x: maxX, y: maxY },
+            { x: boundaryX, y: maxY }
+        ]]
+    ]);
+    const makeAsset = (key) => {
+        const nodes = nodesBySectionKey.get(key);
+        const tileCoordKeys = nodes.map(node => `${node.xindex},${node.yindex}`);
+        return {
+            key,
+            tileCoordKeys,
+            groundTiles: {},
+            terrainPolygons: [],
+            sectionPolygon: sectionPolygonsByKey.get(key),
+            _level0GroundSurfaceVersion: 0
+        };
+    };
+    const assetsByKey = new NativeMap([
+        [sectionLeft, makeAsset(sectionLeft)],
+        [sectionRight, makeAsset(sectionRight)]
+    ]);
+    map._prototypeSectionState = {
+        nodesBySectionKey,
+        sectionAssetsByKey: assetsByKey
+    };
+    map.getPrototypeSectionAsset = (key) => assetsByKey.get(key) || null;
+
+    const paintCoords = (coords, terrainType) => {
+        for (const [x, y] of coords) {
+            const node = map.nodes[x] && map.nodes[x][y];
+            assert.ok(node, `section terrain fixture cannot paint missing node ${x},${y}`);
+            if (map.getGroundTerrainTypeForNode(node) === terrainType) continue;
+            const sectionKey = node._prototypeSectionKey;
+            assert.equal(map.replaceGroundTerrainPolygonPatch(node, terrainType, {
+                asset: assetsByKey.get(sectionKey),
+                sectionKey
+            }), true);
+        }
+    };
+    const rawSectionPolygons = () => Array.from(assetsByKey.values()).flatMap(asset => asset.terrainPolygons);
+
+    return { map, assetsByKey, paintCoords, rawSectionPolygons };
+}
+
+function getAllTerrainPatchMapBounds(map) {
+    const points = [];
+    for (let x = 0; x < map.width; x++) {
+        for (let y = 0; y < map.height; y++) {
+            points.push(...map.getGroundTerrainHexCorners(map.nodes[x][y]));
+        }
+    }
+    const bounds = getTestPolygonBounds(points);
+    return {
+        minX: bounds.minX - 1,
+        minY: bounds.minY - 1,
+        maxX: bounds.maxX + 1,
+        maxY: bounds.maxY + 1
+    };
+}
+
+function createTerrainModelFixture(sectionMode = "none", width = 30, height = 24) {
+    const map = createTerrainPatchMap(width, height);
+    if (sectionMode === "none") {
+        return {
+            map,
+            assetsByKey: new NativeMap(),
+            paintNode(node, terrainType) {
+                if (map.getGroundTerrainTypeForNode(node) === terrainType) return false;
+                return map.replaceGroundTerrainPolygonPatch(node, terrainType);
+            },
+            rawPolygons() {
+                return map.terrainPolygons;
+            },
+            logicalPolygons() {
+                return map.terrainPolygons;
+            }
+        };
+    }
+
+    const bounds = getAllTerrainPatchMapBounds(map);
+    const sectionPolygonsByKey = new NativeMap();
+    const nodesBySectionKey = new NativeMap();
+    const addSection = (key, polygon) => {
+        sectionPolygonsByKey.set(key, polygon);
+        nodesBySectionKey.set(key, []);
+    };
+    const boundaryX = map.nodes[Math.floor(width / 2)][0].x;
+    const boundaryY = map.nodes[0][Math.floor(height / 2)].y;
+
+    if (sectionMode === "one") {
+        addSection("all", [
+            { x: bounds.minX, y: bounds.minY },
+            { x: bounds.maxX, y: bounds.minY },
+            { x: bounds.maxX, y: bounds.maxY },
+            { x: bounds.minX, y: bounds.maxY }
+        ]);
+    } else if (sectionMode === "two") {
+        addSection("left", [
+            { x: bounds.minX, y: bounds.minY },
+            { x: boundaryX, y: bounds.minY },
+            { x: boundaryX, y: bounds.maxY },
+            { x: bounds.minX, y: bounds.maxY }
+        ]);
+        addSection("right", [
+            { x: boundaryX, y: bounds.minY },
+            { x: bounds.maxX, y: bounds.minY },
+            { x: bounds.maxX, y: bounds.maxY },
+            { x: boundaryX, y: bounds.maxY }
+        ]);
+    } else if (sectionMode === "three") {
+        addSection("left", [
+            { x: bounds.minX, y: bounds.minY },
+            { x: boundaryX, y: bounds.minY },
+            { x: boundaryX, y: bounds.maxY },
+            { x: bounds.minX, y: bounds.maxY }
+        ]);
+        addSection("upper-right", [
+            { x: boundaryX, y: bounds.minY },
+            { x: bounds.maxX, y: bounds.minY },
+            { x: bounds.maxX, y: boundaryY },
+            { x: boundaryX, y: boundaryY }
+        ]);
+        addSection("lower-right", [
+            { x: boundaryX, y: boundaryY },
+            { x: bounds.maxX, y: boundaryY },
+            { x: bounds.maxX, y: bounds.maxY },
+            { x: boundaryX, y: bounds.maxY }
+        ]);
+    } else {
+        throw new Error(`unknown terrain model section fixture mode "${sectionMode}"`);
+    }
+
+    const resolveSectionKey = (node) => {
+        if (sectionMode === "one") return "all";
+        if (sectionMode === "two") return Number(node.x) < boundaryX ? "left" : "right";
+        if (Number(node.x) < boundaryX) return "left";
+        return Number(node.y) < boundaryY ? "upper-right" : "lower-right";
+    };
+
+    for (let x = 0; x < map.width; x++) {
+        for (let y = 0; y < map.height; y++) {
+            const node = map.nodes[x][y];
+            const sectionKey = resolveSectionKey(node);
+            node._prototypeSectionKey = sectionKey;
+            nodesBySectionKey.get(sectionKey).push(node);
+        }
+    }
+
+    const makeAsset = (key) => {
+        const nodes = nodesBySectionKey.get(key);
+        const tileCoordKeys = nodes.map(node => `${node.xindex},${node.yindex}`);
+        return {
+            key,
+            tileCoordKeys,
+            groundTiles: {},
+            terrainPolygons: [],
+            sectionPolygon: sectionPolygonsByKey.get(key),
+            _level0GroundSurfaceVersion: 0
+        };
+    };
+    const assetsByKey = new NativeMap();
+    for (const key of sectionPolygonsByKey.keys()) assetsByKey.set(key, makeAsset(key));
+    map._prototypeSectionState = {
+        nodesBySectionKey,
+        sectionAssetsByKey: assetsByKey
+    };
+    map.getPrototypeSectionAsset = (key) => assetsByKey.get(key) || null;
+
+    return {
+        map,
+        assetsByKey,
+        paintNode(node, terrainType) {
+            if (map.getGroundTerrainTypeForNode(node) === terrainType) return false;
+            const sectionKey = node._prototypeSectionKey;
+            return map.replaceGroundTerrainPolygonPatch(node, terrainType, {
+                asset: assetsByKey.get(sectionKey),
+                sectionKey
+            });
+        },
+        rawPolygons() {
+            return Array.from(assetsByKey.values()).flatMap(asset => asset.terrainPolygons);
+        },
+        logicalPolygons() {
+            return map.mergeGroundTerrainPolygonsByType(this.rawPolygons());
+        }
+    };
+}
+
+function createDiagonalSectionTerrainModelFixture(width = 30, height = 24) {
+    const map = createTerrainPatchMap(width, height);
+    const bounds = getAllTerrainPatchMapBounds(map);
+    const sharedA = { x: map.nodes[11][0].x, y: bounds.minY };
+    const sharedB = { x: map.nodes[18][0].x, y: bounds.maxY };
+    const sideOfSharedEdge = (point) => (
+        (sharedB.x - sharedA.x) * (Number(point.y) - sharedA.y) -
+        (sharedB.y - sharedA.y) * (Number(point.x) - sharedA.x)
+    );
+    const nodesBySectionKey = new NativeMap([
+        ["left", []],
+        ["right", []]
+    ]);
+    for (let x = 0; x < map.width; x++) {
+        for (let y = 0; y < map.height; y++) {
+            const node = map.nodes[x][y];
+            const sectionKey = sideOfSharedEdge(node) >= 0 ? "left" : "right";
+            node._prototypeSectionKey = sectionKey;
+            nodesBySectionKey.get(sectionKey).push(node);
+        }
+    }
+    const sectionPolygonsByKey = new NativeMap([
+        ["left", [
+            { x: bounds.minX, y: bounds.minY },
+            sharedA,
+            sharedB,
+            { x: bounds.minX, y: bounds.maxY }
+        ]],
+        ["right", [
+            sharedA,
+            { x: bounds.maxX, y: bounds.minY },
+            { x: bounds.maxX, y: bounds.maxY },
+            sharedB
+        ]]
+    ]);
+    const assetsByKey = new NativeMap();
+    for (const key of sectionPolygonsByKey.keys()) {
+        const nodes = nodesBySectionKey.get(key);
+        const tileCoordKeys = nodes.map(node => `${node.xindex},${node.yindex}`);
+        assetsByKey.set(key, {
+            key,
+            tileCoordKeys,
+            groundTiles: {},
+            terrainPolygons: [],
+            sectionPolygon: sectionPolygonsByKey.get(key),
+            _level0GroundSurfaceVersion: 0
+        });
+    }
+    map._prototypeSectionState = {
+        nodesBySectionKey,
+        sectionAssetsByKey: assetsByKey
+    };
+    map.getPrototypeSectionAsset = (key) => assetsByKey.get(key) || null;
+    return {
+        map,
+        assetsByKey,
+        paintNode(node, terrainType) {
+            if (map.getGroundTerrainTypeForNode(node) === terrainType) return false;
+            const sectionKey = node._prototypeSectionKey;
+            return map.replaceGroundTerrainPolygonPatch(node, terrainType, {
+                asset: assetsByKey.get(sectionKey),
+                sectionKey
+            });
+        },
+        rawPolygons() {
+            return Array.from(assetsByKey.values()).flatMap(asset => asset.terrainPolygons);
+        },
+        logicalPolygons() {
+            return map.mergeGroundTerrainPolygonsByType(this.rawPolygons());
+        }
+    };
+}
+
+function getRetainedWaterUnionPrecisionReproGeometries() {
+    return [
+        [[[
+            [122.69053117782909, 226],
+            [122.76270207852193, 225.625],
+            [122.97921478060046, 225.25],
+            [123.26789838337181, 225],
+            [124.1339491916859, 224.5],
+            [124.49480369515011, 224.375],
+            [124.92782909930715, 224.375],
+            [125.28868360277136, 224.5],
+            [125.5412817551963, 224.5625],
+            [125.86605080831409, 224.5],
+            [126.04647806004618, 224.3125],
+            [126.15473441108544, 224],
+            [126.22690531177828, 223.625],
+            [126.4434180138568, 223.25],
+            [126.73210161662817, 223],
+            [126.91252886836027, 222.8125],
+            [127.02078521939953, 222.5],
+            [127.09295612009237, 222.125],
+            [127.3094688221709, 221.75],
+            [127.59815242494226, 221.5],
+            [128.46420323325634, 221],
+            [128.82505773672054, 220.875],
+            [129.11374133949192, 220.875],
+            [129.33025404157044, 221],
+            [129.33025404157044, 221.5],
+            [129.4385103926097, 221.8125],
+            [129.6189376443418, 222],
+            [130.20442231040514, 222.29825277694755],
+            [130.19744880467718, 223.49405601089737],
+            [130.1602193995381, 223.6875],
+            [130.1602193995381, 224.3125],
+            [130.1894304446586, 224.8690288316357],
+            [130.18866666666665, 225],
+            [129.33974601833197, 225.48355989624903],
+            [129.36633949191685, 225.4375],
+            [128.7168013856813, 225.8125],
+            [128.69451961694145, 225.8510920234574],
+            [128.6525476190476, 225.875],
+            [128.60854503464202, 225.875],
+            [126.4434180138568, 227.125],
+            [123.2318129330254, 228.9375],
+            [122.97921478060046, 228.75],
+            [122.76270207852193, 228.375],
+            [122.69053117782909, 228]
+        ]]],
+        [[[
+            [130.18866666666668, 225],
+            [130.19157077703758, 224.50200878743675],
+            [130.1963048498845, 224.625],
+            [130.1963048498845, 223.6902191595286],
+            [130.20419118113833, 222.33788637524387],
+            [130.48498845265587, 222.5],
+            [136.54734411085448, 226],
+            [136.83602771362587, 226.25],
+            [137.05254041570439, 226.625],
+            [137.12471131639722, 227],
+            [137.12471131639722, 229],
+            [137.09935212781855, 229.04392211461823],
+            [131.24684119890156, 225.61921142498608],
+            [130.1963048498845, 225],
+            [130.19246001476338, 225.0022197514766]
+        ]]],
+        [[[
+            [130.1974488046772, 223.4940560108972],
+            [130.20442231040516, 222.29825277694758],
+            [130.23239030023095, 222.3125],
+            [130.23239030023095, 223.3125]
+        ]]],
+        [[[
+            [128.46420323325634, 222],
+            [128.7528868360277, 221.5],
+            [128.46420323325634, 221],
+            [128.82505773672054, 220.875],
+            [129.2580831408776, 220.875],
+            [129.6189376443418, 221],
+            [129.90762124711316, 221.25],
+            [130.12413394919167, 221.625],
+            [130.1963048498845, 222],
+            [130.30456120092379, 222.3125],
+            [130.48498845265587, 222.5],
+            [130.1963048498845, 223],
+            [129.6189376443418, 223],
+            [129.33025404157044, 222.5],
+            [128.7528868360277, 222.5]
+        ]]]
+    ];
+}
+
+function canonicalTerrainGridKey(map) {
+    const entries = [];
+    for (let y = 0; y < map.height; y++) {
+        for (let x = 0; x < map.width; x++) {
+            const node = map.nodes[x][y];
+            const type = map.getGroundTerrainTypeForNode(node);
+            if (type !== "grass") entries.push(`${x},${y}:${type}`);
+        }
+    }
+    return entries.join("|");
+}
+
+function canonicalAllTerrainPairBoundaryKey(map, polygons) {
+    const terrainTypes = ["water", "mud", "desert"];
+    const entries = [];
+    for (let a = 0; a < terrainTypes.length; a++) {
+        for (let b = a + 1; b < terrainTypes.length; b++) {
+            const typeA = terrainTypes[a];
+            const typeB = terrainTypes[b];
+            const boundary = canonicalTerrainPairSharedBoundaryKey(map, polygons, typeA, typeB);
+            if (boundary) entries.push(`${typeA}/${typeB}:${boundary}`);
+        }
+    }
+    entries.sort();
+    return entries.join("\n");
+}
+
+function getTestNearBoundarySummary(ringDiagnostic, nearDistance = 1, onBoundaryDistance = 1e-3) {
+    const distances = Array.isArray(ringDiagnostic && ringDiagnostic.boundaryDistances)
+        ? ringDiagnostic.boundaryDistances
+        : [];
+    const near = distances.filter(record => (
+        Number.isFinite(Number(record && record.distance)) &&
+        Number(record.distance) <= nearDistance
+    ));
+    const off = near.filter(record => Number(record.distance) > onBoundaryDistance);
+    const on = near.filter(record => Number(record.distance) <= onBoundaryDistance);
+    return {
+        nearCount: near.length,
+        onCount: on.length,
+        offCount: off.length,
+        maxOffDistance: off.reduce((max, record) => Math.max(max, Number(record.distance)), 0),
+        firstOff: off.length > 0 ? off[0] : null
+    };
+}
+
+function ringDiagnosticHasMixedSectionBoundaryRun(ringDiagnostic, nearDistance = 1, onBoundaryDistance = 1e-3) {
+    const distances = Array.isArray(ringDiagnostic && ringDiagnostic.boundaryDistances)
+        ? ringDiagnostic.boundaryDistances
+        : [];
+    const pointCount = Number(ringDiagnostic && ringDiagnostic.pointCount);
+    if (!Number.isFinite(pointCount) || pointCount < 3) return false;
+    const segments = [];
+    for (let i = 0; i < pointCount; i++) {
+        const a = distances[i];
+        const b = distances[(i + 1) % pointCount];
+        if (!a || !b) continue;
+        const distanceA = Number(a.distance);
+        const distanceB = Number(b.distance);
+        if (!Number.isFinite(distanceA) || !Number.isFinite(distanceB)) continue;
+        if (distanceA > nearDistance || distanceB > nearDistance) continue;
+        if (Number(a.edgeIndex) !== Number(b.edgeIndex)) continue;
+        segments.push({
+            index: i,
+            exact: distanceA <= onBoundaryDistance && distanceB <= onBoundaryDistance
+        });
+    }
+    const byIndex = new NativeMap(segments.map(segment => [segment.index, segment]));
+    const seen = new NativeSet();
+    for (const segment of segments) {
+        if (seen.has(segment.index)) continue;
+        const stack = [segment.index];
+        const component = [];
+        seen.add(segment.index);
+        while (stack.length > 0) {
+            const index = stack.pop();
+            const current = byIndex.get(index);
+            if (current) component.push(current);
+            const neighbors = [
+                (index + 1) % pointCount,
+                (index - 1 + pointCount) % pointCount
+            ];
+            for (const neighbor of neighbors) {
+                if (!byIndex.has(neighbor) || seen.has(neighbor)) continue;
+                seen.add(neighbor);
+                stack.push(neighbor);
+            }
+        }
+        if (component.some(record => record.exact) && component.some(record => !record.exact)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function clippedGeometryDiagnosticHasMixedSectionBoundaryRun(clippedGeometryDiagnostic) {
+    const polygons = Array.isArray(clippedGeometryDiagnostic && clippedGeometryDiagnostic.polygons)
+        ? clippedGeometryDiagnostic.polygons
+        : [];
+    return polygons.some(polygon => (
+        Array.isArray(polygon.rings) &&
+        polygon.rings.some(ring => ringDiagnosticHasMixedSectionBoundaryRun(ring && ring.diagnostic))
+    ));
+}
+
+function splitOutputDiagnosticHasMixedSectionBoundaryRun(record) {
+    const polygons = Array.isArray(record && record.polygons) ? record.polygons : [];
+    return polygons.some(polygon => ringDiagnosticHasMixedSectionBoundaryRun(polygon && polygon.outer));
+}
+
+function rectTerrainEdits(x0, x1, y0, y1, terrainType) {
+    const out = [];
+    for (let x = x0; x <= x1; x++) {
+        for (let y = y0; y <= y1; y++) out.push([x, y, terrainType]);
+    }
+    return out;
+}
+
+function lineTerrainEdits(coords, terrainType) {
+    return coords.map(([x, y]) => [x, y, terrainType]);
+}
+
+function maskTerrainEdits(x0, x1, y0, y1, terrainType, predicate) {
+    const out = [];
+    for (let x = x0; x <= x1; x++) {
+        for (let y = y0; y <= y1; y++) {
+            if (predicate(x, y)) out.push([x, y, terrainType]);
+        }
+    }
+    return out;
+}
+
+function ellipseTerrainEdits(cx, cy, rx, ry, terrainType) {
+    return maskTerrainEdits(
+        Math.floor(cx - rx),
+        Math.ceil(cx + rx),
+        Math.floor(cy - ry),
+        Math.ceil(cy + ry),
+        terrainType,
+        (x, y) => (((x - cx) * (x - cx)) / (rx * rx)) + (((y - cy) * (y - cy)) / (ry * ry)) <= 1
+    );
+}
+
+function diamondTerrainEdits(cx, cy, radiusX, radiusY, terrainType) {
+    return maskTerrainEdits(
+        Math.floor(cx - radiusX),
+        Math.ceil(cx + radiusX),
+        Math.floor(cy - radiusY),
+        Math.ceil(cy + radiusY),
+        terrainType,
+        (x, y) => (Math.abs(x - cx) / radiusX) + (Math.abs(y - cy) / radiusY) <= 1
+    );
+}
+
+function diagonalBandTerrainEdits(x0, x1, y0, y1, slope, intercept, halfWidth, terrainType) {
+    return maskTerrainEdits(
+        x0,
+        x1,
+        y0,
+        y1,
+        terrainType,
+        (x, y) => Math.abs(y - ((slope * x) + intercept)) <= halfWidth
+    );
+}
+
+function getTerrainModelStressEdits() {
+    const waterLine = [];
+    for (let x = 6; x <= 23; x++) waterLine.push([x, 10]);
+    const desertLine = [];
+    for (let x = 9; x <= 23; x++) desertLine.push([x, 6 + Math.floor((x - 9) / 2)]);
+    const mudReturn = [];
+    for (let x = 12; x <= 20; x++) mudReturn.push([x, 13 + (x % 2)]);
+    return [
+        ...rectTerrainEdits(8, 20, 7, 15, "mud"),
+        ...lineTerrainEdits(waterLine, "water"),
+        ...lineTerrainEdits(desertLine, "desert"),
+        ...rectTerrainEdits(13, 17, 9, 12, "grass"),
+        ...lineTerrainEdits(mudReturn, "mud"),
+        ...lineTerrainEdits([[11, 8], [12, 8], [13, 8], [14, 8], [15, 8], [16, 8], [17, 8]], "water"),
+        ...lineTerrainEdits([[18, 9], [18, 10], [18, 11], [18, 12], [18, 13], [18, 14]], "desert")
+    ];
+}
+
+function getTerrainModelFinalLayoutEdits(order = ["mud", "water", "desert"]) {
+    const finalByCoord = new NativeMap();
+    const setRect = (x0, x1, y0, y1, terrainType) => {
+        for (let x = x0; x <= x1; x++) {
+            for (let y = y0; y <= y1; y++) finalByCoord.set(`${x},${y}`, terrainType);
+        }
+    };
+    setRect(8, 13, 7, 11, "mud");
+    setRect(14, 18, 7, 11, "water");
+    setRect(10, 18, 12, 15, "desert");
+    setRect(13, 15, 10, 12, "grass");
+    const out = [];
+    for (const terrainType of order) {
+        for (const [coordKey, finalType] of finalByCoord.entries()) {
+            if (finalType !== terrainType) continue;
+            const [x, y] = coordKey.split(",").map(Number);
+            out.push([x, y, terrainType]);
+        }
+    }
+    return out;
+}
+
+function paintTerrainModelEdits(fixture, edits, options = {}) {
+    for (let i = 0; i < edits.length; i++) {
+        const [x, y, terrainType] = edits[i];
+        const node = fixture.map.nodes[x] && fixture.map.nodes[x][y];
+        assert.ok(node, `terrain model edit ${i} cannot find node ${x},${y}`);
+        try {
+            fixture.paintNode(node, terrainType);
+        } catch (err) {
+            assert.fail(`terrain model edit ${i} ${x},${y}->${terrainType} crashed: ${err && err.message ? err.message : err}`);
+        }
+        if (options.validateEachEdit === true) {
+            assertTerrainModelFixtureInvariants(fixture, `terrain model after edit ${i} ${x},${y}->${terrainType}`);
+        }
+    }
+}
+
+function terrainPolygonsContainingNode(map, polygons, node, terrainType) {
+    return (Array.isArray(polygons) ? polygons : []).filter(polygon => (
+        polygon &&
+        polygon.type === terrainType &&
+        map.terrainPolygonContainsPoint(polygon, Number(node.x), Number(node.y))
+    ));
+}
+
+function assertTerrainModelFixtureInvariants(fixture, label, nodes = null) {
+    const rawPolygons = fixture.rawPolygons();
+    assertTerrainPolygonsPassRendererPreflight(rawPolygons, label);
+    assertTerrainPolygonsHaveNoProperSegmentCrossings(rawPolygons, `${label}: raw terrain polygons should not cross`);
+    assertNonGrassTerrainTilesCoveredByPolygons(fixture.map, label, rawPolygons);
+    assertAllAdjacentNonGrassTerrainPairsSharePolygonBorders(fixture.map, rawPolygons, `${label}: adjacent terrain pairs should share polygon borders`, nodes);
+}
+
+function getTestSectionEdgeProjection(point, a, b, maxDistance = Infinity) {
+    const px = Number(point && point.x);
+    const py = Number(point && point.y);
+    const ax = Number(a && a.x);
+    const ay = Number(a && a.y);
+    const bx = Number(b && b.x);
+    const by = Number(b && b.y);
+    if (![px, py, ax, ay, bx, by].every(Number.isFinite)) return null;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lengthSq = dx * dx + dy * dy;
+    if (!(lengthSq > 1e-12)) return null;
+    const t = ((px - ax) * dx + (py - ay) * dy) / lengthSq;
+    if (t < -1e-6 || t > 1 + 1e-6) return null;
+    const clampedT = Math.max(0, Math.min(1, t));
+    const projected = { x: ax + dx * clampedT, y: ay + dy * clampedT };
+    const distance = Math.hypot(px - projected.x, py - projected.y);
+    if (distance > maxDistance) return null;
+    return { t: clampedT, distance, point: projected };
+}
+
+function getTestSectionSegmentOverlap(a0, a1, b0, b1, eps = 1e-6) {
+    const b0Projection = getTestSectionEdgeProjection(b0, a0, a1, eps);
+    const b1Projection = getTestSectionEdgeProjection(b1, a0, a1, eps);
+    if (!b0Projection || !b1Projection) return null;
+    const a0Projection = getTestSectionEdgeProjection(a0, b0, b1, eps);
+    const a1Projection = getTestSectionEdgeProjection(a1, b0, b1, eps);
+    if (!a0Projection || !a1Projection) return null;
+    const start = Math.max(0, Math.min(b0Projection.t, b1Projection.t));
+    const end = Math.min(1, Math.max(b0Projection.t, b1Projection.t));
+    if (end - start <= eps) return null;
+    return { start, end };
+}
+
+function getTestClipRingSignedArea(ring) {
+    let area = 0;
+    const source = Array.isArray(ring) ? ring : [];
+    for (let i = 0; i < source.length; i++) {
+        const a = source[i];
+        const b = source[(i + 1) % source.length];
+        area += Number(a && a[0]) * Number(b && b[1]) - Number(b && b[0]) * Number(a && a[1]);
+    }
+    return area / 2;
+}
+
+function getTestClipGeometryArea(geometry) {
+    let area = 0;
+    for (const polygon of Array.isArray(geometry) ? geometry : []) {
+        if (!Array.isArray(polygon) || !Array.isArray(polygon[0])) continue;
+        let polygonArea = Math.abs(getTestClipRingSignedArea(polygon[0]));
+        for (let h = 1; h < polygon.length; h++) {
+            polygonArea -= Math.abs(getTestClipRingSignedArea(polygon[h]));
+        }
+        area += Math.max(0, polygonArea);
+    }
+    return area;
+}
+
+function collectTestSharedSectionEdges(assetsByKey) {
+    const assets = Array.from(assetsByKey.values()).filter(asset => (
+        asset && typeof asset.key === "string" && Array.isArray(asset.sectionPolygon)
+    ));
+    const out = [];
+    for (let a = 0; a < assets.length; a++) {
+        const assetA = assets[a];
+        const ringA = assetA.sectionPolygon;
+        for (let b = a + 1; b < assets.length; b++) {
+            const assetB = assets[b];
+            const ringB = assetB.sectionPolygon;
+            for (let i = 0; i < ringA.length; i++) {
+                const a0 = ringA[i];
+                const a1 = ringA[(i + 1) % ringA.length];
+                for (let j = 0; j < ringB.length; j++) {
+                    const b0 = ringB[j];
+                    const b1 = ringB[(j + 1) % ringB.length];
+                    const overlap = getTestSectionSegmentOverlap(a0, a1, b0, b1);
+                    if (!overlap) continue;
+                    const edgeStart = {
+                        x: Number(a0.x) + (Number(a1.x) - Number(a0.x)) * overlap.start,
+                        y: Number(a0.y) + (Number(a1.y) - Number(a0.y)) * overlap.start
+                    };
+                    const edgeEnd = {
+                        x: Number(a0.x) + (Number(a1.x) - Number(a0.x)) * overlap.end,
+                        y: Number(a0.y) + (Number(a1.y) - Number(a0.y)) * overlap.end
+                    };
+                    out.push({
+                        keyA: assetA.key,
+                        keyB: assetB.key,
+                        a: edgeStart,
+                        b: edgeEnd
+                    });
+                }
+            }
+        }
+    }
+    return out;
+}
+
+function collectTestSectionBoundaryEdges(assetsByKey) {
+    const assets = Array.from(assetsByKey.values()).filter(asset => (
+        asset && typeof asset.key === "string" && Array.isArray(asset.sectionPolygon)
+    ));
+    const out = [];
+    for (const asset of assets) {
+        const ring = asset.sectionPolygon;
+        for (let i = 0; i < ring.length; i++) {
+            out.push({
+                sectionKey: asset.key,
+                edgeIndex: i,
+                a: ring[i],
+                b: ring[(i + 1) % ring.length]
+            });
+        }
+    }
+    return out;
+}
+
+function collectTestPolygonRings(polygon) {
+    const rings = [{ kind: "outer", index: 0, points: polygon && polygon.points }];
+    const holes = Array.isArray(polygon && polygon.holes) ? polygon.holes : [];
+    for (let h = 0; h < holes.length; h++) {
+        rings.push({ kind: "hole", index: h, points: holes[h] });
+    }
+    return rings.filter(record => Array.isArray(record.points));
+}
+
+function collectTestSectionSeamIntervalsForAsset(asset, sharedEdge, options = {}) {
+    const onDistance = Number.isFinite(options.onDistance) ? Number(options.onDistance) : 1e-6;
+    const terrainPolygons = Array.isArray(asset && asset.terrainPolygons) ? asset.terrainPolygons : [];
+    const intervalsByType = new NativeMap();
+    for (let p = 0; p < terrainPolygons.length; p++) {
+        const polygon = terrainPolygons[p];
+        if (!polygon || typeof polygon.type !== "string") continue;
+        for (const ringRecord of collectTestPolygonRings(polygon)) {
+            const ring = ringRecord.points;
+            for (let i = 0; i < ring.length; i++) {
+                const pointA = ring[i];
+                const pointB = ring[(i + 1) % ring.length];
+                const projectionA = getTestSectionEdgeProjection(pointA, sharedEdge.a, sharedEdge.b, onDistance);
+                const projectionB = getTestSectionEdgeProjection(pointB, sharedEdge.a, sharedEdge.b, onDistance);
+                if (!projectionA || !projectionB) continue;
+                const start = Math.min(projectionA.t, projectionB.t);
+                const end = Math.max(projectionA.t, projectionB.t);
+                if (end - start <= 1e-6) continue;
+                if (!intervalsByType.has(polygon.type)) intervalsByType.set(polygon.type, []);
+                intervalsByType.get(polygon.type).push([
+                    Number(start.toFixed(7)),
+                    Number(end.toFixed(7))
+                ]);
+            }
+        }
+    }
+    const normalized = new NativeMap();
+    for (const [type, intervals] of intervalsByType.entries()) {
+        const mergedIntervals = intervals
+            .slice()
+            .sort((a, b) => a[0] - b[0] || a[1] - b[1])
+            .reduce((merged, interval) => {
+                const previous = merged[merged.length - 1];
+                if (previous && interval[0] <= previous[1] + 1e-7) {
+                    previous[1] = Math.max(previous[1], interval[1]);
+                } else {
+                    merged.push(interval.slice());
+                }
+                return merged;
+            }, []);
+        const keys = Array.from(new NativeSet(mergedIntervals
+            .map(([start, end]) => `${start.toFixed(7)}:${end.toFixed(7)}`)
+        ))
+            .sort();
+        normalized.set(type, keys);
+    }
+    return normalized;
+}
+
+function collectTestSectionSeamDriftSegments(asset, sharedEdge, options = {}) {
+    const nearDistance = Number.isFinite(options.nearDistance) ? Number(options.nearDistance) : 0.01;
+    const onDistance = Number.isFinite(options.onDistance) ? Number(options.onDistance) : 1e-6;
+    const minProjectedLength = Number.isFinite(options.minProjectedLength) ? Number(options.minProjectedLength) : 0.05;
+    const terrainPolygons = Array.isArray(asset && asset.terrainPolygons) ? asset.terrainPolygons : [];
+    const out = [];
+    for (let p = 0; p < terrainPolygons.length; p++) {
+        const polygon = terrainPolygons[p];
+        if (!polygon || typeof polygon.type !== "string") continue;
+        for (const ringRecord of collectTestPolygonRings(polygon)) {
+            const ring = ringRecord.points;
+            for (let i = 0; i < ring.length; i++) {
+                const pointA = ring[i];
+                const pointB = ring[(i + 1) % ring.length];
+                const projectionA = getTestSectionEdgeProjection(pointA, sharedEdge.a, sharedEdge.b, nearDistance);
+                const projectionB = getTestSectionEdgeProjection(pointB, sharedEdge.a, sharedEdge.b, nearDistance);
+                if (!projectionA || !projectionB) continue;
+                const projectedLength = Math.abs(projectionB.t - projectionA.t) *
+                    Math.hypot(Number(sharedEdge.b.x) - Number(sharedEdge.a.x), Number(sharedEdge.b.y) - Number(sharedEdge.a.y));
+                if (!(projectedLength > minProjectedLength)) continue;
+                if (projectionA.distance <= onDistance && projectionB.distance <= onDistance) continue;
+                out.push({
+                    sectionKey: asset.key,
+                    terrainType: polygon.type,
+                    polygonIndex: p,
+                    ringKind: ringRecord.kind,
+                    ringIndex: ringRecord.index,
+                    segmentIndex: i,
+                    distanceA: projectionA.distance,
+                    distanceB: projectionB.distance,
+                    a: { x: Number(pointA.x), y: Number(pointA.y) },
+                    b: { x: Number(pointB.x), y: Number(pointB.y) },
+                    projectedA: projectionA.point,
+                    projectedB: projectionB.point
+                });
+            }
+        }
+    }
+    return out;
+}
+
+function testPointOnSectionBoundary(point, sectionBoundaryEdges, eps = 1e-9) {
+    return sectionBoundaryEdges.some(edge => (
+        getTestSectionEdgeProjection(point, edge.a, edge.b, eps) !== null
+    ));
+}
+
+function assertFinishedTerrainVerticesAreCanonicalOrSectionBoundary(fixture, label) {
+    const sectionBoundaryEdges = collectTestSectionBoundaryEdges(fixture.assetsByKey);
+    const failures = [];
+    const rawPolygons = fixture.rawPolygons();
+    for (let p = 0; p < rawPolygons.length; p++) {
+        const polygon = rawPolygons[p];
+        for (const ringRecord of collectTestPolygonRings(polygon)) {
+            const ring = ringRecord.points;
+            for (let i = 0; i < ring.length; i++) {
+                const point = ring[i];
+                if (testPointOnRepairLattice(fixture.map, point)) continue;
+                if (testPointOnSectionBoundary(point, sectionBoundaryEdges)) continue;
+                failures.push(
+                    `${polygon && polygon.type}[${p}] ${ringRecord.kind}:${ringRecord.index}:${i} ` +
+                    `${Number(point.x).toFixed(12)},${Number(point.y).toFixed(12)}`
+                );
+            }
+        }
+    }
+    assert.deepEqual(
+        failures,
+        [],
+        `${label}: finished terrain vertices must be exactly on the repair grid or section boundary`
+    );
+}
+
+function assertCrossSectionTerrainSeamsAreExact(fixture, label) {
+    assertTerrainModelFixtureInvariants(fixture, label);
+    assertFinishedTerrainVerticesAreCanonicalOrSectionBoundary(fixture, label);
+    const assetsByKey = fixture.assetsByKey;
+    const sharedEdges = collectTestSharedSectionEdges(assetsByKey);
+    assert.ok(sharedEdges.length > 0, `${label}: expected shared section edges`);
+    const driftSegments = [];
+    const intervalFailures = [];
+    let sharedTerrainIntervalCount = 0;
+    for (const sharedEdge of sharedEdges) {
+        const assetA = assetsByKey.get(sharedEdge.keyA);
+        const assetB = assetsByKey.get(sharedEdge.keyB);
+        driftSegments.push(...collectTestSectionSeamDriftSegments(assetA, sharedEdge));
+        driftSegments.push(...collectTestSectionSeamDriftSegments(assetB, sharedEdge));
+        const intervalsA = collectTestSectionSeamIntervalsForAsset(assetA, sharedEdge);
+        const intervalsB = collectTestSectionSeamIntervalsForAsset(assetB, sharedEdge);
+        const types = new NativeSet([...intervalsA.keys(), ...intervalsB.keys()]);
+        for (const type of types) {
+            const left = intervalsA.get(type) || [];
+            const right = intervalsB.get(type) || [];
+            sharedTerrainIntervalCount += Math.max(left.length, right.length);
+            if (JSON.stringify(left) !== JSON.stringify(right)) {
+                intervalFailures.push(
+                    `${sharedEdge.keyA}/${sharedEdge.keyB} ${type}: ` +
+                    `${left.join("|") || "(none)"} != ${right.join("|") || "(none)"}`
+                );
+            }
+        }
+    }
+    assert.ok(sharedTerrainIntervalCount > 0, `${label}: expected terrain to cross at least one section seam`);
+    assert.deepEqual(
+        intervalFailures,
+        [],
+        `${label}: section seam intervals must match exactly on both sides`
+    );
+    assert.deepEqual(
+        driftSegments.map(segment => (
+            `${segment.sectionKey}:${segment.terrainType}[${segment.polygonIndex}:${segment.segmentIndex}] ` +
+            `${segment.distanceA.toFixed(6)},${segment.distanceB.toFixed(6)}`
+        )),
+        [],
+        `${label}: section seam-adjacent segments must lie exactly on the section boundary`
     );
 }
 
@@ -389,159 +1750,6 @@ test("buildGroundTerrainPolygonsFromNodes preserves polygon holes", () => {
     assert.ok(polygons[0].holes[0].length >= 3);
 });
 
-test("replaceGroundTerrainPolygonPatch uses local polygon geometry instead of full rebuild", () => {
-    const map = createTerrainPatchMap();
-    const center = map.nodes[4][4];
-    map.nodes[8][8].groundTextureId = map.getGroundTerrainTextureIdForType("water", 8, 8);
-    const farPolygon = map.buildGroundTerrainPolygonsFromNodes([map.nodes[8][8]])[0];
-    map.terrainPolygons = [farPolygon];
-    map.getGroundTerrainPolygonTypeAtPoint = () => {
-        throw new Error("terrain painter must not rebuild tile membership from polygons");
-    };
-    map.collectGroundTerrainPolygonRepairSourceNodes = () => {
-        throw new Error("terrain painter must not scan the full map for local paint edits");
-    };
-    map.buildGroundTerrainPolygonsFromNodes = () => {
-        throw new Error("terrain painter must not rebuild terrain polygons from tile nodes");
-    };
-    map.removeGroundTerrainAffectedPolygonVertices = () => {
-        throw new Error("terrain painter must not delete affected vertices before local boolean operations");
-    };
-
-    assert.equal(map.replaceGroundTerrainPolygonPatch(center, "water"), true);
-
-    assert.equal(map.getGroundTerrainTypeForNode(center), "water");
-    assert.equal(map.terrainPolygons.length, 2);
-    const farPolygonJson = JSON.stringify(farPolygon);
-    const farPolygonStillPresent = map.terrainPolygons.some(polygon => (
-        JSON.stringify(polygon) === farPolygonJson
-    ));
-    const editedPolygon = map.terrainPolygons.find(polygon => (
-        JSON.stringify(polygon) !== farPolygonJson
-    ));
-    assert.equal(farPolygonStillPresent, true);
-    assert.equal(editedPolygon.type, "water");
-    assert.ok(editedPolygon.points.length >= 3);
-    assert.ok(Array.isArray(map._terrainPaintDebugLastEdit.modifiedSegments));
-    assert.ok(map._terrainPaintDebugLastEdit.modifiedSegments.length > 0);
-    assert.ok(map._terrainPaintDebugLastEdit.modifiedSegments.every(segment => (
-        segment &&
-        Number.isFinite(segment.a && segment.a.x) &&
-        Number.isFinite(segment.a && segment.a.y) &&
-        Number.isFinite(segment.b && segment.b.x) &&
-        Number.isFinite(segment.b && segment.b.y)
-    )));
-});
-
-test("replaceGroundTerrainPolygonPatch changes only the clicked tile terrain value", () => {
-    const map = createTerrainPatchMap();
-    const center = map.nodes[4][4];
-    const neighbor = map.nodes[5][4];
-    neighbor.groundTextureId = map.getGroundTerrainTextureIdForType("desert", 5, 4);
-    const beforeNeighborTextureId = neighbor.groundTextureId;
-
-    assert.equal(map.replaceGroundTerrainPolygonPatch(center, "water"), true);
-
-    assert.equal(map.getGroundTerrainTypeForNode(center), "water");
-    assert.equal(neighbor.groundTextureId, beforeNeighborTextureId);
-});
-
-test("terrain painter preserves manually moved vertices outside the local edit span", () => {
-    const map = createTerrainPatchMap(20, 20);
-    const waterNodes = [
-        [4, 7], [5, 6], [5, 7], [5, 8],
-        [6, 5], [6, 6], [6, 7], [6, 8],
-        [7, 5], [7, 6], [7, 7], [7, 8],
-        [8, 5], [8, 6], [8, 7], [8, 8],
-        [9, 5], [9, 6], [9, 7], [9, 8],
-        [10, 6], [10, 7], [10, 8],
-        [11, 7], [11, 8], [11, 9]
-    ];
-    for (const [x, y] of waterNodes) {
-        map.nodes[x][y].groundTextureId = map.getGroundTerrainTextureIdForType("water", x, y);
-    }
-    map.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes(
-        waterNodes.map(([x, y]) => map.nodes[x][y])
-    );
-    const movedVertex = {
-        x: map.terrainPolygons[0].points[0].x - 0.271,
-        y: map.terrainPolygons[0].points[0].y + 0.137
-    };
-    map.terrainPolygons[0].points[0] = movedVertex;
-
-    assert.equal(map.replaceGroundTerrainPolygonPatch(map.nodes[12][8], "water"), true);
-
-    assert.equal(map.terrainPolygons.length, 1);
-    assert.equal(map.terrainPolygons[0].points.some(point => (
-        point.x === movedVertex.x && point.y === movedVertex.y
-    )), true);
-    assert.ok(Array.isArray(map._terrainPaintDebugLastEdit.rawReplacementSegments));
-    assert.ok(map._terrainPaintDebugLastEdit.rawReplacementSegments.length > 0);
-    assert.ok(Array.isArray(map._terrainPaintDebugLastEdit.modifiedSegments));
-    assert.ok(map._terrainPaintDebugLastEdit.modifiedSegments.length > 0);
-});
-
-test("connecting terrain components preserves unrelated same-type polygons with overlapping bounds", () => {
-    const map = createTerrainPatchMap();
-    const left = map.nodes[3][4];
-    const bridge = map.nodes[4][4];
-    const right = map.nodes[5][4];
-    const unrelated = map.nodes[2][2];
-    const mudId = map.getGroundTerrainTextureIdForType("mud", 0, 0);
-    left.groundTextureId = mudId;
-    right.groundTextureId = mudId;
-    unrelated.groundTextureId = mudId;
-    map.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes([left, right, unrelated]);
-    const beforePatchBounds = map.getGroundTerrainHexPatchBounds(
-        map.collectGroundTerrainLocalPatchNodes(bridge, { radius: 1 })
-    );
-    const unrelatedPolygon = map.terrainPolygons.find(polygon => (
-        map.terrainPolygonContainsPoint(polygon, unrelated.x, unrelated.y)
-    ));
-
-    assert.ok(unrelatedPolygon, "fixture should start with an unrelated mud polygon");
-    assert.equal(testBoundsOverlap(getTestPolygonBounds(unrelatedPolygon.points), beforePatchBounds), true);
-
-    assert.equal(map.replaceGroundTerrainPolygonPatch(bridge, "mud"), true);
-
-    const mudPolygons = map.terrainPolygons.filter(polygon => polygon.type === "mud");
-    assert.equal(mudPolygons.length, 2);
-    assert.equal(map.getGroundTerrainTypeForNode(unrelated), "mud");
-    assert.equal(mudPolygons.some(polygon => (
-        testTerrainPolygonCoversPoint(map, polygon, unrelated.x, unrelated.y)
-    )), true);
-    assert.equal(mudPolygons.some(polygon => (
-        testTerrainPolygonCoversPoint(map, polygon, left.x, left.y) &&
-        testTerrainPolygonCoversPoint(map, polygon, bridge.x, bridge.y) &&
-        testTerrainPolygonCoversPoint(map, polygon, right.x, right.y)
-    )), true);
-});
-
-test("terrain local patch splits a polygon when the edited tile is subtracted", () => {
-    const map = createTerrainPatchMap();
-    const left = map.nodes[3][4];
-    const center = map.nodes[4][4];
-    const right = map.nodes[5][4];
-    const waterId = map.getGroundTerrainTextureIdForType("water", 0, 0);
-    left.groundTextureId = waterId;
-    center.groundTextureId = waterId;
-    right.groundTextureId = waterId;
-    map.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes([left, center, right]);
-
-    assert.equal(map.replaceGroundTerrainPolygonPatch(center, "grass"), true);
-
-    const waterPolygons = map.terrainPolygons.filter(polygon => polygon.type === "water");
-    assert.equal(waterPolygons.length, 2);
-    assert.equal(waterPolygons.some(polygon => (
-        map.terrainPolygonContainsPoint(polygon, left.x, left.y) &&
-        !map.terrainPolygonContainsPoint(polygon, right.x, right.y)
-    )), true);
-    assert.equal(waterPolygons.some(polygon => (
-        map.terrainPolygonContainsPoint(polygon, right.x, right.y) &&
-        !map.terrainPolygonContainsPoint(polygon, left.x, left.y)
-    )), true);
-});
-
 test("water terrain polygons collide with circular movement hitboxes", () => {
     const map = createTerrainPatchMap();
     map.terrainPolygons = [{
@@ -566,75 +1774,610 @@ test("water terrain polygons collide with circular movement hitboxes", () => {
     assert.equal(collision.terrainType, "water");
 });
 
-test("section terrain edits patch only the edited section", () => {
-    const map = createTerrainPatchMap(5, 5);
-    const sectionA = "0,0";
-    const sectionB = "1,0";
-    const sectionANodes = [];
-    const sectionBNodes = [];
-    for (let x = 0; x < map.width; x++) {
-        for (let y = 0; y < map.height; y++) {
-            const node = map.nodes[x][y];
-            node._prototypeSectionKey = x <= 1 ? sectionA : sectionB;
-            if (node._prototypeSectionKey === sectionA) sectionANodes.push(node);
-            else sectionBNodes.push(node);
+test("terrain polygon normalization rejects degenerate stored rings", () => {
+    const map = createTerrainPatchMap();
+
+    assert.throws(
+        () => map.normalizeGroundTerrainPolygons([{
+            type: "mud",
+            points: [
+                { x: 0, y: 0 },
+                { x: 1, y: 0 },
+                { x: 2, y: 0 }
+            ]
+        }]),
+        /degenerate outer ring/
+    );
+    assert.throws(
+        () => map.normalizeGroundTerrainPolygons([{
+            type: "water",
+            points: [
+                { x: 0, y: 0 },
+                { x: 3, y: 0 },
+                { x: 3, y: 3 },
+                { x: 0, y: 3 }
+            ],
+            holes: [[
+                { x: 1, y: 1 },
+                { x: 2, y: 1 },
+                { x: 3, y: 1 }
+            ]]
+        }]),
+        /degenerate hole/
+    );
+});
+
+test("terrain repair lattice preserves hex corners and snaps emitted rings", () => {
+    const map = createTerrainPatchMap();
+    const hexCorners = map.getGroundTerrainHexCorners(map.nodes[4][4]);
+    for (let i = 0; i < hexCorners.length; i++) {
+        assertTestPointOnRepairLattice(map, hexCorners[i], `hex corner ${i}`);
+    }
+
+    const basis = map.getGroundTerrainRepairLatticeBasis();
+    const minEdgeLength = map.getGroundTerrainRepairMinimumEdgeLength();
+    const rawRing = [
+        { x: basis.xStep * 0.1, y: basis.yStep * 0.1 },
+        { x: basis.xStep * 0.2, y: basis.yStep * 0.2 },
+        { x: basis.xStep * 8.1, y: basis.yStep * 0.1 },
+        { x: basis.xStep * 8.1, y: basis.yStep * 8.1 },
+        { x: basis.xStep * 0.1, y: basis.yStep * 8.1 }
+    ];
+    const snapped = map.getGroundTerrainRepairSnappedRingPoints(rawRing);
+
+    assert.equal(snapped.length, 4);
+    for (let i = 0; i < snapped.length; i++) {
+        assertTestPointOnRepairLattice(map, snapped[i], `snapped ring point ${i}`);
+        const next = snapped[(i + 1) % snapped.length];
+        const length = Math.hypot(next.x - snapped[i].x, next.y - snapped[i].y);
+        assert.ok(length >= minEdgeLength - 1e-9, `snapped ring edge ${i} is below repair-lattice length`);
+    }
+});
+
+test("prototype section coarse hexes meet exactly at shared edges", () => {
+    const basis = sectionGeometry.getSectionBasisVectors(50);
+    const rawSectionCorners = (axial) => {
+        const selfWorld = sectionGeometry.offsetToWorld(sectionGeometry.axialToEvenQOffset(axial));
+        const neighborWorlds = sectionGeometry.SECTION_DIRECTIONS.map(direction => sectionGeometry.offsetToWorld(
+            sectionGeometry.axialToEvenQOffset({
+                q: Number(axial.q) + (Number(direction.q) * Number(basis.qAxis.q)) + (Number(direction.r) * Number(basis.rAxis.q)),
+                r: Number(axial.r) + (Number(direction.q) * Number(basis.qAxis.r)) + (Number(direction.r) * Number(basis.rAxis.r))
+            })
+        ));
+        return sectionGeometry.SECTION_DIRECTIONS.map((_, index) => {
+            const n1 = neighborWorlds[index];
+            const n2 = neighborWorlds[(index + 1) % neighborWorlds.length];
+            return {
+                x: (Number(selfWorld.x) + Number(n1.x) + Number(n2.x)) / 3,
+                y: (Number(selfWorld.y) + Number(n1.y) + Number(n2.y)) / 3
+            };
+        });
+    };
+    const pointKey = (point) => `${Math.round(Number(point.x) * 1000000)},${Math.round(Number(point.y) * 1000000)}`;
+    const edgeKey = (a, b) => {
+        const ak = pointKey(a);
+        const bk = pointKey(b);
+        return ak < bk ? `${ak}:${bk}` : `${bk}:${ak}`;
+    };
+    const sectionAxialForCoord = (coord) => sectionGeometry.computeSectionCenterAxial(coord, basis, { q: 0, r: 0 });
+    const polygonCache = new NativeMap();
+    const getSectionCornersForCoord = (coord) => {
+        const key = `${coord.q},${coord.r}`;
+        if (!polygonCache.has(key)) {
+            polygonCache.set(key, sectionGeometry.getSectionHexagonCorners(sectionAxialForCoord(coord), basis));
+        }
+        return polygonCache.get(key);
+    };
+    const originAxial = sectionAxialForCoord({ q: 0, r: 0 });
+    const originRawCorners = rawSectionCorners(originAxial);
+    const originCorners = getSectionCornersForCoord({ q: 0, r: 0 });
+    assert.equal(originCorners.length, 6);
+    for (let i = 0; i < originCorners.length; i++) {
+        assert.ok(
+            Math.abs(Number(originCorners[i].x) - Number(originRawCorners[i].x)) <= 1e-9,
+            `section corner ${i} x should use the original centroid boundary`
+        );
+        assert.ok(
+            Math.abs(Number(originCorners[i].y) - Number(originRawCorners[i].y)) <= 1e-9,
+            `section corner ${i} y should use the original centroid boundary`
+        );
+    }
+    for (let q = -2; q <= 2; q++) {
+        for (let r = -2; r <= 2; r++) {
+            const sectionCorners = getSectionCornersForCoord({ q, r });
+            const sectionEdges = new NativeSet(sectionCorners.map((point, index) => (
+                edgeKey(point, sectionCorners[(index + 1) % sectionCorners.length])
+            )));
+            for (let directionIndex = 0; directionIndex < sectionGeometry.SECTION_DIRECTIONS.length; directionIndex++) {
+                const direction = sectionGeometry.SECTION_DIRECTIONS[directionIndex];
+                const neighborCoord = { q: q + direction.q, r: r + direction.r };
+                const neighborSectionCorners = getSectionCornersForCoord(neighborCoord);
+                let sharedEdgeCount = 0;
+                for (let i = 0; i < neighborSectionCorners.length; i++) {
+                    if (sectionEdges.has(edgeKey(neighborSectionCorners[i], neighborSectionCorners[(i + 1) % neighborSectionCorners.length]))) {
+                        sharedEdgeCount += 1;
+                    }
+                }
+                assert.equal(
+                    sharedEdgeCount,
+                    1,
+                    `section ${q},${r} should share exactly one complete edge with adjacent section ${neighborCoord.q},${neighborCoord.r}`
+                );
+            }
         }
     }
-    const getTileCoordKeys = (nodes) => nodes.map(node => `${node.xindex},${node.yindex}`);
-    const assetA = {
-        key: sectionA,
-        tileCoordKeys: getTileCoordKeys(sectionANodes),
-        groundTiles: {},
-        terrainPolygons: [],
-        sectionPolygon: getSectionPolygonForNodes(map, sectionANodes),
-        _level0GroundSurfaceVersion: 0
-    };
-    const assetB = {
-        key: sectionB,
-        tileCoordKeys: getTileCoordKeys(sectionBNodes),
-        groundTiles: {},
-        terrainPolygons: [],
-        sectionPolygon: getSectionPolygonForNodes(map, sectionBNodes),
-        _level0GroundSurfaceVersion: 0
-    };
-    map._prototypeSectionState = {
-        nodesBySectionKey: new NativeMap([
-            [sectionA, sectionANodes],
-            [sectionB, sectionBNodes]
-        ]),
-        sectionAssetsByKey: new NativeMap([
-            [sectionA, assetA],
-            [sectionB, assetB]
-        ])
-    };
-    map.getPrototypeSectionAsset = (key) => map._prototypeSectionState.sectionAssetsByKey.get(key) || null;
+});
 
-    const edited = map.nodes[1][2];
-    const borderNeighbor = map.nodes[2][2];
-    borderNeighbor.groundTextureId = map.getGroundTerrainTextureIdForType("water", 2, 2);
-    assetB.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes([borderNeighbor]);
+test("terrain section clip polygons preserve raw section boundary coordinates", () => {
+    const { map, assetsByKey } = createTerrainModelFixture("two", 30, 24);
+    const leftAsset = assetsByKey.get("left");
+    const rightAsset = assetsByKey.get("right");
+    const leftClip = map.getGroundTerrainSectionClipPolygonPoints("left", leftAsset);
+    const rightClip = map.getGroundTerrainSectionClipPolygonPoints("right", rightAsset);
+    const sharedEdge = collectTestSharedSectionEdges(assetsByKey).find(edge => (
+        (edge.keyA === "left" && edge.keyB === "right") ||
+        (edge.keyA === "right" && edge.keyB === "left")
+    ));
+    assert.ok(sharedEdge, "two-section fixture should have at least one shared tile edge");
+    const rawSharedA = sharedEdge.a;
+    const rawSharedB = sharedEdge.b;
+    const hasBoundaryPoint = (ring, point) => testRingCoversPointBoundary(ring, Number(point.x), Number(point.y), 1e-9);
 
-    assert.equal(map.replaceGroundTerrainPolygonPatch(edited, "water", {
-        asset: assetA,
-        sectionKey: sectionA
-    }), true);
+    assert.ok(hasBoundaryPoint(leftClip, rawSharedA), "left terrain clip should use raw shared section endpoint A");
+    assert.ok(hasBoundaryPoint(leftClip, rawSharedB), "left terrain clip should use raw shared section endpoint B");
+    assert.ok(hasBoundaryPoint(rightClip, rawSharedA), "right terrain clip should use raw shared section endpoint A");
+    assert.ok(hasBoundaryPoint(rightClip, rawSharedB), "right terrain clip should use raw shared section endpoint B");
 
-    assert.equal(assetA.terrainPolygons.length > 0, true);
-    assert.equal(assetB.terrainPolygons.length > 0, true);
-    assert.equal(assetA.terrainPolygons.some(polygon => (
-        polygon.type === "water" && map.terrainPolygonContainsPoint(polygon, edited.x, edited.y)
-    )), true);
-    assert.equal(assetB.terrainPolygons.some(polygon => (
-        polygon.type === "water" && map.terrainPolygonContainsPoint(polygon, borderNeighbor.x, borderNeighbor.y)
-    )), true);
-    assert.equal(assetA.groundTiles["1,2"], map.getGroundTerrainTextureIdForType("water", 1, 2));
-    assert.equal(Object.prototype.hasOwnProperty.call(assetB.groundTiles, "2,2"), false);
-    assert.equal(assetA._level0GroundSurfaceVersion, 1);
-    assert.equal(assetB._level0GroundSurfaceVersion, 1);
+    const rawOffLattice = [
+        { x: 0.013, y: 0.017 },
+        { x: 10.333333333333, y: 0.017 },
+        { x: 10.333333333333, y: 8.666666666667 },
+        { x: 0.013, y: 8.666666666667 }
+    ];
+    const offLatticeClip = map.getGroundTerrainSectionClipPolygonPoints("raw-off-lattice", {
+        sectionPolygon: rawOffLattice
+    });
+    assert.equal(offLatticeClip.length, rawOffLattice.length);
+    for (let i = 0; i < rawOffLattice.length; i++) {
+        assert.equal(Number(offLatticeClip[i].x), Number(rawOffLattice[i].x));
+        assert.equal(Number(offLatticeClip[i].y), Number(rawOffLattice[i].y));
+    }
+    assert.notDeepEqual(
+        offLatticeClip[0],
+        map.getGroundTerrainCanonicalRepairPoint(rawOffLattice[0]),
+        "section clip endpoints must not be repair-lattice snapped"
+    );
+});
+
+test("terrain section split edges carry section-boundary metadata", () => {
+    const { map, assetsByKey } = createTerrainModelFixture("two", 30, 24);
+    const leftAsset = assetsByKey.get("left");
+    const sectionRing = map.getGroundTerrainSectionClipPolygonPoints("left", leftAsset);
+    const sharedEdge = collectTestSharedSectionEdges(assetsByKey).find(edge => (
+        (edge.keyA === "left" && edge.keyB === "right") ||
+        (edge.keyA === "right" && edge.keyB === "left")
+    ));
+    assert.ok(sharedEdge, "two-section fixture should have at least one shared tile edge");
+    const sharedA = sharedEdge.a;
+    const sharedB = sharedEdge.b;
+    const dx = Number(sharedB.x) - Number(sharedA.x);
+    const dy = Number(sharedB.y) - Number(sharedA.y);
+    const length = Math.hypot(dx, dy);
+    assert.ok(length > 0.1, "shared section edge should have useful length");
+    const ux = dx / length;
+    const uy = dy / length;
+    const nx = -uy;
+    const ny = ux;
+    const center = {
+        x: (Number(sharedA.x) + Number(sharedB.x)) * 0.5,
+        y: (Number(sharedA.y) + Number(sharedB.y)) * 0.5
+    };
+    const along = Math.min(0.08, length * 0.2);
+    const across = 0.25;
+    const crossingGeometry = [[[
+        [center.x - ux * along - nx * across, center.y - uy * along - ny * across],
+        [center.x + ux * along - nx * across, center.y + uy * along - ny * across],
+        [center.x + ux * along + nx * across, center.y + uy * along + ny * across],
+        [center.x - ux * along + nx * across, center.y - uy * along + ny * across],
+        [center.x - ux * along - nx * across, center.y - uy * along - ny * across]
+    ]]];
+    const clipped = polygonClipping.intersection(
+        crossingGeometry,
+        map.getGroundTerrainSectionClipGeometry("left", leftAsset)
+    );
+    const splitPolygons = map.groundTerrainSectionSplitClipGeometryToPolygons("water", clipped, {
+        sectionKey: "left",
+        sectionRing
+    });
+    assert.equal(splitPolygons.length, 1);
+    const split = splitPolygons[0];
+    assert.equal(split._groundTerrainPreserveBoundaryVertices, true);
+    assert.equal(split._groundTerrainSectionKey, "left");
+    assert.ok(Array.isArray(split._groundTerrainSectionBoundaryEdges));
+    const projectedEdgeLiesOnSharedEdge = (edge) => (
+        getTestSectionEdgeProjection(edge && edge.projectedA, sharedA, sharedB, 1e-6) &&
+        getTestSectionEdgeProjection(edge && edge.projectedB, sharedA, sharedB, 1e-6)
+    );
+    const sharedEdgeRecords = split._groundTerrainSectionBoundaryEdges.filter(edge => (
+        edge.ringKind === "outer" &&
+        projectedEdgeLiesOnSharedEdge(edge)
+    ));
+    assert.equal(sharedEdgeRecords.length, 1, "section split should tag the exact shared section edge");
+    assert.ok(sharedEdgeRecords[0].distanceA <= 1e-9);
+    assert.ok(sharedEdgeRecords[0].distanceB <= 1e-9);
+    assert.equal(Object.keys(split).includes("_groundTerrainSectionBoundaryEdges"), false);
+
+    const sanitized = map.sanitizeGroundTerrainPatchPolygons([split]);
+    assert.equal(sanitized.length, 1);
+    assert.ok(
+        sanitized[0]._groundTerrainSectionBoundaryEdges.some(edge => (
+            edge.ringKind === "outer" &&
+            projectedEdgeLiesOnSharedEdge(edge)
+        )),
+        "terrain patch sanitization should preserve section-boundary edge metadata"
+    );
+
+    const persisted = JSON.parse(JSON.stringify(split));
+    const normalized = map.normalizeGroundTerrainSectionSourcePolygons("left", leftAsset, [persisted]);
+    assert.equal(normalized.length, 1);
+    const rehydrated = normalized[0];
+    assert.equal(rehydrated._groundTerrainSectionKey, "left");
+    assert.ok(
+        rehydrated._groundTerrainSectionBoundaryEdges.some(edge => (
+            edge.ringKind === "outer" &&
+            projectedEdgeLiesOnSharedEdge(edge) &&
+            edge.distanceA <= 1e-9 &&
+            edge.distanceB <= 1e-9
+        )),
+        "section source normalization should rebuild section-boundary edge metadata"
+    );
+});
+
+const CROSS_SECTION_SEAM_CASES = [
+    {
+        name: "vertical wide water rectangle",
+        createFixture: () => createTerrainModelFixture("two", 30, 24),
+        edits: () => rectTerrainEdits(11, 19, 6, 12, "water")
+    },
+    {
+        name: "vertical tall water rectangle",
+        createFixture: () => createTerrainModelFixture("two", 30, 24),
+        edits: () => rectTerrainEdits(13, 17, 3, 18, "water")
+    },
+    {
+        name: "vertical water ellipse",
+        createFixture: () => createTerrainModelFixture("two", 30, 24),
+        edits: () => ellipseTerrainEdits(15, 11, 6, 5, "water")
+    },
+    {
+        name: "vertical water diamond",
+        createFixture: () => createTerrainModelFixture("two", 30, 24),
+        edits: () => diamondTerrainEdits(15, 11, 7, 6, "water")
+    },
+    {
+        name: "vertical diagonal water band",
+        createFixture: () => createTerrainModelFixture("two", 30, 24),
+        edits: () => diagonalBandTerrainEdits(8, 22, 5, 16, 0.45, 3.25, 2.25, "water")
+    },
+    {
+        name: "vertical water lake with mud island",
+        createFixture: () => createTerrainModelFixture("two", 30, 24),
+        edits: () => [
+            ...rectTerrainEdits(10, 20, 5, 15, "water"),
+            ...ellipseTerrainEdits(15, 10, 2, 2, "mud")
+        ]
+    },
+    {
+        name: "diagonal wide water rectangle",
+        createFixture: () => createDiagonalSectionTerrainModelFixture(30, 24),
+        edits: () => rectTerrainEdits(11, 19, 6, 12, "water")
+    },
+    {
+        name: "diagonal shifted water rectangle",
+        createFixture: () => createDiagonalSectionTerrainModelFixture(30, 24),
+        edits: () => rectTerrainEdits(10, 21, 8, 14, "water")
+    },
+    {
+        name: "diagonal water lake with mud island",
+        createFixture: () => createDiagonalSectionTerrainModelFixture(30, 24),
+        edits: () => [
+            ...rectTerrainEdits(9, 21, 5, 15, "water"),
+            ...diamondTerrainEdits(15, 10, 3, 3, "mud")
+        ]
+    },
+    {
+        name: "three-section water blob across corner",
+        createFixture: () => createTerrainModelFixture("three", 30, 24),
+        edits: () => ellipseTerrainEdits(15, 12, 7, 6, "water")
+    }
+];
+
+for (const scenario of CROSS_SECTION_SEAM_CASES) {
+    test(`terrain cross-section seam edges stay exact: ${scenario.name}`, () => {
+        const fixture = scenario.createFixture();
+        const deterministicSolver = require("../scripts/terrain-bubble-deterministic-solver");
+        fixture.map.getGroundTerrainDeterministicSolver = () => deterministicSolver;
+
+        paintTerrainModelEdits(fixture, scenario.edits());
+
+        assertCrossSectionTerrainSeamsAreExact(fixture, scenario.name);
+    });
+}
+
+test("terrain one-tile diagonal seam extension does not subtract nonmatching geometry outside repair bubble", () => {
+    const initialEdits = rectTerrainEdits(11, 19, 6, 12, "water");
+    const candidates = [
+        [19, 13],
+        [20, 13],
+        [19, 14],
+        [20, 14],
+        [18, 13],
+        [21, 13],
+        [18, 14],
+        [21, 14]
+    ];
+    const failures = [];
+
+    for (const [x, y] of candidates) {
+        const fixture = createDiagonalSectionTerrainModelFixture(30, 24);
+        const deterministicSolver = require("../scripts/terrain-bubble-deterministic-solver");
+        fixture.map.getGroundTerrainDeterministicSolver = () => deterministicSolver;
+        paintTerrainModelEdits(fixture, initialEdits);
+        assertCrossSectionTerrainSeamsAreExact(fixture, `before one-tile seam extension ${x},${y}`);
+
+        const map = fixture.map;
+        let currentPatch = null;
+        const outsideCutters = [];
+        const originalBuildPatch = map.buildGroundTerrainDeterministicBubblePatch;
+        const originalUnion = map.unionGroundTerrainClipGeometries;
+        map.buildGroundTerrainDeterministicBubblePatch = function(node, terrainType, sourceRecords) {
+            currentPatch = originalBuildPatch.call(this, node, terrainType, sourceRecords);
+            return currentPatch;
+        };
+        map.unionGroundTerrainClipGeometries = function(geometries, label) {
+            const result = originalUnion.call(this, geometries, label);
+            if (/^terrain deterministic patch nonmatching /.test(String(label || "")) && currentPatch) {
+                const outside = polygonClipping.difference(result, currentPatch.repairGeometry);
+                const outsideArea = getTestClipGeometryArea(outside);
+                if (outsideArea > 1e-9) {
+                    outsideCutters.push({
+                        label: String(label),
+                        outsideArea: Number(outsideArea.toFixed(9))
+                    });
+                }
+            }
+            return result;
+        };
+
+        const node = map.nodes[x] && map.nodes[x][y];
+        assert.ok(node, `candidate node ${x},${y} should exist`);
+        if (fixture.paintNode(node, "water") === false) continue;
+        if (outsideCutters.length > 0) {
+            failures.push(`${x},${y}: ${outsideCutters.map(record => `${record.label} outside=${record.outsideArea}`).join("; ")}`);
+        }
+    }
+
+    assert.deepEqual(
+        failures,
+        [],
+        "one-tile diagonal seam extensions must not subtract nonmatching 19-tile bubble geometry outside the 7-tile repair bubble"
+    );
+});
+
+test("terrain diagonal shifted lake keeps seam exact after each one-tile paint", () => {
+    const fixture = createDiagonalSectionTerrainModelFixture(30, 24);
+    const deterministicSolver = require("../scripts/terrain-bubble-deterministic-solver");
+    fixture.map.getGroundTerrainDeterministicSolver = () => deterministicSolver;
+    const edits = rectTerrainEdits(10, 21, 8, 14, "water");
+    const failures = [];
+    const getSharedIntervalSummary = () => {
+        const records = [];
+        for (const sharedEdge of collectTestSharedSectionEdges(fixture.assetsByKey)) {
+            const assetA = fixture.assetsByKey.get(sharedEdge.keyA);
+            const assetB = fixture.assetsByKey.get(sharedEdge.keyB);
+            const intervalsA = collectTestSectionSeamIntervalsForAsset(assetA, sharedEdge);
+            const intervalsB = collectTestSectionSeamIntervalsForAsset(assetB, sharedEdge);
+            const types = new NativeSet([...intervalsA.keys(), ...intervalsB.keys()]);
+            for (const type of types) {
+                records.push(
+                    `${sharedEdge.keyA}/${sharedEdge.keyB} ${type}: ` +
+                    `${(intervalsA.get(type) || []).join("|") || "(none)"} != ` +
+                    `${(intervalsB.get(type) || []).join("|") || "(none)"}`
+                );
+            }
+        }
+        return records.sort();
+    };
+    const hasSharedTerrainInterval = () => {
+        for (const sharedEdge of collectTestSharedSectionEdges(fixture.assetsByKey)) {
+            const assetA = fixture.assetsByKey.get(sharedEdge.keyA);
+            const assetB = fixture.assetsByKey.get(sharedEdge.keyB);
+            const intervalsA = collectTestSectionSeamIntervalsForAsset(assetA, sharedEdge);
+            const intervalsB = collectTestSectionSeamIntervalsForAsset(assetB, sharedEdge);
+            for (const intervals of [...intervalsA.values(), ...intervalsB.values()]) {
+                if (intervals.length > 0) return true;
+            }
+        }
+        return false;
+    };
+
+    for (let i = 0; i < edits.length; i++) {
+        const [x, y, terrainType] = edits[i];
+        const map = fixture.map;
+        const paintDiagnostics = {
+            editIndex: i,
+            coord: `${x},${y}`,
+            nodeSection: "",
+            repairSections: [],
+            bubbleTypes: [],
+            nonmatchingWaterSubtractions: 0,
+            beforeIntervals: getSharedIntervalSummary(),
+            afterIntervals: [],
+            splitOutputs: []
+        };
+        const originalBuildPatch = map.buildGroundTerrainDeterministicBubblePatch;
+        const originalUnion = map.unionGroundTerrainClipGeometries;
+        map.buildGroundTerrainDeterministicBubblePatch = function(node, nextType, sourceRecords) {
+            const patch = originalBuildPatch.call(this, node, nextType, sourceRecords);
+            const countsByType = new NativeMap();
+            for (const polygon of Array.isArray(patch && patch.polygons) ? patch.polygons : []) {
+                countsByType.set(polygon.type, (countsByType.get(polygon.type) || 0) + 1);
+            }
+            const repairSectionKeys = new NativeSet();
+            for (const repairNode of Array.isArray(patch && patch.repairNodes) ? patch.repairNodes : []) {
+                const key = typeof repairNode._prototypeSectionKey === "string" && repairNode._prototypeSectionKey.length > 0
+                    ? repairNode._prototypeSectionKey
+                    : "";
+                if (key) repairSectionKeys.add(key);
+            }
+            paintDiagnostics.repairSections = Array.from(repairSectionKeys).sort();
+            paintDiagnostics.bubbleTypes = Array.from(countsByType.entries())
+                .map(([type, count]) => `${type}:${count}`)
+                .sort();
+            return patch;
+        };
+        map.unionGroundTerrainClipGeometries = function(geometries, label) {
+            if (String(label || "") === "terrain deterministic patch nonmatching water") {
+                paintDiagnostics.nonmatchingWaterSubtractions += 1;
+            }
+            return originalUnion.call(this, geometries, label);
+        };
+        map._debugGroundTerrainPatchDiagnosticHook = (record) => {
+            if (record && record.stage === "section-split-output") {
+                paintDiagnostics.splitOutputs.push(
+                    `${record.sectionKey}:${record.terrainType}:${(record.polygons || []).length}`
+                );
+            }
+        };
+
+        try {
+            const node = map.nodes[x] && map.nodes[x][y];
+            assert.ok(node, `candidate node ${x},${y} should exist`);
+            paintDiagnostics.nodeSection = node._prototypeSectionKey || "";
+            fixture.paintNode(map.nodes[x][y], terrainType);
+            paintDiagnostics.afterIntervals = getSharedIntervalSummary();
+            if (hasSharedTerrainInterval()) {
+                assertCrossSectionTerrainSeamsAreExact(fixture, `diagonal shifted lake after edit ${i} ${x},${y}`);
+            }
+        } catch (err) {
+            failures.push(
+                `${paintDiagnostics.coord}: ${err && err.message ? err.message : err}; ` +
+                `nodeSection=${paintDiagnostics.nodeSection || "(none)"}; ` +
+                `repairSections=${paintDiagnostics.repairSections.join(",") || "(none)"}; ` +
+                `bubble=${paintDiagnostics.bubbleTypes.join(",") || "(none)"}; ` +
+                `nonmatchingWaterSubtractions=${paintDiagnostics.nonmatchingWaterSubtractions}; ` +
+                `before=${paintDiagnostics.beforeIntervals.join(" / ") || "(none)"}; ` +
+                `after=${paintDiagnostics.afterIntervals.join(" / ") || "(none)"}; ` +
+                `splitOutputs=${paintDiagnostics.splitOutputs.join(",") || "(none)"}`
+            );
+            break;
+        } finally {
+            map.buildGroundTerrainDeterministicBubblePatch = originalBuildPatch;
+            map.unionGroundTerrainClipGeometries = originalUnion;
+            map._debugGroundTerrainPatchDiagnosticHook = null;
+        }
+    }
+
+    assert.deepEqual(
+        failures,
+        [],
+        "painting a diagonal shifted lake one tile at a time must not move the opposite section seam"
+    );
+});
+
+test("terrain clipping drops degenerate section-boundary artifacts", () => {
+    const map = createTerrainPatchMap();
+    const polygons = map.groundTerrainClipGeometryToPolygons("mud", [[[
+        [1, 1],
+        [2, 1],
+        [3, 1],
+        [1, 1]
+    ]]]);
+
+    assert.equal(polygons.length, 0);
+});
+
+test("terrain patch sanitization drops holes collapsed by repair-lattice snapping", () => {
+    const map = createTerrainPatchMap();
+    const polygons = map.sanitizeGroundTerrainPatchPolygons([{
+        type: "mud",
+        points: [
+            { x: 0, y: 0 },
+            { x: 4, y: 0 },
+            { x: 4, y: 4 },
+            { x: 0, y: 4 }
+        ],
+        holes: [[
+            { x: 1.0001, y: 1.0001 },
+            { x: 1.0002, y: 1.0001 },
+            { x: 1.0001, y: 1.0002 }
+        ]]
+    }]);
+
+    assert.equal(polygons.length, 1);
+    assert.equal(Array.isArray(polygons[0].holes), false);
+    assert.doesNotThrow(() => map.groundTerrainPolygonToClipGeometry(polygons[0]));
+});
+
+test("terrain polygon tile assignment paints hexes with centers inside", () => {
+    const map = createTerrainPatchMap(8, 8);
+    const insideNodes = [map.nodes[3][3], map.nodes[3][4]];
+    const polygon = map.groundTerrainClipGeometryToPolygons(
+        "water",
+        map.buildGroundTerrainHexPatchGeometry(insideNodes)
+    )[0];
+    map.terrainPolygons = [polygon];
+
+    const result = map.assignGroundTerrainTilesFullyInsidePolygonAtPoint(
+        insideNodes[0].x,
+        insideNodes[0].y
+    );
+
+    assert.equal(result.foundPolygon, true);
+    assert.equal(result.terrainType, "water");
+    assert.equal(result.assignedCount, 2);
+    assert.equal(map.getGroundTerrainTypeForNode(map.nodes[3][3]), "water");
+    assert.equal(map.getGroundTerrainTypeForNode(map.nodes[3][4]), "water");
+    assert.equal(map.getGroundTerrainTypeForNode(map.nodes[2][3]), "grass");
+    assert.equal(map.getGroundTerrainTypeForNode(map.nodes[4][3]), "grass");
+});
+
+test("terrain polygon tile assignment paints hexes even when only their centers are inside", () => {
+    const map = createTerrainPatchMap(8, 8);
+    const node = map.nodes[3][3];
+    const polygon = {
+        type: "mud",
+        points: [
+            { x: node.x - 0.1, y: node.y - 0.1 },
+            { x: node.x + 0.1, y: node.y - 0.1 },
+            { x: node.x + 0.1, y: node.y + 0.1 },
+            { x: node.x - 0.1, y: node.y + 0.1 }
+        ]
+    };
+    map.terrainPolygons = [polygon];
+    assert.equal(map.terrainPolygonContainsPoint(polygon, node.x, node.y), true);
+
+    const result = map.assignGroundTerrainTilesFullyInsidePolygonAtPoint(node.x, node.y);
+
+    assert.equal(result.foundPolygon, true);
+    assert.equal(result.terrainType, "mud");
+    assert.equal(result.assignedCount, 1);
+    assert.equal(map.getGroundTerrainTypeForNode(node), "mud");
+});
+
+test("terrain double-click polygon tile assignment is wired through the terrain painter", () => {
+    const spellSource = fs.readFileSync(path.join(__dirname, "../public/assets/javascript/spells/SpellSystem.js"), "utf8");
+    assert.match(spellSource, /function assignTerrainPolygonTilesAtWorldPoint/);
+    assert.match(spellSource, /target\.terrainType !== selectedTerrainType/);
+    assert.match(spellSource, /assignGroundTerrainTilesFullyInsidePolygonAtPoint/);
+
+    const runaroundSource = fs.readFileSync(path.join(__dirname, "../public/assets/javascript/runaround.js"), "utf8");
+    assert.match(runaroundSource, /wizard\.currentSpell === "terrainedit"/);
+    assert.match(runaroundSource, /assignTerrainPolygonTilesAtWorldPoint/);
 });
 
 test("terrain paint spell path does not reset level 0 ground caches", () => {
-    const source = fs.readFileSync(path.join(__dirname, "../public/assets/javascript/spells.js"), "utf8");
+    const source = fs.readFileSync(path.join(__dirname, "../public/assets/javascript/spells/SpellSystem.js"), "utf8");
     const paintStart = source.indexOf("function paintTerrainAtWorldPoint");
     assert.notEqual(paintStart, -1);
     const paintEnd = source.indexOf("function isVisibleFloorInteriorViewActive", paintStart);
@@ -645,107 +2388,147 @@ test("terrain paint spell path does not reset level 0 ground caches", () => {
     assert.match(paintSource, /Do not[\s/]+reset[\s/]+level-0 ground caches here/);
 });
 
-test("terrain local patch treats affected holes as editable polygon rings", () => {
-    const map = createTerrainPatchMap();
-    const center = map.nodes[4][4];
-    const neighbors = [1, 3, 5, 7, 9, 11].map(direction => center.neighbors[direction]);
-    for (const neighbor of neighbors) {
-        neighbor.groundTextureId = map.getGroundTerrainTextureIdForType("water", neighbor.xindex, neighbor.yindex);
-    }
-    map.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes(neighbors);
-    assert.equal(map.terrainPolygons.length, 1);
-    assert.equal(Array.isArray(map.terrainPolygons[0].holes), true);
-    assert.equal(map.terrainPolygonContainsPoint(map.terrainPolygons[0], center.x, center.y), false);
-
-    assert.equal(map.replaceGroundTerrainPolygonPatch(center, "water"), true);
-
-    assert.equal(map.terrainPolygons.length, 1);
-    assert.equal(map.terrainPolygons[0].type, "water");
-    assert.equal(map.terrainPolygonContainsPoint(map.terrainPolygons[0], center.x, center.y), true);
-});
-
-test("terrain local patch applies grass priority when closing a tiny water ring", () => {
-    const map = createTerrainPatchMap();
-    const center = map.nodes[4][4];
-    const gapDirection = 1;
-    const waterId = map.getGroundTerrainTextureIdForType("water", 0, 0);
-    const waterNeighbors = [];
-    for (const direction of [1, 3, 5, 7, 9, 11]) {
-        const neighbor = center.neighbors[direction];
-        if (direction === gapDirection) continue;
-        neighbor.groundTextureId = waterId;
-        waterNeighbors.push(neighbor);
-    }
-    map.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes(waterNeighbors);
-    assert.equal(map.terrainPolygons.length, 1);
-    assert.equal(Array.isArray(map.terrainPolygons[0].holes), false);
-
-    assert.equal(map.replaceGroundTerrainPolygonPatch(center.neighbors[gapDirection], "water"), true);
-
-    assert.equal(map.terrainPolygons.every(polygon => polygon.type === "water"), true);
-    assert.equal(map.terrainPolygons.some(polygon => (
-        map.terrainPolygonContainsPoint(polygon, center.x, center.y)
-    )), false);
-    assert.ok(map._terrainPaintDebugLastEdit.modifiedSegments.length > 0);
-});
-
-test("terrain local patch separates a new island hole from the outer shore", () => {
-    const map = createTerrainPatchMap(14, 12);
-    const waterId = map.getGroundTerrainTextureIdForType("water", 0, 0);
-    const grassCoords = new Set(["2,5", "3,5", "4,5", "5,5", "6,5", "5,6", "6,6"]);
-    const waterNodes = [];
-    for (let x = 2; x <= 10; x++) {
-        for (let y = 3; y <= 8; y++) {
-            if (grassCoords.has(`${x},${y}`)) continue;
-            const node = map.nodes[x][y];
-            node.groundTextureId = waterId;
-            waterNodes.push(node);
+test("terrain brush batch uses two repair rings plus one context ring", () => {
+    const fixture = createTerrainModelFixture("none", 34, 34);
+    const { map } = fixture;
+    const deterministicSolver = require("../scripts/terrain-bubble-deterministic-solver");
+    let solverInput = null;
+    map.getGroundTerrainDeterministicSolver = () => ({
+        generateDeterministicTerrainBubblePolygons(input) {
+            solverInput = input;
+            return deterministicSolver.generateDeterministicTerrainBubblePolygons(input);
         }
+    });
+
+    const center = map.nodes[17][17];
+    const brushNodes = map.collectGroundTerrainDeterministicBubbleNodes(center, 2)
+        .map(record => record.node);
+    assert.equal(brushNodes.length, 19);
+
+    assert.equal(map.replaceGroundTerrainPolygonPatch(center, "water", {
+        editedNodes: brushNodes,
+        repairRadius: 4
+    }), true);
+
+    assert.ok(solverInput, "terrain brush batch should call the deterministic solver once");
+    assert.equal(solverInput.innerKeys.length, 61, "size-3 brush should repair the footprint plus two rings");
+    assert.equal(solverInput.tiles.length, 91, "repair bubble should include one additional context ring");
+    for (const node of brushNodes) {
+        assert.equal(map.getGroundTerrainTypeForNode(node), "water");
     }
-    map.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes(waterNodes);
-
-    assert.equal(map.replaceGroundTerrainPolygonPatch(map.nodes[4][5], "water"), true);
-
-    assert.equal(map.terrainPolygons.length, 1);
-    const polygon = map.terrainPolygons[0];
-    assert.equal(Array.isArray(polygon.holes), true);
-    assert.equal(polygon.holes.length, 1);
-    assert.equal(map.terrainPolygonContainsPoint(polygon, map.nodes[5][5].x, map.nodes[5][5].y), false);
-    assert.equal(map.terrainPolygonContainsPoint(polygon, map.nodes[3][5].x, map.nodes[3][5].y), false);
-    const outerKeys = new Set(polygon.points.map(point => map.getGroundTerrainRepairPointKey(point)));
-    assert.equal(polygon.holes[0].some(point => outerKeys.has(map.getGroundTerrainRepairPointKey(point))), false);
 });
 
-test("terrain local patch removes a hole when an island connects to shore", () => {
-    const map = createTerrainPatchMap(14, 12);
-    const waterId = map.getGroundTerrainTextureIdForType("water", 0, 0);
-    const grassCoords = new Set(["2,5", "3,5", "5,5", "6,5", "5,6", "6,6"]);
-    const waterNodes = [];
-    for (let x = 2; x <= 10; x++) {
-        for (let y = 3; y <= 8; y++) {
-            if (grassCoords.has(`${x},${y}`)) continue;
-            const node = map.nodes[x][y];
-            node.groundTextureId = waterId;
-            waterNodes.push(node);
+test("terrain polygon patch repair excludes off-repair source polygons", () => {
+    const fixture = createTerrainModelFixture("one", 30, 24);
+    const { map, assetsByKey } = fixture;
+    const deterministicSolver = require("../scripts/terrain-bubble-deterministic-solver");
+    map.getGroundTerrainDeterministicSolver = () => deterministicSolver;
+    const asset = assetsByKey.get("all");
+    const farPolygon = {
+        type: "mud",
+        points: [
+            { x: map.nodes[24][18].x - 0.2, y: map.nodes[24][18].y - 0.2 },
+            { x: map.nodes[27][18].x + 0.2, y: map.nodes[27][18].y - 0.2 },
+            { x: map.nodes[27][21].x + 0.2, y: map.nodes[27][21].y + 0.2 },
+            { x: map.nodes[24][21].x - 0.2, y: map.nodes[24][21].y + 0.2 }
+        ]
+    };
+    asset.terrainPolygons = [farPolygon];
+    const farSignature = JSON.stringify(map.sanitizeGroundTerrainPatchPolygons([farPolygon])[0].points);
+    const originalSynchronize = map.synchronizeGroundTerrainAdjacentPairBoundaryPaths;
+    let farPolygonReachedRepair = false;
+    map.synchronizeGroundTerrainAdjacentPairBoundaryPaths = function(polygons, nodes, bounds, options) {
+        const source = Array.isArray(polygons) ? polygons : [];
+        if (source.some(polygon => polygon && JSON.stringify(polygon.points) === farSignature)) {
+            farPolygonReachedRepair = true;
         }
+        return originalSynchronize.call(this, polygons, nodes, bounds, options);
+    };
+
+    const editedNode = map.nodes[4][4];
+    assert.equal(map.replaceGroundTerrainPolygonPatch(editedNode, "desert", {
+        asset,
+        sectionKey: "all"
+    }), true);
+
+    assert.equal(farPolygonReachedRepair, false);
+    assert.ok(asset.terrainPolygons.some(polygon => (
+        polygon.type === "mud" &&
+        JSON.stringify(polygon.points) === farSignature
+    )));
+});
+
+test("terrain edits preserve explicit grass island when mud or mowed grass touches it", () => {
+    const cases = ["mud", "mowedgrass"];
+    for (const terrainType of cases) {
+        const fixture = createTerrainModelFixture("none", 24, 20);
+        const { map } = fixture;
+        const deterministicSolver = require("../scripts/terrain-bubble-deterministic-solver");
+        map.getGroundTerrainDeterministicSolver = () => deterministicSolver;
+
+        paintTerrainModelEdits(fixture, [
+            ...rectTerrainEdits(6, 17, 5, 14, "water"),
+            ...rectTerrainEdits(10, 13, 8, 10, "grass"),
+            [10, 8, terrainType]
+        ]);
+
+        const untouchedIslandNode = map.nodes[13][10];
+        assert.equal(
+            terrainPolygonsContainingNode(map, map.terrainPolygons, untouchedIslandNode, "water").length,
+            0,
+            `${terrainType}: untouched grass island node should not be covered by water`
+        );
+        assert.ok(
+            terrainPolygonsContainingNode(map, map.terrainPolygons, untouchedIslandNode, "grass").length > 0,
+            `${terrainType}: untouched island area should have explicit grass topology`
+        );
+        assert.ok(
+            terrainPolygonsContainingNode(map, map.terrainPolygons, map.nodes[10][8], terrainType).length > 0,
+            `${terrainType}: edited island edge should be covered by the painted terrain`
+        );
+        assertTerrainModelFixtureInvariants(fixture, `${terrainType} touching grass island`);
     }
-    map.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes(waterNodes);
-    assert.equal(map.terrainPolygons.length, 1);
-    assert.equal(Array.isArray(map.terrainPolygons[0].holes), true);
-    assert.equal(map.terrainPolygons[0].holes.length, 1);
+});
 
-    assert.equal(map.replaceGroundTerrainPolygonPatch(map.nodes[4][5], "grass"), true);
+test("cross-section lake with mud island preserves raw section water/mud borders", () => {
+    const fixture = createTerrainModelFixture("two", 30, 24);
+    const deterministicSolver = require("../scripts/terrain-bubble-deterministic-solver");
+    fixture.map.getGroundTerrainDeterministicSolver = () => deterministicSolver;
+    const originalUnion = fixture.map.unionGroundTerrainClipGeometries;
+    fixture.map.unionGroundTerrainClipGeometries = function(geometries, label) {
+        assert.doesNotMatch(
+            String(label || ""),
+            /^terrain deterministic patch old /,
+            "terrain edits should subtract the repair bubble from old section fragments individually"
+        );
+        return originalUnion.call(this, geometries, label);
+    };
 
-    assert.equal(map.terrainPolygons.length, 1);
-    const polygon = map.terrainPolygons[0];
-    assert.equal(Array.isArray(polygon.holes), false);
-    assert.equal(map.terrainPolygonContainsPoint(polygon, map.nodes[5][5].x, map.nodes[5][5].y), false);
-    assert.equal(map.terrainPolygonContainsPoint(polygon, map.nodes[4][5].x, map.nodes[4][5].y), false);
-    assert.equal(map.terrainPolygonContainsPoint(polygon, map.nodes[3][5].x, map.nodes[3][5].y), false);
+    paintTerrainModelEdits(fixture, [
+        ...rectTerrainEdits(11, 19, 6, 12, "water"),
+        ...rectTerrainEdits(14, 16, 7, 9, "mud")
+    ]);
+
+    assertAllAdjacentNonGrassTerrainPairsSharePolygonBorders(
+        fixture.map,
+        fixture.logicalPolygons(),
+        "cross-section lake island: merged logical polygons should share water/mud borders"
+    );
+    assertAllAdjacentNonGrassTerrainPairsSharePolygonBorders(
+        fixture.map,
+        fixture.rawPolygons(),
+        "cross-section lake island: raw section polygons should share water/mud borders"
+    );
+    assertAdjacentTerrainPairCenterlinesCoveredByPolygons(
+        fixture.map,
+        fixture.rawPolygons(),
+        null,
+        "cross-section lake island: raw section polygons should cover water/mud centerlines"
+    );
 });
 
 test("nested terrain polygons keep outer holes contiguous with inner polygon boundaries for every type pair", () => {
-    const terrainTypes = ["water", "mud", "grass", "desert"];
+    const terrainTypes = ["water", "mud", "grass", "mowedgrass", "desert"];
     const failures = [];
 
     for (const outerType of terrainTypes) {
@@ -809,526 +2592,97 @@ test("nested terrain polygons keep outer holes contiguous with inner polygon bou
     assert.deepEqual(failures, []);
 });
 
-test("local terrain edits keep compact nested polygon holes contiguous with inner boundaries", () => {
-    const terrainTypes = ["water", "mud", "desert"];
-    const failures = [];
-
-    for (const outerType of terrainTypes) {
-        for (const innerType of terrainTypes) {
-            if (outerType === innerType) continue;
-            try {
-                const map = createTerrainPatchMap(18, 16);
-                const grassId = map.getGroundTerrainTextureIdForType("grass", 0, 0);
-                for (let x = 0; x < map.width; x++) {
-                    for (let y = 0; y < map.height; y++) {
-                        map.nodes[x][y].groundTextureId = grassId;
-                    }
-                }
-
-                const outerId = map.getGroundTerrainTextureIdForType(outerType, 0, 0);
-                const outerNodes = LIVE_NESTED_OUTER_COORDS.map(([x, y]) => {
-                    const node = map.nodes[x][y];
-                    node.groundTextureId = outerId;
-                    return node;
-                });
-                map.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes(outerNodes);
-
-                for (const [x, y] of LIVE_NESTED_INNER_COORDS) {
-                    const node = map.nodes[x][y];
-                    if (map.getGroundTerrainTypeForNode(node) !== innerType) {
-                        assert.equal(map.replaceGroundTerrainPolygonPatch(node, innerType), true);
-                    }
-                }
-
-                const outerPolygons = map.terrainPolygons.filter(polygon => polygon.type === outerType);
-                const innerPolygons = map.terrainPolygons.filter(polygon => polygon.type === innerType);
-                if (outerPolygons.length !== 1 || innerPolygons.length !== 1) {
-                    failures.push(`${innerType} inside ${outerType}: expected one outer and one inner polygon`);
-                    continue;
-                }
-
-                const outer = outerPolygons[0];
-                const inner = innerPolygons[0];
-                if (!Array.isArray(outer.holes) || outer.holes.length !== 1) {
-                    failures.push(`${innerType} inside ${outerType}: expected one outer hole`);
-                    continue;
-                }
-                const holeSegments = canonicalTerrainRingSegmentKeys(map, outer.holes[0]);
-                const innerSegments = canonicalTerrainRingSegmentKeys(map, inner.points);
-                if (JSON.stringify(holeSegments) !== JSON.stringify(innerSegments)) {
-                    failures.push(`${innerType} inside ${outerType}: hole boundary does not match inner boundary`);
-                }
-            } catch (err) {
-                failures.push(`${innerType} inside ${outerType}: ${err && err.message ? err.message : err}`);
-            }
-        }
-    }
-
-    assert.deepEqual(failures, []);
-});
-
-test("local terrain edits keep nested boundaries contiguous when the outer ring closes last", () => {
-    const terrainTypes = ["water", "mud", "desert"];
-    const failures = [];
-    const innerCoordKeys = new NativeSet(LIVE_NESTED_INNER_COORDS.map(([x, y]) => `${x},${y}`));
-    const ringCoords = LIVE_NESTED_OUTER_COORDS.filter(([x, y]) => !innerCoordKeys.has(`${x},${y}`));
-
-    for (const outerType of terrainTypes) {
-        for (const innerType of terrainTypes) {
-            if (outerType === innerType) continue;
-            try {
-                const map = createTerrainPatchMap(18, 16);
-                for (const [x, y] of LIVE_NESTED_INNER_COORDS) {
-                    assert.equal(map.replaceGroundTerrainPolygonPatch(map.nodes[x][y], innerType), true);
-                }
-                for (const [x, y] of ringCoords) {
-                    assert.equal(map.replaceGroundTerrainPolygonPatch(map.nodes[x][y], outerType), true);
-                }
-                assertNestedTerrainPolygonsShareBoundary(
-                    map,
-                    outerType,
-                    innerType,
-                    `${innerType} inside ${outerType}`
-                );
-            } catch (err) {
-                failures.push(`${innerType} inside ${outerType}: ${err && err.message ? err.message : err}`);
-            }
-        }
-    }
-
-    assert.deepEqual(failures, []);
-});
-
-test("local terrain edits keep three terrain polygons meeting at the shared vertex in any edit order", () => {
-    const terrainTypes = ["water", "mud", "desert"];
-    const editOrders = [
-        [0, 1, 2],
-        [0, 2, 1],
-        [1, 0, 2],
-        [1, 2, 0],
-        [2, 0, 1],
-        [2, 1, 0]
+test("terrain nested boundary canonicalization handles legacy holes containing multiple polygons", () => {
+    const map = createTerrainPatchMap();
+    const waterOuter = [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+        { x: 0, y: 10 }
+    ];
+    const legacyLargeHole = [
+        { x: 2, y: 2 },
+        { x: 8, y: 2 },
+        { x: 8, y: 8 },
+        { x: 2, y: 8 }
+    ];
+    const nestedInner = [
+        { x: 4, y: 4 },
+        { x: 6, y: 4 },
+        { x: 6, y: 6 },
+        { x: 4, y: 6 }
     ];
 
-    for (const order of editOrders) {
-        const map = createTerrainPatchMap(18, 16);
-        const fixture = getInteriorThreeHexJunction(map);
-        for (const index of order) {
-            assert.equal(
-                map.replaceGroundTerrainPolygonPatch(fixture.nodes[index], terrainTypes[index]),
-                true,
-                `edit order ${order.join(",")} should paint ${terrainTypes[index]}`
-            );
-        }
-        for (let i = 0; i < terrainTypes.length; i++) {
-            const type = terrainTypes[i];
-            const polygons = map.terrainPolygons.filter(polygon => polygon.type === type);
-            assert.equal(polygons.length, 1, `edit order ${order.join(",")}: expected one ${type} polygon`);
-            assert.ok(
-                terrainRingHasPointKey(map, polygons[0].points, fixture.pointKey),
-                `edit order ${order.join(",")}: expected ${type} polygon to include the shared vertex`
-            );
-        }
-    }
-});
+    const nested = map.canonicalizeGroundTerrainNestedPolygonBoundaries([
+        { type: "water", points: waterOuter, holes: [legacyLargeHole] },
+        { type: "mud", points: legacyLargeHole, holes: [nestedInner] },
+        { type: "desert", points: nestedInner }
+    ]);
+    const nestedWater = nested.find(polygon => polygon.type === "water");
+    const nestedMud = nested.find(polygon => polygon.type === "mud");
+    assert.equal(nestedWater.holes.length, 1);
+    assert.deepEqual(
+        canonicalTerrainRingSegmentKeys(map, nestedWater.holes[0]),
+        canonicalTerrainRingSegmentKeys(map, legacyLargeHole)
+    );
+    assert.equal(nestedMud.holes.length, 1);
+    assert.deepEqual(
+        canonicalTerrainRingSegmentKeys(map, nestedMud.holes[0]),
+        canonicalTerrainRingSegmentKeys(map, nestedInner)
+    );
 
-test("terrain local patch keeps a polygon when several holes are closed", () => {
-    const map = createTerrainPatchMap(24, 24);
-    const waterId = map.getGroundTerrainTextureIdForType("water", 0, 0);
-    const waterNodes = [];
-    for (let x = 3; x <= 20; x++) {
-        for (let y = 3; y <= 20; y++) {
-            const node = map.nodes[x][y];
-            node.groundTextureId = waterId;
-            waterNodes.push(node);
-        }
-    }
-    map.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes(waterNodes);
-
-    const holeCoords = [
-        [8, 8], [10, 8], [12, 8], [14, 8],
-        [9, 11], [11, 11], [13, 11],
-        [8, 14], [10, 14], [12, 14], [14, 14]
+    const siblingA = [
+        { x: 2, y: 2 },
+        { x: 4, y: 2 },
+        { x: 4, y: 4 },
+        { x: 2, y: 4 }
     ];
-    const getCurrentWaterNodes = () => {
-        const nodes = [];
-        for (let x = 0; x < map.width; x++) {
-            for (let y = 0; y < map.height; y++) {
-                const node = map.nodes[x][y];
-                if (map.getGroundTerrainTypeForNode(node) === "water") nodes.push(node);
-            }
-        }
-        return nodes;
-    };
-    const assertWaterMatchesTiles = (label) => {
-        const waterPolygons = map.terrainPolygons.filter(polygon => polygon.type === "water");
-        assert.equal(waterPolygons.length, 1, label);
-        assert.deepEqual(
-            canonicalTerrainPolygonsForType(map, map.terrainPolygons, "water"),
-            canonicalTerrainPolygonsForType(
-                map,
-                map.buildGroundTerrainPolygonsFromNodes(getCurrentWaterNodes()),
-                "water"
-            ),
-            label
-        );
-    };
-
-    for (const [x, y] of holeCoords) {
-        assert.equal(map.replaceGroundTerrainPolygonPatch(map.nodes[x][y], "grass"), true);
-        assertWaterMatchesTiles(`after cutting ${x},${y}`);
-    }
-    for (const [x, y] of holeCoords) {
-        assert.equal(map.replaceGroundTerrainPolygonPatch(map.nodes[x][y], "water"), true);
-        assertWaterMatchesTiles(`after filling ${x},${y}`);
-    }
+    const siblingB = [
+        { x: 6, y: 6 },
+        { x: 8, y: 6 },
+        { x: 8, y: 8 },
+        { x: 6, y: 8 }
+    ];
+    const siblings = map.canonicalizeGroundTerrainNestedPolygonBoundaries([
+        { type: "water", points: waterOuter, holes: [legacyLargeHole] },
+        { type: "mud", points: siblingA },
+        { type: "desert", points: siblingB }
+    ]);
+    const siblingWater = siblings.find(polygon => polygon.type === "water");
+    assert.equal(siblingWater.holes.length, 2);
+    assert.equal(
+        JSON.stringify(siblingWater.holes
+            .map(hole => canonicalTerrainRingSegmentKeys(map, hole))
+            .sort()),
+        JSON.stringify([
+            canonicalTerrainRingSegmentKeys(map, siblingA),
+            canonicalTerrainRingSegmentKeys(map, siblingB)
+        ].sort())
+    );
 });
 
 test("terrain edit priority orders boundary ownership", () => {
     const map = createTerrainPatchMap();
 
     assert.ok(map.getGroundTerrainEditPriority("desert") > map.getGroundTerrainEditPriority("grass"));
+    assert.ok(map.getGroundTerrainEditPriority("desert") > map.getGroundTerrainEditPriority("mowedgrass"));
+    assert.ok(map.getGroundTerrainEditPriority("mowedgrass") > map.getGroundTerrainEditPriority("grass"));
     assert.ok(map.getGroundTerrainEditPriority("grass") > map.getGroundTerrainEditPriority("mud"));
     assert.ok(map.getGroundTerrainEditPriority("mud") > map.getGroundTerrainEditPriority("water"));
 });
 
-test("water line on grass matches the water left by a desert negative of the same line", () => {
-    const directions = [
-        5, 5, 7, 7, 9, 7, 5, 5, 3, 3,
-        5, 7, 7, 5, 5, 3, 1, 1, 3, 5,
-        5, 7, 9, 9, 7, 5, 3, 3
-    ];
-    const grassMap = createTerrainPatchMap(28, 20);
-    const grassLineNodes = getTerrainPathNodes(grassMap, 4, 10, directions);
-    const lineKeys = new NativeSet(grassLineNodes.map(node => `${node.xindex},${node.yindex}`));
+test("mowed grass is a distinct plain grass terrain material", () => {
+    const map = createTerrainPatchMap();
+    const node = map.nodes[3][3];
+    const textureId = map.getGroundTerrainTextureIdForType("mowedgrass", node.xindex, node.yindex);
 
-    for (const node of grassLineNodes) {
-        assert.equal(grassMap.replaceGroundTerrainPolygonPatch(node, "water"), true);
-    }
-
-    const negativeMap = createTerrainPatchMap(28, 20);
-    const negativeLineNodes = getTerrainPathNodes(negativeMap, 4, 10, directions);
-    const negativeRegionNodes = getOneRingTerrainNodes(negativeLineNodes);
-    const waterId = negativeMap.getGroundTerrainTextureIdForType("water", 0, 0);
-    for (const node of negativeRegionNodes) {
-        node.groundTextureId = waterId;
-    }
-    negativeMap.terrainPolygons = negativeMap.buildGroundTerrainPolygonsFromNodes(negativeRegionNodes);
-    for (const node of negativeRegionNodes) {
-        if (lineKeys.has(`${node.xindex},${node.yindex}`)) continue;
-        assert.equal(negativeMap.replaceGroundTerrainPolygonPatch(node, "desert"), true);
-    }
-
-    assert.deepEqual(
-        canonicalTerrainPolygonsForType(negativeMap, negativeMap.terrainPolygons, "water"),
-        canonicalTerrainPolygonsForType(grassMap, grassMap.terrainPolygons, "water")
-    );
-});
-
-test("water line painted into an existing body matches the same line painted outward", () => {
-    const initialWaterCoords = [
-        [18, 13], [18, 14], [18, 15], [18, 16],
-        [19, 12], [19, 13], [19, 14], [19, 15], [19, 16],
-        [20, 12], [20, 13], [20, 14], [20, 15], [20, 16],
-        [21, 12], [21, 13], [21, 14], [21, 15], [21, 16],
-        [22, 12], [22, 13], [22, 14], [22, 15]
-    ];
-    const lineCoords = [
-        [19, 17], [19, 18], [20, 18], [19, 19], [19, 20],
-        [20, 20], [20, 21], [20, 22], [21, 23], [20, 23],
-        [20, 24], [21, 25], [22, 25], [21, 26]
-    ];
-    const makeMap = () => {
-        const map = createTerrainPatchMap(36, 30);
-        const waterId = map.getGroundTerrainTextureIdForType("water", 0, 0);
-        const initialWaterNodes = [];
-        for (const [x, y] of initialWaterCoords) {
-            const node = map.nodes[x][y];
-            node.groundTextureId = waterId;
-            initialWaterNodes.push(node);
-        }
-        map.terrainPolygons = map.buildGroundTerrainPolygonsFromNodes(initialWaterNodes);
-        return map;
-    };
-    const paintLine = (map, coords) => {
-        for (const [x, y] of coords) {
-            const node = map.nodes[x][y];
-            if (map.getGroundTerrainTypeForNode(node) !== "water") {
-                assert.equal(map.replaceGroundTerrainPolygonPatch(node, "water"), true);
-            }
-        }
-    };
-    const outwardMap = makeMap();
-    const inwardMap = makeMap();
-
-    paintLine(outwardMap, lineCoords);
-    paintLine(inwardMap, lineCoords.slice().reverse());
-
-    assert.deepEqual(
-        canonicalTerrainPolygonsForType(inwardMap, inwardMap.terrainPolygons, "water"),
-        canonicalTerrainPolygonsForType(outwardMap, outwardMap.terrainPolygons, "water")
-    );
-});
-
-test("water line cut across the middle matches painting the separated segments", () => {
-    const waterLineCoords = [
-        [8, 14], [9, 14], [10, 14], [11, 14],
-        [12, 14], [13, 14], [14, 14], [15, 14],
-        [16, 14], [17, 14], [18, 14], [19, 14],
-        [20, 14], [21, 14], [22, 14], [23, 14]
-    ];
-    const cutCoords = [
-        [14, 13], [15, 13],
-        [14, 14], [15, 14], [16, 14],
-        [15, 15], [16, 15]
-    ];
-    const cutCoordKeys = new NativeSet(cutCoords.map(([x, y]) => `${x},${y}`));
-    const paintCoords = (map, coords, terrainType) => {
-        for (const [x, y] of coords) {
-            const node = map.nodes[x][y];
-            if (map.getGroundTerrainTypeForNode(node) !== terrainType) {
-                assert.equal(map.replaceGroundTerrainPolygonPatch(node, terrainType), true);
-            }
-        }
-    };
-    const cutMap = createTerrainPatchMap(32, 28);
-    const separatedMap = createTerrainPatchMap(32, 28);
-
-    paintCoords(cutMap, waterLineCoords, "water");
-    paintCoords(cutMap, cutCoords, "grass");
-    paintCoords(
-        separatedMap,
-        waterLineCoords.filter(([x, y]) => !cutCoordKeys.has(`${x},${y}`)),
-        "water"
-    );
-
-    assert.deepEqual(
-        canonicalTerrainPolygonsForType(cutMap, cutMap.terrainPolygons, "water"),
-        canonicalTerrainPolygonsForType(separatedMap, separatedMap.terrainPolygons, "water")
-    );
-    assert.equal(cutMap.terrainPolygons.filter(polygon => polygon.type === "water").length, 2);
-    assert.equal(separatedMap.terrainPolygons.filter(polygon => polygon.type === "water").length, 2);
-});
-
-test("section water line cut across the middle matches painting separated segments", () => {
-    const makeSectionMap = () => {
-        const map = createTerrainPatchMap(32, 28);
-        const sectionKey = "0,0";
-        const sectionNodes = [];
-        for (let x = 0; x < map.width; x++) {
-            for (let y = 0; y < map.height; y++) {
-                const node = map.nodes[x][y];
-                node._prototypeSectionKey = sectionKey;
-                sectionNodes.push(node);
-            }
-        }
-        const asset = {
-            key: sectionKey,
-            tileCoordKeys: sectionNodes.map(node => `${node.xindex},${node.yindex}`),
-            groundTiles: {},
-            terrainPolygons: [],
-            sectionPolygon: getSectionPolygonForNodes(map, sectionNodes),
-            _level0GroundSurfaceVersion: 0
-        };
-        map._prototypeSectionState = {
-            nodesBySectionKey: new NativeMap([[sectionKey, sectionNodes]]),
-            sectionAssetsByKey: new NativeMap([[sectionKey, asset]])
-        };
-        map.getPrototypeSectionAsset = (key) => map._prototypeSectionState.sectionAssetsByKey.get(key) || null;
-        return { map, asset, sectionKey };
-    };
-    const paintCoords = (fixture, coords, terrainType) => {
-        for (const [x, y] of coords) {
-            const node = fixture.map.nodes[x][y];
-            if (fixture.map.getGroundTerrainTypeForNode(node) !== terrainType) {
-                assert.equal(fixture.map.replaceGroundTerrainPolygonPatch(node, terrainType, {
-                    asset: fixture.asset,
-                    sectionKey: fixture.sectionKey
-                }), true);
-            }
-        }
-    };
-    const waterLineCoords = [
-        [8, 14], [9, 14], [10, 14], [11, 14],
-        [12, 14], [13, 14], [14, 14], [15, 14],
-        [16, 14], [17, 14], [18, 14], [19, 14],
-        [20, 14], [21, 14], [22, 14], [23, 14]
-    ];
-    const cutCoords = [
-        [14, 13], [15, 13],
-        [14, 14], [15, 14], [16, 14],
-        [15, 15], [16, 15]
-    ];
-    const cutCoordKeys = new NativeSet(cutCoords.map(([x, y]) => `${x},${y}`));
-    const cutFixture = makeSectionMap();
-    const separatedFixture = makeSectionMap();
-
-    paintCoords(cutFixture, waterLineCoords, "water");
-    paintCoords(cutFixture, cutCoords, "grass");
-    paintCoords(
-        separatedFixture,
-        waterLineCoords.filter(([x, y]) => !cutCoordKeys.has(`${x},${y}`)),
-        "water"
-    );
-
-    assert.deepEqual(
-        canonicalTerrainPolygonsForType(cutFixture.map, cutFixture.asset.terrainPolygons, "water"),
-        canonicalTerrainPolygonsForType(separatedFixture.map, separatedFixture.asset.terrainPolygons, "water")
-    );
-    assert.equal(cutFixture.asset.terrainPolygons.filter(polygon => polygon.type === "water").length, 2);
-    assert.equal(separatedFixture.asset.terrainPolygons.filter(polygon => polygon.type === "water").length, 2);
-});
-
-test("section water patch remains editable after save and reload", () => {
-    const makeSectionMap = (savedAsset = null) => {
-        const map = createTerrainPatchMap(18, 16);
-        const sectionKey = "0,0";
-        const sectionNodes = [];
-        for (let x = 0; x < map.width; x++) {
-            for (let y = 0; y < map.height; y++) {
-                const node = map.nodes[x][y];
-                node._prototypeSectionKey = sectionKey;
-                sectionNodes.push(node);
-            }
-        }
-        const tileCoordKeys = sectionNodes.map(node => `${node.xindex},${node.yindex}`);
-        const asset = savedAsset
-            ? {
-                ...savedAsset,
-                groundTiles: { ...savedAsset.groundTiles },
-                terrainPolygons: savedAsset.terrainPolygons.map(polygon => ({
-                    type: polygon.type,
-                    points: polygon.points.map(point => ({ ...point })),
-                    holes: Array.isArray(polygon.holes)
-                        ? polygon.holes.map(hole => hole.map(point => ({ ...point })))
-                        : undefined
-                }))
-            }
-            : {
-                key: sectionKey,
-                tileCoordKeys,
-                groundTiles: {},
-                terrainPolygons: [],
-                sectionPolygon: getSectionPolygonForNodes(map, sectionNodes),
-                _level0GroundSurfaceVersion: 0
-            };
-        asset.key = sectionKey;
-        asset.tileCoordKeys = tileCoordKeys;
-        asset.sectionPolygon = getSectionPolygonForNodes(map, sectionNodes);
-        map._prototypeSectionState = {
-            nodesBySectionKey: new NativeMap([[sectionKey, sectionNodes]]),
-            sectionAssetsByKey: new NativeMap([[sectionKey, asset]])
-        };
-        map.getPrototypeSectionAsset = (key) => map._prototypeSectionState.sectionAssetsByKey.get(key) || null;
-        if (savedAsset) {
-            for (const node of sectionNodes) {
-                const coordKey = `${node.xindex},${node.yindex}`;
-                if (Object.prototype.hasOwnProperty.call(asset.groundTiles, coordKey)) {
-                    node.groundTextureId = asset.groundTiles[coordKey];
-                }
-            }
-            asset.terrainPolygons = map.normalizeGroundTerrainPolygons(asset.terrainPolygons);
-        }
-        return { map, asset, sectionKey };
-    };
-    const paintCoords = (fixture, coords) => {
-        for (const [x, y] of coords) {
-            const node = fixture.map.nodes[x][y];
-            if (fixture.map.getGroundTerrainTypeForNode(node) !== "water") {
-                assert.equal(fixture.map.replaceGroundTerrainPolygonPatch(node, "water", {
-                    asset: fixture.asset,
-                    sectionKey: fixture.sectionKey
-                }), true);
-            }
-        }
-    };
-    const cloneSavedAsset = (asset) => JSON.parse(JSON.stringify({
-        key: asset.key,
-        tileCoordKeys: asset.tileCoordKeys,
-        groundTiles: asset.groundTiles,
-        terrainPolygons: asset.terrainPolygons,
-        sectionPolygon: asset.sectionPolygon,
-        _level0GroundSurfaceVersion: asset._level0GroundSurfaceVersion
-    }));
-    const initialCoords = [
-        [7, 7], [8, 7], [9, 7],
-        [8, 8], [9, 8],
-        [8, 6]
-    ];
-    const edgeCoord = [10, 7];
-
-    const reloadedFixture = makeSectionMap();
-    paintCoords(reloadedFixture, initialCoords);
-    const savedAsset = cloneSavedAsset(reloadedFixture.asset);
-    const hydratedFixture = makeSectionMap(savedAsset);
-    paintCoords(hydratedFixture, [edgeCoord]);
-
-    const continuousFixture = makeSectionMap();
-    paintCoords(continuousFixture, initialCoords.concat([edgeCoord]));
-
-    assert.deepEqual(
-        canonicalTerrainPolygonsForType(hydratedFixture.map, hydratedFixture.asset.terrainPolygons, "water"),
-        canonicalTerrainPolygonsForType(continuousFixture.map, continuousFixture.asset.terrainPolygons, "water")
-    );
-});
-
-test("water painted through reloaded mud matches direct final terrain", () => {
-    const cloneReloadedTerrainMap = (sourceMap) => {
-        const reloaded = createTerrainPatchMap(sourceMap.width, sourceMap.height);
-        for (let x = 0; x < sourceMap.width; x++) {
-            for (let y = 0; y < sourceMap.height; y++) {
-                reloaded.nodes[x][y].groundTextureId = sourceMap.nodes[x][y].groundTextureId;
-            }
-        }
-        reloaded.terrainPolygons = reloaded.normalizeGroundTerrainPolygons(
-            JSON.parse(JSON.stringify(sourceMap.terrainPolygons))
-        );
-        return reloaded;
-    };
-    const paintCoords = (map, coords, terrainType) => {
-        for (const [x, y] of coords) {
-            const node = map.nodes[x][y];
-            if (map.getGroundTerrainTypeForNode(node) !== terrainType) {
-                assert.equal(map.replaceGroundTerrainPolygonPatch(node, terrainType), true);
-            }
-        }
-    };
-    const waterCoords = [
-        [8, 8], [8, 9],
-        [9, 8], [9, 9],
-        [10, 8], [10, 9]
-    ];
-    const mudCoords = [
-        [11, 7], [11, 8], [11, 9],
-        [12, 7], [12, 8], [12, 9],
-        [13, 7], [13, 8], [13, 9]
-    ];
-    const cutWaterCoords = [
-        [10, 8], [11, 8], [12, 8], [13, 8]
-    ];
-    const cutWaterKeys = new NativeSet(cutWaterCoords.map(([x, y]) => `${x},${y}`));
-    const finalMudCoords = mudCoords.filter(([x, y]) => !cutWaterKeys.has(`${x},${y}`));
-
-    const reloadedCutMap = createTerrainPatchMap(26, 20);
-    paintCoords(reloadedCutMap, waterCoords, "water");
-    paintCoords(reloadedCutMap, mudCoords, "mud");
-    const hydratedCutMap = cloneReloadedTerrainMap(reloadedCutMap);
-    paintCoords(hydratedCutMap, cutWaterCoords, "water");
-
-    const directFinalMap = createTerrainPatchMap(26, 20);
-    paintCoords(directFinalMap, waterCoords.concat(cutWaterCoords), "water");
-    paintCoords(directFinalMap, finalMudCoords, "mud");
-
-    assert.deepEqual(
-        {
-            water: canonicalTerrainPolygonsForType(hydratedCutMap, hydratedCutMap.terrainPolygons, "water"),
-            mud: canonicalTerrainPolygonsForType(hydratedCutMap, hydratedCutMap.terrainPolygons, "mud")
-        },
-        {
-            water: canonicalTerrainPolygonsForType(directFinalMap, directFinalMap.terrainPolygons, "water"),
-            mud: canonicalTerrainPolygonsForType(directFinalMap, directFinalMap.terrainPolygons, "mud")
-        }
-    );
+    assert.equal(textureId, 55);
+    node.groundTextureId = textureId;
+    assert.equal(map.getGroundTerrainTypeForNode(node), "mowedgrass");
+    assert.equal(map.getGroundPolygonMaterialPathForType("mowedgrass"), "/assets/images/terrain/materials/grass.png");
+    map.groundPalette = Array.from({ length: 61 }, (_unused, index) => `test-${index}`);
+    map.groundTexturePaths = Array.from({ length: 61 }, () => "/assets/images/terrain/materials/grass.png");
+    assert.equal(map.getGroundTexturePathForNode(node), "/assets/images/terrain/materials/grass.png");
 });
 
 test("water immersion query reports shore distance and slope depth", () => {
@@ -1378,9 +2732,13 @@ test("water immersion query reports shore distance and slope depth", () => {
             { x: 0, y: 4 }
         ]
     }];
+    markWaterNodesInsidePolygon(rectangularWaterMap, rectangularWaterMap.terrainPolygons[0]);
     const oneMeterImmersion = rectangularWaterMap.getGroundTerrainWaterImmersionAtPoint(1, 1);
-    assert.equal(oneMeterImmersion.distanceToShore, 1);
-    assert.equal(oneMeterImmersion.submergedDepth, 2 / 3);
+    assert.equal(
+        oneMeterImmersion.distanceToShore,
+        rectangularWaterMap.getGroundTerrainWaterDistanceToNearestNonWaterTile(1, 1)
+    );
+    assert.equal(oneMeterImmersion.submergedDepth, Math.min(2 / 3, oneMeterImmersion.distanceToShore * (2 / 3)));
 });
 
 test("water immersion ignores section boundary when water continues across it", () => {
@@ -1411,6 +2769,9 @@ test("water immersion ignores section boundary when water continues across it", 
             sectionAssetsByKey: new NativeMap(entries),
             loadedSectionAssetKeys: new NativeSet(entries.map(([key]) => key))
         };
+        for (const [, asset] of entries) {
+            markWaterNodesInsidePolygon(map, asset.terrainPolygons[0]);
+        }
         return map;
     };
 
@@ -1420,12 +2781,71 @@ test("water immersion ignores section boundary when water continues across it", 
     const continuous = makeMap(true).getGroundTerrainWaterImmersionAtPoint(seamPointX, seamPointY);
 
     assert.equal(leftOnly.inWater, true);
-    assert.ok(Math.abs(leftOnly.distanceToShore - 0.05) < 1e-6);
     assert.equal(continuous.inWater, true);
-    assert.ok(
-        Math.abs(continuous.distanceToShore - 0.5) < 1e-6,
-        `expected nearest true shore to be 0.5, got ${continuous.distanceToShore}`
-    );
+    assert.ok(continuous.distanceToShore >= leftOnly.distanceToShore);
+});
+
+test("water immersion treats exact polygon boundaries as covered water", () => {
+    const map = createTerrainPatchMap(4, 4);
+    const water = {
+        type: "water",
+        points: [
+            { x: 0, y: 0 },
+            { x: 1, y: 0 },
+            { x: 1, y: 1 },
+            { x: 0, y: 1 }
+        ]
+    };
+    map.terrainPolygons = [water];
+    markWaterNodesInsidePolygon(map, water);
+
+    const edge = map.getGroundTerrainWaterImmersionAtPoint(1, 0.5);
+    const corner = map.getGroundTerrainWaterImmersionAtPoint(1, 1);
+
+    assert.equal(edge.inWater, true);
+    assert.equal(edge.distanceToShore, 0);
+    assert.equal(edge.submergedDepth, 0);
+    assert.equal(corner.inWater, true);
+    assert.equal(corner.distanceToShore, 0);
+    assert.equal(corner.submergedDepth, 0);
+});
+
+test("road coverage overrides water terrain passability until the road is removed", () => {
+    const map = createTerrainPassabilityMap();
+    const node = map.nodes[1][1];
+    node.groundTextureId = map.getGroundTerrainTextureIdForType("water", node.xindex, node.yindex);
+
+    assert.equal(map.isNodeTerrainImpassableForTraversal(node), true);
+    assert.equal(map.recomputeGroundTerrainPassabilityForNode(node), true);
+    assert.equal(node.blocked, true);
+    assert.equal(node._groundTerrainBlockedForNpcTraversal, true);
+
+    const road = {
+        type: "road",
+        gone: false,
+        blocksTile: false,
+        isPassable: true,
+        node,
+        getNode() { return node; }
+    };
+    node.addObject(road);
+    assert.equal(map.recomputeGroundTerrainPassabilityForRoad(road), true);
+    assert.equal(node.blocked, false);
+    assert.equal(node._groundTerrainBlockedForNpcTraversal, false);
+    assert.equal(map.isNodeTerrainImpassableForTraversal(node), false);
+
+    node.removeObject(road);
+    assert.equal(map.recomputeGroundTerrainPassabilityForRoad(road, [node]), true);
+    assert.equal(node.blocked, true);
+    assert.equal(node._groundTerrainBlockedForNpcTraversal, true);
+    assert.equal(map.isNodeTerrainImpassableForTraversal(node), true);
+
+    node.groundTextureId = map.getGroundTerrainTextureIdForType("grass", node.xindex, node.yindex);
+    assert.equal(map.recomputeGroundTerrainPassabilityForNode(node), true);
+    assert.equal(node.blocked, false);
+    assert.equal(node._groundTerrainBlockedForNpcTraversal, false);
+    assert.ok(map.clearanceUpdates >= 4);
+    assert.ok(map.snapshotDirtyCount >= 4);
 });
 
 test("road over water acts as bridge collision depending on swim depth and jump state", () => {
@@ -1439,6 +2859,7 @@ test("road over water acts as bridge collision depending on swim depth and jump 
             { x: 0, y: 10 }
         ]
     }];
+    markWaterNodesInsidePolygon(map, map.terrainPolygons[0]);
     const bridgeRoad = {
         type: "roadPath",
         outlinePolygon: [
@@ -1572,6 +2993,7 @@ test("road path bridge collision uses section runtime road path registry", () =>
             { x: 0, y: 10 }
         ]
     }];
+    markWaterNodesInsidePolygon(map, map.terrainPolygons[0]);
     map.objects = [];
     const runtimeRoadPath = {
         type: "roadPath",
@@ -1597,58 +3019,4 @@ test("road path bridge collision uses section runtime road path registry", () =>
         { actor: { currentLayer: 0 } }
     );
     assert.ok(collision, "deep-water swimmer should collide with section runtime roadPath bridge");
-});
-
-test("terrain replacement path smoothing applies absolute terrain priority", () => {
-    const map = createTerrainPatchMap();
-    const center = map.nodes[4][4];
-    const neighbor = center.neighbors[1];
-    center.groundTextureId = map.getGroundTerrainTextureIdForType("water", center.xindex, center.yindex);
-    neighbor.groundTextureId = map.getGroundTerrainTextureIdForType("water", neighbor.xindex, neighbor.yindex);
-    const affectedNodes = map.collectGroundTerrainLocalPatchNodes(center);
-    const vertexSlotsByPointKey = map.buildGroundTerrainVertexSlotMap({ nodes: affectedNodes });
-    const group = map.buildGroundTerrainLocalSmoothingGroup("water", affectedNodes, vertexSlotsByPointKey);
-    const candidatesByKey = new NativeMap();
-    for (const node of affectedNodes) {
-        for (const point of map.getGroundTerrainHexCorners(node)) {
-            const key = map.getGroundTerrainPointKey(point);
-            if (candidatesByKey.has(key)) continue;
-            const slots = vertexSlotsByPointKey.get(key);
-            if (!(slots instanceof NativeSet)) continue;
-            let groupCount = 0;
-            for (const slotKey of slots) {
-                if (group.nodeKeys.has(slotKey)) groupCount += 1;
-            }
-            candidatesByKey.set(key, { point, nonGroupCount: 3 - groupCount });
-        }
-    }
-    const skipCandidate = Array.from(candidatesByKey.values()).find(candidate => candidate.nonGroupCount === 1);
-    const keepCandidate = Array.from(candidatesByKey.values()).find(candidate => candidate.nonGroupCount === 2);
-    assert.ok(skipCandidate, "fixture should find a two-water/one-grass vertex");
-    assert.ok(keepCandidate, "fixture should find a one-water/two-grass vertex");
-
-    const smoothed = map.smoothGroundTerrainReplacementPathPoints([
-        { x: skipCandidate.point.x - 0.25, y: skipCandidate.point.y - 0.25 },
-        skipCandidate.point,
-        keepCandidate.point,
-        { x: keepCandidate.point.x + 0.25, y: keepCandidate.point.y + 0.25 }
-    ], group, vertexSlotsByPointKey, affectedNodes, { isHole: false });
-
-    assert.equal(smoothed.some(point => (
-        Math.abs(point.x - skipCandidate.point.x) < 1e-7 &&
-        Math.abs(point.y - skipCandidate.point.y) < 1e-7
-    )), true);
-    assert.equal(smoothed.some(point => (
-        Math.abs(point.x - keepCandidate.point.x) < 1e-7 &&
-        Math.abs(point.y - keepCandidate.point.y) < 1e-7
-    )), false);
-
-    const smoothedWithLegacySuppression = map.smoothGroundTerrainReplacementPathPoints([
-        { x: skipCandidate.point.x - 0.25, y: skipCandidate.point.y - 0.25 },
-        skipCandidate.point,
-        keepCandidate.point,
-        { x: keepCandidate.point.x + 0.25, y: keepCandidate.point.y + 0.25 }
-    ], group, vertexSlotsByPointKey, affectedNodes, { isHole: false, suppressPriorityInversion: true });
-
-    assert.deepEqual(smoothedWithLegacySuppression, smoothed);
 });

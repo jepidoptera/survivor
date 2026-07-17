@@ -109,8 +109,8 @@ test("placing a prototype roof marks it dirty for prototype object capture", () 
         selectedRoofTextureRepeat: 0.125
     };
 
-    delete require.cache[require.resolve("../public/assets/javascript/spells/PlaceObject.js")];
-    require("../public/assets/javascript/spells/PlaceObject.js");
+    delete require.cache[require.resolve("../public/assets/javascript/spells/editor/PlaceObject.js")];
+    require("../public/assets/javascript/spells/editor/PlaceObject.js");
 
     const spell = new globalThis.PlaceObject(0, 0);
     spell.cast(1, 2);
@@ -190,8 +190,8 @@ test("placing furniture uses the wizard's current layer", () => {
         selectedPlaceableRenderOffset: 0
     };
 
-    delete require.cache[require.resolve("../public/assets/javascript/spells/PlaceObject.js")];
-    require("../public/assets/javascript/spells/PlaceObject.js");
+    delete require.cache[require.resolve("../public/assets/javascript/spells/editor/PlaceObject.js")];
+    require("../public/assets/javascript/spells/editor/PlaceObject.js");
 
     const spell = new globalThis.PlaceObject(0, 0);
     spell.cast(4, 5);
@@ -273,8 +273,8 @@ test("placing ground furniture keeps exact world position instead of snapping to
         selectedPlaceableRenderOffset: 0
     };
 
-    delete require.cache[require.resolve("../public/assets/javascript/spells/PlaceObject.js")];
-    require("../public/assets/javascript/spells/PlaceObject.js");
+    delete require.cache[require.resolve("../public/assets/javascript/spells/editor/PlaceObject.js")];
+    require("../public/assets/javascript/spells/editor/PlaceObject.js");
 
     const spell = new globalThis.PlaceObject(0, 0);
     spell.cast(4.25, 5.75);
@@ -361,8 +361,8 @@ test("placing furniture projects screen clicks onto the wizard's current level",
         selectedPlaceableRenderOffset: 0
     };
 
-    delete require.cache[require.resolve("../public/assets/javascript/spells/PlaceObject.js")];
-    require("../public/assets/javascript/spells/PlaceObject.js");
+    delete require.cache[require.resolve("../public/assets/javascript/spells/editor/PlaceObject.js")];
+    require("../public/assets/javascript/spells/editor/PlaceObject.js");
 
     const spell = new globalThis.PlaceObject(0, 0);
     spell.cast(999, 999, { screenX: 30, screenY: 40 });
@@ -476,8 +476,8 @@ test("placing furniture while physically on upper level attaches to upper floor 
         selectedPlaceableRenderOffset: 0
     };
 
-    delete require.cache[require.resolve("../public/assets/javascript/spells/PlaceObject.js")];
-    require("../public/assets/javascript/spells/PlaceObject.js");
+    delete require.cache[require.resolve("../public/assets/javascript/spells/editor/PlaceObject.js")];
+    require("../public/assets/javascript/spells/editor/PlaceObject.js");
 
     const spell = new globalThis.PlaceObject(0, 0);
     assert.doesNotThrow(() => spell.cast(7.25, 8.75));
@@ -621,8 +621,8 @@ test("placing visual furniture on a building floor invalidates that floor interi
         selectedPlaceableRenderOffset: 0
     };
 
-    delete require.cache[require.resolve("../public/assets/javascript/spells/PlaceObject.js")];
-    require("../public/assets/javascript/spells/PlaceObject.js");
+    delete require.cache[require.resolve("../public/assets/javascript/spells/editor/PlaceObject.js")];
+    require("../public/assets/javascript/spells/editor/PlaceObject.js");
 
     const spell = new globalThis.PlaceObject(0, 0);
     spell.cast(-136, 210);

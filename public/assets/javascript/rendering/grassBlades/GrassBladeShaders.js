@@ -73,6 +73,8 @@ out vec4 fragColor;
 uniform sampler2D uRootMask;
 uniform sampler2D uLosDepthTexture;
 uniform vec2 uScreenSize;
+uniform vec2 uRootMaskWorldOrigin;
+uniform vec2 uRootMaskWorldSize;
 uniform vec2 uCameraWorld;
 uniform float uCameraZ;
 uniform float uBaseZ;
@@ -122,6 +124,10 @@ float depthForBaseWorld(vec2 baseWorld) {
     return clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
 }
 
+vec2 rootMaskUvForWorld(vec2 baseWorld) {
+    return (baseWorld - uRootMaskWorldOrigin) / max(uRootMaskWorldSize, vec2(0.0001));
+}
+
 float unpackLosDepth(vec4 packedDepth) {
     float hi = floor(packedDepth.r * 255.0 + 0.5);
     float lo = floor(packedDepth.g * 255.0 + 0.5);
@@ -168,8 +174,7 @@ float grassShadowShade(vec2 baseWorld) {
 }
 
 void main(void) {
-    vec2 screenSize = max(uScreenSize, vec2(1.0));
-    vec2 maskUv = vBaseScreen / screenSize;
+    vec2 maskUv = rootMaskUvForWorld(vBaseWorld);
     if (maskUv.x < 0.0 || maskUv.y < 0.0 || maskUv.x > 1.0 || maskUv.y > 1.0) discard;
     float rootMask = texture(uRootMask, maskUv).r;
     if (rootMask <= uRootMaskThreshold) discard;

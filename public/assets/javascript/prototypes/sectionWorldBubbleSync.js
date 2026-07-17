@@ -29,6 +29,12 @@
             return task;
         };
 
+        const invalidateVisibleNodeBucketIndex = (stateRef) => {
+            if (!stateRef || typeof stateRef !== "object") return;
+            stateRef.visibleNodeBucketIndexDirty = true;
+            stateRef.visibleNodeBucketIndexVersion = (Number(stateRef.visibleNodeBucketIndexVersion) || 0) + 1;
+        };
+
         const isPromiseLike = (value) => !!(
             value &&
             (typeof value === "object" || typeof value === "function") &&
@@ -1074,33 +1080,42 @@
             }
             for (let s = 0; s < activateKeys.length; s++) {
                 const sectionKey = activateKeys[s];
-                const nodes = state.nodesBySectionKey.get(sectionKey) || [];
-                for (let i = 0; i < nodes.length; i += chunkSize) {
-                    const startIndex = i;
-                    tasks.push(createPrototypeTask("layout.activateChunk", () => {
-                        const start = prototypeNow();
-                        const end = Math.min(startIndex + chunkSize, nodes.length);
-                        for (let n = startIndex; n < end; n++) {
-                            const node = nodes[n];
-                            if (!node) continue;
-                            node._prototypeSectionActive = true;
-                            node.blocked = false;
-                            const coordKey = `${node.xindex},${node.yindex}`;
-                            state.loadedNodesByCoordKey.set(coordKey, node);
-                            if (!state.loadedNodeKeySet.has(coordKey)) {
-                                state.loadedNodeKeySet.add(coordKey);
-                                state.loadedNodes.push(node);
-                            }
-                            stats.activatedNodeCount += 1;
-                        }
-                        stats.activateMs += prototypeNow() - start;
-                    }));
-                }
-                tasks.push(createPrototypeTask("layout.activateSet", () => {
-                    if (!(state.actualActiveSectionKeys instanceof Set)) {
-                        state.actualActiveSectionKeys = new Set();
+                tasks.push(createPrototypeTask("layout.activatePlan", () => {
+                    const nodes = state.nodesBySectionKey.get(sectionKey) || [];
+                    if (nodes.length === 0) {
+                        throw new Error(`prototype layout activation requires materialized nodes for active section ${sectionKey}`);
                     }
-                    state.actualActiveSectionKeys.add(sectionKey);
+                    const activationTasks = [];
+                    for (let i = 0; i < nodes.length; i += chunkSize) {
+                        const startIndex = i;
+                        activationTasks.push(createPrototypeTask("layout.activateChunk", () => {
+                            const start = prototypeNow();
+                            const liveNodes = state.nodesBySectionKey.get(sectionKey) || [];
+                            const end = Math.min(startIndex + chunkSize, liveNodes.length);
+                            for (let n = startIndex; n < end; n++) {
+                                const node = liveNodes[n];
+                                if (!node) continue;
+                                node._prototypeSectionActive = true;
+                                node.blocked = false;
+                                const coordKey = `${node.xindex},${node.yindex}`;
+                                state.loadedNodesByCoordKey.set(coordKey, node);
+                                if (!state.loadedNodeKeySet.has(coordKey)) {
+                                    state.loadedNodeKeySet.add(coordKey);
+                                    state.loadedNodes.push(node);
+                                }
+                                stats.activatedNodeCount += 1;
+                            }
+                            invalidateVisibleNodeBucketIndex(state);
+                            stats.activateMs += prototypeNow() - start;
+                        }));
+                    }
+                    activationTasks.push(createPrototypeTask("layout.activateSet", () => {
+                        if (!(state.actualActiveSectionKeys instanceof Set)) {
+                            state.actualActiveSectionKeys = new Set();
+                        }
+                        state.actualActiveSectionKeys.add(sectionKey);
+                    }));
+                    prependPrototypeTasks(session, activationTasks);
                 }));
             }
             for (let s = 0; s < deactivateKeys.length; s++) {
@@ -1121,6 +1136,7 @@
                             state.loadedNodeKeySet.delete(`${node.xindex},${node.yindex}`);
                             stats.deactivatedNodeCount += 1;
                         }
+                        invalidateVisibleNodeBucketIndex(state);
                         stats.deactivateMs += prototypeNow() - start;
                     }));
                 }
@@ -1162,6 +1178,7 @@
                                     }
                                     stats.reactivateOverlapCount += 1;
                                 }
+                                invalidateVisibleNodeBucketIndex(state);
                                 stats.reactivateOverlapMs += prototypeNow() - t0;
                             }));
                         }
@@ -1200,6 +1217,7 @@
                     if (typeof sortPrototypeLoadedNodes === "function") {
                         sortPrototypeLoadedNodes(state.loadedNodes);
                     }
+                    invalidateVisibleNodeBucketIndex(state);
                     stats.rebuildLoadedMs += prototypeNow() - t0;
                 }));
                 prependPrototypeTasks(session, rebuildTasks);

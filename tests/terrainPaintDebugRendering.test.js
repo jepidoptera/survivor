@@ -78,6 +78,7 @@ test("terrain paint debug outline colors follow terrain type", () => {
     assert.equal(debugRenderer.getTerrainOutlineColor("water"), 0xffffff);
     assert.equal(debugRenderer.getTerrainOutlineColor("mud"), 0xffa500);
     assert.equal(debugRenderer.getTerrainOutlineColor("grass"), 0x00ff00);
+    assert.equal(debugRenderer.getTerrainOutlineColor("mowedgrass"), 0x7fd65a);
     assert.equal(debugRenderer.getTerrainOutlineColor("desert"), 0xffff00);
     assert.equal(debugRenderer.getTerrainOutlineColor("bog"), 0xffffff);
 });
@@ -89,7 +90,8 @@ test("terrain paint debug renderer draws terrain polygon outlines with terrain c
         { isTerrainPolygon: true, terrainType: "water", outer: square(0) },
         { isTerrainPolygon: true, terrainType: "mud", outer: square(2) },
         { isTerrainPolygon: true, terrainType: "grass", outer: square(4) },
-        { isTerrainPolygon: true, terrainType: "desert", outer: square(6) }
+        { isTerrainPolygon: true, terrainType: "mowedgrass", outer: square(6) },
+        { isTerrainPolygon: true, terrainType: "desert", outer: square(8) }
     ];
 
     context.RenderingTerrainPaintDebugRenderer.render(renderer, { map: {} }, entries);
@@ -97,6 +99,6 @@ test("terrain paint debug renderer draws terrain polygon outlines with terrain c
     const lineColors = calls
         .filter(call => call[0] === "lineStyle")
         .map(call => call[2]);
-    assert.deepEqual(lineColors, [0xffffff, 0xffa500, 0x00ff00, 0xffff00]);
+    assert.deepEqual(lineColors, [0xffffff, 0xffa500, 0x00ff00, 0x7fd65a, 0xffff00]);
     assert.equal(renderer.terrainPolygonDiagnosticGraphics.visible, true);
 });

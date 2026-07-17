@@ -1431,7 +1431,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": true,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -2.6046494441547723,
           "y": 10.0125
@@ -1478,7 +1478,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 5.196,
           "y": 4.675063386664179
@@ -1540,7 +1540,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": true,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 7.806500000000001,
           "y": 1.9251369086907868
@@ -1587,7 +1587,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 5.196,
           "y": -0.28647507487428214
@@ -1634,7 +1634,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 5.196,
           "y": 2.194294155894948
@@ -1681,7 +1681,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -8.66,
           "y": 0.8057058441050522
@@ -1728,7 +1728,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -8.66,
           "y": -1.6750633866641786
@@ -1775,7 +1775,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -8.66,
           "y": 3.286475074874282
@@ -1822,7 +1822,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -11.258,
           "y": 0.8057058441050522
@@ -1869,7 +1869,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -1.0377058441050515,
           "y": -7
@@ -1916,7 +1916,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -9.947094155894947,
           "y": 10
@@ -1963,7 +1963,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -6.186694155894947,
           "y": 10
@@ -2010,7 +2010,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 1.3341058441050517,
           "y": 10
@@ -2057,7 +2057,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 5.094505844105054,
           "y": 10
@@ -2104,7 +2104,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 6.483094155894948,
           "y": -7
@@ -2151,7 +2151,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 2.7226941558949482,
           "y": -7
@@ -2198,7 +2198,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -4.79810584410505,
           "y": -7
@@ -2245,7 +2245,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -8.558505844105053,
           "y": -7
@@ -2292,7 +2292,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 7.794,
           "y": 8.475544155894948
@@ -2339,7 +2339,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 7.794,
           "y": 4.58715129875209
@@ -2386,7 +2386,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 7.7940000000000005,
           "y": -0.19856298696219632
@@ -2433,7 +2433,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": 7.7940000000000005,
           "y": -4.086955844105052
@@ -2480,7 +2480,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -11.258,
           "y": -3.980008441609234
@@ -2527,7 +2527,7 @@
       "isPassable": true,
       "blocksTile": false,
       "castsLosShadows": false,
-      "groundPlaneHitboxOverridePoints": [
+      "shadowBoxOverridePoints": [
         {
           "x": -11.258,
           "y": 5.591420129819337
@@ -2952,887 +2952,6 @@
   "triggers": [],
   "loadState": "interior",
   "contentVersion": 5,
-  "movementBlockedEdges": [
-    {
-      "id": "building:placed-5:movement-edge:0",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -190,
-        "yindex": 209,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -189,
-        "yindex": 209,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 7,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:1",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -190,
-        "yindex": 209,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -188,
-        "yindex": 209,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 7,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:2",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -190,
-        "yindex": 209,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -189,
-        "yindex": 210,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 7,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:3",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -190,
-        "yindex": 209,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -189,
-        "yindex": 211,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 7,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:4",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -188,
-        "yindex": 208,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -187,
-        "yindex": 208,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 6,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:5",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -188,
-        "yindex": 209,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -187,
-        "yindex": 208,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 6,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:6",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -187,
-        "yindex": 208,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -185,
-        "yindex": 208,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 6,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:7",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -187,
-        "yindex": 208,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -186,
-        "yindex": 208,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 6,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:8",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -187,
-        "yindex": 208,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -186,
-        "yindex": 209,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 6,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:9",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -187,
-        "yindex": 208,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -187,
-        "yindex": 209,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 6,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:10",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -187,
-        "yindex": 218,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -187,
-        "yindex": 219,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 7,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:11",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -187,
-        "yindex": 219,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -186,
-        "yindex": 217,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 7,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:12",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -187,
-        "yindex": 219,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -186,
-        "yindex": 218,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 7,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:13",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -187,
-        "yindex": 219,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -185,
-        "yindex": 219,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 7,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:14",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -187,
-        "yindex": 219,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -186,
-        "yindex": 219,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 7,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:15",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -187,
-        "yindex": 219,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -186,
-        "yindex": 220,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 7,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:16",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -185,
-        "yindex": 221,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -183,
-        "yindex": 221,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 8,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:17",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -184,
-        "yindex": 207,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -183,
-        "yindex": 207,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 6,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:18",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -184,
-        "yindex": 208,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -183,
-        "yindex": 207,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 6,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:19",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -184,
-        "yindex": 219,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -183,
-        "yindex": 221,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 8,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:20",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -184,
-        "yindex": 220,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -183,
-        "yindex": 221,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 8,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:21",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -183,
-        "yindex": 207,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -181,
-        "yindex": 207,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 6,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:22",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -183,
-        "yindex": 207,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -182,
-        "yindex": 207,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 6,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:23",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -183,
-        "yindex": 207,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -182,
-        "yindex": 208,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 6,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:24",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -183,
-        "yindex": 207,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -183,
-        "yindex": 208,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 6,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:25",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -183,
-        "yindex": 220,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -183,
-        "yindex": 221,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 8,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:26",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -183,
-        "yindex": 221,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -182,
-        "yindex": 219,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 8,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:27",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -183,
-        "yindex": 221,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -182,
-        "yindex": 220,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 8,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:28",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -178,
-        "yindex": 213,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -176,
-        "yindex": 213,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 9,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:29",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -177,
-        "yindex": 212,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -176,
-        "yindex": 213,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 9,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:30",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -177,
-        "yindex": 213,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -176,
-        "yindex": 213,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 9,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:31",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -177,
-        "yindex": 214,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -176,
-        "yindex": 213,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 9,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:32",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -177,
-        "yindex": 215,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -176,
-        "yindex": 213,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 9,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:33",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -177,
-        "yindex": 217,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -175,
-        "yindex": 217,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 9,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:34",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -176,
-        "yindex": 213,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -176,
-        "yindex": 214,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 9,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:35",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -176,
-        "yindex": 215,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -175,
-        "yindex": 217,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 9,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:36",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -176,
-        "yindex": 216,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -175,
-        "yindex": 217,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 9,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:37",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -176,
-        "yindex": 217,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -175,
-        "yindex": 217,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 9,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:38",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -176,
-        "yindex": 218,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -175,
-        "yindex": 217,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 9,
-      "traversalLayer": 1
-    },
-    {
-      "id": "building:placed-5:movement-edge:39",
-      "buildingPlacementId": "building:placed-5",
-      "surfaceId": "building:placed-5:surface:floor-fragment-26",
-      "a": {
-        "xindex": -175,
-        "yindex": 217,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "b": {
-        "xindex": -175,
-        "yindex": 218,
-        "surfaceId": "building:placed-5:surface:floor-fragment-26",
-        "fragmentId": "building:placed-5:floor:floor-fragment-26",
-        "traversalLayer": 1
-      },
-      "fragmentId": "building:placed-5:floor:floor-fragment-26",
-      "movementBlockerIndex": 9,
-      "traversalLayer": 1
-    }
-  ],
-  "movementEdgeBlockerVersion": "surface-neighbor-crossings-v3"
+  "movementBlockedEdges": [],
+  "movementEdgeBlockerVersion": "surface-neighbor-crossings-v4-ground-walls"
 }

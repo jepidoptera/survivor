@@ -243,6 +243,9 @@ class Animal extends Character {
         const baseGroundRadius = Number.isFinite(this.groundRadius) ? Number(this.groundRadius) : (this.size / 3);
         const baseVisualRadius = Number.isFinite(this.visualRadius) ? Number(this.visualRadius) : baseGroundRadius;
         const metadata = this._animalMetadata;
+        if (metadata && typeof globalThis.normalizeLegacyHitboxFieldsDeep === "function") {
+            globalThis.normalizeLegacyHitboxFieldsDeep(metadata);
+        }
         const buildHitbox = (typeof globalThis.buildHitboxFromSpec === "function")
             ? globalThis.buildHitboxFromSpec
             : null;
@@ -257,35 +260,35 @@ class Animal extends Character {
             const baseHeight = Number.isFinite(metadata.hitboxBaseHeight)
                 ? Number(metadata.hitboxBaseHeight)
                 : (Number.isFinite(metadata.height) ? Number(metadata.height) : (Number.isFinite(this.height) ? Number(this.height) : 1));
-            const groundSpec = (metadata.groundPlaneHitbox && typeof metadata.groundPlaneHitbox === "object")
-                ? metadata.groundPlaneHitbox
+            const groundSpec = (metadata.shadowBox && typeof metadata.shadowBox === "object")
+                ? metadata.shadowBox
                 : {};
-            const hasVisualSpec = Object.prototype.hasOwnProperty.call(metadata, "visualHitbox");
-            const visualSpec = hasVisualSpec ? metadata.visualHitbox : null;
+            const hasVisualSpec = Object.prototype.hasOwnProperty.call(metadata, "touchBox");
+            const visualSpec = hasVisualSpec ? metadata.touchBox : null;
 
             const groundScaleContext = resolveScaleContext(groundSpec, this, baseWidth, baseHeight);
             const builtGroundHitbox = buildHitbox(groundSpec, this, baseGroundRadius, groundScaleContext);
-            this.groundPlaneHitbox = builtGroundHitbox || new CircleHitbox(this.x, this.y, baseGroundRadius);
+            this.shadowBox = builtGroundHitbox || new CircleHitbox(this.x, this.y, baseGroundRadius);
 
             if (hasVisualSpec) {
                 const visualScaleContext = resolveScaleContext(visualSpec, this, baseWidth, baseHeight);
-                this.visualHitbox = buildHitbox(visualSpec, this, baseVisualRadius, visualScaleContext) || this.cloneHitbox(this.groundPlaneHitbox);
+                this.touchBox = buildHitbox(visualSpec, this, baseVisualRadius, visualScaleContext) || this.cloneHitbox(this.shadowBox);
             } else {
-                this.visualHitbox = this.cloneHitbox(this.groundPlaneHitbox);
+                this.touchBox = this.cloneHitbox(this.shadowBox);
             }
         } else {
-            if (this.groundPlaneHitbox && this.groundPlaneHitbox.type === "circle") {
-                this.groundPlaneHitbox.x = this.x;
-                this.groundPlaneHitbox.y = this.y;
-                this.groundPlaneHitbox.radius = baseGroundRadius;
+            if (this.shadowBox && this.shadowBox.type === "circle") {
+                this.shadowBox.x = this.x;
+                this.shadowBox.y = this.y;
+                this.shadowBox.radius = baseGroundRadius;
             } else {
-                this.groundPlaneHitbox = new CircleHitbox(this.x, this.y, baseGroundRadius);
+                this.shadowBox = new CircleHitbox(this.x, this.y, baseGroundRadius);
             }
-            this.visualHitbox = this.cloneHitbox(this.groundPlaneHitbox);
+            this.touchBox = this.cloneHitbox(this.shadowBox);
         }
 
-        this.groundRadius = this.inferHitboxRadius(this.groundPlaneHitbox, baseGroundRadius);
-        this.visualRadius = this.inferHitboxRadius(this.visualHitbox, this.groundRadius);
+        this.groundRadius = this.inferHitboxRadius(this.shadowBox, baseGroundRadius);
+        this.visualRadius = this.inferHitboxRadius(this.touchBox, this.groundRadius);
         this.radius = this.groundRadius;
     }
 
@@ -401,8 +404,8 @@ class Animal extends Character {
         const strikeDistance = this.getStrikeDistance(target);
         if (!Number.isFinite(strikeDistance) || strikeDistance < 0) return false;
 
-        const ownHitbox = this.groundPlaneHitbox || this.visualHitbox || null;
-        const targetHitbox = target.groundPlaneHitbox || target.visualHitbox || null;
+        const ownHitbox = this.shadowBox || this.touchBox || null;
+        const targetHitbox = target.shadowBox || target.touchBox || null;
         if (
             ownHitbox &&
             targetHitbox &&
@@ -2753,6 +2756,9 @@ class Animal extends Character {
 
     static loadJson(data, map, options = {}) {
         if (!data || !data.type || !map) return null;
+        if (typeof globalThis.normalizeLegacyHitboxFieldsDeep === "function") {
+            globalThis.normalizeLegacyHitboxFieldsDeep(data);
+        }
 
         const loadStart = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
             ? performance.now()

@@ -323,7 +323,7 @@ test("GameMap stair fast-path movement is blocked by swept building wall blocker
         assert.ok(bounds.minX <= -3.95 && bounds.maxX >= -3.95);
         return [{
             gone: false,
-            groundPlaneHitbox: {
+            shadowBox: {
                 intersects(hitbox) {
                     return rectCircleIntersects(wallRect, hitbox);
                 }
@@ -354,7 +354,7 @@ test("GameMap stair fast-path reports only into-wall blocker contact", () => {
     map.wrapY = false;
     map.collectPrototypeBuildingMovementBlockersInBounds = () => [{
         gone: false,
-        groundPlaneHitbox: {
+        shadowBox: {
             intersects(hitbox) {
                 const radius = Number(hitbox && hitbox.radius) || 0;
                 const y = Number(hitbox && hitbox.y);
@@ -859,8 +859,8 @@ function createCharacterHarness(ClassRef, map, startNode, overrides = {}) {
         _onScreen: false,
         nodeVisitLog: [],
         nodeVisitLogLimit: 50,
-        visualHitbox: { moveTo() {} },
-        groundPlaneHitbox: { moveTo() {} },
+        touchBox: { moveTo() {} },
+        shadowBox: { moveTo() {} },
         direction: null,
         _closeCombatState: null,
         _blodiaAi() {},
@@ -1017,13 +1017,56 @@ test("hitbox movement treats water terrain polygons as impassable", () => {
         currentLayer: 0,
         traversalLayer: 0,
         currentLayerBaseZ: 0,
-        groundPlaneHitbox: { type: "circle", x: start.x, y: start.y, radius: 0.2 },
-        visualHitbox: { type: "circle", x: start.x, y: start.y, radius: 0.2 }
+        shadowBox: { type: "circle", x: start.x, y: start.y, radius: 0.2 },
+        touchBox: { type: "circle", x: start.x, y: start.y, radius: 0.2 }
     });
 
     assert.equal(actor.moveDirection({ x: 1, y: 0 }, { lockMovementVector: true }), true);
     assert.ok(actor.x < 1, `actor should not enter water polygon, got x=${actor.x}`);
     assert.ok(actor.x <= 0.82, `swept collision should stop near the water edge, got x=${actor.x}`);
+});
+
+test("hitbox movement can cross water terrain on a bridge road", () => {
+    const start = createNode(0, 0, { x: 0, y: 1, baseZ: 0 });
+    const map = Object.create(GameMap.prototype);
+    Object.assign(map, createMovementMap([start]));
+    map.terrainPolygons = [{
+        type: "water",
+        points: [
+            { x: 1, y: 0 },
+            { x: 3, y: 0 },
+            { x: 3, y: 2 },
+            { x: 1, y: 2 }
+        ]
+    }];
+    const bridgeRoad = {
+        type: "roadPath",
+        outlinePolygon: [
+            { x: 0, y: 0.6 },
+            { x: 4, y: 0.6 },
+            { x: 4, y: 1.4 },
+            { x: 0, y: 1.4 }
+        ]
+    };
+    map.objects = [bridgeRoad];
+
+    const actor = createCharacterHarness(Character, map, start, {
+        frameRate: 1,
+        speed: 2,
+        groundRadius: 0.2,
+        movementVector: { x: 1.2, y: 0 },
+        _closeCombatState: { phase: "test" },
+        currentLayer: 0,
+        traversalLayer: 0,
+        currentLayerBaseZ: 0,
+        shadowBox: { type: "circle", x: start.x, y: start.y, radius: 0.2 },
+        touchBox: { type: "circle", x: start.x, y: start.y, radius: 0.2 }
+    });
+
+    assert.equal(actor.moveDirection({ x: 1, y: 0 }, { lockMovementVector: true }), true);
+    assert.ok(actor.x > 1, `actor should cross onto the bridge over water, got x=${actor.x}`);
+    assert.equal(actor._bridgeMovementState && actor._bridgeMovementState.onBridge, true);
+    assert.equal(actor._bridgeMovementState.road, bridgeRoad);
 });
 
 test("Blodia.move uses traversal-step interpolation like Character.move", () => {
@@ -2344,7 +2387,7 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
 
     const wallBlocker = {
         gone: false,
-        groundPlaneHitbox: {
+        shadowBox: {
             intersects(hitbox) {
                 const radius = Number(hitbox && hitbox.radius) || 0;
                 const x = Number(hitbox && hitbox.x);
@@ -2442,7 +2485,7 @@ test("tread path stair occupancy uses endpoint crossing and rendered tread-heigh
 
         const overlappingEntryWallBlocker = {
             gone: false,
-            groundPlaneHitbox: {
+            shadowBox: {
                 intersects(hitbox) {
                     const radius = Number(hitbox && hitbox.radius) || 0;
                     const x = Number(hitbox && hitbox.x);

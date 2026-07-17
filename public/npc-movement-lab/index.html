@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NPC Movement Lab</title>
+    <link rel="stylesheet" href="/npc-movement-lab/styles.css?v=npc-movement-lab-26">
+</head>
+<body>
+    <main class="app-shell">
+        <section class="workbench" aria-label="NPC movement solver workbench">
+            <canvas id="solverCanvas"></canvas>
+        </section>
+        <aside class="side-panel" aria-label="NPC movement controls">
+            <section class="panel-section">
+                <h1>NPC Movement Lab</h1>
+                <div class="button-row">
+                    <button type="button" id="playButton">Pause</button>
+                    <button type="button" id="stepButton">Step</button>
+                    <button type="button" id="resetButton">Reset</button>
+                </div>
+            </section>
+
+            <section class="panel-section">
+                <h2>Scenario</h2>
+                <select id="scenarioSelect" class="select-input">
+                    <option value="sealedRoom">Sealed Room</option>
+                    <option value="crowdedArena">Crowded Arena</option>
+                    <option value="openArena" selected>Open Arena</option>
+                </select>
+            </section>
+
+            <section class="panel-section">
+                <h2>Solver</h2>
+                <label class="field-label" for="agentCount">Agents <span id="agentCountValue"></span></label>
+                <input id="agentCount" type="range" min="8" max="90" step="1" value="42">
+
+                <label class="field-label" for="separationStrength">Separation <span id="separationStrengthValue"></span></label>
+                <input id="separationStrength" type="range" min="1" max="10" step="0.1" value="7">
+
+                <label class="field-label" for="speedScale">Speed <span id="speedScaleValue"></span></label>
+                <input id="speedScale" type="range" min="0" max="1" step="0.001" value="0.5">
+            </section>
+
+            <section class="panel-section">
+                <h2>Status</h2>
+                <dl class="metric-grid">
+                    <dt>Worker</dt><dd id="workerStatus">starting</dd>
+                    <dt>Solve</dt><dd id="solveMs">0.00 ms</dd>
+                    <dt>Checks</dt><dd id="pairChecks">0</dd>
+                    <dt>Milling</dt><dd id="movingCount">0</dd>
+                    <dt>Waiting</dt><dd id="waitingCount">0</dd>
+                    <dt>Attacking</dt><dd id="attackingCount">0</dd>
+                    <dt>Retreating</dt><dd id="retreatingCount">0</dd>
+                    <dt>Blocked</dt><dd id="blockedCount">0</dd>
+                    <dt>Wall Leaks</dt><dd id="wallLeaks">0</dd>
+                </dl>
+            </section>
+
+            <section class="panel-section">
+                <h2>Diagnostics</h2>
+                <div class="legend">
+                    <span><i class="dot moving"></i>milling</span>
+                    <span><i class="dot waiting"></i>waiting</span>
+                    <span><i class="dot striking"></i>attacking</span>
+                    <span><i class="dot retreating"></i>retreating</span>
+                    <span><i class="dot blocked"></i>wall contact</span>
+                </div>
+            </section>
+
+            <section class="panel-section">
+                <h2>Target</h2>
+                <p class="hint-line">Arrow keys move the target. Hold Shift for larger steps.</p>
+            </section>
+        </aside>
+    </main>
+    <script src="/npc-movement-lab/main.js?v=npc-movement-lab-48"></script>
+</body>
+</html>
