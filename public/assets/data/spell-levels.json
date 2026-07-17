@@ -13,7 +13,6 @@
           "damage": 5,
           "range": 7,
           "castDelay": 0.7,
-          "duration": 1,
           "projectileSpeed": 8
         },
         {
@@ -24,7 +23,6 @@
           "damage": 10,
           "range": 8,
           "castDelay": 0.65,
-          "duration": 1.3,
           "projectileSpeed": 8.5
         },
         {
@@ -35,7 +33,6 @@
           "damage": 15,
           "range": 9,
           "castDelay": 0.6,
-          "duration": 1.6,
           "projectileSpeed": 9
         },
         {
@@ -46,7 +43,6 @@
           "damage": 20,
           "range": 10,
           "castDelay": 0.55,
-          "duration": 2,
           "projectileSpeed": 9.5
         },
         {
@@ -57,7 +53,6 @@
           "damage": 46,
           "range": 11,
           "castDelay": 0.5,
-          "duration": 2.4,
           "projectileSpeed": 10
         },
         {
@@ -68,7 +63,6 @@
           "damage": 56,
           "range": 12,
           "castDelay": 0.45,
-          "duration": 2.9,
           "projectileSpeed": 10.5
         },
         {
@@ -79,7 +73,6 @@
           "damage": 68,
           "range": 13,
           "castDelay": 0.4,
-          "duration": 3.5,
           "projectileSpeed": 11
         }
       ]
