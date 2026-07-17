@@ -51,6 +51,16 @@ app.get('/terrain-bubble-lab/:asset', (req, res, next) => {
     res.set('Cache-Control', 'no-store');
     res.sendFile(path.join(__dirname, 'public', 'terrain-bubble-lab', asset));
 })
+app.get('/npc-movement-lab', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.sendFile(path.join(__dirname, 'public', 'npc-movement-lab', 'index.html'));
+})
+app.get('/npc-movement-lab/:asset', (req, res, next) => {
+    const asset = String(req.params.asset || '');
+    if (!['index.html', 'main.js', 'styles.css', 'solverWorker.js'].includes(asset)) return next();
+    res.set('Cache-Control', 'no-store');
+    res.sendFile(path.join(__dirname, 'public', 'npc-movement-lab', asset));
+})
 app.get('/assets/javascript/terrain-bubble-deterministic-solver-runtime.js', (req, res) => {
     const modulePaths = {
         'terrain-bubble-ruleset': path.join(__dirname, 'scripts', 'terrain-bubble-ruleset.js'),

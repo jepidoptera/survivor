@@ -1984,3 +1984,70 @@ test("saveGameState stores prototype building placements at the world level with
         { id: "building:test-house", shell: true }
     ]);
 });
+
+test("prototype visible node viewport query uses bucket index without changing projected visibility", () => {
+    const loadedNodes = [];
+    for (let x = 0; x < 100; x++) {
+        for (let y = 0; y < 100; y++) {
+            loadedNodes.push({
+                id: `${x},${y}`,
+                x,
+                y,
+                xindex: x,
+                yindex: y,
+                baseZ: x % 5 === 0 ? 6 : 0,
+                objects: [],
+                visibilityObjects: []
+            });
+        }
+    }
+    const state = {
+        loadedNodes,
+        loadedNodeKeySet: new Set(loadedNodes.map((node) => `${node.xindex},${node.yindex}`)),
+        loadedNodesByCoordKey: new Map(loadedNodes.map((node) => [`${node.xindex},${node.yindex}`, node])),
+        visibleNodeBucketIndex: null,
+        visibleNodeBucketIndexDirty: true,
+        visibleNodeBucketIndexVersion: 1,
+        visibleNodeBucketIndexBuiltVersion: -1
+    };
+    const map = {
+        _prototypeSectionState: state,
+        getNodeBaseZ(node) {
+            return Number.isFinite(node && node.baseZ) ? Number(node.baseZ) : 0;
+        }
+    };
+    sectionWorldApiInstallers.installSectionWorldTraversalApis(map, {
+        globalScope: globalThis
+    });
+
+    const camera = { x: 20, y: 20, z: 5, width: 12, height: 12 };
+    const expected = loadedNodes.filter((node) => {
+        if (node.x < camera.x || node.x > camera.x + camera.width) return false;
+        const projectedY = node.y - (node.baseZ - camera.z);
+        return projectedY >= camera.y && projectedY <= camera.y + camera.height;
+    }).map((node) => node.id).sort();
+    const actual = map.getVisibleNodesInViewport(camera, 0, 0).map((node) => node.id).sort();
+    assert.deepEqual(actual, expected);
+
+    const stats = map.getVisibleNodeBucketIndexStats();
+    assert.ok(stats.bucketCount > 0);
+    assert.ok(stats.candidates > actual.length);
+    assert.ok(stats.candidates < loadedNodes.length);
+
+    const added = {
+        id: "24,18,elevated",
+        x: 24,
+        y: 18,
+        xindex: 24,
+        yindex: 18,
+        baseZ: 3,
+        objects: [],
+        visibilityObjects: []
+    };
+    loadedNodes.push(added);
+    state.visibleNodeBucketIndexDirty = true;
+    state.visibleNodeBucketIndexVersion += 1;
+
+    const afterMutation = map.getVisibleNodesInViewport(camera, 0, 0).map((node) => node.id);
+    assert.ok(afterMutation.includes(added.id));
+});
