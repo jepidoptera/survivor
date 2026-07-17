@@ -1,7 +1,7 @@
 "use strict";
 
-const STRIDE = 12;
-const OUT_STRIDE = 12;
+const STRIDE = 14;
+const OUT_STRIDE = 14;
 const STATE_MILLING = 1;
 const STATE_WAITING = 2;
 const STATE_ATTACKING = 3;
@@ -12,6 +12,7 @@ const PHASE_ATTACKING = 1;
 const PHASE_RETREATING = 2;
 const PHASE_WAITING = 3;
 const EPSILON = 0.000001;
+const MILLING_WALL_TURN_LOCK_SECONDS = 0.75;
 
 self.postMessage({ type: "ready" });
 
@@ -90,6 +91,10 @@ function solveStep(message) {
         const homeAngle = agents[base + 9];
         const storedCooldown = Number.isFinite(agents[base + 10]) ? agents[base + 10] : 0;
         const heading = Number.isFinite(agents[base + 11]) ? agents[base + 11] : homeAngle;
+        const millingDirection = agents[base + 12] >= 0 ? 1 : -1;
+        const millingWallTurnLock = Math.max(0, Number.isFinite(agents[base + 13]) ? agents[base + 13] : 0);
+        let nextMillingDirection = millingDirection;
+        let nextMillingWallTurnLock = Math.max(0, millingWallTurnLock - dt);
 
         let desiredX = 0;
         let desiredY = 0;
@@ -113,6 +118,8 @@ function solveStep(message) {
         const slotDx = slotPoint.x - x;
         const slotDy = slotPoint.y - y;
         const slotDist = Math.hypot(slotDx, slotDy);
+        let movementGoalX = slotPoint.x;
+        let movementGoalY = slotPoint.y;
         const touchDistance = targetRadius + radius;
         const touchingTarget = targetDist <= touchDistance;
         const canHoldWaitingSlot = slotDist <= Math.max(radius * 0.08, speed * dt * 0.25);
@@ -160,24 +167,36 @@ function solveStep(message) {
                 desiredY += slotDy;
             } else {
                 nextPhase = PHASE_MILLING;
-                desiredX += slotDx;
-                desiredY += slotDy;
-                const tangentSign = (Math.floor(id) % 2) === 0 ? 1 : -1;
-                desiredX += -toTargetY * tangentSign * 0.28;
-                desiredY += toTargetX * tangentSign * 0.28;
-                if (targetDist < ringRadius) {
-                    state = STATE_RETREATING;
-                    retreating += 1;
+                const loopRadius = ringRadius + radius * 2.25;
+                const clearOrbitRadius = ringRadius + radius * 0.9;
+                if (targetDist < clearOrbitRadius) {
+                    const escape = computeTargetEscapeVector(x, y, targetX, targetY, homeAngle, clearOrbitRadius);
+                    desiredX += escape.x;
+                    desiredY += escape.y;
+                    movementGoalX = escape.goalX;
+                    movementGoalY = escape.goalY;
                 } else {
-                    state = STATE_MILLING;
-                    milling += 1;
+                    const millingVector = computeMillingLoopVector(
+                        x,
+                        y,
+                        targetX,
+                        targetY,
+                        loopRadius,
+                        millingDirection
+                    );
+                    desiredX += millingVector.x;
+                    desiredY += millingVector.y;
+                    movementGoalX = x + millingVector.x;
+                    movementGoalY = y + millingVector.y;
                 }
+                state = STATE_MILLING;
+                milling += 1;
             }
         }
 
         if (state !== STATE_WAITING) {
-            const goalX = state === STATE_ATTACKING ? targetX : slotPoint.x;
-            const goalY = state === STATE_ATTACKING ? targetY : slotPoint.y;
+            const goalX = state === STATE_ATTACKING ? targetX : movementGoalX;
+            const goalY = state === STATE_ATTACKING ? targetY : movementGoalY;
             const detour = computeWallDetour(x, y, goalX, goalY, radius, walls);
             if (detour) {
                 const currentDesiredLen = Math.hypot(desiredX, desiredY);
@@ -213,10 +232,6 @@ function solveStep(message) {
                 vx = Math.cos(retreatHeading) * speed * 1.45;
                 vy = Math.sin(retreatHeading) * speed * 1.45;
             }
-        } else if (state === STATE_MILLING && targetDist < ringRadius + radius * 2) {
-            nextHeading = targetDist > EPSILON ? Math.atan2(y - targetY, x - targetX) : homeAngle;
-            vx = Math.cos(nextHeading) * speed;
-            vy = Math.sin(nextHeading) * speed;
         } else if (state !== STATE_ATTACKING && state !== STATE_RETREATING && targetDist < ringRadius) {
             nextHeading = targetDist > EPSILON ? Math.atan2(y - targetY, x - targetX) : 0;
             vx = Math.cos(nextHeading) * speed;
@@ -252,6 +267,10 @@ function solveStep(message) {
         candidateY = constrained.y;
         wallClamps += constrained.clamps;
         if (constrained.clamps > 0 && state === STATE_MILLING) {
+            if (nextMillingWallTurnLock <= EPSILON) {
+                nextMillingDirection = -millingDirection;
+                nextMillingWallTurnLock = MILLING_WALL_TURN_LOCK_SECONDS;
+            }
             state = STATE_BLOCKED;
             blocked += 1;
         }
@@ -273,6 +292,8 @@ function solveStep(message) {
         next[outBase + 9] = nextCooldown;
         next[outBase + 10] = slotChoice.angle;
         next[outBase + 11] = nextHeading;
+        next[outBase + 12] = nextMillingDirection;
+        next[outBase + 13] = nextMillingWallTurnLock;
     }
 
     return {
@@ -319,6 +340,46 @@ function getRingSlotPoint(targetX, targetY, ringRadius, angle) {
     return {
         x: targetX + Math.cos(angle) * ringRadius,
         y: targetY + Math.sin(angle) * ringRadius
+    };
+}
+
+function computeTargetEscapeVector(x, y, targetX, targetY, fallbackAngle, clearRadius) {
+    const fromTargetX = x - targetX;
+    const fromTargetY = y - targetY;
+    const dist = Math.hypot(fromTargetX, fromTargetY);
+    const radialX = dist > EPSILON ? fromTargetX / dist : Math.cos(fallbackAngle);
+    const radialY = dist > EPSILON ? fromTargetY / dist : Math.sin(fallbackAngle);
+    const goalX = targetX + radialX * clearRadius;
+    const goalY = targetY + radialY * clearRadius;
+    return {
+        x: goalX - x,
+        y: goalY - y,
+        goalX,
+        goalY
+    };
+}
+
+function computeMillingLoopVector(x, y, targetX, targetY, loopRadius, direction) {
+    const fromTargetX = x - targetX;
+    const fromTargetY = y - targetY;
+    let dist = Math.hypot(fromTargetX, fromTargetY);
+    let radialX = 1;
+    let radialY = 0;
+    if (dist > EPSILON) {
+        radialX = fromTargetX / dist;
+        radialY = fromTargetY / dist;
+    } else {
+        dist = 0;
+    }
+
+    const sign = direction >= 0 ? 1 : -1;
+    const tangentX = -radialY * sign;
+    const tangentY = radialX * sign;
+    const radialError = dist - loopRadius;
+    const correction = Math.max(-2.5, Math.min(2.5, radialError));
+    return {
+        x: tangentX * loopRadius - radialX * correction * 1.8,
+        y: tangentY * loopRadius - radialY * correction * 1.8
     };
 }
 
