@@ -26,7 +26,7 @@
                 <select id="scenarioSelect" class="select-input">
                     <option value="sealedRoom">Sealed Room</option>
                     <option value="crowdedArena">Crowded Arena</option>
-                    <option value="openArena">Open Arena</option>
+                    <option value="openArena" selected>Open Arena</option>
                 </select>
             </section>
 
@@ -36,10 +36,10 @@
                 <input id="agentCount" type="range" min="8" max="90" step="1" value="42">
 
                 <label class="field-label" for="separationStrength">Separation <span id="separationStrengthValue"></span></label>
-                <input id="separationStrength" type="range" min="0" max="6" step="0.1" value="2.4">
+                <input id="separationStrength" type="range" min="1" max="10" step="0.1" value="7">
 
                 <label class="field-label" for="speedScale">Speed <span id="speedScaleValue"></span></label>
-                <input id="speedScale" type="range" min="0.2" max="3" step="0.1" value="1">
+                <input id="speedScale" type="range" min="0" max="1" step="0.001" value="0.5">
             </section>
 
             <section class="panel-section">
@@ -74,6 +74,6 @@
             </section>
         </aside>
     </main>
-    <script src="/npc-movement-lab/main.js?v=npc-movement-lab-33"></script>
+    <script src="/npc-movement-lab/main.js?v=npc-movement-lab-48"></script>
 </body>
 </html>

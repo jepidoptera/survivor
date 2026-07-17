@@ -13,6 +13,27 @@ const PHASE_RETREATING = 2;
 const PHASE_WAITING = 3;
 const EPSILON = 0.000001;
 const MILLING_WALL_TURN_LOCK_SECONDS = 0.75;
+const RETREAT_MIN_OUTWARD_SPEED_SCALE = 1.15;
+const ATTACK_LUNGE_SPEED_MULTIPLIER = 1.8;
+const ATTACK_LUNGE_TIMEOUT_PADDING_SECONDS = 0.45;
+const ATTACK_SLOT_RUN_SPEED_MULTIPLIER = 1.45;
+const ATTACK_SLOT_ARRIVAL_RADIUS_SCALE = 0.22;
+const ATTACK_READY_RANGE_RADIUS_SCALE = 1.25;
+const VACATE_ATTACK_RING_CLEARANCE_SCALE = 0.65;
+const MILLING_SEPARATION_ACTIVATION_SCALE = 1.85;
+const MILLING_SEPARATION_STRENGTH_SCALE = 1.55;
+const MILLING_ROUTE_YIELD_PER_PRESSURE = 0.48;
+const MILLING_ROUTE_MIN_YIELD = 0.24;
+const MILLING_WALL_ESCAPE_CLEARANCE_SCALE = 1.35;
+const MILLING_WALL_ESCAPE_STRENGTH = 4.8;
+const ATTACKER_SELECTION_NEARBY_RADIUS_SCALE = 2.8;
+const ATTACKER_SELECTION_SPREAD_WEIGHT = 0.72;
+const ATTACKER_SELECTION_RING_ERROR_WEIGHT = 0.45;
+const ATTACKER_RING_SLIDE_STRENGTH = 1.35;
+const ATTACKER_RING_SLIDE_ACTIVATION_SCALE = 2.8;
+const ATTACKER_RING_SLIDE_MAX = 2.2;
+const ATTACKER_RING_ENTRY_PRESSURE_OUTER_SCALE = 5.5;
+const WAITING_RING_SLIDE_SPEED_SCALE = 0.65;
 
 self.postMessage({ type: "ready" });
 
@@ -62,10 +83,7 @@ function solveStep(message) {
     const targetMoved = params.targetMoved === true;
 
     const slotChoices = buildSlotChoices(agents, count, targetX, targetY, ringRadius, walls);
-    const attackSlotLimit = Math.max(1, countUsableRingSlots(agents, count, targetX, targetY, ringRadius, walls));
-    const maxAttackers = attackSlotLimit;
-    const attackSlots = selectDesignatedAttackers(agents, count, maxAttackers, targetX, targetY, ringRadius, targetMoved);
-    const ringSlots = selectRingSlots(agents, count, targetX, targetY, ringRadius, walls, attackSlots);
+    const attackSlots = selectAttackingNpcs(agents, count, targetX, targetY, ringRadius, walls, targetMoved);
     let pairChecks = 0;
     let wallClamps = 0;
     let wallLeaks = 0;
@@ -83,7 +101,9 @@ function solveStep(message) {
         const x = agents[base + 1];
         const y = agents[base + 2];
         const radius = agents[base + 3];
-        const speed = agents[base + 4] * speedScale;
+        const baseSpeed = agents[base + 4];
+        const speed = baseSpeed * speedScale;
+        const attackSpeed = getAttackLungeSpeed(baseSpeed, speedScale);
         const priority = agents[base + 5];
         const waitTime = agents[base + 6];
         const phase = Math.max(0, Math.floor(agents[base + 7]));
@@ -101,6 +121,7 @@ function solveStep(message) {
         let state = STATE_MILLING;
         let nextPhase = phase;
         let nextPhaseTime = phaseTime + dt;
+        let outerMillingCanReverseAtWall = false;
         const isDesignatedAttacker = attackSlots.has(i);
         const cooldown = isDesignatedAttacker && storedCooldown >= 0
             ? 0
@@ -110,10 +131,10 @@ function solveStep(message) {
         const toTargetX = targetX - x;
         const toTargetY = targetY - y;
         const targetDist = Math.hypot(toTargetX, toTargetY);
-        const ownsRingSlot = ringSlots.has(i);
-        const slotChoice = ringSlots.get(i)
-            || (ownsRingSlot ? slotChoices[i] : chooseMillingSlot(targetX, targetY, ringRadius, homeAngle, radius))
-            || chooseMillingSlot(targetX, targetY, ringRadius, homeAngle, radius);
+        const ownsRingSlot = isDesignatedAttacker;
+        const slotChoice = isDesignatedAttacker
+            ? (slotChoices[i] || chooseMillingSlot(targetX, targetY, ringRadius, homeAngle, radius))
+            : chooseMillingSlot(targetX, targetY, ringRadius, homeAngle, radius);
         const slotPoint = slotChoice.point;
         const slotDx = slotPoint.x - x;
         const slotDy = slotPoint.y - y;
@@ -122,36 +143,60 @@ function solveStep(message) {
         let movementGoalY = slotPoint.y;
         const touchDistance = targetRadius + radius;
         const touchingTarget = targetDist <= touchDistance;
-        const canHoldWaitingSlot = slotDist <= Math.max(radius * 0.08, speed * dt * 0.25);
+        const attackTimeoutSeconds = getAttackTimeoutSeconds(ringRadius, radius, touchDistance, attackSpeed);
+        const canHoldWaitingSlot = slotDist <= Math.max(radius * ATTACK_SLOT_ARRIVAL_RADIUS_SCALE, speed * dt * 0.25);
+        const canStartAttackFromHere = targetDist <= ringRadius + radius * ATTACK_READY_RANGE_RADIUS_SCALE;
 
         if (phase === PHASE_ATTACKING) {
             state = STATE_ATTACKING;
             attacking += 1;
             desiredX += toTargetX;
             desiredY += toTargetY;
-            if (touchingTarget || phaseTime > 1.2) {
+            if (touchingTarget || phaseTime > attackTimeoutSeconds) {
                 nextPhase = PHASE_RETREATING;
                 nextPhaseTime = 0;
+                const resetCooldown = getAttackRecoveryCooldown(id);
+                nextCooldown = isDesignatedAttacker ? -(resetCooldown + 1) : resetCooldown;
             }
+        } else if (isDesignatedAttacker && remainingCooldown <= 0 && canStartAttackFromHere) {
+            nextPhase = PHASE_ATTACKING;
+            nextPhaseTime = 0;
+            state = STATE_ATTACKING;
+            attacking += 1;
+            desiredX += toTargetX;
+            desiredY += toTargetY;
         } else if (phase === PHASE_RETREATING && ownsRingSlot) {
             state = STATE_RETREATING;
             retreating += 1;
             desiredX += slotDx;
             desiredY += slotDy;
-            if (targetDist >= ringRadius) {
+            if (canHoldWaitingSlot) {
                 nextPhase = PHASE_WAITING;
                 nextPhaseTime = 0;
-                const resetCooldown = 0.7 + (id % 5) * 0.08;
+                const resetCooldown = getAttackRecoveryCooldown(id);
                 nextCooldown = isDesignatedAttacker ? -(resetCooldown + 1) : resetCooldown;
             }
         } else {
-            if (isDesignatedAttacker && remainingCooldown <= 0 && targetDist <= ringRadius + radius * 0.35) {
+            if (isDesignatedAttacker && remainingCooldown <= 0 && canHoldWaitingSlot) {
                 nextPhase = PHASE_ATTACKING;
                 nextPhaseTime = 0;
                 state = STATE_ATTACKING;
                 attacking += 1;
                 desiredX += toTargetX;
                 desiredY += toTargetY;
+            } else if (isDesignatedAttacker && ownsRingSlot && !canHoldWaitingSlot) {
+                nextPhase = PHASE_RETREATING;
+                state = STATE_RETREATING;
+                retreating += 1;
+                desiredX += slotDx;
+                desiredY += slotDy;
+            } else if (phase === PHASE_WAITING && isDesignatedAttacker) {
+                nextPhase = PHASE_WAITING;
+                state = STATE_WAITING;
+                waiting += 1;
+                desiredX = 0;
+                desiredY = 0;
+                nextPhaseTime = 0;
             } else if (ownsRingSlot && canHoldWaitingSlot) {
                 nextPhase = PHASE_WAITING;
                 state = STATE_WAITING;
@@ -165,6 +210,16 @@ function solveStep(message) {
                 retreating += 1;
                 desiredX += slotDx;
                 desiredY += slotDy;
+            } else if (targetDist < ringRadius) {
+                nextPhase = PHASE_MILLING;
+                state = STATE_RETREATING;
+                retreating += 1;
+                const vacateRadius = ringRadius + radius * VACATE_ATTACK_RING_CLEARANCE_SCALE;
+                const escape = computeTargetEscapeVector(x, y, targetX, targetY, homeAngle, vacateRadius);
+                desiredX += escape.x;
+                desiredY += escape.y;
+                movementGoalX = escape.goalX;
+                movementGoalY = escape.goalY;
             } else {
                 nextPhase = PHASE_MILLING;
                 const loopRadius = ringRadius + radius * 2.25;
@@ -188,13 +243,75 @@ function solveStep(message) {
                     desiredY += millingVector.y;
                     movementGoalX = x + millingVector.x;
                     movementGoalY = y + millingVector.y;
+                    outerMillingCanReverseAtWall = true;
                 }
                 state = STATE_MILLING;
                 milling += 1;
             }
         }
 
-        if (state !== STATE_WAITING) {
+        if (state === STATE_WAITING || state === STATE_RETREATING) {
+            const slide = computeRingSlideVector(
+                agents,
+                count,
+                i,
+                x,
+                y,
+                radius,
+                targetX,
+                targetY,
+                ringRadius,
+                attackSlots
+            );
+            if (slide.pressure > 0) {
+                desiredX += slide.x * ATTACKER_RING_SLIDE_STRENGTH;
+                desiredY += slide.y * ATTACKER_RING_SLIDE_STRENGTH;
+                movementGoalX = x + desiredX;
+                movementGoalY = y + desiredY;
+            }
+        }
+
+        if (
+            outerMillingCanReverseAtWall &&
+            nextMillingWallTurnLock <= EPSILON &&
+            hasWallAheadAlongMillingIntent(x, y, desiredX, desiredY, radius, walls)
+        ) {
+            nextMillingDirection = -millingDirection;
+            nextMillingWallTurnLock = MILLING_WALL_TURN_LOCK_SECONDS;
+            const loopRadius = ringRadius + radius * 2.25;
+            const reversedMillingVector = computeMillingLoopVector(
+                x,
+                y,
+                targetX,
+                targetY,
+                loopRadius,
+                nextMillingDirection
+            );
+            desiredX = reversedMillingVector.x;
+            desiredY = reversedMillingVector.y;
+            movementGoalX = x + reversedMillingVector.x;
+            movementGoalY = y + reversedMillingVector.y;
+        }
+
+        if (state === STATE_MILLING) {
+            const wallEscape = computeWallEscapeVector(x, y, radius, walls);
+            if (wallEscape.pressure > 0) {
+                if (nextMillingWallTurnLock <= EPSILON) {
+                    nextMillingDirection = -millingDirection;
+                    nextMillingWallTurnLock = MILLING_WALL_TURN_LOCK_SECONDS;
+                }
+                const routeYield = Math.max(
+                    MILLING_ROUTE_MIN_YIELD,
+                    1 - Math.min(1 - MILLING_ROUTE_MIN_YIELD, wallEscape.pressure)
+                );
+                desiredX = desiredX * routeYield + wallEscape.x * MILLING_WALL_ESCAPE_STRENGTH;
+                desiredY = desiredY * routeYield + wallEscape.y * MILLING_WALL_ESCAPE_STRENGTH;
+                movementGoalX = x + desiredX;
+                movementGoalY = y + desiredY;
+            }
+        }
+
+        if (state !== STATE_WAITING && state !== STATE_MILLING) {
             const goalX = state === STATE_ATTACKING ? targetX : movementGoalX;
             const goalY = state === STATE_ATTACKING ? targetY : movementGoalY;
             const detour = computeWallDetour(x, y, goalX, goalY, radius, walls);
@@ -208,11 +325,21 @@ function solveStep(message) {
 
         if (!ownsRingSlot) {
             const separation = computeSeparation(agents, count, i, x, y, radius, priority, {
-                overlapOnly: false
+                overlapOnly: false,
+                activationScale: state === STATE_MILLING ? MILLING_SEPARATION_ACTIVATION_SCALE : undefined
             });
             pairChecks += separation.checks;
-            desiredX += separation.x * separationStrength;
-            desiredY += separation.y * separationStrength;
+            if (state === STATE_MILLING && separation.pressure > 0) {
+                const routeYield = Math.max(
+                    MILLING_ROUTE_MIN_YIELD,
+                    1 - Math.min(1 - MILLING_ROUTE_MIN_YIELD, separation.pressure * MILLING_ROUTE_YIELD_PER_PRESSURE)
+                );
+                desiredX *= routeYield;
+                desiredY *= routeYield;
+            }
+            const separationScale = separationStrength * (state === STATE_MILLING ? MILLING_SEPARATION_STRENGTH_SCALE : 1);
+            desiredX += separation.x * separationScale;
+            desiredY += separation.y * separationScale;
         }
 
         let len = Math.hypot(desiredX, desiredY);
@@ -221,16 +348,24 @@ function solveStep(message) {
         let nextHeading = heading;
         if (state === STATE_WAITING) {
             nextHeading = rotateTowardAngle(heading, Math.atan2(toTargetY, toTargetX), Math.PI * 2 * dt);
+            if (len > EPSILON) {
+                const slideHeading = Math.atan2(desiredY, desiredX);
+                vx = Math.cos(slideHeading) * speed * WAITING_RING_SLIDE_SPEED_SCALE;
+                vy = Math.sin(slideHeading) * speed * WAITING_RING_SLIDE_SPEED_SCALE;
+            }
         } else if (state === STATE_ATTACKING) {
             nextHeading = Math.atan2(toTargetY, toTargetX);
-            vx = Math.cos(nextHeading) * speed * 1.8;
-            vy = Math.sin(nextHeading) * speed * 1.8;
+            vx = Math.cos(nextHeading) * attackSpeed;
+            vy = Math.sin(nextHeading) * attackSpeed;
         } else if (state === STATE_RETREATING) {
             const retreatHeading = Math.atan2(desiredY, desiredX);
             nextHeading = Math.atan2(toTargetY, toTargetX);
             if (len > EPSILON) {
-                vx = Math.cos(retreatHeading) * speed * 1.45;
-                vy = Math.sin(retreatHeading) * speed * 1.45;
+                const retreatSpeed = isDesignatedAttacker
+                    ? getAttackSlotRunSpeed(baseSpeed, speedScale)
+                    : speed * 1.45;
+                vx = Math.cos(retreatHeading) * retreatSpeed;
+                vy = Math.sin(retreatHeading) * retreatSpeed;
             }
         } else if (state !== STATE_ATTACKING && state !== STATE_RETREATING && targetDist < ringRadius) {
             nextHeading = targetDist > EPSILON ? Math.atan2(y - targetY, x - targetX) : 0;
@@ -245,6 +380,11 @@ function solveStep(message) {
             vx = Math.cos(nextHeading) * phaseSpeed * turnSpeedScale;
             vy = Math.sin(nextHeading) * phaseSpeed * turnSpeedScale;
         }
+        if (state === STATE_RETREATING) {
+            const outward = enforceMinimumOutwardVelocity(vx, vy, x, y, targetX, targetY, ringRadius, speed);
+            vx = outward.vx;
+            vy = outward.vy;
+        }
 
         let candidateX = x + vx * dt;
         let candidateY = y + vy * dt;
@@ -255,8 +395,14 @@ function solveStep(message) {
             if (contact.touched) {
                 nextPhase = PHASE_RETREATING;
                 nextPhaseTime = 0;
+                const resetCooldown = getAttackRecoveryCooldown(id);
+                nextCooldown = isDesignatedAttacker ? -(resetCooldown + 1) : resetCooldown;
                 hits += 1;
             }
+        } else if (state === STATE_WAITING || state === STATE_RETREATING) {
+            const outsideRing = clampOutsideTargetRing(x, y, candidateX, candidateY, targetX, targetY, ringRadius);
+            candidateX = outsideRing.x;
+            candidateY = outsideRing.y;
         } else if (state !== STATE_RETREATING) {
             const outsideRing = clampOutsideTargetRing(x, y, candidateX, candidateY, targetX, targetY, ringRadius);
             candidateX = outsideRing.x;
@@ -336,6 +482,26 @@ function rotateTowardAngle(from, to, maxRadians) {
     return normalizeAngle(from + Math.sign(delta) * maxRadians);
 }
 
+function getAttackLungeSpeed(baseSpeed, speedScale) {
+    const scale = Math.sqrt(Math.max(0, speedScale));
+    return baseSpeed * scale * ATTACK_LUNGE_SPEED_MULTIPLIER;
+}
+
+function getAttackSlotRunSpeed(baseSpeed, speedScale) {
+    const scale = Math.sqrt(Math.max(0, speedScale));
+    return baseSpeed * scale * ATTACK_SLOT_RUN_SPEED_MULTIPLIER;
+}
+
+function getAttackRecoveryCooldown(id) {
+    return 0.7 + (id % 5) * 0.08;
+}
+
+function getAttackTimeoutSeconds(ringRadius, radius, touchDistance, attackSpeed) {
+    const attackRange = Math.max(0, ringRadius + radius * 0.35 - touchDistance);
+    const travelSeconds = attackRange / Math.max(EPSILON, attackSpeed);
+    return Math.max(1.2, travelSeconds + ATTACK_LUNGE_TIMEOUT_PADDING_SECONDS);
+}
+
 function getRingSlotPoint(targetX, targetY, ringRadius, angle) {
     return {
         x: targetX + Math.cos(angle) * ringRadius,
@@ -383,15 +549,29 @@ function computeMillingLoopVector(x, y, targetX, targetY, loopRadius, direction)
     };
 }
 
+function hasWallAheadAlongMillingIntent(x, y, desiredX, desiredY, radius, walls) {
+    const desiredLength = Math.hypot(desiredX, desiredY);
+    if (desiredLength <= EPSILON) return false;
+    const lookAhead = Math.max(radius * 1.5, 0.25);
+    const toX = x + desiredX / desiredLength * lookAhead;
+    const toY = y + desiredY / desiredLength * lookAhead;
+    return !!findEarliestSegmentHit(x, y, toX, toY, radius, walls);
+}
+
 function buildSlotChoices(agents, count, targetX, targetY, ringRadius, walls) {
     const choices = new Array(count);
     for (let i = 0; i < count; i++) {
         const base = i * STRIDE;
+        const x = agents[base + 1];
+        const y = agents[base + 2];
+        const homeAngle = agents[base + 9];
+        const targetDist = Math.hypot(x - targetX, y - targetY);
+        const ringAngle = targetDist > EPSILON ? Math.atan2(y - targetY, x - targetX) : homeAngle;
         choices[i] = chooseRingSlot(
             targetX,
             targetY,
             ringRadius,
-            agents[base + 9],
+            ringAngle,
             agents[base + 3],
             walls
         );
@@ -464,6 +644,32 @@ function wallClearance(x, y, walls) {
     return clearance;
 }
 
+function computeWallEscapeVector(x, y, radius, walls) {
+    const activationDistance = radius * MILLING_WALL_ESCAPE_CLEARANCE_SCALE;
+    let escapeX = 0;
+    let escapeY = 0;
+    let pressure = 0;
+    for (let i = 0; i < walls.length; i += 6) {
+        const ax = walls[i];
+        const ay = walls[i + 1];
+        const nx = walls[i + 4];
+        const ny = walls[i + 5];
+        const clearance = (x - ax) * nx + (y - ay) * ny;
+        if (clearance >= activationDistance) continue;
+        const push = (activationDistance - clearance) / activationDistance;
+        escapeX += nx * push;
+        escapeY += ny * push;
+        pressure += push;
+    }
+    const length = Math.hypot(escapeX, escapeY);
+    if (length <= EPSILON) return { x: 0, y: 0, pressure: 0 };
+    return {
+        x: escapeX / length * Math.min(1, pressure),
+        y: escapeY / length * Math.min(1, pressure),
+        pressure
+    };
+}
+
 function pushPointInsideWalls(x, y, radius, walls) {
     let outX = x;
     let outY = y;
@@ -504,45 +710,140 @@ function countUsableRingSlots(agents, count, targetX, targetY, ringRadius, walls
     return usable;
 }
 
-function selectRingSlots(agents, count, targetX, targetY, ringRadius, walls, attackSlots) {
+function selectAttackingNpcs(agents, count, targetX, targetY, ringRadius, walls, targetMoved) {
+    const maxAttackers = countUsableRingSlots(agents, count, targetX, targetY, ringRadius, walls);
+    if (maxAttackers <= 0) return new Set();
+
+    const nearby = collectNearbyAttackCandidates(agents, count, targetX, targetY, ringRadius);
+    const selected = new Set();
     const candidates = [];
-    let maxRadius = 0;
-    for (let i = 0; i < count; i++) {
-        const base = i * STRIDE;
+
+    for (let n = 0; n < nearby.length; n++) {
+        const candidate = nearby[n];
+        const base = candidate.index * STRIDE;
+        const id = agents[base];
+        const waitTime = agents[base + 6];
         const phase = Math.max(0, Math.floor(agents[base + 7]));
         const phaseTime = Math.max(0, agents[base + 8]);
-        const radius = agents[base + 3];
-        const x = agents[base + 1];
-        const y = agents[base + 2];
+        const cooldown = Number.isFinite(agents[base + 10]) ? agents[base + 10] : 0;
 
-        const targetDist = Math.hypot(targetX - x, targetY - y);
-        maxRadius = Math.max(maxRadius, radius);
-        const isDesignatedAttacker = attackSlots.has(i);
-        const isInsideRetreater = phase === PHASE_RETREATING && targetDist < ringRadius;
-        if (!isDesignatedAttacker && !isInsideRetreater) continue;
+        if (phase === PHASE_ATTACKING && !targetMoved && selected.size < maxAttackers) {
+            selected.add(candidate.index);
+            continue;
+        }
+        if (phase === PHASE_RETREATING && candidate.targetDist > ringRadius + candidate.radius * 2.2 && phaseTime > 1.5) {
+            continue;
+        }
 
-        const currentAngle = targetDist > EPSILON ? Math.atan2(y - targetY, x - targetX) : agents[base + 9];
-        candidates.push({
-            index: i,
-            phase,
-            radius,
-            x,
-            y,
-            targetDist,
-            phaseTime,
-            currentAngle,
-            homeAngle: agents[base + 9],
-            isDesignatedAttacker,
-            isInsideRetreater,
-            isActiveRingAgent: targetDist <= ringRadius * 2.2
-                && (phase === PHASE_ATTACKING
-                    || phase === PHASE_WAITING
-                    || isDesignatedAttacker
-                    || (phase === PHASE_RETREATING && (phaseTime <= 2 || targetDist <= ringRadius + radius * 1.2)))
-        });
+        const crowdClearance = computeCandidateCrowdClearance(candidate, nearby, ringRadius);
+        const targetNearness = candidate.targetDist;
+        const ringError = Math.abs(candidate.targetDist - ringRadius);
+        let score = targetNearness
+            + ringError * ATTACKER_SELECTION_RING_ERROR_WEIGHT
+            - crowdClearance * ATTACKER_SELECTION_SPREAD_WEIGHT;
+
+        if (phase === PHASE_WAITING) score -= Math.min(ringRadius * 0.45, Math.min(2, waitTime) * 0.22);
+        if (phase === PHASE_RETREATING && candidate.targetDist <= ringRadius + candidate.radius * 2.2) score -= ringRadius * 0.22;
+        if (!targetMoved && cooldown < 0) score -= ringRadius * 0.3;
+        if (candidate.targetDist < ringRadius) score -= (ringRadius - candidate.targetDist) * 0.4;
+
+        candidates.push({ index: candidate.index, id, score });
     }
 
-    if (maxRadius <= EPSILON) return new Map();
+    candidates.sort((a, b) => a.score - b.score || a.id - b.id);
+    for (let i = 0; i < candidates.length && selected.size < maxAttackers; i++) {
+        selected.add(candidates[i].index);
+    }
+    return selected;
+}
+
+function collectNearbyAttackCandidates(agents, count, targetX, targetY, ringRadius) {
+    const nearby = [];
+    const maxDist = ringRadius * ATTACKER_SELECTION_NEARBY_RADIUS_SCALE;
+    for (let i = 0; i < count; i++) {
+        const base = i * STRIDE;
+        const x = agents[base + 1];
+        const y = agents[base + 2];
+        const radius = agents[base + 3];
+        const targetDist = Math.hypot(targetX - x, targetY - y);
+        if (targetDist > maxDist) continue;
+        const angle = targetDist > EPSILON ? Math.atan2(y - targetY, x - targetX) : agents[base + 9];
+        nearby.push({ index: i, x, y, radius, targetDist, angle });
+    }
+    return nearby;
+}
+
+function computeCandidateCrowdClearance(candidate, nearby, ringRadius) {
+    let best = ringRadius * Math.PI;
+    for (let i = 0; i < nearby.length; i++) {
+        const other = nearby[i];
+        if (other.index === candidate.index) continue;
+        const angleDistance = Math.abs(shortestAngleDelta(candidate.angle, other.angle)) * ringRadius;
+        const radialDistance = Math.abs(candidate.targetDist - other.targetDist);
+        const separation = Math.hypot(angleDistance, radialDistance * 0.65);
+        if (separation < best) best = separation;
+    }
+    return Math.min(best, ringRadius * 2.5);
+}
+
+function computeRingSlideVector(agents, count, selfIndex, x, y, radius, targetX, targetY, ringRadius, attackSlots) {
+    const fromTargetX = x - targetX;
+    const fromTargetY = y - targetY;
+    const targetDist = Math.hypot(fromTargetX, fromTargetY);
+    if (targetDist <= EPSILON) return { x: 0, y: 0, pressure: 0 };
+
+    const radialX = fromTargetX / targetDist;
+    const radialY = fromTargetY / targetDist;
+    const tangentX = -radialY;
+    const tangentY = radialX;
+    const selfAngle = Math.atan2(fromTargetY, fromTargetX);
+    const selfRingError = Math.abs(targetDist - ringRadius);
+    if (selfRingError > radius * ATTACKER_RING_SLIDE_ACTIVATION_SCALE) return { x: 0, y: 0, pressure: 0 };
+
+    let slide = 0;
+    let pressure = 0;
+    const angularActivation = Math.max(radius * 3.2, ringRadius * 0.45);
+    const maxOtherDist = ringRadius + radius * ATTACKER_RING_ENTRY_PRESSURE_OUTER_SCALE;
+    for (let i = 0; i < count; i++) {
+        if (i === selfIndex) continue;
+        if (!attackSlots || !attackSlots.has(i)) continue;
+        const base = i * STRIDE;
+        const ox = agents[base + 1];
+        const oy = agents[base + 2];
+        const otherRadius = agents[base + 3];
+        const otherPhase = Math.max(0, Math.floor(agents[base + 7]));
+        const otherDist = Math.hypot(ox - targetX, oy - targetY);
+        if (otherPhase === PHASE_ATTACKING) continue;
+        if (otherDist < ringRadius + otherRadius * ATTACK_SLOT_ARRIVAL_RADIUS_SCALE) continue;
+        if (otherDist <= targetDist || otherDist > maxOtherDist) continue;
+
+        const otherAngle = otherDist > EPSILON ? Math.atan2(oy - targetY, ox - targetX) : agents[base + 9];
+        const angleDelta = shortestAngleDelta(selfAngle, otherAngle);
+        const arcDistance = Math.abs(angleDelta) * ringRadius;
+        if (arcDistance >= angularActivation) continue;
+
+        const radialGap = Math.max(0, otherDist - targetDist);
+        const radialWeight = 1 - Math.min(1, radialGap / Math.max(radius * 5, EPSILON));
+        const outerRingError = Math.max(0, otherDist - ringRadius);
+        const entryPressure = 1 + Math.max(0, 1 - Math.min(1, outerRingError / Math.max(otherRadius * 3.5, EPSILON)));
+        const push = (angularActivation - arcDistance) / angularActivation * radialWeight * entryPressure;
+        if (push <= 0) continue;
+
+        slide += (angleDelta >= 0 ? -1 : 1) * push;
+        pressure += push;
+    }
+
+    if (Math.abs(slide) <= EPSILON) return { x: 0, y: 0, pressure: 0 };
+    const clampedSlide = Math.max(-ATTACKER_RING_SLIDE_MAX, Math.min(ATTACKER_RING_SLIDE_MAX, slide));
+    const radialCorrection = Math.max(-1, Math.min(1, (ringRadius - targetDist) / Math.max(radius, EPSILON))) * 0.38;
+    return {
+        x: tangentX * clampedSlide + radialX * radialCorrection,
+        y: tangentY * clampedSlide + radialY * radialCorrection,
+        pressure
+    };
+}
+
+function buildUsableRingSlots(targetX, targetY, ringRadius, maxRadius, walls) {
     const circumference = Math.max(ringRadius * Math.PI * 2, EPSILON);
     const slotCount = Math.max(1, Math.floor(circumference / (maxRadius * 2)));
     const slots = [];
@@ -554,170 +855,20 @@ function selectRingSlots(agents, count, targetX, targetY, ringRadius, walls, att
             slots.push({ angle, point, clearance });
         }
     }
-    if (slots.length === 0) return new Map();
-
-    candidates.sort((a, b) => {
-        const priorityDelta = ringClaimPriority(a.phase, a.isDesignatedAttacker, a.isActiveRingAgent, a.isInsideRetreater)
-            - ringClaimPriority(b.phase, b.isDesignatedAttacker, b.isActiveRingAgent, b.isInsideRetreater);
-        if (priorityDelta !== 0) return priorityDelta;
-        if (a.isActiveRingAgent || b.isActiveRingAgent) {
-            const angleDelta = Math.abs(shortestAngleDelta(a.homeAngle, a.currentAngle))
-                - Math.abs(shortestAngleDelta(b.homeAngle, b.currentAngle));
-            if (Math.abs(angleDelta) > EPSILON) return angleDelta;
-        }
-        return a.targetDist - b.targetDist;
-    });
-
-    const assignedCandidates = candidates.slice(0, slots.length);
-    const assignment = minimizeRingSlotMovement(assignedCandidates, slots, ringRadius);
-    const selected = new Map();
-    for (let i = 0; i < assignedCandidates.length; i++) {
-        const candidate = assignedCandidates[i];
-        const slot = slots[assignment[i]];
-        if (!slot) continue;
-        selected.set(candidate.index, {
-            point: slot.point,
-            angle: slot.angle,
-            clearance: slot.clearance,
-            usable: true,
-            score: -ringSlotMovementCost(candidate, slot, ringRadius)
-        });
-    }
-    return selected;
-}
-
-function minimizeRingSlotMovement(candidates, slots, ringRadius) {
-    const candidateCount = candidates.length;
-    const slotCount = slots.length;
-    if (candidateCount === 0) return [];
-    const stateCount = 1 << slotCount;
-    let costs = new Float64Array(stateCount);
-    const parentMasksByLayer = [];
-    const parentSlotsByLayer = [];
-    costs.fill(Infinity);
-    costs[0] = 0;
-
-    for (let candidateIndex = 0; candidateIndex < candidateCount; candidateIndex++) {
-        const nextCosts = new Float64Array(stateCount);
-        const nextParents = new Int32Array(stateCount);
-        const nextParentSlots = new Int16Array(stateCount);
-        nextCosts.fill(Infinity);
-        nextParents.fill(-1);
-        nextParentSlots.fill(-1);
-        for (let mask = 0; mask < stateCount; mask++) {
-            if (!Number.isFinite(costs[mask]) || bitCount(mask) !== candidateIndex) continue;
-            for (let slotIndex = 0; slotIndex < slotCount; slotIndex++) {
-                const slotBit = 1 << slotIndex;
-                if ((mask & slotBit) !== 0) continue;
-                const nextMask = mask | slotBit;
-                const cost = costs[mask] + ringSlotMovementCost(candidates[candidateIndex], slots[slotIndex], ringRadius);
-                if (cost < nextCosts[nextMask]) {
-                    nextCosts[nextMask] = cost;
-                    nextParents[nextMask] = mask;
-                    nextParentSlots[nextMask] = slotIndex;
-                }
-            }
-        }
-        parentMasksByLayer.push(nextParents);
-        parentSlotsByLayer.push(nextParentSlots);
-        costs = nextCosts;
-    }
-
-    let bestMask = -1;
-    let bestCost = Infinity;
-    for (let mask = 0; mask < stateCount; mask++) {
-        if (bitCount(mask) !== candidateCount) continue;
-        if (costs[mask] < bestCost) {
-            bestCost = costs[mask];
-            bestMask = mask;
-        }
-    }
-    if (bestMask < 0) throw new Error("ring slot assignment failed");
-
-    const assignment = new Array(candidateCount);
-    let mask = bestMask;
-    for (let candidateIndex = candidateCount - 1; candidateIndex >= 0; candidateIndex--) {
-        const slotIndex = parentSlotsByLayer[candidateIndex][mask];
-        assignment[candidateIndex] = slotIndex;
-        mask = parentMasksByLayer[candidateIndex][mask];
-    }
-    return assignment;
-}
-
-function ringSlotMovementCost(candidate, slot, ringRadius) {
-    const angleCost = Math.abs(shortestAngleDelta(candidate.currentAngle, slot.angle)) * ringRadius;
-    const distanceCost = Math.hypot(slot.point.x - candidate.x, slot.point.y - candidate.y);
-    const previousSlotWeight = candidate.isActiveRingAgent ? 1.4 : 0.18;
-    const previousSlotCost = Math.abs(shortestAngleDelta(candidate.homeAngle, slot.angle)) * ringRadius * previousSlotWeight;
-    return angleCost * 0.45 + distanceCost * 0.12 + previousSlotCost;
-}
-
-function bitCount(value) {
-    let count = 0;
-    let remaining = value;
-    while (remaining) {
-        remaining &= remaining - 1;
-        count += 1;
-    }
-    return count;
-}
-
-function ringClaimPriority(phase, isDesignatedAttacker, isActiveRingAgent, isInsideRetreater) {
-    if (isInsideRetreater) return 0;
-    if (!isActiveRingAgent && !isDesignatedAttacker) return 3;
-    if (phase === PHASE_ATTACKING || isDesignatedAttacker) return 1;
-    if (phase === PHASE_RETREATING) return 2;
-    if (phase === PHASE_WAITING) return 3;
-    return 3;
-}
-
-function selectDesignatedAttackers(agents, count, maxAttackers, targetX, targetY, ringRadius, targetMoved) {
-    const candidates = [];
-    let activeAttackers = 0;
-    const selected = new Set();
-    for (let i = 0; i < count; i++) {
-        const base = i * STRIDE;
-        const id = agents[base];
-        const waitTime = agents[base + 6];
-        const phase = Math.max(0, Math.floor(agents[base + 7]));
-        const cooldown = Number.isFinite(agents[base + 10]) ? agents[base + 10] : 0;
-        const x = agents[base + 1];
-        const y = agents[base + 2];
-        const targetDist = Math.hypot(targetX - x, targetY - y);
-        if (!targetMoved && phase === PHASE_ATTACKING) {
-            activeAttackers += 1;
-            if (selected.size < maxAttackers) selected.add(i);
-            continue;
-        }
-        if (!targetMoved && cooldown < 0) {
-            if (selected.size < maxAttackers) selected.add(i);
-            continue;
-        }
-        if (phase === PHASE_RETREATING) continue;
-        if (phase === PHASE_WAITING) {
-            const stalePenalty = targetDist > ringRadius * 1.8 ? ringRadius * 4 : 0;
-            candidates.push({ index: i, score: stalePenalty + targetDist * 0.25 - waitTime, id });
-        } else if (targetDist <= ringRadius * 2.4) {
-            candidates.push({ index: i, score: targetDist, id });
-        }
-    }
-    candidates.sort((a, b) => a.score - b.score || a.id - b.id);
-    const available = Math.max(0, maxAttackers - selected.size);
-    let added = 0;
-    for (let i = 0; i < candidates.length && added < available; i++) {
-        selected.add(candidates[i].index);
-        added += 1;
-    }
-    return selected;
+    return slots;
 }
 
 function computeSeparation(agents, count, selfIndex, x, y, radius, priority, options = {}) {
     let sx = 0;
     let sy = 0;
     let checks = 0;
-    const maxRange = radius * 4.5;
-    const maxRangeSq = maxRange * maxRange;
+    let pressure = 0;
     const overlapOnly = options.overlapOnly === true;
+    const activationScale = Number.isFinite(options.activationScale)
+        ? Math.max(1, Number(options.activationScale))
+        : (overlapOnly ? 1.02 : 1.35);
+    const maxRange = radius * Math.max(4.5, activationScale * 3);
+    const maxRangeSq = maxRange * maxRange;
     for (let i = 0; i < count; i++) {
         if (i === selfIndex) continue;
         const base = i * STRIDE;
@@ -731,15 +882,16 @@ function computeSeparation(agents, count, selfIndex, x, y, radius, priority, opt
         checks += 1;
         const dist = Math.max(0.001, Math.sqrt(distSq));
         const desired = radius + oradius;
-        const activationDistance = overlapOnly ? desired * 1.02 : desired * 1.35;
+        const activationDistance = desired * activationScale;
         if (dist >= activationDistance) continue;
         const otherPriority = agents[base + 5];
         const priorityWeight = otherPriority > priority ? 1.25 : 0.75;
         const push = (activationDistance - dist) / activationDistance * priorityWeight;
+        pressure += push;
         sx += dx / dist * push;
         sy += dy / dist * push;
     }
-    return { x: sx, y: sy, checks };
+    return { x: sx, y: sy, checks, pressure };
 }
 
 function clampDartToTargetContact(previousX, previousY, x, y, targetX, targetY, touchDistance) {
@@ -789,6 +941,24 @@ function clampOutsideTargetRing(previousX, previousY, x, y, targetX, targetY, ri
     return {
         x: targetX + nextDx * scale,
         y: targetY + nextDy * scale
+    };
+}
+
+function enforceMinimumOutwardVelocity(vx, vy, x, y, targetX, targetY, ringRadius, speed) {
+    const dx = x - targetX;
+    const dy = y - targetY;
+    const dist = Math.hypot(dx, dy);
+    if (!(dist > EPSILON)) return { vx, vy };
+    const radialX = dx / dist;
+    const radialY = dy / dist;
+    const outwardSpeed = vx * radialX + vy * radialY;
+    if (dist >= ringRadius) return { vx, vy };
+    const minOutwardSpeed = Math.max(speed * RETREAT_MIN_OUTWARD_SPEED_SCALE, (ringRadius - dist) * 6);
+    if (outwardSpeed >= minOutwardSpeed) return { vx, vy };
+    const correction = minOutwardSpeed - outwardSpeed;
+    return {
+        vx: vx + radialX * correction,
+        vy: vy + radialY * correction
     };
 }
 

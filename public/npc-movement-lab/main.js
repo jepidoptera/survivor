@@ -14,9 +14,13 @@
     const COMBAT_RING_RADIUS = 1.6;
     const TARGET_KEYBOARD_MOVE_SPEED = 5.67;
     const TARGET_KEYBOARD_FAST_MOVE_SPEED = 14.49;
-    const TARGET_NPC_PUSH_ITERATIONS = 12;
+    const SPEED_SCALE_MIN = 0.05;
+    const SPEED_SCALE_MAX = 0.8;
+    const SPEED_SCALE_DEFAULT = 0.2;
+    const TARGET_NPC_PUSH_ITERATIONS = 96;
     const TARGET_NPC_PUSH_SLOP = 0.0005;
     const TARGET_NPC_PUSH_PLAYER_SHARE = 0.38;
+    const NPC_NPC_PUSH_SHARE = 0.5;
     const TARGET_NPC_PUSH_MIN_AXIS = 0.0001;
     const TARGET_MOVEMENT_KEYS = {
         ArrowLeft: [-1, 0],
@@ -69,7 +73,7 @@
     };
     window.__npcMovementLabDebug = state;
 
-    const worker = new Worker("/npc-movement-lab/solverWorker.js?v=npc-movement-lab-31");
+    const worker = new Worker("/npc-movement-lab/solverWorker.js?v=npc-movement-lab-54");
     worker.addEventListener("message", handleWorkerMessage);
     worker.addEventListener("error", (event) => {
         labels.workerStatus.textContent = event.message || "failed";
@@ -78,7 +82,18 @@
     function updateControlLabels() {
         labels.agentCount.textContent = agentCountInput.value;
         labels.separationStrength.textContent = Number(separationInput.value).toFixed(1);
-        labels.speedScale.textContent = Number(speedScaleInput.value).toFixed(1);
+        labels.speedScale.textContent = getSpeedScale().toFixed(2);
+    }
+
+    function getSpeedScale() {
+        const t = Math.max(0, Math.min(1, Number(speedScaleInput.value)));
+        return SPEED_SCALE_MIN * Math.pow(SPEED_SCALE_MAX / SPEED_SCALE_MIN, t);
+    }
+
+    function setSpeedScaleValue(value) {
+        const scale = Math.max(SPEED_SCALE_MIN, Math.min(SPEED_SCALE_MAX, Number(value)));
+        const t = Math.log(scale / SPEED_SCALE_MIN) / Math.log(SPEED_SCALE_MAX / SPEED_SCALE_MIN);
+        speedScaleInput.value = String(Math.max(0, Math.min(1, t)));
     }
 
     function addWall(walls, ax, ay, bx, by, nx, ny) {
@@ -230,9 +245,17 @@
                 pushes += 1;
                 changed = true;
             }
+            for (let i = 0; i < state.agents.length; i++) {
+                for (let j = i + 1; j < state.agents.length; j++) {
+                    const result = resolveAgentAgentOverlap(state.agents[i], state.agents[j]);
+                    if (!result.changed) continue;
+                    pushes += 1;
+                    changed = true;
+                }
+            }
             if (!changed) break;
         }
-        assertTargetNpcSeparation();
+        assertContactInvariants();
         state.targetPushes = pushes;
     }
 
@@ -271,11 +294,68 @@
         constrainTargetToWalls();
 
         if (agent.x !== previousAgentX || agent.y !== previousAgentY || state.target.x !== previousTargetX || state.target.y !== previousTargetY) {
-            agent.vx = agent.x - previousAgentX;
-            agent.vy = agent.y - previousAgentY;
+            accumulateContactVelocity(agent, previousAgentX, previousAgentY);
             return { changed: true };
         }
         return { changed: false };
+    }
+
+    function resolveAgentAgentOverlap(left, right) {
+        const combinedRadius = left.radius + right.radius;
+        let dx = right.x - left.x;
+        let dy = right.y - left.y;
+        let dist = Math.hypot(dx, dy);
+        if (dist >= combinedRadius - TARGET_NPC_PUSH_SLOP) return { changed: false };
+
+        if (!(dist > TARGET_NPC_PUSH_MIN_AXIS)) {
+            const angle = ((left.id * 928371 + right.id * 689287) % 360) / 360 * Math.PI * 2;
+            dx = Math.cos(angle);
+            dy = Math.sin(angle);
+            dist = 1;
+        }
+
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const correction = combinedRadius - dist + TARGET_NPC_PUSH_SLOP;
+        const previousLeftX = left.x;
+        const previousLeftY = left.y;
+        const previousRightX = right.x;
+        const previousRightY = right.y;
+
+        const leftPushX = -nx * correction * NPC_NPC_PUSH_SHARE;
+        const leftPushY = -ny * correction * NPC_NPC_PUSH_SHARE;
+        const rightPushX = nx * correction * (1 - NPC_NPC_PUSH_SHARE);
+        const rightPushY = ny * correction * (1 - NPC_NPC_PUSH_SHARE);
+
+        const leftApplied = moveAgentWithWallConstraint(left, leftPushX, leftPushY);
+        const rightApplied = moveAgentWithWallConstraint(right, rightPushX - leftApplied.blockedX, rightPushY - leftApplied.blockedY);
+        if (rightApplied.blockedX !== 0 || rightApplied.blockedY !== 0) {
+            moveAgentWithWallConstraint(left, -rightApplied.blockedX, -rightApplied.blockedY);
+        }
+
+        if (left.x !== previousLeftX || left.y !== previousLeftY || right.x !== previousRightX || right.y !== previousRightY) {
+            accumulateContactVelocity(left, previousLeftX, previousLeftY);
+            accumulateContactVelocity(right, previousRightX, previousRightY);
+            return { changed: true };
+        }
+        return { changed: false };
+    }
+
+    function moveAgentWithWallConstraint(agent, dx, dy) {
+        const intendedX = agent.x + dx;
+        const intendedY = agent.y + dy;
+        agent.x = intendedX;
+        agent.y = intendedY;
+        constrainAgentToWalls(agent);
+        return {
+            blockedX: intendedX - agent.x,
+            blockedY: intendedY - agent.y
+        };
+    }
+
+    function accumulateContactVelocity(agent, previousX, previousY) {
+        agent.vx += agent.x - previousX;
+        agent.vy += agent.y - previousY;
     }
 
     function constrainAgentToWalls(agent) {
@@ -294,12 +374,34 @@
         }
     }
 
-    function assertTargetNpcSeparation() {
+    function assertContactInvariants() {
+        assertActorWallSeparation("target", state.target, TARGET_RADIUS);
         for (const agent of state.agents) {
+            assertActorWallSeparation(`agent ${agent.id}`, agent, agent.radius);
             const minDistance = TARGET_RADIUS + agent.radius - TARGET_NPC_PUSH_SLOP * 4;
             const distance = Math.hypot(agent.x - state.target.x, agent.y - state.target.y);
             if (distance < minDistance) {
                 throw new Error(`NPC movement lab target collision unresolved for agent ${agent.id}`);
+            }
+        }
+        for (let i = 0; i < state.agents.length; i++) {
+            const left = state.agents[i];
+            for (let j = i + 1; j < state.agents.length; j++) {
+                const right = state.agents[j];
+                const minDistance = left.radius + right.radius - TARGET_NPC_PUSH_SLOP * 4;
+                const distance = Math.hypot(right.x - left.x, right.y - left.y);
+                if (distance < minDistance) {
+                    throw new Error(`NPC movement lab NPC collision unresolved for agents ${left.id} and ${right.id}`);
+                }
+            }
+        }
+    }
+
+    function assertActorWallSeparation(label, actor, radius) {
+        for (const wall of state.walls) {
+            const signed = (actor.x - wall.ax) * wall.nx + (actor.y - wall.ay) * wall.ny;
+            if (signed < radius - TARGET_NPC_PUSH_SLOP * 4) {
+                throw new Error(`NPC movement lab ${label} wall collision unresolved`);
             }
         }
     }
@@ -365,7 +467,7 @@
                 targetRadius: TARGET_RADIUS,
                 ringRadius: COMBAT_RING_RADIUS,
                 separationStrength: Number(separationInput.value),
-                speedScale: Number(speedScaleInput.value),
+                speedScale: getSpeedScale(),
                 targetMoved
             }
         }, [agents.buffer, walls.buffer]);
@@ -632,6 +734,7 @@
     });
     window.addEventListener("resize", resizeCanvas);
 
+    setSpeedScaleValue(SPEED_SCALE_DEFAULT);
     updateControlLabels();
     createScenario();
     updateStats();
