@@ -1,6 +1,7 @@
 "use strict";
 
 importScripts("/assets/javascript/wallGeometry.js?v=npc-movement-lab-1");
+importScripts("/npc-movement-lab/orcaSolver.js?v=npc-movement-lab-1");
 
 const STRIDE = 17;
 const OUT_STRIDE = 14;
@@ -39,11 +40,19 @@ const SEEKING_ROUTE_YIELD_PER_PRESSURE = 0.36;
 const SEEKING_ROUTE_MIN_YIELD = 0.38;
 const MILLING_WALL_ESCAPE_CLEARANCE_SCALE = 1.35;
 const MILLING_WALL_ESCAPE_STRENGTH = 4.8;
+const MILLING_ORCA_TIME_HORIZON = 0.85;
+const MILLING_ORCA_NEIGHBOR_DIST_SCALE = 7.5;
+const MILLING_ORCA_MAX_NEIGHBORS = 16;
 const CROWD_LOCK_ENTER_RADIUS_SCALE = 3.25;
 const CROWD_LOCK_EXIT_RADIUS_SCALE = 4.1;
 const CROWD_LOCK_FORWARD_RANGE_SCALE = 4.5;
 const CROWD_LOCK_BACK_TOLERANCE_SCALE = 0.35;
 const CROWD_LOCK_LANE_PADDING_SCALE = 0.35;
+const MILLING_RING_FULL_ENTER_RADIUS_SCALE = 3.25;
+const MILLING_RING_FULL_EXIT_RADIUS_SCALE = 4.1;
+const MILLING_RING_OCCUPANCY_RADIUS_SCALE = 2.35;
+const MILLING_PROPAGATION_FORWARD_RANGE_SCALE = 4.75;
+const MILLING_PROPAGATION_LANE_PADDING_SCALE = 0.45;
 const ATTACKER_SELECTION_NEARBY_RADIUS_SCALE = 2.8;
 const ATTACKER_SELECTION_SPREAD_WEIGHT = 0.72;
 const ATTACKER_SELECTION_RING_ERROR_WEIGHT = 0.45;
@@ -51,6 +60,12 @@ const ATTACKER_RING_SLIDE_STRENGTH = 1.35;
 const ATTACKER_RING_SLIDE_ACTIVATION_SCALE = 2.8;
 const ATTACKER_RING_SLIDE_MAX = 2.2;
 const ATTACKER_RING_ENTRY_PRESSURE_OUTER_SCALE = 5.5;
+const VACATING_LANE_YIELD_FORWARD_RANGE_SCALE = 8.5;
+const VACATING_LANE_YIELD_LANE_PADDING_SCALE = 0.65;
+const VACATING_LANE_YIELD_ROUTE_SCALE = 0.42;
+const VACATING_LANE_YIELD_SIDE_STRENGTH = 3.4;
+const VACATING_LANE_YIELD_OUTWARD_STRENGTH = 2.6;
+const VACATING_SEPARATION_PUSH_MULTIPLIER = 100;
 const WAITING_RING_SLIDE_SPEED_SCALE = 0.65;
 const HEX_GRID_COL_STEP = 0.866;
 const HEX_GRID_WIDTH = 1 / HEX_GRID_COL_STEP;
@@ -189,8 +204,55 @@ function solveStep(message) {
         const recoverReleaseRadius = ringRadius + radius * RECOVER_ATTACK_RING_RELEASE_SCALE;
         const mustVacateRing = !isDesignatedAttacker && (targetDist < ringRadius || (phase === PHASE_VACATING && targetDist < vacateReleaseRadius));
         const mustRecover = phase === PHASE_RECOVERING && remainingCooldown > 0;
+        const seekingGoalX = followingWorkerPath ? pathGoalX : slotPoint.x;
+        const seekingGoalY = followingWorkerPath ? pathGoalY : slotPoint.y;
+        const ringFullMilling = !isDesignatedAttacker && isTargetRingFullForMilling(
+            agents,
+            count,
+            i,
+            x,
+            y,
+            radius,
+            targetX,
+            targetY,
+            targetDist,
+            ringRadius,
+            walls,
+            phase === PHASE_MILLING
+        );
+        const millingPressure = !isDesignatedAttacker && isSeekingIntoMillingAgent(
+            agents,
+            count,
+            i,
+            x,
+            y,
+            radius,
+            seekingGoalX,
+            seekingGoalY,
+            targetX,
+            targetY
+        );
 
-        if (followingWorkerPath) {
+        if (ringFullMilling || millingPressure) {
+            nextPhase = PHASE_MILLING;
+            state = STATE_MILLING;
+            milling += 1;
+            const millingIntent = computeTargetRingMillingIntent(
+                x,
+                y,
+                radius,
+                targetX,
+                targetY,
+                ringRadius,
+                homeAngle,
+                millingDirection
+            );
+            desiredX += millingIntent.x;
+            desiredY += millingIntent.y;
+            movementGoalX = millingIntent.goalX;
+            movementGoalY = millingIntent.goalY;
+            outerMillingCanReverseAtWall = millingIntent.canReverseAtWall;
+        } else if (followingWorkerPath) {
             nextPhase = PHASE_SEEKING;
             state = STATE_SEEKING;
             seeking += 1;
@@ -284,31 +346,23 @@ function solveStep(message) {
                 );
                 if (crowdLocked) {
                     nextPhase = PHASE_MILLING;
-                    const loopRadius = ringRadius + radius * 2.25;
-                    const clearOrbitRadius = ringRadius + radius * 0.9;
-                    if (targetDist < clearOrbitRadius) {
-                        const escape = computeTargetEscapeVector(x, y, targetX, targetY, homeAngle, clearOrbitRadius);
-                        desiredX += escape.x;
-                        desiredY += escape.y;
-                        movementGoalX = escape.goalX;
-                        movementGoalY = escape.goalY;
-                    } else {
-                        const millingVector = computeMillingLoopVector(
-                            x,
-                            y,
-                            targetX,
-                            targetY,
-                            loopRadius,
-                            millingDirection
-                        );
-                        desiredX += millingVector.x;
-                        desiredY += millingVector.y;
-                        movementGoalX = x + millingVector.x;
-                        movementGoalY = y + millingVector.y;
-                        outerMillingCanReverseAtWall = true;
-                    }
                     state = STATE_MILLING;
                     milling += 1;
+                    const millingIntent = computeTargetRingMillingIntent(
+                        x,
+                        y,
+                        radius,
+                        targetX,
+                        targetY,
+                        ringRadius,
+                        homeAngle,
+                        millingDirection
+                    );
+                    desiredX += millingIntent.x;
+                    desiredY += millingIntent.y;
+                    movementGoalX = millingIntent.goalX;
+                    movementGoalY = millingIntent.goalY;
+                    outerMillingCanReverseAtWall = millingIntent.canReverseAtWall;
                 } else {
                     nextPhase = PHASE_SEEKING;
                     state = STATE_SEEKING;
@@ -392,7 +446,7 @@ function solveStep(message) {
             }
         }
 
-        if (state !== STATE_ATTACKING) {
+        if (state !== STATE_ATTACKING && state !== STATE_MILLING) {
             const isSeekingLike = state === STATE_SEEKING || followingWorkerPath;
             const separation = computeSeparation(agents, count, i, x, y, radius, priority, {
                 overlapOnly: false,
@@ -418,12 +472,53 @@ function solveStep(message) {
             desiredX += separation.x * separationScale;
             desiredY += separation.y * separationScale;
         }
+        if (state !== STATE_ATTACKING && state !== STATE_RECOVERING && state !== STATE_VACATING) {
+            const vacatingYield = computeVacatingLaneYield(
+                agents,
+                count,
+                i,
+                x,
+                y,
+                radius,
+                targetX,
+                targetY,
+                desiredX,
+                desiredY
+            );
+            if (vacatingYield.pressure > 0) {
+                desiredX = desiredX * VACATING_LANE_YIELD_ROUTE_SCALE + vacatingYield.x;
+                desiredY = desiredY * VACATING_LANE_YIELD_ROUTE_SCALE + vacatingYield.y;
+                movementGoalX = x + desiredX;
+                movementGoalY = y + desiredY;
+            }
+        }
 
         let len = Math.hypot(desiredX, desiredY);
         let vx = 0;
         let vy = 0;
         let nextHeading = heading;
-        if (followingWorkerPath) {
+        if (state === STATE_MILLING) {
+            if (len > EPSILON) {
+                const orcaVelocity = computeMillingOrcaVelocity(
+                    agents,
+                    count,
+                    i,
+                    desiredX,
+                    desiredY,
+                    targetX,
+                    targetY,
+                    ringRadius,
+                    baseSpeed,
+                    speedScale,
+                    dt
+                );
+                vx = orcaVelocity.vx;
+                vy = orcaVelocity.vy;
+                const velocityLength = Math.hypot(vx, vy);
+                const facingHeading = velocityLength > EPSILON ? Math.atan2(vy, vx) : Math.atan2(desiredY, desiredX);
+                nextHeading = rotateTowardAngle(heading, facingHeading, Math.PI * 2 * dt);
+            }
+        } else if (followingWorkerPath) {
             if (len > EPSILON) {
                 nextHeading = rotateTowardAngle(heading, Math.atan2(desiredY, desiredX), Math.PI * 2 * dt);
                 const pathSpeed = getAttackSlotRunSpeed(baseSpeed, speedScale);
@@ -443,7 +538,10 @@ function solveStep(message) {
             vy = Math.sin(nextHeading) * attackSpeed;
         } else if (state === STATE_SEEKING || state === STATE_RECOVERING || state === STATE_VACATING) {
             const retreatHeading = Math.atan2(desiredY, desiredX);
-            nextHeading = Math.atan2(toTargetY, toTargetX);
+            const targetHeading = Math.atan2(toTargetY, toTargetX);
+            nextHeading = state === STATE_SEEKING
+                ? rotateTowardAngle(heading, targetHeading, Math.PI * 2 * dt)
+                : targetHeading;
             if (len > EPSILON) {
                 const retreatSpeed = state === STATE_SEEKING
                     ? getAttackSlotRunSpeed(baseSpeed, speedScale)
@@ -888,6 +986,114 @@ function chooseMillingSlot(targetX, targetY, ringRadius, homeAngle, radius) {
     };
 }
 
+function computeTargetRingMillingIntent(x, y, radius, targetX, targetY, ringRadius, homeAngle, millingDirection) {
+    const targetDist = Math.hypot(x - targetX, y - targetY);
+    const loopRadius = ringRadius + radius * 2.25;
+    const clearOrbitRadius = ringRadius + radius * 0.9;
+    if (targetDist < clearOrbitRadius) {
+        const escape = computeTargetEscapeVector(x, y, targetX, targetY, homeAngle, clearOrbitRadius);
+        return {
+            x: escape.x,
+            y: escape.y,
+            goalX: escape.goalX,
+            goalY: escape.goalY,
+            canReverseAtWall: false
+        };
+    }
+    const millingVector = computeMillingLoopVector(
+        x,
+        y,
+        targetX,
+        targetY,
+        loopRadius,
+        millingDirection
+    );
+    return {
+        x: millingVector.x,
+        y: millingVector.y,
+        goalX: x + millingVector.x,
+        goalY: y + millingVector.y,
+        canReverseAtWall: true
+    };
+}
+
+function isTargetRingFullForMilling(agents, count, selfIndex, x, y, radius, targetX, targetY, targetDist, ringRadius, walls, wasMilling) {
+    if (!(targetDist > EPSILON)) return false;
+    const enterRadius = ringRadius + radius * MILLING_RING_FULL_ENTER_RADIUS_SCALE;
+    const exitRadius = ringRadius + radius * MILLING_RING_FULL_EXIT_RADIUS_SCALE;
+    if (targetDist > (wasMilling ? exitRadius : enterRadius)) return false;
+
+    const usableSlots = countUsableRingSlots(agents, count, targetX, targetY, ringRadius, walls);
+    if (usableSlots <= 0) return true;
+
+    let occupiedSlots = 0;
+    const occupancyRadius = ringRadius + radius * MILLING_RING_OCCUPANCY_RADIUS_SCALE;
+    for (let i = 0; i < count; i++) {
+        if (i === selfIndex) continue;
+        const base = i * STRIDE;
+        const ox = agents[base + 1];
+        const oy = agents[base + 2];
+        const otherDist = Math.hypot(ox - targetX, oy - targetY);
+        if (otherDist <= occupancyRadius) occupiedSlots += 1;
+    }
+
+    if (occupiedSlots < usableSlots) return false;
+    return !isAgentCloserThanEnoughRingOccupants(agents, count, selfIndex, targetX, targetY, targetDist, usableSlots);
+}
+
+function isAgentCloserThanEnoughRingOccupants(agents, count, selfIndex, targetX, targetY, targetDist, usableSlots) {
+    let closer = 0;
+    for (let i = 0; i < count; i++) {
+        if (i === selfIndex) continue;
+        const base = i * STRIDE;
+        const ox = agents[base + 1];
+        const oy = agents[base + 2];
+        const otherDist = Math.hypot(ox - targetX, oy - targetY);
+        if (otherDist < targetDist) closer += 1;
+        if (closer >= usableSlots) return false;
+    }
+    return true;
+}
+
+function isSeekingIntoMillingAgent(agents, count, selfIndex, x, y, radius, goalX, goalY, targetX, targetY) {
+    const goalDx = goalX - x;
+    const goalDy = goalY - y;
+    const goalDist = Math.hypot(goalDx, goalDy);
+    if (!(goalDist > EPSILON)) return false;
+
+    const dirX = goalDx / goalDist;
+    const dirY = goalDy / goalDist;
+    const selfTargetDist = Math.hypot(x - targetX, y - targetY);
+    const forwardLimit = Math.min(goalDist + radius, radius * MILLING_PROPAGATION_FORWARD_RANGE_SCALE);
+    const backTolerance = radius * CROWD_LOCK_BACK_TOLERANCE_SCALE;
+
+    for (let i = 0; i < count; i++) {
+        if (i === selfIndex) continue;
+        const base = i * STRIDE;
+        const otherPhase = Math.max(0, Math.floor(agents[base + 7]));
+        if (otherPhase !== PHASE_MILLING) continue;
+
+        const ox = agents[base + 1];
+        const oy = agents[base + 2];
+        const otherRadius = agents[base + 3];
+        const dx = ox - x;
+        const dy = oy - y;
+        const projection = dx * dirX + dy * dirY;
+        if (projection < -backTolerance || projection > forwardLimit) continue;
+
+        const otherTargetDist = Math.hypot(ox - targetX, oy - targetY);
+        if (otherTargetDist > selfTargetDist + radius * 0.75) continue;
+
+        const lateralX = dx - dirX * projection;
+        const lateralY = dy - dirY * projection;
+        const lateralDistance = Math.hypot(lateralX, lateralY);
+        const laneRadius = radius + otherRadius + Math.min(radius, otherRadius) * MILLING_PROPAGATION_LANE_PADDING_SCALE;
+        if (lateralDistance <= laneRadius) return true;
+    }
+
+    return false;
+}
+
 function isSeekingBlockedByCloseCrowd(agents, count, selfIndex, x, y, radius, targetX, targetY, targetDist, ringRadius, wasMilling) {
     if (!(targetDist > EPSILON)) return false;
     const eligibilityRadius = ringRadius + radius * (wasMilling ? CROWD_LOCK_EXIT_RADIUS_SCALE : CROWD_LOCK_ENTER_RADIUS_SCALE);
@@ -1181,6 +1387,154 @@ function computeRingSlideVector(agents, count, selfIndex, x, y, radius, targetX,
     };
 }
 
+function computeVacatingLaneYield(agents, count, selfIndex, x, y, radius, targetX, targetY, desiredX, desiredY) {
+    const desiredLength = Math.hypot(desiredX, desiredY);
+    if (!(desiredLength > EPSILON)) return { x: 0, y: 0, pressure: 0 };
+
+    const toTargetX = targetX - x;
+    const toTargetY = targetY - y;
+    const targetDist = Math.hypot(toTargetX, toTargetY);
+    if (!(targetDist > EPSILON)) return { x: 0, y: 0, pressure: 0 };
+
+    const inwardAlignment = (desiredX * toTargetX + desiredY * toTargetY) / (desiredLength * targetDist);
+    if (inwardAlignment <= 0.15) return { x: 0, y: 0, pressure: 0 };
+
+    const dirX = desiredX / desiredLength;
+    const dirY = desiredY / desiredLength;
+    const radialX = (x - targetX) / targetDist;
+    const radialY = (y - targetY) / targetDist;
+    const tangentX = -radialY;
+    const tangentY = radialX;
+    const selfAngle = Math.atan2(y - targetY, x - targetX);
+    const forwardLimit = radius * VACATING_LANE_YIELD_FORWARD_RANGE_SCALE;
+    const backTolerance = radius * CROWD_LOCK_BACK_TOLERANCE_SCALE;
+    let slide = 0;
+    let outward = 0;
+    let pressure = 0;
+
+    for (let i = 0; i < count; i++) {
+        if (i === selfIndex) continue;
+        const base = i * STRIDE;
+        const otherPhase = Math.max(0, Math.floor(agents[base + 7]));
+        if (otherPhase !== PHASE_VACATING) continue;
+
+        const ox = agents[base + 1];
+        const oy = agents[base + 2];
+        const otherRadius = agents[base + 3];
+        const otherTargetDist = Math.hypot(ox - targetX, oy - targetY);
+        if (otherTargetDist > targetDist + radius * 0.5) continue;
+
+        const dx = ox - x;
+        const dy = oy - y;
+        const projection = dx * dirX + dy * dirY;
+        if (projection < -backTolerance || projection > forwardLimit) continue;
+
+        const lateralX = dx - dirX * projection;
+        const lateralY = dy - dirY * projection;
+        const lateralDistance = Math.hypot(lateralX, lateralY);
+        const laneRadius = radius + otherRadius + Math.min(radius, otherRadius) * VACATING_LANE_YIELD_LANE_PADDING_SCALE;
+        if (lateralDistance > laneRadius) continue;
+
+        const otherAngle = otherTargetDist > EPSILON ? Math.atan2(oy - targetY, ox - targetX) : selfAngle;
+        const angleDelta = shortestAngleDelta(selfAngle, otherAngle);
+        const lateralWeight = 1 - Math.min(1, lateralDistance / Math.max(laneRadius, EPSILON));
+        const forwardWeight = 1 - Math.min(1, Math.max(0, projection) / Math.max(forwardLimit, EPSILON));
+        const push = Math.max(0.2, lateralWeight * forwardWeight);
+        const sideSign = Math.abs(angleDelta) > 0.05
+            ? (angleDelta >= 0 ? -1 : 1)
+            : (selfIndex % 2 === 0 ? 1 : -1);
+        slide += sideSign * push;
+        outward += push * Math.max(0.35, inwardAlignment);
+        pressure += push;
+    }
+
+    if (pressure <= EPSILON) return { x: 0, y: 0, pressure: 0 };
+    const clampedSlide = Math.max(-1, Math.min(1, slide));
+    const clampedOutward = Math.min(1.35, outward);
+    return {
+        x: tangentX * clampedSlide * VACATING_LANE_YIELD_SIDE_STRENGTH + radialX * clampedOutward * VACATING_LANE_YIELD_OUTWARD_STRENGTH,
+        y: tangentY * clampedSlide * VACATING_LANE_YIELD_SIDE_STRENGTH + radialY * clampedOutward * VACATING_LANE_YIELD_OUTWARD_STRENGTH,
+        pressure
+    };
+}
+
+function computeMillingOrcaVelocity(agents, count, selfIndex, desiredX, desiredY, targetX, targetY, ringRadius, baseSpeed, speedScale, dt) {
+    const orca = self.NpcMovementOrca;
+    if (!orca || typeof orca.computeAgentVelocity !== "function") {
+        throw new Error("NPC movement lab milling ORCA requires NpcMovementOrca.computeAgentVelocity");
+    }
+    const preferredLength = Math.hypot(desiredX, desiredY);
+    if (!(preferredLength > EPSILON)) return { vx: 0, vy: 0 };
+
+    const selfBase = selfIndex * STRIDE;
+    const maxSpeed = Math.max(EPSILON, baseSpeed * speedScale);
+    const preferredVx = desiredX / preferredLength * maxSpeed;
+    const preferredVy = desiredY / preferredLength * maxSpeed;
+    const orcaAgents = new Array(count);
+    const selfNeighborDist = Math.max(agents[selfBase + 3] * MILLING_ORCA_NEIGHBOR_DIST_SCALE, 2.5);
+
+    for (let i = 0; i < count; i++) {
+        const base = i * STRIDE;
+        const isSelf = i === selfIndex;
+        const agentMaxSpeed = Math.max(EPSILON, agents[base + 4] * speedScale);
+        const preferred = isSelf
+            ? { vx: preferredVx, vy: preferredVy }
+            : getPackedAgentMillingPreferredVelocity(agents, i, targetX, targetY, ringRadius, speedScale);
+        const vx = isSelf || preferred.active ? preferred.vx : 0;
+        const vy = isSelf || preferred.active ? preferred.vy : 0;
+        orcaAgents[i] = {
+            id: agents[base],
+            x: agents[base + 1],
+            y: agents[base + 2],
+            vx,
+            vy,
+            prefVx: vx,
+            prefVy: vy,
+            radius: agents[base + 3],
+            maxSpeed: agentMaxSpeed,
+            neighborDist: selfNeighborDist,
+            maxNeighbors: MILLING_ORCA_MAX_NEIGHBORS
+        };
+    }
+
+    return orca.computeAgentVelocity(orcaAgents[selfIndex], orcaAgents, {
+        timeStep: dt,
+        timeHorizon: MILLING_ORCA_TIME_HORIZON,
+        neighborDist: selfNeighborDist,
+        maxNeighbors: MILLING_ORCA_MAX_NEIGHBORS
+    });
+}
+
+function getPackedAgentMillingPreferredVelocity(agents, index, targetX, targetY, ringRadius, speedScale) {
+    const base = index * STRIDE;
+    const phase = Math.max(0, Math.floor(agents[base + 7]));
+    if (phase !== PHASE_MILLING) return { vx: 0, vy: 0, active: false };
+
+    const x = agents[base + 1];
+    const y = agents[base + 2];
+    const radius = agents[base + 3];
+    const speed = Math.max(EPSILON, agents[base + 4] * speedScale);
+    const homeAngle = agents[base + 9];
+    const millingDirection = agents[base + 12] >= 0 ? 1 : -1;
+    const intent = computeTargetRingMillingIntent(
+        x,
+        y,
+        radius,
+        targetX,
+        targetY,
+        ringRadius,
+        homeAngle,
+        millingDirection
+    );
+    const length = Math.hypot(intent.x, intent.y);
+    if (!(length > EPSILON)) return { vx: 0, vy: 0, active: false };
+    return {
+        vx: intent.x / length * speed,
+        vy: intent.y / length * speed,
+        active: true
+    };
+}
+
 function buildUsableRingSlots(targetX, targetY, ringRadius, maxRadius, walls) {
     const circumference = Math.max(ringRadius * Math.PI * 2, EPSILON);
     const slotCount = Math.max(1, Math.floor(circumference / (maxRadius * 2)));
@@ -1223,8 +1577,10 @@ function computeSeparation(agents, count, selfIndex, x, y, radius, priority, opt
         const activationDistance = desired * activationScale;
         if (dist >= activationDistance) continue;
         const otherPriority = agents[base + 5];
+        const otherPhase = Math.max(0, Math.floor(agents[base + 7]));
         const priorityWeight = otherPriority > priority ? 1.25 : 0.75;
-        const push = (activationDistance - dist) / activationDistance * priorityWeight;
+        const phasePushMultiplier = otherPhase === PHASE_VACATING ? VACATING_SEPARATION_PUSH_MULTIPLIER : 1;
+        const push = (activationDistance - dist) / activationDistance * priorityWeight * phasePushMultiplier;
         pressure += push;
         sx += dx / dist * push;
         sy += dy / dist * push;

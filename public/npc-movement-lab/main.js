@@ -12,18 +12,22 @@
     const STATE_RECOVERING = 9;
     const STATE_VACATING = 10;
     const PHASE_MILLING = 0;
+    const PHASE_VACATING = 5;
     const AGENT_RADIUS = 0.42;
     const TARGET_RADIUS = AGENT_RADIUS;
     const COMBAT_RING_RADIUS = 1.6;
     const TARGET_KEYBOARD_MOVE_SPEED = 5.67;
     const TARGET_KEYBOARD_FAST_MOVE_SPEED = 14.49;
+    const TARGET_KEYBOARD_BACKWARD_SPEED_MULTIPLIER = 0.65;
+    const TARGET_KEYBOARD_STEER_RADIANS_PER_SECOND = Math.PI * 1.75;
     const SPEED_SCALE_MIN = 0.05;
     const SPEED_SCALE_MAX = 0.8;
     const SPEED_SCALE_DEFAULT = 0.2;
     const TARGET_NPC_PUSH_ITERATIONS = 96;
     const TARGET_NPC_PUSH_SLOP = 0.0005;
-    const TARGET_NPC_PUSH_PLAYER_SHARE = 0.38;
+    const TARGET_NPC_PUSH_PLAYER_SHARE = 0.69;
     const NPC_NPC_PUSH_SHARE = 0.5;
+    const VACATING_CONTACT_PUSH_FORCE = 10;
     const TARGET_NPC_PUSH_MIN_AXIS = 0.0001;
     const HEX_GRID_ROW_STEP = 1;
     const HEX_GRID_COL_STEP = 0.866;
@@ -46,6 +50,14 @@
         ArrowRight: [1, 0],
         ArrowUp: [0, -1],
         ArrowDown: [0, 1]
+    };
+    const TARGET_STEER_KEYS = {
+        KeyA: -1,
+        KeyD: 1
+    };
+    const TARGET_FORWARD_KEYS = {
+        KeyW: 1,
+        KeyS: -1
     };
 
     const canvas = document.getElementById("solverCanvas");
@@ -84,7 +96,7 @@
         lastTime: performance.now(),
         agents: [],
         walls: [],
-        target: { x: 0, y: 0 },
+        target: { x: 0, y: 0, heading: -Math.PI / 2 },
         lastSentTarget: { x: 0, y: 0 },
         targetFlashTime: 0,
         targetPushes: 0,
@@ -136,7 +148,7 @@
     window.__npcMovementLabDebug = state;
     window.debug = state.debug;
 
-    const worker = new Worker("/npc-movement-lab/solverWorker.js?v=npc-movement-lab-66");
+    const worker = new Worker("/npc-movement-lab/solverWorker.js?v=npc-movement-lab-77");
     worker.addEventListener("message", handleWorkerMessage);
     worker.addEventListener("error", (event) => {
         labels.workerStatus.textContent = event.message || "failed";
@@ -194,15 +206,15 @@
         const count = Number(agentCountInput.value);
         const scenario = scenarioSelect.value;
         if (scenario === "openArena") {
-            state.target = { x: 0, y: 0 };
+            state.target = { x: 0, y: 0, heading: -Math.PI / 2 };
             addRoomWalls(-18, -12, 18, 12);
             spawnRing(count, 10, 3.5);
         } else if (scenario === "crowdedArena") {
-            state.target = { x: 0, y: 0 };
+            state.target = { x: 0, y: 0, heading: -Math.PI / 2 };
             addRoomWalls(-10, -7.5, 10, 7.5);
             spawnCluster(count, -4.2, 0, 4.4, 10);
         } else {
-            state.target = { x: 0, y: 0 };
+            state.target = { x: 0, y: 0, heading: -Math.PI / 2 };
             addRoomWalls(-8, -6, 8, 6);
             addRoomWalls(-18, -12, 18, 12);
             spawnCluster(count, 0, 0.8, 4.8, 5);
@@ -303,11 +315,28 @@
         if (!Number.isFinite(dt) || dt <= 0) return;
         let dirX = 0;
         let dirY = 0;
+        let steer = 0;
+        let forward = 0;
         for (const key of Object.keys(TARGET_MOVEMENT_KEYS)) {
             if (!state.pressedMovementKeys[key]) continue;
             const delta = TARGET_MOVEMENT_KEYS[key];
             dirX += delta[0];
             dirY += delta[1];
+        }
+        for (const key of Object.keys(TARGET_STEER_KEYS)) {
+            if (state.pressedMovementKeys[key]) steer += TARGET_STEER_KEYS[key];
+        }
+        if (steer !== 0) {
+            state.target.heading = normalizeAngle(state.target.heading + Math.max(-1, Math.min(1, steer)) * TARGET_KEYBOARD_STEER_RADIANS_PER_SECOND * dt);
+        }
+        for (const key of Object.keys(TARGET_FORWARD_KEYS)) {
+            if (state.pressedMovementKeys[key]) forward += TARGET_FORWARD_KEYS[key];
+        }
+        if (forward !== 0) {
+            const signedForward = Math.max(-1, Math.min(1, forward));
+            const multiplier = signedForward < 0 ? TARGET_KEYBOARD_BACKWARD_SPEED_MULTIPLIER : 1;
+            dirX += Math.cos(state.target.heading) * signedForward * multiplier;
+            dirY += Math.sin(state.target.heading) * signedForward * multiplier;
         }
         if (dirX === 0 && dirY === 0) return;
         const magnitude = Math.hypot(dirX, dirY);
@@ -423,10 +452,11 @@
         const previousRightX = right.x;
         const previousRightY = right.y;
 
-        const leftPushX = -nx * correction * NPC_NPC_PUSH_SHARE;
-        const leftPushY = -ny * correction * NPC_NPC_PUSH_SHARE;
-        const rightPushX = nx * correction * (1 - NPC_NPC_PUSH_SHARE);
-        const rightPushY = ny * correction * (1 - NPC_NPC_PUSH_SHARE);
+        const pushShare = getAgentAgentPushShare(left, right);
+        const leftPushX = -nx * correction * pushShare.left;
+        const leftPushY = -ny * correction * pushShare.left;
+        const rightPushX = nx * correction * pushShare.right;
+        const rightPushY = ny * correction * pushShare.right;
 
         const leftApplied = moveAgentWithWallConstraint(left, leftPushX, leftPushY);
         const rightApplied = moveAgentWithWallConstraint(right, rightPushX - leftApplied.blockedX, rightPushY - leftApplied.blockedY);
@@ -440,6 +470,25 @@
             return { changed: true };
         }
         return { changed: false };
+    }
+
+    function getAgentAgentPushShare(left, right) {
+        const leftForce = getAgentContactPushForce(left);
+        const rightForce = getAgentContactPushForce(right);
+        const total = leftForce + rightForce;
+        if (!(total > 0)) {
+            return { left: NPC_NPC_PUSH_SHARE, right: 1 - NPC_NPC_PUSH_SHARE };
+        }
+        return {
+            left: rightForce / total,
+            right: leftForce / total
+        };
+    }
+
+    function getAgentContactPushForce(agent) {
+        return agent && (agent.solverState === STATE_VACATING || agent.phase === PHASE_VACATING)
+            ? VACATING_CONTACT_PUSH_FORCE
+            : 1;
     }
 
     function moveAgentWithWallConstraint(agent, dx, dy) {
@@ -1451,19 +1500,55 @@
     function drawTarget() {
         const point = worldToScreen(state.target.x, state.target.y);
         const flash = Math.max(0, Math.min(1, state.targetFlashTime / 0.18));
+        const radius = TARGET_RADIUS * state.view.scale;
         ctx.save();
         ctx.strokeStyle = flash > 0 ? "#ff4d4d" : "#58d27b";
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(point.x, point.y, TARGET_RADIUS * state.view.scale, 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
         ctx.stroke();
         ctx.fillStyle = flash > 0
             ? `rgba(255,77,77,${0.25 + flash * 0.45})`
             : "rgba(88,210,123,0.28)";
         ctx.beginPath();
-        ctx.arc(point.x, point.y, TARGET_RADIUS * state.view.scale, 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
         ctx.fill();
+        drawTargetHeadingArrow(point.x, point.y, radius, state.target.heading, flash);
         ctx.restore();
+    }
+
+    function drawTargetHeadingArrow(x, y, radius, heading, flash) {
+        if (!Number.isFinite(heading)) throw new Error("NPC movement lab target heading arrow requires a finite heading");
+        const arrowRadius = radius * 3;
+        const cos = Math.cos(heading);
+        const sin = Math.sin(heading);
+        const sideX = -sin;
+        const sideY = cos;
+        const lineWidth = Math.max(1, arrowRadius * 0.1);
+        const tipDistance = arrowRadius * 0.64;
+        const baseDistance = tipDistance - (tipDistance - lineWidth) * 0.5;
+        const halfWidth = Math.max(1.5, arrowRadius * 0.17);
+        const tipX = x + cos * tipDistance;
+        const tipY = y + sin * tipDistance;
+        const baseX = x + cos * baseDistance;
+        const baseY = y + sin * baseDistance;
+        const connectorDistance = baseDistance - lineWidth;
+        const connectorX = x + cos * connectorDistance;
+        const connectorY = y + sin * connectorDistance;
+        const connectorHalfWidth = halfWidth * 4 / 3 * 1.37;
+
+        ctx.strokeStyle = "#68b7ff";
+        ctx.lineWidth = lineWidth;
+        ctx.beginPath();
+        ctx.moveTo(connectorX + sideX * connectorHalfWidth, connectorY + sideY * connectorHalfWidth);
+        ctx.lineTo(connectorX - sideX * connectorHalfWidth, connectorY - sideY * connectorHalfWidth);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(baseX + sideX * halfWidth, baseY + sideY * halfWidth);
+        ctx.lineTo(baseX - sideX * halfWidth, baseY - sideY * halfWidth);
+        ctx.closePath();
+        ctx.stroke();
     }
 
     function drawCombatRing() {
@@ -1532,12 +1617,13 @@
 
     function getAgentStateColor(agent) {
         if (agent.wallClamps > 0 || agent.solverState === STATE_BLOCKED) return "#ff6b6b";
-        if (agent.pathMode === PATH_MODE_WORKER) return "#b48cff";
+        if (agent.solverState === STATE_MILLING) return "#6fa8d8";
         if (agent.solverState === STATE_ATTACKING) return "#58d27b";
         if (agent.solverState === STATE_SEEKING) return "#b48cff";
         if (agent.solverState === STATE_RECOVERING) return "#ff9f5a";
         if (agent.solverState === STATE_VACATING) return "#ff6fb1";
         if (agent.solverState === STATE_HOLDING) return "#ffd166";
+        if (agent.pathMode === PATH_MODE_WORKER) return "#b48cff";
         return "#6fa8d8";
     }
 
@@ -1938,6 +2024,17 @@
     canvas.addEventListener("pointercancel", (event) => {
         if (state.wallTool.pointerId === event.pointerId) cancelWallBuildDrag();
     });
+    function getTargetKeyboardControlKey(event) {
+        if (!event) return null;
+        if (TARGET_MOVEMENT_KEYS[event.key]) return event.key;
+        if (TARGET_STEER_KEYS[event.code] || TARGET_FORWARD_KEYS[event.code]) return event.code;
+        const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
+        if (key === "a") return "KeyA";
+        if (key === "d") return "KeyD";
+        if (key === "w") return "KeyW";
+        if (key === "s") return "KeyS";
+        return null;
+    }
     window.addEventListener("keydown", (event) => {
         if (event.key === "b" || event.key === "B") {
             state.wallTool.active = true;
@@ -1947,10 +2044,11 @@
             state.fastMovementHeld = true;
             return;
         }
-        if (!TARGET_MOVEMENT_KEYS[event.key]) return;
+        const movementKey = getTargetKeyboardControlKey(event);
+        if (!movementKey) return;
         event.preventDefault();
         state.fastMovementHeld = event.shiftKey;
-        state.pressedMovementKeys[event.key] = true;
+        state.pressedMovementKeys[movementKey] = true;
     });
     window.addEventListener("keyup", (event) => {
         if (event.key === "b" || event.key === "B") {
@@ -1962,9 +2060,10 @@
             state.fastMovementHeld = false;
             return;
         }
-        if (!TARGET_MOVEMENT_KEYS[event.key]) return;
+        const movementKey = getTargetKeyboardControlKey(event);
+        if (!movementKey) return;
         event.preventDefault();
-        delete state.pressedMovementKeys[event.key];
+        delete state.pressedMovementKeys[movementKey];
     });
     window.addEventListener("blur", () => {
         state.pressedMovementKeys = Object.create(null);
