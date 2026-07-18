@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>NPC Movement Lab</title>
-    <link rel="stylesheet" href="/npc-movement-lab/styles.css?v=npc-movement-lab-26">
+    <link rel="stylesheet" href="/npc-movement-lab/styles.css?v=npc-movement-lab-27">
 </head>
 <body>
     <main class="app-shell">
@@ -49,9 +49,10 @@
                     <dt>Solve</dt><dd id="solveMs">0.00 ms</dd>
                     <dt>Checks</dt><dd id="pairChecks">0</dd>
                     <dt>Milling</dt><dd id="movingCount">0</dd>
-                    <dt>Waiting</dt><dd id="waitingCount">0</dd>
+                    <dt>Seeking</dt><dd id="seekingCount">0</dd>
+                    <dt>Holding</dt><dd id="waitingCount">0</dd>
                     <dt>Attacking</dt><dd id="attackingCount">0</dd>
-                    <dt>Retreating</dt><dd id="retreatingCount">0</dd>
+                    <dt>Recover/Vacate</dt><dd id="retreatingCount">0</dd>
                     <dt>Blocked</dt><dd id="blockedCount">0</dd>
                     <dt>Wall Leaks</dt><dd id="wallLeaks">0</dd>
                 </dl>
@@ -61,19 +62,22 @@
                 <h2>Diagnostics</h2>
                 <div class="legend">
                     <span><i class="dot moving"></i>milling</span>
-                    <span><i class="dot waiting"></i>waiting</span>
+                    <span><i class="dot seeking"></i>seeking</span>
+                    <span><i class="dot waiting"></i>holding</span>
                     <span><i class="dot striking"></i>attacking</span>
-                    <span><i class="dot retreating"></i>retreating</span>
+                    <span><i class="dot retreating"></i>recovering</span>
+                    <span><i class="dot vacating"></i>vacating</span>
                     <span><i class="dot blocked"></i>wall contact</span>
                 </div>
             </section>
 
             <section class="panel-section">
                 <h2>Target</h2>
-                <p class="hint-line">Arrow keys move the target. Hold Shift for larger steps.</p>
+                <p class="hint-line">Arrow keys move the target. Hold Shift for larger steps. Hold B and drag to build walls.</p>
             </section>
         </aside>
     </main>
-    <script src="/npc-movement-lab/main.js?v=npc-movement-lab-48"></script>
+    <script src="/assets/javascript/wallGeometry.js?v=npc-movement-lab-1"></script>
+    <script src="/npc-movement-lab/main.js?v=npc-movement-lab-63"></script>
 </body>
 </html>

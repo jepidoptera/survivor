@@ -1,16 +1,23 @@
 "use strict";
 
-const STRIDE = 14;
+importScripts("/assets/javascript/wallGeometry.js?v=npc-movement-lab-1");
+
+const STRIDE = 17;
 const OUT_STRIDE = 14;
+const WALL_STRIDE = 7;
 const STATE_MILLING = 1;
-const STATE_WAITING = 2;
 const STATE_ATTACKING = 3;
-const STATE_RETREATING = 5;
 const STATE_BLOCKED = 6;
+const STATE_SEEKING = 7;
+const STATE_HOLDING = 8;
+const STATE_RECOVERING = 9;
+const STATE_VACATING = 10;
 const PHASE_MILLING = 0;
 const PHASE_ATTACKING = 1;
-const PHASE_RETREATING = 2;
-const PHASE_WAITING = 3;
+const PHASE_RECOVERING = 2;
+const PHASE_HOLDING = 3;
+const PHASE_SEEKING = 4;
+const PHASE_VACATING = 5;
 const EPSILON = 0.000001;
 const MILLING_WALL_TURN_LOCK_SECONDS = 0.75;
 const RETREAT_MIN_OUTWARD_SPEED_SCALE = 1.15;
@@ -20,12 +27,23 @@ const ATTACK_SLOT_RUN_SPEED_MULTIPLIER = 1.45;
 const ATTACK_SLOT_ARRIVAL_RADIUS_SCALE = 0.22;
 const ATTACK_READY_RANGE_RADIUS_SCALE = 1.25;
 const VACATE_ATTACK_RING_CLEARANCE_SCALE = 0.65;
+const VACATE_ATTACK_RING_RELEASE_SCALE = 1.75;
+const RECOVER_ATTACK_RING_RELEASE_SCALE = 1.35;
 const MILLING_SEPARATION_ACTIVATION_SCALE = 1.85;
 const MILLING_SEPARATION_STRENGTH_SCALE = 1.55;
 const MILLING_ROUTE_YIELD_PER_PRESSURE = 0.48;
 const MILLING_ROUTE_MIN_YIELD = 0.24;
+const SEEKING_SEPARATION_ACTIVATION_SCALE = 1.7;
+const SEEKING_PATH_SEPARATION_STRENGTH_FLOOR = 0.85;
+const SEEKING_ROUTE_YIELD_PER_PRESSURE = 0.36;
+const SEEKING_ROUTE_MIN_YIELD = 0.38;
 const MILLING_WALL_ESCAPE_CLEARANCE_SCALE = 1.35;
 const MILLING_WALL_ESCAPE_STRENGTH = 4.8;
+const CROWD_LOCK_ENTER_RADIUS_SCALE = 3.25;
+const CROWD_LOCK_EXIT_RADIUS_SCALE = 4.1;
+const CROWD_LOCK_FORWARD_RANGE_SCALE = 4.5;
+const CROWD_LOCK_BACK_TOLERANCE_SCALE = 0.35;
+const CROWD_LOCK_LANE_PADDING_SCALE = 0.35;
 const ATTACKER_SELECTION_NEARBY_RADIUS_SCALE = 2.8;
 const ATTACKER_SELECTION_SPREAD_WEIGHT = 0.72;
 const ATTACKER_SELECTION_RING_ERROR_WEIGHT = 0.45;
@@ -34,6 +52,18 @@ const ATTACKER_RING_SLIDE_ACTIVATION_SCALE = 2.8;
 const ATTACKER_RING_SLIDE_MAX = 2.2;
 const ATTACKER_RING_ENTRY_PRESSURE_OUTER_SCALE = 5.5;
 const WAITING_RING_SLIDE_SPEED_SCALE = 0.65;
+const HEX_GRID_COL_STEP = 0.866;
+const HEX_GRID_WIDTH = 1 / HEX_GRID_COL_STEP;
+const HEX_GRID_HEIGHT = 1;
+const PATH_NODE_LAYER_PADDING = 4;
+const PATH_NODE_WALL_THICKNESS = 0.1;
+const PATH_NODE_WALL_FACE_EXTEND = 0.501;
+const WALL_KIND_BOUNDARY = 0;
+const WALL_KIND_SEGMENT = 1;
+const PATH_MODE_DIRECT = 0;
+const PATH_MODE_WORKER = 1;
+
+let cachedPathfindingNodeLayer = null;
 
 self.postMessage({ type: "ready" });
 
@@ -68,12 +98,13 @@ function solveStep(message) {
     const agents = message.agents;
     const walls = message.walls;
     validatePackedLength(agents, STRIDE, "agents");
-    validatePackedLength(walls, 6, "walls");
+    validatePackedLength(walls, WALL_STRIDE, "walls");
 
     const count = agents.length / STRIDE;
     const next = new Float32Array(count * OUT_STRIDE);
     const dt = Math.min(0.05, Math.max(0.001, finiteNumber(message.dt, "dt")));
     const params = message.params || {};
+    const pathfindingNodeLayer = getPathfindingNodeLayer(message.worldVersion, walls);
     const targetX = finiteNumber(params.targetX, "targetX");
     const targetY = finiteNumber(params.targetY, "targetY");
     const targetRadius = Math.max(0.1, finiteNumber(params.targetRadius, "targetRadius"));
@@ -88,6 +119,7 @@ function solveStep(message) {
     let wallClamps = 0;
     let wallLeaks = 0;
     let milling = 0;
+    let seeking = 0;
     let waiting = 0;
     let attacking = 0;
     let retreating = 0;
@@ -113,12 +145,19 @@ function solveStep(message) {
         const heading = Number.isFinite(agents[base + 11]) ? agents[base + 11] : homeAngle;
         const millingDirection = agents[base + 12] >= 0 ? 1 : -1;
         const millingWallTurnLock = Math.max(0, Number.isFinite(agents[base + 13]) ? agents[base + 13] : 0);
+        const pathMode = Math.floor(agents[base + 14]) === PATH_MODE_WORKER ? PATH_MODE_WORKER : PATH_MODE_DIRECT;
+        const pathGoalX = Number.isFinite(agents[base + 15]) ? agents[base + 15] : NaN;
+        const pathGoalY = Number.isFinite(agents[base + 16]) ? agents[base + 16] : NaN;
+        if (pathMode === PATH_MODE_WORKER && (!Number.isFinite(pathGoalX) || !Number.isFinite(pathGoalY))) {
+            throw new Error(`pathfinding mode requires finite path goal for agent ${id}`);
+        }
+        const followingWorkerPath = pathMode === PATH_MODE_WORKER;
         let nextMillingDirection = millingDirection;
         let nextMillingWallTurnLock = Math.max(0, millingWallTurnLock - dt);
 
         let desiredX = 0;
         let desiredY = 0;
-        let state = STATE_MILLING;
+        let state = STATE_SEEKING;
         let nextPhase = phase;
         let nextPhaseTime = phaseTime + dt;
         let outerMillingCanReverseAtWall = false;
@@ -146,18 +185,48 @@ function solveStep(message) {
         const attackTimeoutSeconds = getAttackTimeoutSeconds(ringRadius, radius, touchDistance, attackSpeed);
         const canHoldWaitingSlot = slotDist <= Math.max(radius * ATTACK_SLOT_ARRIVAL_RADIUS_SCALE, speed * dt * 0.25);
         const canStartAttackFromHere = targetDist <= ringRadius + radius * ATTACK_READY_RANGE_RADIUS_SCALE;
+        const vacateReleaseRadius = ringRadius + radius * VACATE_ATTACK_RING_RELEASE_SCALE;
+        const recoverReleaseRadius = ringRadius + radius * RECOVER_ATTACK_RING_RELEASE_SCALE;
+        const mustVacateRing = !isDesignatedAttacker && (targetDist < ringRadius || (phase === PHASE_VACATING && targetDist < vacateReleaseRadius));
+        const mustRecover = phase === PHASE_RECOVERING && remainingCooldown > 0;
 
-        if (phase === PHASE_ATTACKING) {
+        if (followingWorkerPath) {
+            nextPhase = PHASE_SEEKING;
+            state = STATE_SEEKING;
+            seeking += 1;
+            desiredX += pathGoalX - x;
+            desiredY += pathGoalY - y;
+            movementGoalX = pathGoalX;
+            movementGoalY = pathGoalY;
+        } else if (phase === PHASE_ATTACKING) {
             state = STATE_ATTACKING;
             attacking += 1;
             desiredX += toTargetX;
             desiredY += toTargetY;
             if (touchingTarget || phaseTime > attackTimeoutSeconds) {
-                nextPhase = PHASE_RETREATING;
+                nextPhase = PHASE_RECOVERING;
                 nextPhaseTime = 0;
                 const resetCooldown = getAttackRecoveryCooldown(id);
                 nextCooldown = isDesignatedAttacker ? -(resetCooldown + 1) : resetCooldown;
             }
+        } else if (mustRecover) {
+            nextPhase = PHASE_RECOVERING;
+            state = STATE_RECOVERING;
+            retreating += 1;
+            const escape = computeTargetEscapeVector(x, y, targetX, targetY, homeAngle, recoverReleaseRadius);
+            desiredX += escape.x;
+            desiredY += escape.y;
+            movementGoalX = escape.goalX;
+            movementGoalY = escape.goalY;
+        } else if (mustVacateRing) {
+            nextPhase = PHASE_VACATING;
+            state = STATE_VACATING;
+            retreating += 1;
+            const escape = computeTargetEscapeVector(x, y, targetX, targetY, homeAngle, vacateReleaseRadius);
+            desiredX += escape.x;
+            desiredY += escape.y;
+            movementGoalX = escape.goalX;
+            movementGoalY = escape.goalY;
         } else if (isDesignatedAttacker && remainingCooldown <= 0 && canStartAttackFromHere) {
             nextPhase = PHASE_ATTACKING;
             nextPhaseTime = 0;
@@ -165,17 +234,6 @@ function solveStep(message) {
             attacking += 1;
             desiredX += toTargetX;
             desiredY += toTargetY;
-        } else if (phase === PHASE_RETREATING && ownsRingSlot) {
-            state = STATE_RETREATING;
-            retreating += 1;
-            desiredX += slotDx;
-            desiredY += slotDy;
-            if (canHoldWaitingSlot) {
-                nextPhase = PHASE_WAITING;
-                nextPhaseTime = 0;
-                const resetCooldown = getAttackRecoveryCooldown(id);
-                nextCooldown = isDesignatedAttacker ? -(resetCooldown + 1) : resetCooldown;
-            }
         } else {
             if (isDesignatedAttacker && remainingCooldown <= 0 && canHoldWaitingSlot) {
                 nextPhase = PHASE_ATTACKING;
@@ -185,72 +243,83 @@ function solveStep(message) {
                 desiredX += toTargetX;
                 desiredY += toTargetY;
             } else if (isDesignatedAttacker && ownsRingSlot && !canHoldWaitingSlot) {
-                nextPhase = PHASE_RETREATING;
-                state = STATE_RETREATING;
-                retreating += 1;
+                nextPhase = PHASE_SEEKING;
+                state = STATE_SEEKING;
+                seeking += 1;
                 desiredX += slotDx;
                 desiredY += slotDy;
-            } else if (phase === PHASE_WAITING && isDesignatedAttacker) {
-                nextPhase = PHASE_WAITING;
-                state = STATE_WAITING;
+            } else if (phase === PHASE_HOLDING && isDesignatedAttacker) {
+                nextPhase = PHASE_HOLDING;
+                state = STATE_HOLDING;
                 waiting += 1;
                 desiredX = 0;
                 desiredY = 0;
                 nextPhaseTime = 0;
             } else if (ownsRingSlot && canHoldWaitingSlot) {
-                nextPhase = PHASE_WAITING;
-                state = STATE_WAITING;
+                nextPhase = PHASE_HOLDING;
+                state = STATE_HOLDING;
                 waiting += 1;
                 desiredX = 0;
                 desiredY = 0;
                 nextPhaseTime = 0;
             } else if (ownsRingSlot) {
-                nextPhase = PHASE_RETREATING;
-                state = STATE_RETREATING;
-                retreating += 1;
+                nextPhase = PHASE_SEEKING;
+                state = STATE_SEEKING;
+                seeking += 1;
                 desiredX += slotDx;
                 desiredY += slotDy;
-            } else if (targetDist < ringRadius) {
-                nextPhase = PHASE_MILLING;
-                state = STATE_RETREATING;
-                retreating += 1;
-                const vacateRadius = ringRadius + radius * VACATE_ATTACK_RING_CLEARANCE_SCALE;
-                const escape = computeTargetEscapeVector(x, y, targetX, targetY, homeAngle, vacateRadius);
-                desiredX += escape.x;
-                desiredY += escape.y;
-                movementGoalX = escape.goalX;
-                movementGoalY = escape.goalY;
             } else {
-                nextPhase = PHASE_MILLING;
-                const loopRadius = ringRadius + radius * 2.25;
-                const clearOrbitRadius = ringRadius + radius * 0.9;
-                if (targetDist < clearOrbitRadius) {
-                    const escape = computeTargetEscapeVector(x, y, targetX, targetY, homeAngle, clearOrbitRadius);
-                    desiredX += escape.x;
-                    desiredY += escape.y;
-                    movementGoalX = escape.goalX;
-                    movementGoalY = escape.goalY;
+                const crowdLocked = isSeekingBlockedByCloseCrowd(
+                    agents,
+                    count,
+                    i,
+                    x,
+                    y,
+                    radius,
+                    targetX,
+                    targetY,
+                    targetDist,
+                    ringRadius,
+                    phase === PHASE_MILLING
+                );
+                if (crowdLocked) {
+                    nextPhase = PHASE_MILLING;
+                    const loopRadius = ringRadius + radius * 2.25;
+                    const clearOrbitRadius = ringRadius + radius * 0.9;
+                    if (targetDist < clearOrbitRadius) {
+                        const escape = computeTargetEscapeVector(x, y, targetX, targetY, homeAngle, clearOrbitRadius);
+                        desiredX += escape.x;
+                        desiredY += escape.y;
+                        movementGoalX = escape.goalX;
+                        movementGoalY = escape.goalY;
+                    } else {
+                        const millingVector = computeMillingLoopVector(
+                            x,
+                            y,
+                            targetX,
+                            targetY,
+                            loopRadius,
+                            millingDirection
+                        );
+                        desiredX += millingVector.x;
+                        desiredY += millingVector.y;
+                        movementGoalX = x + millingVector.x;
+                        movementGoalY = y + millingVector.y;
+                        outerMillingCanReverseAtWall = true;
+                    }
+                    state = STATE_MILLING;
+                    milling += 1;
                 } else {
-                    const millingVector = computeMillingLoopVector(
-                        x,
-                        y,
-                        targetX,
-                        targetY,
-                        loopRadius,
-                        millingDirection
-                    );
-                    desiredX += millingVector.x;
-                    desiredY += millingVector.y;
-                    movementGoalX = x + millingVector.x;
-                    movementGoalY = y + millingVector.y;
-                    outerMillingCanReverseAtWall = true;
+                    nextPhase = PHASE_SEEKING;
+                    state = STATE_SEEKING;
+                    seeking += 1;
+                    desiredX += slotDx;
+                    desiredY += slotDy;
                 }
-                state = STATE_MILLING;
-                milling += 1;
             }
         }
 
-        if (state === STATE_WAITING || state === STATE_RETREATING) {
+        if (!followingWorkerPath && (state === STATE_HOLDING || state === STATE_SEEKING || state === STATE_RECOVERING)) {
             const slide = computeRingSlideVector(
                 agents,
                 count,
@@ -311,7 +380,7 @@ function solveStep(message) {
             }
         }
 
-        if (state !== STATE_WAITING && state !== STATE_MILLING) {
+        if (!followingWorkerPath && state !== STATE_HOLDING && state !== STATE_MILLING) {
             const goalX = state === STATE_ATTACKING ? targetX : movementGoalX;
             const goalY = state === STATE_ATTACKING ? targetY : movementGoalY;
             const detour = computeWallDetour(x, y, goalX, goalY, radius, walls);
@@ -323,21 +392,29 @@ function solveStep(message) {
             }
         }
 
-        if (!ownsRingSlot) {
+        if (state !== STATE_ATTACKING) {
+            const isSeekingLike = state === STATE_SEEKING || followingWorkerPath;
             const separation = computeSeparation(agents, count, i, x, y, radius, priority, {
                 overlapOnly: false,
-                activationScale: state === STATE_MILLING ? MILLING_SEPARATION_ACTIVATION_SCALE : undefined
+                activationScale: state === STATE_MILLING
+                    ? MILLING_SEPARATION_ACTIVATION_SCALE
+                    : (isSeekingLike ? SEEKING_SEPARATION_ACTIVATION_SCALE : undefined)
             });
             pairChecks += separation.checks;
-            if (state === STATE_MILLING && separation.pressure > 0) {
+            if (separation.pressure > 0 && (state === STATE_MILLING || (isSeekingLike && !ownsRingSlot))) {
+                const minYield = state === STATE_MILLING ? MILLING_ROUTE_MIN_YIELD : SEEKING_ROUTE_MIN_YIELD;
+                const yieldPerPressure = state === STATE_MILLING ? MILLING_ROUTE_YIELD_PER_PRESSURE : SEEKING_ROUTE_YIELD_PER_PRESSURE;
                 const routeYield = Math.max(
-                    MILLING_ROUTE_MIN_YIELD,
-                    1 - Math.min(1 - MILLING_ROUTE_MIN_YIELD, separation.pressure * MILLING_ROUTE_YIELD_PER_PRESSURE)
+                    minYield,
+                    1 - Math.min(1 - minYield, separation.pressure * yieldPerPressure)
                 );
                 desiredX *= routeYield;
                 desiredY *= routeYield;
             }
-            const separationScale = separationStrength * (state === STATE_MILLING ? MILLING_SEPARATION_STRENGTH_SCALE : 1);
+            const separationBaseStrength = isSeekingLike
+                ? (followingWorkerPath ? Math.max(separationStrength, SEEKING_PATH_SEPARATION_STRENGTH_FLOOR) : separationStrength)
+                : separationStrength;
+            const separationScale = separationBaseStrength * (state === STATE_MILLING ? MILLING_SEPARATION_STRENGTH_SCALE : 1);
             desiredX += separation.x * separationScale;
             desiredY += separation.y * separationScale;
         }
@@ -346,7 +423,14 @@ function solveStep(message) {
         let vx = 0;
         let vy = 0;
         let nextHeading = heading;
-        if (state === STATE_WAITING) {
+        if (followingWorkerPath) {
+            if (len > EPSILON) {
+                nextHeading = rotateTowardAngle(heading, Math.atan2(desiredY, desiredX), Math.PI * 2 * dt);
+                const pathSpeed = getAttackSlotRunSpeed(baseSpeed, speedScale);
+                vx = Math.cos(nextHeading) * pathSpeed;
+                vy = Math.sin(nextHeading) * pathSpeed;
+            }
+        } else if (state === STATE_HOLDING) {
             nextHeading = rotateTowardAngle(heading, Math.atan2(toTargetY, toTargetX), Math.PI * 2 * dt);
             if (len > EPSILON) {
                 const slideHeading = Math.atan2(desiredY, desiredX);
@@ -357,17 +441,17 @@ function solveStep(message) {
             nextHeading = Math.atan2(toTargetY, toTargetX);
             vx = Math.cos(nextHeading) * attackSpeed;
             vy = Math.sin(nextHeading) * attackSpeed;
-        } else if (state === STATE_RETREATING) {
+        } else if (state === STATE_SEEKING || state === STATE_RECOVERING || state === STATE_VACATING) {
             const retreatHeading = Math.atan2(desiredY, desiredX);
             nextHeading = Math.atan2(toTargetY, toTargetX);
             if (len > EPSILON) {
-                const retreatSpeed = isDesignatedAttacker
+                const retreatSpeed = state === STATE_SEEKING
                     ? getAttackSlotRunSpeed(baseSpeed, speedScale)
                     : speed * 1.45;
                 vx = Math.cos(retreatHeading) * retreatSpeed;
                 vy = Math.sin(retreatHeading) * retreatSpeed;
             }
-        } else if (state !== STATE_ATTACKING && state !== STATE_RETREATING && targetDist < ringRadius) {
+        } else if (state !== STATE_ATTACKING && state !== STATE_SEEKING && state !== STATE_RECOVERING && state !== STATE_VACATING && targetDist < ringRadius) {
             nextHeading = targetDist > EPSILON ? Math.atan2(y - targetY, x - targetX) : 0;
             vx = Math.cos(nextHeading) * speed;
             vy = Math.sin(nextHeading) * speed;
@@ -380,7 +464,7 @@ function solveStep(message) {
             vx = Math.cos(nextHeading) * phaseSpeed * turnSpeedScale;
             vy = Math.sin(nextHeading) * phaseSpeed * turnSpeedScale;
         }
-        if (state === STATE_RETREATING) {
+        if (state === STATE_RECOVERING || state === STATE_VACATING) {
             const outward = enforceMinimumOutwardVelocity(vx, vy, x, y, targetX, targetY, ringRadius, speed);
             vx = outward.vx;
             vy = outward.vy;
@@ -393,17 +477,17 @@ function solveStep(message) {
             candidateX = contact.x;
             candidateY = contact.y;
             if (contact.touched) {
-                nextPhase = PHASE_RETREATING;
+                nextPhase = PHASE_RECOVERING;
                 nextPhaseTime = 0;
                 const resetCooldown = getAttackRecoveryCooldown(id);
                 nextCooldown = isDesignatedAttacker ? -(resetCooldown + 1) : resetCooldown;
                 hits += 1;
             }
-        } else if (state === STATE_WAITING || state === STATE_RETREATING) {
+        } else if (!followingWorkerPath && (state === STATE_HOLDING || state === STATE_SEEKING || state === STATE_RECOVERING || state === STATE_VACATING)) {
             const outsideRing = clampOutsideTargetRing(x, y, candidateX, candidateY, targetX, targetY, ringRadius);
             candidateX = outsideRing.x;
             candidateY = outsideRing.y;
-        } else if (state !== STATE_RETREATING) {
+        } else if (state !== STATE_SEEKING && state !== STATE_RECOVERING && state !== STATE_VACATING) {
             const outsideRing = clampOutsideTargetRing(x, y, candidateX, candidateY, targetX, targetY, ringRadius);
             candidateX = outsideRing.x;
             candidateY = outsideRing.y;
@@ -454,15 +538,185 @@ function solveStep(message) {
             wallLeaks,
             moving: milling,
             milling,
+            seeking,
             waiting,
             darting: attacking,
             striking: 0,
             retreating,
             attacking,
             hits,
-            blocked
+            blocked,
+            pathNodes: pathfindingNodeLayer.nodes.length,
+            pathBlockedEdges: pathfindingNodeLayer.blockedEdges.length
         }
     };
+}
+
+function getPathfindingNodeLayer(worldVersion, walls) {
+    const version = Number.isFinite(Number(worldVersion)) ? Number(worldVersion) : 0;
+    if (cachedPathfindingNodeLayer && cachedPathfindingNodeLayer.worldVersion === version) {
+        return cachedPathfindingNodeLayer;
+    }
+    cachedPathfindingNodeLayer = buildPathfindingNodeLayer(version, walls);
+    return cachedPathfindingNodeLayer;
+}
+
+function buildPathfindingNodeLayer(worldVersion, walls) {
+    const wallGeometry = self.WallGeometry;
+    if (!wallGeometry || typeof wallGeometry.connectionCrossesWallFaces !== "function") {
+        throw new Error("NPC movement lab solver pathfinding node layer requires WallGeometry.connectionCrossesWallFaces");
+    }
+    const bounds = getPathfindingLayerBounds(walls);
+    const colStart = Math.floor(bounds.minX / HEX_GRID_COL_STEP) - PATH_NODE_LAYER_PADDING;
+    const colEnd = Math.ceil(bounds.maxX / HEX_GRID_COL_STEP) + PATH_NODE_LAYER_PADDING;
+    const rowStart = Math.floor(bounds.minY) - PATH_NODE_LAYER_PADDING;
+    const rowEnd = Math.ceil(bounds.maxY) + PATH_NODE_LAYER_PADDING;
+    const nodes = [];
+    const nodeByKey = new Map();
+
+    for (let col = colStart; col <= colEnd; col++) {
+        for (let row = rowStart; row <= rowEnd; row++) {
+            const node = createPathfindingNode(col, row);
+            nodes.push(node);
+            nodeByKey.set(node.key, node);
+        }
+    }
+
+    for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
+        const offsets = getPathfindingNeighborOffsets(node.xindex);
+        for (let dir = 0; dir < 12; dir++) {
+            const offset = offsets[dir];
+            node.neighbors[dir] = nodeByKey.get(pathfindingNodeKey(node.xindex + offset.x, node.yindex + offset.y)) || null;
+        }
+    }
+
+    const blockedEdges = [];
+    const blockedKeys = new Set();
+    for (let w = 0; w < walls.length; w += WALL_STRIDE) {
+        const ax = walls[w];
+        const ay = walls[w + 1];
+        const bx = walls[w + 2];
+        const by = walls[w + 3];
+        const wallMinX = Math.min(ax, bx) - HEX_GRID_WIDTH;
+        const wallMaxX = Math.max(ax, bx) + HEX_GRID_WIDTH;
+        const wallMinY = Math.min(ay, by) - HEX_GRID_HEIGHT;
+        const wallMaxY = Math.max(ay, by) + HEX_GRID_HEIGHT;
+        for (let n = 0; n < nodes.length; n++) {
+            const node = nodes[n];
+            if (node.x < wallMinX || node.x > wallMaxX || node.y < wallMinY || node.y > wallMaxY) continue;
+            for (let dir = 0; dir < 12; dir++) {
+                const neighbor = node.neighbors[dir];
+                if (!neighbor) continue;
+                const edgeKey = pathfindingEdgeKey(node, neighbor);
+                if (blockedKeys.has(edgeKey)) continue;
+                if (!wallGeometry.connectionCrossesWallFaces(
+                    node,
+                    neighbor,
+                    { x: ax, y: ay },
+                    { x: bx, y: by },
+                    {
+                        thickness: PATH_NODE_WALL_THICKNESS,
+                        extend: PATH_NODE_WALL_FACE_EXTEND
+                    }
+                )) {
+                    continue;
+                }
+                blockedKeys.add(edgeKey);
+                addDirectionalBlock(node, dir, w);
+                const reverseDir = neighbor.neighbors.indexOf(node);
+                if (reverseDir >= 0) addDirectionalBlock(neighbor, reverseDir, w);
+                blockedEdges.push({ a: node, b: neighbor, wallOffset: w });
+            }
+        }
+    }
+
+    return { worldVersion, nodes, nodeByKey, blockedEdges };
+}
+
+function getPathfindingLayerBounds(walls) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < walls.length; i += WALL_STRIDE) {
+        minX = Math.min(minX, walls[i], walls[i + 2]);
+        minY = Math.min(minY, walls[i + 1], walls[i + 3]);
+        maxX = Math.max(maxX, walls[i], walls[i + 2]);
+        maxY = Math.max(maxY, walls[i + 1], walls[i + 3]);
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+        throw new Error("NPC movement lab solver pathfinding node layer requires finite wall bounds");
+    }
+    return { minX, minY, maxX, maxY };
+}
+
+function createPathfindingNode(xindex, yindex) {
+    return {
+        x: xindex * HEX_GRID_COL_STEP,
+        y: yindex + (isEvenGridColumn(xindex) ? 0.5 : 0),
+        xindex,
+        yindex,
+        key: pathfindingNodeKey(xindex, yindex),
+        neighbors: new Array(12).fill(null),
+        blockedNeighbors: new Map()
+    };
+}
+
+function getPathfindingNeighborOffsets(xindex) {
+    if (isEvenGridColumn(xindex)) {
+        return [
+            { x: -2, y: 0 },
+            { x: -1, y: 0 },
+            { x: -1, y: -1 },
+            { x: 0, y: -1 },
+            { x: 1, y: -1 },
+            { x: 1, y: 0 },
+            { x: 2, y: 0 },
+            { x: 1, y: 1 },
+            { x: 1, y: 2 },
+            { x: 0, y: 1 },
+            { x: -1, y: 2 },
+            { x: -1, y: 1 }
+        ];
+    }
+    return [
+        { x: -2, y: 0 },
+        { x: -1, y: -1 },
+        { x: -1, y: -2 },
+        { x: 0, y: -1 },
+        { x: 1, y: -2 },
+        { x: 1, y: -1 },
+        { x: 2, y: 0 },
+        { x: 1, y: 0 },
+        { x: 1, y: 1 },
+        { x: 0, y: 1 },
+        { x: -1, y: 1 },
+        { x: -1, y: 0 }
+    ];
+}
+
+function isEvenGridColumn(col) {
+    return Math.abs(col % 2) === 0;
+}
+
+function pathfindingNodeKey(xindex, yindex) {
+    return `${xindex},${yindex}`;
+}
+
+function pathfindingEdgeKey(a, b) {
+    return a.key <= b.key ? `${a.key}|${b.key}` : `${b.key}|${a.key}`;
+}
+
+function addDirectionalBlock(node, direction, blockerId) {
+    if (!node || !Number.isInteger(direction) || direction < 0 || direction > 11) {
+        throw new Error("NPC movement lab solver pathfinding block requires a valid node direction");
+    }
+    if (!node.neighbors[direction]) {
+        throw new Error("NPC movement lab solver pathfinding block requires an existing neighbor connection");
+    }
+    if (!node.blockedNeighbors.has(direction)) node.blockedNeighbors.set(direction, new Set());
+    node.blockedNeighbors.get(direction).add(blockerId);
 }
 
 function normalizeAngle(angle) {
@@ -562,6 +816,8 @@ function buildSlotChoices(agents, count, targetX, targetY, ringRadius, walls) {
     const choices = new Array(count);
     for (let i = 0; i < count; i++) {
         const base = i * STRIDE;
+        const pathMode = Math.floor(agents[base + 14]) === PATH_MODE_WORKER ? PATH_MODE_WORKER : PATH_MODE_DIRECT;
+        if (pathMode === PATH_MODE_WORKER) continue;
         const x = agents[base + 1];
         const y = agents[base + 2];
         const homeAngle = agents[base + 9];
@@ -632,14 +888,60 @@ function chooseMillingSlot(targetX, targetY, ringRadius, homeAngle, radius) {
     };
 }
 
+function isSeekingBlockedByCloseCrowd(agents, count, selfIndex, x, y, radius, targetX, targetY, targetDist, ringRadius, wasMilling) {
+    if (!(targetDist > EPSILON)) return false;
+    const eligibilityRadius = ringRadius + radius * (wasMilling ? CROWD_LOCK_EXIT_RADIUS_SCALE : CROWD_LOCK_ENTER_RADIUS_SCALE);
+    if (targetDist > eligibilityRadius) return false;
+
+    const dirX = (targetX - x) / targetDist;
+    const dirY = (targetY - y) / targetDist;
+    const forwardLimit = radius * CROWD_LOCK_FORWARD_RANGE_SCALE;
+    const backTolerance = radius * CROWD_LOCK_BACK_TOLERANCE_SCALE;
+    let lanePressure = 0;
+
+    for (let i = 0; i < count; i++) {
+        if (i === selfIndex) continue;
+        const base = i * STRIDE;
+        const ox = agents[base + 1];
+        const oy = agents[base + 2];
+        const otherRadius = agents[base + 3];
+        const dx = ox - x;
+        const dy = oy - y;
+        const projection = dx * dirX + dy * dirY;
+        if (projection < -backTolerance || projection > forwardLimit) continue;
+
+        const lateralX = dx - dirX * projection;
+        const lateralY = dy - dirY * projection;
+        const lateralDistance = Math.hypot(lateralX, lateralY);
+        const laneRadius = radius + otherRadius + Math.min(radius, otherRadius) * CROWD_LOCK_LANE_PADDING_SCALE;
+        if (lateralDistance > laneRadius) continue;
+
+        const otherTargetDist = Math.hypot(ox - targetX, oy - targetY);
+        if (otherTargetDist > targetDist + radius * 0.75) continue;
+
+        const forwardWeight = 1 - Math.min(1, Math.max(0, projection) / Math.max(forwardLimit, EPSILON));
+        const lateralWeight = 1 - Math.min(1, lateralDistance / Math.max(laneRadius, EPSILON));
+        lanePressure += Math.max(0.2, forwardWeight * lateralWeight);
+        if (lanePressure >= (wasMilling ? 0.35 : 0.65)) return true;
+    }
+
+    return false;
+}
+
 function wallClearance(x, y, walls) {
     let clearance = Infinity;
-    for (let i = 0; i < walls.length; i += 6) {
+    for (let i = 0; i < walls.length; i += WALL_STRIDE) {
         const ax = walls[i];
         const ay = walls[i + 1];
+        const bx = walls[i + 2];
+        const by = walls[i + 3];
         const nx = walls[i + 4];
         const ny = walls[i + 5];
-        clearance = Math.min(clearance, (x - ax) * nx + (y - ay) * ny);
+        const kind = Math.round(walls[i + 6] || WALL_KIND_BOUNDARY);
+        const distance = kind === WALL_KIND_SEGMENT
+            ? pointSegmentDistance(x, y, ax, ay, bx, by)
+            : (x - ax) * nx + (y - ay) * ny;
+        clearance = Math.min(clearance, distance);
     }
     return clearance;
 }
@@ -649,16 +951,27 @@ function computeWallEscapeVector(x, y, radius, walls) {
     let escapeX = 0;
     let escapeY = 0;
     let pressure = 0;
-    for (let i = 0; i < walls.length; i += 6) {
+    for (let i = 0; i < walls.length; i += WALL_STRIDE) {
         const ax = walls[i];
         const ay = walls[i + 1];
+        const bx = walls[i + 2];
+        const by = walls[i + 3];
         const nx = walls[i + 4];
         const ny = walls[i + 5];
-        const clearance = (x - ax) * nx + (y - ay) * ny;
+        const kind = Math.round(walls[i + 6] || WALL_KIND_BOUNDARY);
+        const clearance = kind === WALL_KIND_SEGMENT
+            ? pointSegmentDistance(x, y, ax, ay, bx, by)
+            : (x - ax) * nx + (y - ay) * ny;
         if (clearance >= activationDistance) continue;
         const push = (activationDistance - clearance) / activationDistance;
-        escapeX += nx * push;
-        escapeY += ny * push;
+        if (kind === WALL_KIND_SEGMENT) {
+            const normal = segmentRepulsionNormal(x, y, ax, ay, bx, by);
+            escapeX += normal.x * push;
+            escapeY += normal.y * push;
+        } else {
+            escapeX += nx * push;
+            escapeY += ny * push;
+        }
         pressure += push;
     }
     const length = Math.hypot(escapeX, escapeY);
@@ -675,11 +988,25 @@ function pushPointInsideWalls(x, y, radius, walls) {
     let outY = y;
     for (let pass = 0; pass < 4; pass++) {
         let changed = false;
-        for (let i = 0; i < walls.length; i += 6) {
+        for (let i = 0; i < walls.length; i += WALL_STRIDE) {
             const ax = walls[i];
             const ay = walls[i + 1];
+            const bx = walls[i + 2];
+            const by = walls[i + 3];
             const nx = walls[i + 4];
             const ny = walls[i + 5];
+            const kind = Math.round(walls[i + 6] || WALL_KIND_BOUNDARY);
+            if (kind === WALL_KIND_SEGMENT) {
+                const distance = pointSegmentDistance(outX, outY, ax, ay, bx, by);
+                if (distance < radius) {
+                    const normal = segmentRepulsionNormal(outX, outY, ax, ay, bx, by);
+                    const correction = radius - distance;
+                    outX += normal.x * correction;
+                    outY += normal.y * correction;
+                    changed = true;
+                }
+                continue;
+            }
             const signed = (outX - ax) * nx + (outY - ay) * ny;
             if (signed < radius) {
                 const correction = radius - signed;
@@ -726,12 +1053,16 @@ function selectAttackingNpcs(agents, count, targetX, targetY, ringRadius, walls,
         const phase = Math.max(0, Math.floor(agents[base + 7]));
         const phaseTime = Math.max(0, agents[base + 8]);
         const cooldown = Number.isFinite(agents[base + 10]) ? agents[base + 10] : 0;
+        const remainingCooldown = cooldown < 0 ? Math.max(0, -cooldown - 1) : Math.max(0, cooldown);
 
         if (phase === PHASE_ATTACKING && !targetMoved && selected.size < maxAttackers) {
             selected.add(candidate.index);
             continue;
         }
-        if (phase === PHASE_RETREATING && candidate.targetDist > ringRadius + candidate.radius * 2.2 && phaseTime > 1.5) {
+        if (phase === PHASE_VACATING && candidate.targetDist < ringRadius + candidate.radius * VACATE_ATTACK_RING_RELEASE_SCALE) {
+            continue;
+        }
+        if (phase === PHASE_RECOVERING && remainingCooldown > 0) {
             continue;
         }
 
@@ -742,8 +1073,8 @@ function selectAttackingNpcs(agents, count, targetX, targetY, ringRadius, walls,
             + ringError * ATTACKER_SELECTION_RING_ERROR_WEIGHT
             - crowdClearance * ATTACKER_SELECTION_SPREAD_WEIGHT;
 
-        if (phase === PHASE_WAITING) score -= Math.min(ringRadius * 0.45, Math.min(2, waitTime) * 0.22);
-        if (phase === PHASE_RETREATING && candidate.targetDist <= ringRadius + candidate.radius * 2.2) score -= ringRadius * 0.22;
+        if (phase === PHASE_HOLDING) score -= Math.min(ringRadius * 0.45, Math.min(2, waitTime) * 0.22);
+        if (phase === PHASE_SEEKING && candidate.targetDist <= ringRadius + candidate.radius * 2.2) score -= ringRadius * 0.22;
         if (!targetMoved && cooldown < 0) score -= ringRadius * 0.3;
         if (candidate.targetDist < ringRadius) score -= (ringRadius - candidate.targetDist) * 0.4;
 
@@ -762,6 +1093,8 @@ function collectNearbyAttackCandidates(agents, count, targetX, targetY, ringRadi
     const maxDist = ringRadius * ATTACKER_SELECTION_NEARBY_RADIUS_SCALE;
     for (let i = 0; i < count; i++) {
         const base = i * STRIDE;
+        const pathMode = Math.floor(agents[base + 14]) === PATH_MODE_WORKER ? PATH_MODE_WORKER : PATH_MODE_DIRECT;
+        if (pathMode === PATH_MODE_WORKER) continue;
         const x = agents[base + 1];
         const y = agents[base + 2];
         const radius = agents[base + 3];
@@ -806,26 +1139,31 @@ function computeRingSlideVector(agents, count, selfIndex, x, y, radius, targetX,
     const maxOtherDist = ringRadius + radius * ATTACKER_RING_ENTRY_PRESSURE_OUTER_SCALE;
     for (let i = 0; i < count; i++) {
         if (i === selfIndex) continue;
-        if (!attackSlots || !attackSlots.has(i)) continue;
         const base = i * STRIDE;
         const ox = agents[base + 1];
         const oy = agents[base + 2];
         const otherRadius = agents[base + 3];
         const otherPhase = Math.max(0, Math.floor(agents[base + 7]));
+        const sourceIsVacating = otherPhase === PHASE_VACATING;
+        if (!sourceIsVacating && (!attackSlots || !attackSlots.has(i))) continue;
         const otherDist = Math.hypot(ox - targetX, oy - targetY);
         if (otherPhase === PHASE_ATTACKING) continue;
-        if (otherDist < ringRadius + otherRadius * ATTACK_SLOT_ARRIVAL_RADIUS_SCALE) continue;
-        if (otherDist <= targetDist || otherDist > maxOtherDist) continue;
+        if (!sourceIsVacating && otherDist < ringRadius + otherRadius * ATTACK_SLOT_ARRIVAL_RADIUS_SCALE) continue;
+        if (!sourceIsVacating && otherDist <= targetDist) continue;
+        if (sourceIsVacating && otherDist >= targetDist) continue;
+        if (otherDist > maxOtherDist) continue;
 
         const otherAngle = otherDist > EPSILON ? Math.atan2(oy - targetY, ox - targetX) : agents[base + 9];
         const angleDelta = shortestAngleDelta(selfAngle, otherAngle);
         const arcDistance = Math.abs(angleDelta) * ringRadius;
         if (arcDistance >= angularActivation) continue;
 
-        const radialGap = Math.max(0, otherDist - targetDist);
+        const radialGap = Math.abs(otherDist - targetDist);
         const radialWeight = 1 - Math.min(1, radialGap / Math.max(radius * 5, EPSILON));
         const outerRingError = Math.max(0, otherDist - ringRadius);
-        const entryPressure = 1 + Math.max(0, 1 - Math.min(1, outerRingError / Math.max(otherRadius * 3.5, EPSILON)));
+        const entryPressure = sourceIsVacating
+            ? 1.5
+            : 1 + Math.max(0, 1 - Math.min(1, outerRingError / Math.max(otherRadius * 3.5, EPSILON)));
         const push = (angularActivation - arcDistance) / angularActivation * radialWeight * entryPressure;
         if (push <= 0) continue;
 
@@ -1020,7 +1358,7 @@ function constrainToWalls(previousX, previousY, x, y, radius, walls) {
 
 function findEarliestSegmentHit(fromX, fromY, toX, toY, radius, walls) {
     let best = null;
-    for (let i = 0; i < walls.length; i += 6) {
+    for (let i = 0; i < walls.length; i += WALL_STRIDE) {
         const hit = sweptCircleSegmentHit(
             fromX,
             fromY,
@@ -1153,7 +1491,7 @@ function cross2d(ax, ay, bx, by) {
 }
 
 function violatesWalls(x, y, radius, walls) {
-    for (let i = 0; i < walls.length; i += 6) {
+    for (let i = 0; i < walls.length; i += WALL_STRIDE) {
         const ax = walls[i];
         const ay = walls[i + 1];
         const bx = walls[i + 2];

@@ -186,6 +186,77 @@
         };
     }
 
+    function orientation2D(a, b, c) {
+        return (Number(b && b.y) - Number(a && a.y)) * (Number(c && c.x) - Number(b && b.x)) -
+            (Number(b && b.x) - Number(a && a.x)) * (Number(c && c.y) - Number(b && b.y));
+    }
+
+    function onSegment2D(a, b, c, eps = DEFAULT_EPS) {
+        return Math.min(Number(a && a.x), Number(b && b.x)) - eps <= Number(c && c.x) &&
+            Number(c && c.x) <= Math.max(Number(a && a.x), Number(b && b.x)) + eps &&
+            Math.min(Number(a && a.y), Number(b && b.y)) - eps <= Number(c && c.y) &&
+            Number(c && c.y) <= Math.max(Number(a && a.y), Number(b && b.y)) + eps;
+    }
+
+    function segmentsIntersect2D(a, b, c, d, eps = DEFAULT_EPS) {
+        const o1 = orientation2D(a, b, c);
+        const o2 = orientation2D(a, b, d);
+        const o3 = orientation2D(c, d, a);
+        const o4 = orientation2D(c, d, b);
+
+        const sign = (value) => (Math.abs(value) <= eps ? 0 : (value > 0 ? 1 : -1));
+        const s1 = sign(o1);
+        const s2 = sign(o2);
+        const s3 = sign(o3);
+        const s4 = sign(o4);
+        if (s1 !== s2 && s3 !== s4) return true;
+        if (s1 === 0 && onSegment2D(a, b, c, eps)) return true;
+        if (s2 === 0 && onSegment2D(a, b, d, eps)) return true;
+        if (s3 === 0 && onSegment2D(c, d, a, eps)) return true;
+        if (s4 === 0 && onSegment2D(c, d, b, eps)) return true;
+        return false;
+    }
+
+    function connectionCrossesWallFaces(connectionStart, connectionEnd, wallStart, wallEnd, options = {}) {
+        const ax = finiteNumber(connectionStart && connectionStart.x);
+        const ay = finiteNumber(connectionStart && connectionStart.y);
+        const bx = finiteNumber(connectionEnd && connectionEnd.x);
+        const by = finiteNumber(connectionEnd && connectionEnd.y);
+        const sx = finiteNumber(wallStart && wallStart.x);
+        const sy = finiteNumber(wallStart && wallStart.y);
+        const ex = finiteNumber(wallEnd && wallEnd.x);
+        const ey = finiteNumber(wallEnd && wallEnd.y);
+        if (ax === null || ay === null || bx === null || by === null || sx === null || sy === null || ex === null || ey === null) {
+            return false;
+        }
+
+        const eps = Number.isFinite(Number(options.eps)) ? Number(options.eps) : DEFAULT_EPS;
+        const wallDx = ex - sx;
+        const wallDy = ey - sy;
+        const wallLen = Math.hypot(wallDx, wallDy);
+        const connectionLen = Math.hypot(bx - ax, by - ay);
+        if (!(wallLen > eps) || !(connectionLen > eps)) return false;
+
+        const ux = wallDx / wallLen;
+        const uy = wallDy / wallLen;
+        const px = -uy;
+        const py = ux;
+        const halfT = Math.max(eps, (Number.isFinite(Number(options.thickness)) ? Number(options.thickness) : 0.1) * 0.5);
+        const extend = Number.isFinite(Number(options.extend)) ? Number(options.extend) : 0.501;
+        const segStart = { x: ax, y: ay };
+        const segEnd = { x: bx, y: by };
+
+        const testFace = (sign) => {
+            const offX = px * sign * halfT;
+            const offY = py * sign * halfT;
+            const faceStart = { x: sx + offX - ux * extend, y: sy + offY - uy * extend };
+            const faceEnd = { x: ex + offX + ux * extend, y: ey + offY + uy * extend };
+            return segmentsIntersect2D(faceStart, faceEnd, segStart, segEnd, eps);
+        };
+
+        return testFace(1) || testFace(-1);
+    }
+
     function sideLinePerpendicularCenterHit(point, direction, center, eps = DEFAULT_EPS) {
         const dx = Number(direction && direction.x);
         const dy = Number(direction && direction.y);
@@ -294,9 +365,13 @@
 
     const api = {
         baseProfileFromEndpoints,
+        connectionCrossesWallFaces,
         lineIntersection,
         normalizeDirection,
+        orientation2D,
+        onSegment2D,
         parameterForWorldPointOnSection,
+        segmentsIntersect2D,
         sideLinePerpendicularCenterHit,
         solveEndpointJoinery,
         wallPositionAtScreenPoint

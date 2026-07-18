@@ -14858,6 +14858,7 @@ void main(void) {
                 wizard
             );
             const wizardLayer = this.getWizardVisualLayerIndex(wizard, 0);
+            if (wizardLayer < 0) return [];
             if (mazeLayerOnly && wizardLayer !== 0) return [];
             const sourceSectionKeys = viewportSectionKeys instanceof Set && viewportSectionKeys.size > 0
                 ? viewportSectionKeys

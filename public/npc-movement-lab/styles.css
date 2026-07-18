@@ -192,10 +192,12 @@ input[type="range"] {
 .dot.enemy { background: #6fa8d8; }
 .dot.slot { background: rgba(104,183,255,0.55); }
 .dot.moving { background: var(--blue); }
+.dot.seeking { background: var(--violet); }
 .dot.waiting { background: var(--yellow); }
 .dot.darting { background: var(--violet); }
 .dot.striking { background: var(--green); }
 .dot.retreating { background: #ff9f5a; }
+.dot.vacating { background: #ff6fb1; }
 .dot.blocked { background: var(--red); }
 
 @media (max-width: 820px) {
