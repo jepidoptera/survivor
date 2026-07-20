@@ -60,6 +60,8 @@
     const MAZE_SECTION_CACHE_LIMIT = 10;
     const MAZE_SECTION_NEARBY_LOAD_COUNT = 2;
     const MAZE_WORKER_STATUS_PREFIX = "maze";
+    const MAZE_LOOKAHEAD_DISTANCE = 20;
+    const MAZE_LOOKAHEAD_REFRESH_INTERVAL_MS = 1000;
     const MAZE_ROOM_EDGE_INSET_TILES = 2;
     const MAZE_HALLWAY_GAP_WIDTH = 3.4;
     const MAZE_OUTSIDE_DOOR_MIN_WIDTH = 1;
@@ -140,8 +142,11 @@
         generatedMazeChunkKeys: new Set(),
         generatedMazeSignature: "",
         generatedMazeRequestId: 1,
+        generatedMazeActiveRequestId: 0,
         generatedMazePendingSignature: "",
         generatedMazeLoading: false,
+        generatedMazeLookaheadKeys: [],
+        generatedMazeLookaheadNextRefreshAt: 0,
         target: { x: 0, y: 0, heading: -Math.PI / 2 },
         lastSentTarget: { x: 0, y: 0 },
         targetFlashTime: 0,
@@ -217,7 +222,7 @@
         labels.workerStatus.textContent = event.message || "pathfinding failed";
     });
 
-    const mazeWorker = new Worker("/npc-movement-lab/mazeSectionWorker.js?v=npc-movement-lab-1");
+    const mazeWorker = new Worker("/npc-movement-lab/mazeSectionWorker.js?v=npc-movement-lab-2");
     mazeWorker.addEventListener("message", handleMazeWorkerMessage);
     mazeWorker.addEventListener("error", (event) => {
         state.generatedMazeLoading = false;
@@ -372,7 +377,110 @@
             });
         }
         neighbors.sort((a, b) => a.distance - b.distance);
-        return [currentKey, ...neighbors.slice(0, MAZE_SECTION_NEARBY_LOAD_COUNT).map((entry) => entry.key)];
+        const keys = [currentKey, ...neighbors.slice(0, MAZE_SECTION_NEARBY_LOAD_COUNT).map((entry) => entry.key)];
+        const lookaheadKeys = getMazeLookaheadSectionKeys(options);
+        for (const key of lookaheadKeys) {
+            if (keys.length >= MAZE_SECTION_CACHE_LIMIT) break;
+            if (!keys.includes(key)) keys.push(key);
+        }
+        return keys;
+    }
+
+    function getMazeLookaheadSectionKeys(options) {
+        const now = performance.now();
+        if (Array.isArray(state.generatedMazeLookaheadKeys) && now < state.generatedMazeLookaheadNextRefreshAt) {
+            return state.generatedMazeLookaheadKeys;
+        }
+        const keys = computeMazeLookaheadSectionKeys(options);
+        state.generatedMazeLookaheadKeys = keys;
+        state.generatedMazeLookaheadNextRefreshAt = now + MAZE_LOOKAHEAD_REFRESH_INTERVAL_MS;
+        return keys;
+    }
+
+    function computeMazeLookaheadSectionKeys(options) {
+        const rect = getProjectedMazeViewportRect(options);
+        if (!rect) return [];
+        const center = {
+            x: (rect.minX + rect.maxX) * 0.5,
+            y: (rect.minY + rect.maxY) * 0.5
+        };
+        const centerCoord = worldToMazeSectionCoord(center.x, center.y, options);
+        const sectionRadius = getMazeSectionRadius(options);
+        const halfDiagonal = Math.hypot(rect.maxX - rect.minX, rect.maxY - rect.minY) * 0.5;
+        const searchRadius = Math.max(1, Math.ceil((halfDiagonal + sectionRadius) / sectionRadius) + 1);
+        const hits = [];
+        for (let dq = -searchRadius; dq <= searchRadius; dq++) {
+            for (let dr = -searchRadius; dr <= searchRadius; dr++) {
+                const q = centerCoord.q + dq;
+                const r = centerCoord.r + dr;
+                const sectionCenter = mazeSectionCenter(q, r, options);
+                const polygon = getHexCornersWorld(sectionCenter.x, sectionCenter.y, sectionRadius);
+                if (!polygonIntersectsAxisAlignedRect(polygon, rect)) continue;
+                hits.push({
+                    key: mazeSectionKey(q, r),
+                    distance: Math.hypot(sectionCenter.x - state.target.x, sectionCenter.y - state.target.y)
+                });
+            }
+        }
+        hits.sort((a, b) => a.distance - b.distance);
+        return hits.map((entry) => entry.key);
+    }
+
+    function getProjectedMazeViewportRect(_options) {
+        const view = state.view;
+        if (!view || !(view.width > 0 && view.height > 0 && view.scale > 0)) return null;
+        const dx = Math.cos(state.target.heading) * MAZE_LOOKAHEAD_DISTANCE;
+        const dy = Math.sin(state.target.heading) * MAZE_LOOKAHEAD_DISTANCE;
+        const halfWidth = view.width / view.scale * 0.5;
+        const halfHeight = view.height / view.scale * 0.5;
+        return {
+            minX: state.target.x + dx - halfWidth,
+            minY: state.target.y + dy - halfHeight,
+            maxX: state.target.x + dx + halfWidth,
+            maxY: state.target.y + dy + halfHeight
+        };
+    }
+
+    function invalidateMazeLookaheadCache() {
+        state.generatedMazeLookaheadKeys = [];
+        state.generatedMazeLookaheadNextRefreshAt = 0;
+    }
+
+    function polygonIntersectsAxisAlignedRect(polygon, rect) {
+        if (!Array.isArray(polygon) || polygon.length < 3) {
+            throw new Error("NPC movement lab maze lookahead requires a section polygon");
+        }
+        if (!rect || !Number.isFinite(rect.minX) || !Number.isFinite(rect.minY) || !Number.isFinite(rect.maxX) || !Number.isFinite(rect.maxY)) {
+            throw new Error("NPC movement lab maze lookahead requires a finite viewport rectangle");
+        }
+        for (const point of polygon) {
+            if (point.x >= rect.minX && point.x <= rect.maxX && point.y >= rect.minY && point.y <= rect.maxY) return true;
+        }
+        const corners = [
+            { x: rect.minX, y: rect.minY },
+            { x: rect.maxX, y: rect.minY },
+            { x: rect.maxX, y: rect.maxY },
+            { x: rect.minX, y: rect.maxY }
+        ];
+        for (const corner of corners) {
+            if (pointInPolygon(corner.x, corner.y, polygon)) return true;
+        }
+        const edges = [
+            [corners[0], corners[1]],
+            [corners[1], corners[2]],
+            [corners[2], corners[3]],
+            [corners[3], corners[0]]
+        ];
+        for (let i = 0; i < polygon.length; i++) {
+            const a = polygon[i];
+            const b = polygon[(i + 1) % polygon.length];
+            for (const edge of edges) {
+                if (segmentIntersectionParameters(a.x, a.y, b.x, b.y, edge[0].x, edge[0].y, edge[1].x, edge[1].y)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     function getMazeSignature(options, keys) {
@@ -423,8 +531,11 @@
         const bounds = getPathfindingLayerBounds();
         const manualWalls = state.manualWalls.map(cloneWallRecord);
         const requestId = state.generatedMazeRequestId++;
+        state.generatedMazeActiveRequestId = requestId;
         state.generatedMazePendingSignature = signature;
         state.generatedMazeLoading = true;
+        state.worldVersion += 1;
+        clearAgentPathRequestsForMapRebuild();
         labels.workerStatus.textContent = `${MAZE_WORKER_STATUS_PREFIX} loading`;
         mazeWorker.postMessage({
             type: "build_maze_sections",
@@ -436,6 +547,155 @@
             bounds,
             targetRadius: TARGET_RADIUS
         });
+    }
+
+    function handleMazeWorkerMessage(event) {
+        const message = event && event.data ? event.data : null;
+        if (!message || typeof message.type !== "string") return;
+        if (message.type === "ready") return;
+        if (message.type === "error") {
+            if (Number(message.requestId) !== Number(state.generatedMazeActiveRequestId)) return;
+            state.generatedMazeLoading = false;
+            labels.workerStatus.textContent = message.message || "maze error";
+            return;
+        }
+        if (message.type !== "maze_sections_result") return;
+        if (Number(message.requestId) !== Number(state.generatedMazeActiveRequestId)) return;
+        if (message.signature !== state.generatedMazePendingSignature) return;
+        installGeneratedMazeWorkerResult(message);
+    }
+
+    function installGeneratedMazeWorkerResult(message) {
+        if (!message || typeof message.signature !== "string" || !message.nodeLayer) {
+            throw new Error("NPC movement lab maze worker result is malformed");
+        }
+        const generatedWalls = unpackMazeWorkerWalls(message.generatedWalls, "generated maze walls");
+        const allWalls = unpackMazeWorkerWalls(message.allWalls, "maze pathfinding walls");
+        const manualOffset = generatedWalls.length;
+        if (allWalls.length !== generatedWalls.length + state.manualWalls.length) {
+            throw new Error("NPC movement lab maze worker wall count does not match active manual walls");
+        }
+        for (let i = 0; i < state.manualWalls.length; i++) {
+            const expected = state.manualWalls[i];
+            const actual = allWalls[manualOffset + i];
+            if (!wallsMatch(expected, actual)) {
+                throw new Error("NPC movement lab maze worker result is stale for manual walls");
+            }
+        }
+
+        state.generatedMazeWalls = generatedWalls;
+        state.walls = allWalls;
+        state.generatedMazeSignature = message.signature;
+        state.generatedMazePendingSignature = "";
+        state.generatedMazeLoading = false;
+        state.generatedMazeActiveRequestId = 0;
+        state.worldVersion += 1;
+        installPathfindingNodeLayerFromWorker(message.nodeLayer);
+        constrainTargetToWalls();
+        for (const agent of state.agents) constrainAgentToWalls(agent);
+        resolveTargetNpcContacts();
+        labels.workerStatus.textContent = "ready";
+    }
+
+    function clearAgentPathRequestsForMapRebuild() {
+        for (const agent of state.agents) {
+            agent.pathMode = PATH_MODE_DIRECT;
+            agent.pathRequestPending = false;
+            agent.pathRequestId = 0;
+            agent.pathRequestedWorldVersion = 0;
+            agent.pathRequestedRawStartKey = "";
+            agent.pathRequestedStartKey = "";
+            agent.pathRequestedGoalKey = "";
+            agent.pathNodeKeys = [];
+            agent.pathCursor = 0;
+            agent.pathGoalX = agent.x;
+            agent.pathGoalY = agent.y;
+        }
+    }
+
+    function unpackMazeWorkerWalls(packed, label) {
+        if (!(packed instanceof Float32Array)) throw new Error(`NPC movement lab ${label} must be packed`);
+        if (packed.length % WALL_STRIDE !== 0) throw new Error(`NPC movement lab ${label} has an invalid packed length`);
+        const walls = [];
+        for (let i = 0; i < packed.length; i += WALL_STRIDE) {
+            walls.push({
+                ax: packed[i],
+                ay: packed[i + 1],
+                bx: packed[i + 2],
+                by: packed[i + 3],
+                nx: packed[i + 4],
+                ny: packed[i + 5],
+                kind: Math.round(packed[i + 6]) === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY
+            });
+        }
+        return walls;
+    }
+
+    function wallsMatch(left, right) {
+        if (!left || !right) return false;
+        return Math.abs(Number(left.ax) - Number(right.ax)) < 0.0001 &&
+            Math.abs(Number(left.ay) - Number(right.ay)) < 0.0001 &&
+            Math.abs(Number(left.bx) - Number(right.bx)) < 0.0001 &&
+            Math.abs(Number(left.by) - Number(right.by)) < 0.0001 &&
+            Math.abs(Number(left.nx) - Number(right.nx)) < 0.0001 &&
+            Math.abs(Number(left.ny) - Number(right.ny)) < 0.0001 &&
+            (left.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY) ===
+                (right.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY);
+    }
+
+    function installPathfindingNodeLayerFromWorker(workerLayer) {
+        const packedNodes = workerLayer.nodes;
+        const packedBlockedEdges = workerLayer.blockedEdges;
+        if (!(packedNodes instanceof Float32Array) || packedNodes.length % 4 !== 0) {
+            throw new Error("NPC movement lab maze worker nodes are malformed");
+        }
+        if (!(packedBlockedEdges instanceof Int32Array) || packedBlockedEdges.length % 3 !== 0) {
+            throw new Error("NPC movement lab maze worker blocked edges are malformed");
+        }
+
+        const nodes = [];
+        const nodeByKey = new Map();
+        for (let i = 0; i < packedNodes.length; i += 4) {
+            const xindex = Math.round(packedNodes[i]);
+            const yindex = Math.round(packedNodes[i + 1]);
+            const node = createPathfindingNode(xindex, yindex);
+            node.blocked = packedNodes[i + 2] === 1;
+            nodes.push(node);
+            nodeByKey.set(node.key, node);
+        }
+        for (const node of nodes) {
+            const offsets = getPathfindingNeighborOffsets(node.xindex);
+            for (let dir = 0; dir < 12; dir++) {
+                const offset = offsets[dir];
+                node.neighbors[dir] = nodeByKey.get(pathfindingNodeKey(node.xindex + offset.x, node.yindex + offset.y)) || null;
+            }
+        }
+
+        const blockedEdges = [];
+        for (let i = 0; i < packedBlockedEdges.length; i += 3) {
+            const a = nodes[packedBlockedEdges[i]];
+            const b = nodes[packedBlockedEdges[i + 1]];
+            const wall = state.walls[packedBlockedEdges[i + 2]];
+            if (!a || !b || !wall) throw new Error("NPC movement lab maze worker blocked edge references are invalid");
+            const aDir = a.neighbors.indexOf(b);
+            const bDir = b.neighbors.indexOf(a);
+            if (aDir < 0 || bDir < 0) throw new Error("NPC movement lab maze worker blocked edge is not between neighbors");
+            addDirectionalBlock(a, aDir, wall);
+            addDirectionalBlock(b, bDir, wall);
+            blockedEdges.push({ a, b, wallIndex: packedBlockedEdges[i + 2] });
+        }
+
+        state.nodeLayer.pathCenterX = Number(workerLayer.pathCenterX);
+        state.nodeLayer.pathCenterY = Number(workerLayer.pathCenterY);
+        if (!Number.isFinite(state.nodeLayer.pathCenterX) || !Number.isFinite(state.nodeLayer.pathCenterY)) {
+            throw new Error("NPC movement lab maze worker path center is invalid");
+        }
+        state.nodeLayer.nodes = nodes;
+        state.nodeLayer.nodeByKey = nodeByKey;
+        state.nodeLayer.blockedEdges = blockedEdges;
+        state.nodeLayer.version += 1;
+        state.nodeLayer.dirty = true;
+        publishPathfindingSnapshot();
     }
 
     function cloneWallRecord(wall) {
@@ -467,12 +727,18 @@
 
     function refreshMazePathBoundsIfNeeded() {
         if (!isProceduralMazeScenario()) return false;
+        if (state.generatedMazeLoading) return false;
         const radius = getMazeSectionRadius(getMazeOptions());
         const dx = state.target.x - state.nodeLayer.pathCenterX;
         const dy = state.target.y - state.nodeLayer.pathCenterY;
         if (Number.isFinite(dx) && Number.isFinite(dy) && Math.hypot(dx, dy) < radius * 0.35) return false;
-        state.worldVersion += 1;
-        rebuildPathfindingNodeLayer();
+        const options = getMazeOptions();
+        const keys = Array.from(state.generatedMazeChunkKeys).sort();
+        if (keys.length === 0) {
+            refreshGeneratedMazeIfNeeded(true);
+            return true;
+        }
+        requestGeneratedMazeRefresh(options, keys, getMazeSignature(options, keys));
         return true;
     }
 
@@ -514,29 +780,15 @@
     }
 
     function getMazeSectionOutgoingSides(q, r, options) {
-        const random = seededRandom(hashString(`${options.seed}|section-outs|${q},${r}`));
-        const count = 1 + Math.floor(random() * 3);
-        const sides = [0, 1, 2, 3, 4, 5];
-        sides.sort((a, b) => mazeSideScore(options.seed, q, r, a) - mazeSideScore(options.seed, q, r, b));
-        return sides.slice(0, count).sort((a, b) => a - b);
-    }
-
-    function mazeSideScore(seed, q, r, side) {
-        return hashString(`${seed}|side-score|${q},${r}|${side}`);
+        const sides = [];
+        for (let side = 0; side < 6; side++) {
+            if (isMazeSharedHallOpen(q, r, side, options)) sides.push(side);
+        }
+        return sides;
     }
 
     function getMazeSectionIncomingSides(q, r, options) {
-        const sides = [];
-        for (let side = 0; side < 6; side++) {
-            const dir = MAZE_SECTION_DIRECTIONS[side];
-            const neighborQ = q + dir.q;
-            const neighborR = r + dir.r;
-            const neighborSide = (side + 3) % 6;
-            if (getMazeSectionOutgoingSides(neighborQ, neighborR, options).includes(neighborSide)) {
-                sides.push(side);
-            }
-        }
-        return sides;
+        return [];
     }
 
     function getMazeSectionHallConnections(q, r, outgoingSides, incomingSides, options) {
@@ -562,8 +814,7 @@
             : `${neighborKey}|${thisKey}`;
         const random = seededRandom(hashString(`${options.seed}|hall-edge|${ordered}`));
         const edgeT = 0.28 + random() * 0.44;
-        const open = getMazeSectionOutgoingSides(q, r, options).includes(side) ||
-            getMazeSectionOutgoingSides(neighborQ, neighborR, options).includes((side + 3) % 6);
+        const open = isMazeSharedHallOpen(q, r, side, options);
         if (requireOpen && !open) {
             throw new Error(`NPC movement lab maze hallway edge ${ordered} is not open`);
         }
@@ -574,6 +825,18 @@
             t: thisKey < neighborKey ? edgeT : 1 - edgeT,
             width: MAZE_HALLWAY_GAP_WIDTH
         };
+    }
+
+    function isMazeSharedHallOpen(q, r, side, options) {
+        const dir = MAZE_SECTION_DIRECTIONS[side];
+        if (!dir) throw new Error("NPC movement lab maze hallway side is invalid");
+        const thisKey = mazeSectionKey(q, r);
+        const neighborKey = mazeSectionKey(q + dir.q, r + dir.r);
+        const ordered = thisKey < neighborKey
+            ? `${thisKey}|${neighborKey}`
+            : `${neighborKey}|${thisKey}`;
+        const random = seededRandom(hashString(`${options.seed}|hall-open|${ordered}`));
+        return random() < 1 / 3;
     }
 
     function getMazeSectionOutsideDoor(q, r, options, hallSides) {
@@ -659,8 +922,6 @@
         const dy = neighborCenter.y - room.center.y;
         const length = Math.hypot(dx, dy);
         if (!(length > 0.001)) throw new Error("NPC movement lab maze hallway requires separated section centers");
-        const ux = dx / length;
-        const uy = dy / length;
         const neighborRoomRadius = Math.max(
             5,
             getMazeSectionRadius(options) - MAZE_ROOM_EDGE_INSET_TILES / Math.cos(Math.PI / 6)
@@ -684,20 +945,17 @@
             neighborConnection.width
         );
 
-        appendHalfHallwaySideWall(walls, startGap.left, neighborGap.right, ux, uy, connection.width);
-        appendHalfHallwaySideWall(walls, startGap.right, neighborGap.left, ux, uy, connection.width);
+        appendHalfHallwaySideWall(walls, startGap.left, neighborGap.right);
+        appendHalfHallwaySideWall(walls, startGap.right, neighborGap.left);
     }
 
-    function appendHalfHallwaySideWall(walls, start, end, ux, uy, gapWidth) {
-        const startInset = gapWidth * 0.08;
-        const sx = start.x + ux * startInset;
-        const sy = start.y + uy * startInset;
+    function appendHalfHallwaySideWall(walls, start, end) {
         const middle = {
             x: (start.x + end.x) * 0.5,
             y: (start.y + end.y) * 0.5
         };
-        if (Math.hypot(middle.x - sx, middle.y - sy) <= 0.5) return;
-        appendSegmentWall(walls, sx, sy, middle.x, middle.y);
+        if (Math.hypot(middle.x - start.x, middle.y - start.y) <= 0.5) return;
+        appendSegmentWall(walls, start.x, start.y, middle.x, middle.y);
     }
 
     function getWallGapEndpoints(a, b, gapT, gapWidth) {
@@ -766,6 +1024,8 @@
         state.generatedMazeSignature = "";
         state.generatedMazePendingSignature = "";
         state.generatedMazeLoading = false;
+        invalidateMazeLookaheadCache();
+        clearPathfindingNodeLayer();
         const count = Number(agentCountInput.value);
         const scenario = scenarioSelect.value;
         if (scenario === "openArena") {
@@ -792,6 +1052,16 @@
             rebuildPathfindingNodeLayer();
             enforceInitialWallConstraints();
         }
+    }
+
+    function clearPathfindingNodeLayer() {
+        state.nodeLayer.nodes = [];
+        state.nodeLayer.nodeByKey = new Map();
+        state.nodeLayer.blockedEdges = [];
+        state.nodeLayer.pathCenterX = NaN;
+        state.nodeLayer.pathCenterY = NaN;
+        state.nodeLayer.version += 1;
+        state.nodeLayer.dirty = true;
     }
 
     function respawnAgentsForCurrentScenario() {
@@ -976,7 +1246,9 @@
         if (!isTargetMovementInputActive() && !isProjectedCursorInputActive()) return;
         const bendRatio = getProjectedCursorBendRatio(cursor.angleOffset);
         if (bendRatio === 0) return;
-        const turnRadius = getProjectedCursorTurnRadius(cursor.distance, bendRatio);
+        const trace = getCurrentProjectedCursorTrace();
+        const effectiveDistance = getProjectedCursorTraceDistance(trace);
+        const turnRadius = getProjectedCursorTurnRadius(effectiveDistance, bendRatio);
         const turnRate = TARGET_KEYBOARD_MOVE_SPEED / turnRadius;
         state.target.heading = normalizeAngle(state.target.heading + Math.sign(bendRatio) * turnRate * dt);
     }
@@ -1031,8 +1303,19 @@
         const survivors = [];
         for (const fireball of state.fireballs) {
             fireball.age += dt;
-            fireball.x += fireball.dirX * FIREBALL_SPEED * dt;
-            fireball.y += fireball.dirY * FIREBALL_SPEED * dt;
+            const previousX = fireball.x;
+            const previousY = fireball.y;
+            const nextX = fireball.x + fireball.dirX * FIREBALL_SPEED * dt;
+            const nextY = fireball.y + fireball.dirY * FIREBALL_SPEED * dt;
+            const wallHit = findEarliestFireballWallHit(previousX, previousY, nextX, nextY);
+            if (wallHit) {
+                fireball.x = wallHit.x;
+                fireball.y = wallHit.y;
+                detonateFireball(fireball);
+                continue;
+            }
+            fireball.x = nextX;
+            fireball.y = nextY;
             const hitbox = getFireballHitboxPolygon(fireball);
             if (findAgentIntersectingPolygon(hitbox)) {
                 detonateFireball(fireball);
@@ -1042,6 +1325,38 @@
         }
         state.fireballs = survivors;
         updateFireballExplosions(dt);
+    }
+
+    function findEarliestFireballWallHit(fromX, fromY, toX, toY) {
+        if (!Number.isFinite(fromX) || !Number.isFinite(fromY) || !Number.isFinite(toX) || !Number.isFinite(toY)) {
+            throw new Error("NPC movement lab fireball wall hit test requires finite movement");
+        }
+        let best = null;
+        for (const wall of state.walls) {
+            const hit = wall.kind === WALL_KIND_SEGMENT
+                ? sweptCircleSegmentHit(fromX, fromY, toX, toY, wall.ax, wall.ay, wall.bx, wall.by, FIREBALL_DAMAGE_RADIUS)
+                : sweptCircleBoundaryWallHit(fromX, fromY, toX, toY, wall, FIREBALL_DAMAGE_RADIUS);
+            if (!hit || (best && hit.t >= best.t)) continue;
+            best = {
+                t: hit.t,
+                x: fromX + (toX - fromX) * hit.t,
+                y: fromY + (toY - fromY) * hit.t
+            };
+        }
+        return best;
+    }
+
+    function sweptCircleBoundaryWallHit(fromX, fromY, toX, toY, wall, radius) {
+        if (!wall || !Number.isFinite(wall.ax) || !Number.isFinite(wall.ay) || !Number.isFinite(wall.nx) || !Number.isFinite(wall.ny) || !Number.isFinite(radius)) {
+            throw new Error("NPC movement lab fireball boundary hit test requires finite wall data");
+        }
+        const startSigned = (fromX - wall.ax) * wall.nx + (fromY - wall.ay) * wall.ny;
+        const endSigned = (toX - wall.ax) * wall.nx + (toY - wall.ay) * wall.ny;
+        if (startSigned <= radius) return { t: 0 };
+        if (endSigned > radius) return null;
+        const delta = startSigned - endSigned;
+        if (!(delta > 0.000001)) return null;
+        return { t: Math.max(0, Math.min(1, (startSigned - radius) / delta)) };
     }
 
     function findAgentIntersectingPolygon(polygon) {
@@ -1369,6 +1684,7 @@
 
     function packAgents() {
         const packed = new Float32Array(state.agents.length * STRIDE);
+        const forceDirectPathing = isProceduralMazeScenario() && state.generatedMazeLoading;
         for (let i = 0; i < state.agents.length; i++) {
             const agent = state.agents[i];
             const base = i * STRIDE;
@@ -1386,9 +1702,9 @@
             packed[base + 11] = agent.heading;
             packed[base + 12] = agent.millingDirection;
             packed[base + 13] = agent.millingWallTurnLock || 0;
-            packed[base + 14] = agent.pathMode === PATH_MODE_WORKER ? PATH_MODE_WORKER : PATH_MODE_DIRECT;
-            packed[base + 15] = Number.isFinite(agent.pathGoalX) ? agent.pathGoalX : agent.x;
-            packed[base + 16] = Number.isFinite(agent.pathGoalY) ? agent.pathGoalY : agent.y;
+            packed[base + 14] = !forceDirectPathing && agent.pathMode === PATH_MODE_WORKER ? PATH_MODE_WORKER : PATH_MODE_DIRECT;
+            packed[base + 15] = !forceDirectPathing && Number.isFinite(agent.pathGoalX) ? agent.pathGoalX : state.target.x;
+            packed[base + 16] = !forceDirectPathing && Number.isFinite(agent.pathGoalY) ? agent.pathGoalY : state.target.y;
         }
         return packed;
     }
@@ -1411,7 +1727,11 @@
 
     function requestStep(dt) {
         if (state.waitingForWorker) return;
-        updateAgentPathing(dt);
+        if (isProceduralMazeScenario() && state.nodeLayer.nodes.length === 0) {
+            labels.workerStatus.textContent = state.generatedMazeLoading ? "maze loading" : "maze missing";
+            return;
+        }
+        if (!(isProceduralMazeScenario() && state.generatedMazeLoading)) updateAgentPathing(dt);
         state.waitingForWorker = true;
         const targetMoved = Math.hypot(
             state.target.x - state.lastSentTarget.x,
@@ -1776,6 +2096,7 @@
         if (!message || typeof message.type !== "string") return;
         if (message.type === "ready") return;
         if (message.type !== "path_result") return;
+        if (isProceduralMazeScenario() && state.generatedMazeLoading) return;
         const agent = state.agents.find((candidate) => candidate.pathRequestId === message.requestId);
         if (!agent) return;
         agent.pathRequestPending = false;
@@ -1840,6 +2161,17 @@
         ) {
             state.hexGridLayer.dirty = true;
             state.nodeLayer.dirty = true;
+            if (
+                isProceduralMazeScenario() &&
+                (
+                    resized ||
+                    Math.abs(state.view.scale - previousScale) > 0.001 ||
+                    Math.abs(state.view.offsetX - previousOffsetX) > 0.001 ||
+                    Math.abs(state.view.offsetY - previousOffsetY) > 0.001
+                )
+            ) {
+                invalidateMazeLookaheadCache();
+            }
         }
     }
 
@@ -2431,6 +2763,29 @@
             cursor.angleOffset,
             cursor.distance
         );
+    }
+
+    function getProjectedCursorTraceDistance(trace) {
+        if (!trace || !Array.isArray(trace.points) || trace.points.length < 2) {
+            throw new Error("NPC movement lab projected cursor trace requires at least two points");
+        }
+        let distance = 0;
+        for (let i = 1; i < trace.points.length; i++) {
+            const previous = trace.points[i - 1];
+            const current = trace.points[i];
+            if (
+                !previous ||
+                !current ||
+                !Number.isFinite(previous.x) ||
+                !Number.isFinite(previous.y) ||
+                !Number.isFinite(current.x) ||
+                !Number.isFinite(current.y)
+            ) {
+                throw new Error("NPC movement lab projected cursor trace contains invalid points");
+            }
+            distance += Math.hypot(current.x - previous.x, current.y - previous.y);
+        }
+        return distance;
     }
 
     function drawProjectedCursorGuide(points) {
@@ -3051,6 +3406,7 @@
             updateControlLabels();
             if (!isProceduralMazeScenario()) return;
             state.generatedMazeSignature = "";
+            invalidateMazeLookaheadCache();
             refreshGeneratedMazeIfNeeded(true);
         });
     }

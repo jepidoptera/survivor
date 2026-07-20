@@ -1,7 +1,7 @@
 "use strict";
 
 importScripts("/assets/javascript/wallGeometry.js?v=npc-movement-lab-1");
-importScripts("/npc-movement-lab/orcaSolver.js?v=npc-movement-lab-1");
+importScripts("/assets/javascript/pathfinding/orcaSolver.js?v=npc-movement-lab-1");
 
 const STRIDE = 17;
 const OUT_STRIDE = 14;

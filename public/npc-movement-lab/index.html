@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>NPC Movement Lab</title>
-    <link rel="stylesheet" href="/npc-movement-lab/styles.css?v=npc-movement-lab-27">
+    <link rel="stylesheet" href="/npc-movement-lab/styles.css?v=npc-movement-lab-28">
 </head>
 <body>
     <main class="app-shell">
@@ -58,8 +58,8 @@
                 <input id="speedScale" type="range" min="0" max="1" step="0.001" value="0.5">
             </section>
 
-            <section class="panel-section">
-                <h2>Status</h2>
+            <details class="panel-section collapsible-section" id="statusPanel">
+                <summary>Status</summary>
                 <dl class="metric-grid">
                     <dt>Worker</dt><dd id="workerStatus">starting</dd>
                     <dt>Solve</dt><dd id="solveMs">0.00 ms</dd>
@@ -72,7 +72,7 @@
                     <dt>Blocked</dt><dd id="blockedCount">0</dd>
                     <dt>Wall Leaks</dt><dd id="wallLeaks">0</dd>
                 </dl>
-            </section>
+            </details>
 
             <section class="panel-section">
                 <h2>Diagnostics</h2>
@@ -94,6 +94,6 @@
         </aside>
     </main>
     <script src="/assets/javascript/wallGeometry.js?v=npc-movement-lab-1"></script>
-    <script src="/npc-movement-lab/main.js?v=npc-movement-lab-76"></script>
+    <script src="/npc-movement-lab/main.js?v=npc-movement-lab-78"></script>
 </body>
 </html>
