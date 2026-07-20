@@ -53,13 +53,23 @@ app.get('/terrain-bubble-lab/:asset', (req, res, next) => {
 })
 app.get('/npc-movement-lab', (req, res) => {
     res.set('Cache-Control', 'no-store');
-    res.sendFile(path.join(__dirname, 'public', 'npc-movement-lab', 'index.html'));
+    res.redirect(302, '/wizard-of-flatland');
 })
 app.get('/npc-movement-lab/:asset', (req, res, next) => {
     const asset = String(req.params.asset || '');
-    if (!['index.html', 'main.js', 'styles.css', 'solverWorker.js'].includes(asset)) return next();
+    if (!['index.html', 'main.js', 'styles.css', 'solverWorker.js', 'mazeSectionWorker.js'].includes(asset)) return next();
     res.set('Cache-Control', 'no-store');
     res.sendFile(path.join(__dirname, 'public', 'npc-movement-lab', asset));
+})
+app.get('/wizard-of-flatland', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.sendFile(path.join(__dirname, 'public', 'wizard-of-flatland', 'index.html'));
+})
+app.get('/wizard-of-flatland/:asset', (req, res, next) => {
+    const asset = String(req.params.asset || '');
+    if (!['index.html', 'main.js', 'styles.css', 'solverWorker.js', 'mazeSectionWorker.js'].includes(asset)) return next();
+    res.set('Cache-Control', 'no-store');
+    res.sendFile(path.join(__dirname, 'public', 'wizard-of-flatland', asset));
 })
 app.get('/assets/javascript/terrain-bubble-deterministic-solver-runtime.js', (req, res) => {
     const modulePaths = {

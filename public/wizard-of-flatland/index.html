@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Wizard of Flatland</title>
+    <link rel="stylesheet" href="/wizard-of-flatland/styles.css?v=wizard-of-flatland-28">
+</head>
+<body>
+    <main class="app-shell">
+        <section class="workbench" aria-label="NPC movement solver workbench">
+            <canvas id="solverCanvas"></canvas>
+        </section>
+        <aside class="side-panel" aria-label="NPC movement controls">
+            <section class="panel-section">
+                <h1>Wizard of Flatland</h1>
+                <div class="button-row">
+                    <button type="button" id="playButton">Pause</button>
+                    <button type="button" id="stepButton">Step</button>
+                    <button type="button" id="resetButton">Reset</button>
+                </div>
+            </section>
+
+            <section class="panel-section">
+                <h2>Scenario</h2>
+                <select id="scenarioSelect" class="select-input">
+                    <option value="sealedRoom">Sealed Room</option>
+                    <option value="crowdedArena">Crowded Arena</option>
+                    <option value="openArena">Open Arena</option>
+                    <option value="proceduralMaze" selected>Procedural Maze</option>
+                </select>
+            </section>
+
+            <section class="panel-section" id="mazeControlsSection">
+                <h2>Maze</h2>
+                <label class="field-label" for="mazeSeed">Seed</label>
+                <input id="mazeSeed" class="text-input" type="text" value="hex-maze-1" spellcheck="false">
+
+                <label class="field-label" for="mazeChunkSize">Section Size <span id="mazeChunkSizeValue"></span></label>
+                <input id="mazeChunkSize" type="range" min="28" max="72" step="2" value="44">
+
+                <label class="field-label" for="mazeRoomScale">Room Scale <span id="mazeRoomScaleValue"></span></label>
+                <input id="mazeRoomScale" type="range" min="0" max="1" step="0.01" value="0.56">
+
+                <label class="field-label" for="mazeTwistiness">Twistiness <span id="mazeTwistinessValue"></span></label>
+                <input id="mazeTwistiness" type="range" min="0" max="1" step="0.01" value="0.62">
+            </section>
+
+            <section class="panel-section">
+                <h2>Solver</h2>
+                <label class="field-label" for="agentCount">Agents <span id="agentCountValue"></span></label>
+                <input id="agentCount" type="range" min="8" max="90" step="1" value="42">
+
+                <label class="field-label" for="separationStrength">Separation <span id="separationStrengthValue"></span></label>
+                <input id="separationStrength" type="range" min="1" max="10" step="0.1" value="7">
+
+                <label class="field-label" for="speedScale">Speed <span id="speedScaleValue"></span></label>
+                <input id="speedScale" type="range" min="0" max="1" step="0.001" value="0.5">
+            </section>
+
+            <details class="panel-section collapsible-section" id="statusPanel">
+                <summary>Status</summary>
+                <dl class="metric-grid">
+                    <dt>Worker</dt><dd id="workerStatus">starting</dd>
+                    <dt>Solve</dt><dd id="solveMs">0.00 ms</dd>
+                    <dt>Checks</dt><dd id="pairChecks">0</dd>
+                    <dt>Milling</dt><dd id="movingCount">0</dd>
+                    <dt>Seeking</dt><dd id="seekingCount">0</dd>
+                    <dt>Holding</dt><dd id="waitingCount">0</dd>
+                    <dt>Attacking</dt><dd id="attackingCount">0</dd>
+                    <dt>Recover/Vacate</dt><dd id="retreatingCount">0</dd>
+                    <dt>Blocked</dt><dd id="blockedCount">0</dd>
+                    <dt>Wall Leaks</dt><dd id="wallLeaks">0</dd>
+                </dl>
+            </details>
+
+            <section class="panel-section">
+                <h2>Diagnostics</h2>
+                <div class="legend">
+                    <span><i class="dot moving"></i>milling</span>
+                    <span><i class="dot seeking"></i>seeking</span>
+                    <span><i class="dot waiting"></i>holding</span>
+                    <span><i class="dot striking"></i>attacking</span>
+                    <span><i class="dot retreating"></i>recovering</span>
+                    <span><i class="dot vacating"></i>vacating</span>
+                    <span><i class="dot blocked"></i>wall contact</span>
+                </div>
+            </section>
+
+            <section class="panel-section">
+                <h2>Target</h2>
+                <p class="hint-line">W/S move forward/back, A/D strafe. Arrow keys steer and move the projected cursor. Space shoots. Hold Shift for speed. Hold B and drag to build walls.</p>
+            </section>
+        </aside>
+    </main>
+    <script src="/assets/javascript/wallGeometry.js?v=wizard-of-flatland-1"></script>
+    <script src="/wizard-of-flatland/main.js?v=wizard-of-flatland-79"></script>
+</body>
+</html>
