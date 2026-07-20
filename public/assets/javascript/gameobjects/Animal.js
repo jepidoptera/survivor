@@ -1,4 +1,4 @@
-class Animal extends Character {
+class NpcCharacter extends Character {
     static FIRE_TEXTURE_PATH = "/assets/images/magic/fire.png";
     static FIRE_FRAME_COUNT_X = 5;
     static FIRE_FRAME_COUNT_Y = 5;
@@ -7,13 +7,13 @@ class Animal extends Character {
     static METADATA_CATEGORY = "animals";
 
     static getFireFrames() {
-        if (Animal._fireFramesCache && Animal._fireFramesCache.length > 0) {
-            return Animal._fireFramesCache;
+        if (NpcCharacter._fireFramesCache && NpcCharacter._fireFramesCache.length > 0) {
+            return NpcCharacter._fireFramesCache;
         }
-        const baseTex = PIXI.Texture.from(Animal.FIRE_TEXTURE_PATH).baseTexture;
+        const baseTex = PIXI.Texture.from(NpcCharacter.FIRE_TEXTURE_PATH).baseTexture;
         if (!baseTex || !baseTex.valid) return null;
-        const cols = Animal.FIRE_FRAME_COUNT_X;
-        const rows = Animal.FIRE_FRAME_COUNT_Y;
+        const cols = NpcCharacter.FIRE_FRAME_COUNT_X;
+        const rows = NpcCharacter.FIRE_FRAME_COUNT_Y;
         const fw = baseTex.width / cols;
         const fh = baseTex.height / rows;
         const frames = [];
@@ -22,7 +22,7 @@ class Animal extends Character {
                 frames.push(new PIXI.Texture(baseTex, new PIXI.Rectangle(c * fw, r * fh, fw, fh)));
             }
         }
-        Animal._fireFramesCache = frames;
+        NpcCharacter._fireFramesCache = frames;
         return frames;
     }
 
@@ -167,7 +167,7 @@ class Animal extends Character {
             return this._animalMetadataPromise;
         }
         this._animalMetadataPromise = globalThis.getResolvedPlaceableMetadata(
-            Animal.METADATA_CATEGORY,
+            NpcCharacter.METADATA_CATEGORY,
             this.texturePath || this.resolveAnimalTexturePath()
         )
             .then(meta => {
@@ -294,7 +294,7 @@ class Animal extends Character {
 
     _ensureFireSprite() {
         if (this.fireSprite) return this.fireSprite;
-        const frames = Animal.getFireFrames();
+        const frames = NpcCharacter.getFireFrames();
         if (!frames || frames.length === 0) return null;
         this._fireFrameIndex = Math.floor(Math.random() * frames.length);
         this._fireFrameProgress = 0;
@@ -307,7 +307,7 @@ class Animal extends Character {
 
     _updateFireAnimation() {
         if (!this.fireSprite) return;
-        const frames = Animal.getFireFrames();
+        const frames = NpcCharacter.getFireFrames();
         if (!frames || frames.length <= 1) return;
 
         const currentFC = Number.isFinite(frameCount) ? Number(frameCount) : 0;
@@ -322,7 +322,7 @@ class Animal extends Character {
         if (delta <= 0) return;
 
         const simFps = Math.max(1, Number(frameRate) || 30);
-        this._fireFrameProgress += delta * (Animal.FIRE_FPS / simFps);
+        this._fireFrameProgress += delta * (NpcCharacter.FIRE_FPS / simFps);
         const advance = Math.floor(this._fireFrameProgress);
         if (advance > 0) {
             this._fireFrameProgress -= advance;
@@ -2897,7 +2897,7 @@ class Animal extends Character {
                     animalInstance = new Blodia(node, map, constructorOptions);
                     break;
                 default:
-                    animalInstance = new Animal(data.type, node, map, constructorOptions);
+                    animalInstance = new NpcCharacter(data.type, node, map, constructorOptions);
             }
             const constructMs = (
                 ((typeof performance !== "undefined" && performance && typeof performance.now === "function")
@@ -3112,7 +3112,7 @@ class Animal extends Character {
     }
 }
 
-class Squirrel extends Animal {
+class Squirrel extends NpcCharacter {
     constructor(location, map, options = {}) {
         const size = Math.random() * .2 + .4;
         super('squirrel', location, size, map, options);
@@ -3617,7 +3617,7 @@ class Squirrel extends Animal {
     }
 }
 
-class Deer extends Animal {
+class Deer extends NpcCharacter {
     constructor(location, map, options = {}) {
         const size = Math.random() * .5 + .75;
         super('deer', location, size, map, options);
@@ -3647,7 +3647,7 @@ class Deer extends Animal {
     }
 }
 
-class Bear extends Animal {
+class Bear extends NpcCharacter {
     constructor(location, map, options = {}) {
         const size = Math.random() * .5 + 1.2;
         super('bear', location, size, map, options);
@@ -3682,7 +3682,7 @@ class Bear extends Animal {
     }
 }
 
-class Eagleman extends Animal {
+class Eagleman extends NpcCharacter {
     constructor(location, map, options = {}) {
         const size = Math.random() * .5 + 1.2;
         super('eagleman', location, size, map, options);
@@ -3823,7 +3823,7 @@ class Eagleman extends Animal {
     }
 }
 
-class Fragglegod extends Animal {
+class Fragglegod extends NpcCharacter {
     constructor(location, map, options = {}) {
         const size = Math.random() * .5 + 1.2;
         super('fragglegod', location, size, map, options);
@@ -3906,7 +3906,7 @@ class Fragglegod extends Animal {
 }
 
 
-class Scorpion extends Animal {
+class Scorpion extends NpcCharacter {
     constructor(location, map, options = {}) {
         const size = Math.random() * .1 + .4;
         super('scorpion', location, size, map, options);
@@ -3923,7 +3923,7 @@ class Scorpion extends Animal {
     }
 }
 
-class Armadillo extends Animal {
+class Armadillo extends NpcCharacter {
     constructor(location, map, options = {}) {
         const size = Math.random() * .2 + .5;
         super('armadillo', location, size, map, options);
@@ -3938,7 +3938,7 @@ class Armadillo extends Animal {
     }
 }
 
-class Coyote extends Animal {
+class Coyote extends NpcCharacter {
     constructor(location, map, options = {}) {
         const size = Math.random() * .25 + .7;
         super('coyote', location, size, map, options);
@@ -3953,7 +3953,7 @@ class Coyote extends Animal {
     }
 }
 
-class Goat extends Animal {
+class Goat extends NpcCharacter {
     constructor(location, map, options = {}) {
         const size = Math.random() * .25 + .7;
         super('goat', location, size, map, options);
@@ -3978,7 +3978,7 @@ class Goat extends Animal {
     }
 }
 
-class Porcupine extends Animal {
+class Porcupine extends NpcCharacter {
     constructor(location, map, options = {}) {
         const size = Math.random() * .2 + .5;
         super('porcupine', location, size, map, options);
@@ -3996,7 +3996,7 @@ class Porcupine extends Animal {
     }
 }
 
-class Blodia extends Animal {
+class Blodia extends NpcCharacter {
     constructor(location, map, options = {}) {
         const size = Math.random() * .5 + 1.5;
         super('blodia', location, size, map, options);
@@ -4584,7 +4584,7 @@ class Blodia extends Animal {
     }
 }
 
-class Yeti extends Animal {
+class Yeti extends NpcCharacter {
     constructor(location, map, options = {}) {
         const size = Math.random() * .5 + 1.5;
         super('yeti', location, size, map, options);
@@ -4612,7 +4612,8 @@ class Yeti extends Animal {
 }
 
 if (typeof globalThis !== "undefined") {
-    globalThis.Animal = Animal;
+    globalThis.NpcCharacter = NpcCharacter;
+    globalThis.Animal = NpcCharacter;
     globalThis.Squirrel = Squirrel;
     globalThis.Deer = Deer;
     globalThis.Bear = Bear;
