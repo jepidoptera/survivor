@@ -148,7 +148,7 @@ which obstacles were assumed to be opened or broken along the way.
 
 ## Obstacle Semantics
 
-These should mirror the current rules in `Animal.js` and `Map.js`:
+These should mirror the current rules in `NpcCharacter.js` and `Map.js`:
 
 - Closed doors are blocking and knockable.
 - Open, locked-open, fallen, or gone doors are non-blocking.
