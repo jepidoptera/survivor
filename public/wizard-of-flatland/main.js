@@ -3,7 +3,13 @@
 
     const STRIDE = 17;
     const OUT_STRIDE = 14;
-    const WALL_STRIDE = 7;
+    const WALL_STRIDE = 8;
+    const WALL_X1 = 0;
+    const WALL_Y1 = 1;
+    const WALL_X2 = 2;
+    const WALL_Y2 = 3;
+    const PATH_SNAPSHOT_NODE_STRIDE = 8;
+    const PATH_SNAPSHOT_EDGE_STRIDE = 4;
     const STATE_MILLING = 1;
     const STATE_ATTACKING = 3;
     const STATE_BLOCKED = 6;
@@ -74,8 +80,6 @@
         { q: 0, r: -1 },
         { q: 1, r: -1 }
     ];
-    const WALL_KIND_BOUNDARY = 0;
-    const WALL_KIND_SEGMENT = 1;
     const PATH_MODE_DIRECT = 0;
     const PATH_MODE_WORKER = 1;
     const PATH_REQUEST_INTERVAL_SECONDS = 0.22;
@@ -122,13 +126,16 @@
         attackingCount: document.getElementById("attackingCount"),
         retreatingCount: document.getElementById("retreatingCount"),
         blockedCount: document.getElementById("blockedCount"),
-        wallLeaks: document.getElementById("wallLeaks")
+        wallLeaks: document.getElementById("wallLeaks"),
+        profilerSummary: document.getElementById("profilerSummary"),
+        profilerRows: document.getElementById("profilerRows")
     };
 
     const state = {
         running: true,
         requestId: 1,
         waitingForWorker: false,
+        solverWallVersion: 0,
         pathfindingRequestId: 1,
         pathfindingSnapshotVersion: 0,
         worldVersion: 1,
@@ -136,10 +143,11 @@
         agents: [],
         fireballs: [],
         fireballExplosions: [],
-        walls: [],
-        manualWalls: [],
-        generatedMazeWalls: [],
+        walls: createEmptyWallBuffer(),
+        manualWalls: createEmptyWallBuffer(),
+        generatedMazeWalls: createEmptyWallBuffer(),
         generatedMazeChunkKeys: new Set(),
+        generatedMazeInstalledChunkKeys: new Set(),
         generatedMazeSignature: "",
         generatedMazeRequestId: 1,
         generatedMazeActiveRequestId: 0,
@@ -210,24 +218,231 @@
     window.__wizardOfFlatlandDebug = state;
     window.debug = state.debug;
 
-    const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-77");
+    const profiler = createWizardOfFlatlandProfiler();
+    window.__wizardOfFlatlandProfiler = profiler;
+
+    const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-79");
     worker.addEventListener("message", handleWorkerMessage);
     worker.addEventListener("error", (event) => {
         labels.workerStatus.textContent = event.message || "failed";
     });
 
-    const pathfindingWorker = new Worker("/assets/javascript/pathfinding/pathfindingWorker.js?v=wizard-of-flatland-1");
+    const pathfindingWorker = new Worker("/wizard-of-flatland/pathfindingWorker.js?v=wizard-of-flatland-1");
     pathfindingWorker.addEventListener("message", handlePathfindingWorkerMessage);
     pathfindingWorker.addEventListener("error", (event) => {
         labels.workerStatus.textContent = event.message || "pathfinding failed";
     });
 
-    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-2");
+    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-3");
     mazeWorker.addEventListener("message", handleMazeWorkerMessage);
     mazeWorker.addEventListener("error", (event) => {
         state.generatedMazeLoading = false;
         labels.workerStatus.textContent = event.message || "maze worker failed";
     });
+
+    function createWizardOfFlatlandProfiler() {
+        const maxLoads = 12;
+        const maxRows = 12;
+        const loadRecords = [];
+        const longTasks = [];
+        const frameHitches = [];
+        let currentLoad = null;
+        let lastCompletedLoad = null;
+        let pendingFrameAfterLoad = null;
+
+        const api = {
+            enabled: true,
+            loadRecords,
+            longTasks,
+            frameHitches,
+            beginLoad,
+            mark,
+            span,
+            completeLoad,
+            noteFrame,
+            noteFirstFrameAfterLoad,
+            getCurrentLoad: () => currentLoad,
+            getLastCompletedLoad: () => lastCompletedLoad,
+            printLastLoad: () => {
+                if (lastCompletedLoad) printLoadRecord(lastCompletedLoad);
+            }
+        };
+
+        if (typeof PerformanceObserver === "function") {
+            try {
+                const observer = new PerformanceObserver((list) => {
+                    for (const entry of list.getEntries()) {
+                        const record = {
+                            name: entry.name || "longtask",
+                            start: entry.startTime,
+                            duration: entry.duration
+                        };
+                        longTasks.push(record);
+                        while (longTasks.length > 40) longTasks.shift();
+                        if (currentLoad && record.start >= currentLoad.start && record.start <= performance.now()) {
+                            currentLoad.longTasks.push(record);
+                        }
+                    }
+                });
+                observer.observe({ type: "longtask", buffered: true });
+                api.longTaskObserver = observer;
+            } catch (_error) {
+                api.longTaskObserver = null;
+            }
+        }
+
+        function beginLoad(meta) {
+            if (!api.enabled) return null;
+            const now = performance.now();
+            currentLoad = {
+                requestId: Number(meta && meta.requestId) || 0,
+                signature: String(meta && meta.signature || ""),
+                keys: Array.isArray(meta && meta.keys) ? meta.keys.slice() : [],
+                start: now,
+                marks: [{ label: "request", at: now, duration: 0 }],
+                spans: [],
+                longTasks: [],
+                firstFrame: null,
+                completed: false,
+                totalMs: 0,
+                mainThreadMs: 0,
+                counts: {}
+            };
+            updateProfilerPanel();
+            return currentLoad;
+        }
+
+        function mark(label, extra) {
+            if (!api.enabled || !currentLoad) return;
+            currentLoad.marks.push({
+                label,
+                at: performance.now(),
+                duration: 0,
+                extra: extra || null
+            });
+        }
+
+        function span(label, fn) {
+            if (!api.enabled || !currentLoad) return fn();
+            const started = performance.now();
+            try {
+                return fn();
+            } finally {
+                const duration = performance.now() - started;
+                currentLoad.spans.push({ label, duration, at: started });
+            }
+        }
+
+        function completeLoad(counts) {
+            if (!api.enabled || !currentLoad) return;
+            currentLoad.completed = true;
+            currentLoad.totalMs = performance.now() - currentLoad.start;
+            currentLoad.counts = counts || {};
+            currentLoad.spans.sort((a, b) => b.duration - a.duration);
+            currentLoad.mainThreadMs = currentLoad.spans.reduce((total, entry) => total + entry.duration, 0);
+            loadRecords.push(currentLoad);
+            while (loadRecords.length > maxLoads) loadRecords.shift();
+            lastCompletedLoad = currentLoad;
+            pendingFrameAfterLoad = currentLoad;
+            currentLoad = null;
+            updateProfilerPanel();
+            printLoadRecord(lastCompletedLoad);
+        }
+
+        function noteFrame(duration, parts) {
+            if (!api.enabled || duration < 24) return;
+            const record = { duration, at: performance.now(), parts: parts || null };
+            frameHitches.push(record);
+            while (frameHitches.length > 40) frameHitches.shift();
+        }
+
+        function noteFirstFrameAfterLoad(duration, parts) {
+            if (!api.enabled || !pendingFrameAfterLoad) return;
+            pendingFrameAfterLoad.firstFrame = { duration, parts: parts || null };
+            if (typeof console !== "undefined") {
+                console.groupCollapsed(`Wizard of Flatland first frame after section load: ${duration.toFixed(2)} ms`);
+                console.table((parts || []).map((entry) => ({
+                    span: entry.label,
+                    ms: Number(entry.duration.toFixed(3))
+                })));
+                console.groupEnd();
+            }
+            pendingFrameAfterLoad = null;
+            updateProfilerPanel();
+        }
+
+        function updateProfilerPanel() {
+            if (!labels.profilerSummary || !labels.profilerRows) return;
+            const record = currentLoad || lastCompletedLoad;
+            if (!record) {
+                labels.profilerSummary.textContent = "waiting for section load";
+                labels.profilerRows.textContent = "";
+                return;
+            }
+            const counts = record.counts || {};
+            const status = record.completed ? "last" : "loading";
+            const firstFrameText = record.firstFrame
+                ? `, first frame ${record.firstFrame.duration.toFixed(2)} ms`
+                : "";
+            const mainThreadMs = record.completed
+                ? record.mainThreadMs
+                : record.spans.reduce((total, entry) => total + entry.duration, 0);
+            labels.profilerSummary.textContent = `${status} request ${record.requestId}: ${mainThreadMs.toFixed(2)} ms main thread, ${record.totalMs.toFixed(2)} ms elapsed${firstFrameText} (${counts.sections || record.keys.length || 0} sections, ${counts.walls || 0} walls, ${counts.nodes || 0} nodes)`;
+            const rows = record.spans.map((spanRecord) => ({
+                label: spanRecord.label,
+                duration: spanRecord.duration
+            }));
+            if (record.firstFrame && Array.isArray(record.firstFrame.parts)) {
+                rows.push({
+                    label: "first frame total",
+                    duration: record.firstFrame.duration
+                });
+                for (const part of record.firstFrame.parts.slice(0, 5)) {
+                    rows.push({
+                        label: `first frame: ${part.label}`,
+                        duration: part.duration
+                    });
+                }
+            }
+            rows.sort((a, b) => b.duration - a.duration);
+            labels.profilerRows.replaceChildren(...rows.slice(0, maxRows).map((spanRecord) => {
+                const row = document.createElement("div");
+                row.className = "profiler-row";
+                const name = document.createElement("strong");
+                name.textContent = spanRecord.label;
+                const value = document.createElement("span");
+                value.textContent = `${spanRecord.duration.toFixed(2)} ms`;
+                row.append(name, value);
+                return row;
+            }));
+        }
+
+        function printLoadRecord(record) {
+            if (!record || typeof console === "undefined") return;
+            const rows = record.spans.map((entry) => ({
+                span: entry.label,
+                ms: Number(entry.duration.toFixed(3))
+            }));
+            console.groupCollapsed(
+                `Wizard of Flatland section load ${record.requestId}: ${record.mainThreadMs.toFixed(2)} ms main thread`
+            );
+            console.log({
+                requestId: record.requestId,
+                mainThreadMs: record.mainThreadMs,
+                elapsedMs: record.totalMs,
+                sections: record.counts.sections || record.keys.length || 0,
+                wallSegments: record.counts.walls || 0,
+                nodes: record.counts.nodes || 0,
+                blockedEdges: record.counts.blockedEdges || 0,
+                firstFrame: record.firstFrame,
+                longTasks: record.longTasks
+            });
+            console.table(rows);
+            console.groupEnd();
+        }
+
+        return api;
+    }
 
     function updateControlLabels() {
         labels.agentCount.textContent = agentCountInput.value;
@@ -292,26 +507,14 @@
         };
     }
 
-    function createSegmentWall(ax, ay, bx, by) {
-        const dx = bx - ax;
-        const dy = by - ay;
-        const len = Math.hypot(dx, dy);
-        if (!(len > 0.001)) return null;
-        return {
-            ax,
-            ay,
-            bx,
-            by,
-            nx: -dy / len,
-            ny: dx / len,
-            kind: WALL_KIND_SEGMENT
-        };
+    function isUsableWallSegment(ax, ay, bx, by) {
+        if (Math.hypot(bx - ax, by - ay) <= 0.001) return null;
+        return true;
     }
 
     function appendSegmentWall(walls, ax, ay, bx, by) {
-        const wall = createSegmentWall(ax, ay, bx, by);
-        if (!wall) return false;
-        walls.push(wall);
+        if (!isUsableWallSegment(ax, ay, bx, by)) return false;
+        walls.push(ax, ay, bx, by, 0, 0, 0, 0);
         return true;
     }
 
@@ -529,23 +732,26 @@
             throw new Error("Wizard of Flatland procedural maze requires a section worker");
         }
         const bounds = getPathfindingLayerBounds();
-        const manualWalls = state.manualWalls.map(cloneWallRecord);
+        const manualWalls = cloneWallBuffer(state.manualWalls, "manual walls");
         const requestId = state.generatedMazeRequestId++;
         state.generatedMazeActiveRequestId = requestId;
         state.generatedMazePendingSignature = signature;
         state.generatedMazeLoading = true;
         state.worldVersion += 1;
-        clearAgentPathRequestsForMapRebuild();
+        profiler.beginLoad({ requestId, signature, keys });
+        profiler.span("clear agent path requests", () => clearAgentPathRequestsForMapRebuild());
         labels.workerStatus.textContent = `${MAZE_WORKER_STATUS_PREFIX} loading`;
-        mazeWorker.postMessage({
-            type: "build_maze_sections",
-            requestId,
-            signature,
-            options,
-            keys,
-            manualWalls,
-            bounds,
-            targetRadius: TARGET_RADIUS
+        profiler.span("post maze worker request", () => {
+            mazeWorker.postMessage({
+                type: "build_maze_sections",
+                requestId,
+                signature,
+                options,
+                keys,
+                manualWalls,
+                bounds,
+                targetRadius: TARGET_RADIUS
+            }, [manualWalls.buffer]);
         });
     }
 
@@ -562,6 +768,10 @@
         if (message.type !== "maze_sections_result") return;
         if (Number(message.requestId) !== Number(state.generatedMazeActiveRequestId)) return;
         if (message.signature !== state.generatedMazePendingSignature) return;
+        profiler.mark("maze worker result received", {
+            generatedWallSegments: message.generatedWalls instanceof Float32Array ? message.generatedWalls.length / WALL_STRIDE : 0,
+            nodeCount: message.nodeLayer && message.nodeLayer.nodes instanceof Float32Array ? message.nodeLayer.nodes.length / 4 : 0
+        });
         installGeneratedMazeWorkerResult(message);
     }
 
@@ -569,40 +779,57 @@
         if (!message || typeof message.signature !== "string" || !message.nodeLayer) {
             throw new Error("Wizard of Flatland maze worker result is malformed");
         }
-        const generatedWalls = unpackMazeWorkerWalls(message.generatedWalls, "generated maze walls");
-        const allWalls = unpackMazeWorkerWalls(message.allWalls, "maze pathfinding walls");
+        profiler.span("validate wall buffers", () => {
+            validateWallBuffer(message.generatedWalls, "generated maze walls");
+            validateWallBuffer(message.allWalls, "maze pathfinding walls");
+        });
+        const generatedWalls = message.generatedWalls;
+        const allWalls = message.allWalls;
         const manualOffset = generatedWalls.length;
         if (allWalls.length !== generatedWalls.length + state.manualWalls.length) {
             throw new Error("Wizard of Flatland maze worker wall count does not match active manual walls");
         }
-        for (let i = 0; i < state.manualWalls.length; i++) {
-            const expected = state.manualWalls[i];
-            const actual = allWalls[manualOffset + i];
-            if (!wallsMatch(expected, actual)) {
-                throw new Error("Wizard of Flatland maze worker result is stale for manual walls");
+        profiler.span("validate manual wall echo", () => {
+            for (let i = 0; i < state.manualWalls.length; i++) {
+                if (Math.abs(state.manualWalls[i] - allWalls[manualOffset + i]) > 0.0001) {
+                    throw new Error("Wizard of Flatland maze worker result is stale for manual walls");
+                }
             }
-        }
+        });
 
-        state.generatedMazeWalls = generatedWalls;
-        state.walls = allWalls;
-        state.generatedMazeSignature = message.signature;
-        state.generatedMazePendingSignature = "";
-        state.generatedMazeLoading = false;
-        state.generatedMazeActiveRequestId = 0;
-        state.worldVersion += 1;
-        installPathfindingNodeLayerFromWorker(message.nodeLayer);
-        separateActorsFromWallsAfterMazeInstall();
-        resolveTargetNpcContacts();
+        profiler.span("install wall buffers and section keys", () => {
+            state.generatedMazeWalls = generatedWalls;
+            state.walls = allWalls;
+            state.generatedMazeSignature = message.signature;
+            state.generatedMazePendingSignature = "";
+            state.generatedMazeLoading = false;
+            state.generatedMazeActiveRequestId = 0;
+            state.generatedMazeInstalledChunkKeys = new Set(state.generatedMazeChunkKeys);
+            state.worldVersion += 1;
+        });
+        profiler.span("install pathfinding node layer", () => {
+            installPathfindingNodeLayerFromWorker(message.nodeLayer);
+        });
+        profiler.span("constrain target to walls", () => constrainTargetToWalls());
+        profiler.span("constrain or freeze agents", () => {
+            for (const agent of state.agents) {
+                if (isAgentInInstalledMazeSection(agent)) {
+                    constrainAgentToWalls(agent);
+                } else {
+                    freezeAgentForUnloadedSection(agent);
+                }
+            }
+        });
+        profiler.span("resolve target npc contacts", () => resolveTargetNpcContacts());
         labels.workerStatus.textContent = "ready";
-    }
-
-    function separateActorsFromWallsAfterMazeInstall() {
-        constrainActorToWalls(state.target, TARGET_RADIUS, 32);
-        assertActorWallSeparation("target after maze section install", state.target, TARGET_RADIUS);
-        for (const agent of state.agents) {
-            constrainActorToWalls(agent, agent.radius, 32);
-            assertActorWallSeparation(`agent ${agent.id} after maze section install`, agent, agent.radius);
-        }
+        profiler.completeLoad({
+            sections: state.generatedMazeInstalledChunkKeys.size,
+            walls: getWallCount(state.walls),
+            generatedWalls: getWallCount(state.generatedMazeWalls),
+            manualWalls: getWallCount(state.manualWalls),
+            nodes: state.nodeLayer.nodes.length,
+            blockedEdges: state.nodeLayer.blockedEdges.length
+        });
     }
 
     function clearAgentPathRequestsForMapRebuild() {
@@ -621,36 +848,6 @@
         }
     }
 
-    function unpackMazeWorkerWalls(packed, label) {
-        if (!(packed instanceof Float32Array)) throw new Error(`Wizard of Flatland ${label} must be packed`);
-        if (packed.length % WALL_STRIDE !== 0) throw new Error(`Wizard of Flatland ${label} has an invalid packed length`);
-        const walls = [];
-        for (let i = 0; i < packed.length; i += WALL_STRIDE) {
-            walls.push({
-                ax: packed[i],
-                ay: packed[i + 1],
-                bx: packed[i + 2],
-                by: packed[i + 3],
-                nx: packed[i + 4],
-                ny: packed[i + 5],
-                kind: Math.round(packed[i + 6]) === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY
-            });
-        }
-        return walls;
-    }
-
-    function wallsMatch(left, right) {
-        if (!left || !right) return false;
-        return Math.abs(Number(left.ax) - Number(right.ax)) < 0.0001 &&
-            Math.abs(Number(left.ay) - Number(right.ay)) < 0.0001 &&
-            Math.abs(Number(left.bx) - Number(right.bx)) < 0.0001 &&
-            Math.abs(Number(left.by) - Number(right.by)) < 0.0001 &&
-            Math.abs(Number(left.nx) - Number(right.nx)) < 0.0001 &&
-            Math.abs(Number(left.ny) - Number(right.ny)) < 0.0001 &&
-            (left.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY) ===
-                (right.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY);
-    }
-
     function installPathfindingNodeLayerFromWorker(workerLayer) {
         const packedNodes = workerLayer.nodes;
         const packedBlockedEdges = workerLayer.blockedEdges;
@@ -663,35 +860,45 @@
 
         const nodes = [];
         const nodeByKey = new Map();
-        for (let i = 0; i < packedNodes.length; i += 4) {
-            const xindex = Math.round(packedNodes[i]);
-            const yindex = Math.round(packedNodes[i + 1]);
-            const node = createPathfindingNode(xindex, yindex);
-            node.blocked = packedNodes[i + 2] === 1;
-            nodes.push(node);
-            nodeByKey.set(node.key, node);
-        }
-        for (const node of nodes) {
-            const offsets = getPathfindingNeighborOffsets(node.xindex);
-            for (let dir = 0; dir < 12; dir++) {
-                const offset = offsets[dir];
-                node.neighbors[dir] = nodeByKey.get(pathfindingNodeKey(node.xindex + offset.x, node.yindex + offset.y)) || null;
+        profiler.span("hydrate path nodes", () => {
+            for (let i = 0; i < packedNodes.length; i += 4) {
+                const xindex = Math.round(packedNodes[i]);
+                const yindex = Math.round(packedNodes[i + 1]);
+                const node = createPathfindingNode(xindex, yindex);
+                node.blocked = packedNodes[i + 2] === 1;
+                node.pathIndex = nodes.length;
+                nodes.push(node);
+                nodeByKey.set(node.key, node);
             }
-        }
+        });
+        profiler.span("link path node neighbors", () => {
+            for (const node of nodes) {
+                const offsets = getPathfindingNeighborOffsets(node.xindex);
+                for (let dir = 0; dir < 12; dir++) {
+                    const offset = offsets[dir];
+                    node.neighbors[dir] = nodeByKey.get(pathfindingNodeKey(node.xindex + offset.x, node.yindex + offset.y)) || null;
+                }
+            }
+        });
 
         const blockedEdges = [];
-        for (let i = 0; i < packedBlockedEdges.length; i += 3) {
-            const a = nodes[packedBlockedEdges[i]];
-            const b = nodes[packedBlockedEdges[i + 1]];
-            const wall = state.walls[packedBlockedEdges[i + 2]];
-            if (!a || !b || !wall) throw new Error("Wizard of Flatland maze worker blocked edge references are invalid");
-            const aDir = a.neighbors.indexOf(b);
-            const bDir = b.neighbors.indexOf(a);
-            if (aDir < 0 || bDir < 0) throw new Error("Wizard of Flatland maze worker blocked edge is not between neighbors");
-            addDirectionalBlock(a, aDir, wall);
-            addDirectionalBlock(b, bDir, wall);
-            blockedEdges.push({ a, b, wallIndex: packedBlockedEdges[i + 2] });
-        }
+        profiler.span("rebuild blocked path edges", () => {
+            const wallCount = getWallCount(state.walls);
+            for (let i = 0; i < packedBlockedEdges.length; i += 3) {
+                const a = nodes[packedBlockedEdges[i]];
+                const b = nodes[packedBlockedEdges[i + 1]];
+                const wallIndex = packedBlockedEdges[i + 2];
+                if (!a || !b || wallIndex < 0 || wallIndex >= wallCount) {
+                    throw new Error("Wizard of Flatland maze worker blocked edge references are invalid");
+                }
+                const aDir = a.neighbors.indexOf(b);
+                const bDir = b.neighbors.indexOf(a);
+                if (aDir < 0 || bDir < 0) throw new Error("Wizard of Flatland maze worker blocked edge is not between neighbors");
+                addDirectionalBlock(a, aDir, wallIndex);
+                addDirectionalBlock(b, bDir, wallIndex);
+                blockedEdges.push({ a, b, wallIndex });
+            }
+        });
 
         state.nodeLayer.pathCenterX = Number(workerLayer.pathCenterX);
         state.nodeLayer.pathCenterY = Number(workerLayer.pathCenterY);
@@ -703,20 +910,63 @@
         state.nodeLayer.blockedEdges = blockedEdges;
         state.nodeLayer.version += 1;
         state.nodeLayer.dirty = true;
-        publishPathfindingSnapshot();
+        profiler.span("publish pathfinding snapshot", () => publishPathfindingSnapshot());
     }
 
-    function cloneWallRecord(wall) {
-        if (!wall || typeof wall !== "object") throw new Error("Wizard of Flatland wall clone requires a wall record");
-        return {
-            ax: Number(wall.ax),
-            ay: Number(wall.ay),
-            bx: Number(wall.bx),
-            by: Number(wall.by),
-            nx: Number(wall.nx),
-            ny: Number(wall.ny),
-            kind: wall.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY
-        };
+    function createEmptyWallBuffer() {
+        return new Float32Array(0);
+    }
+
+    function getWallCount(walls) {
+        validateWallBuffer(walls, "walls");
+        return walls.length / WALL_STRIDE;
+    }
+
+    function validateWallBuffer(walls, label) {
+        if (!(walls instanceof Float32Array)) throw new Error(`Wizard of Flatland ${label} must be a wall buffer`);
+        if (walls.length % WALL_STRIDE !== 0) throw new Error(`Wizard of Flatland ${label} has an invalid wall stride`);
+    }
+
+    function appendWallSegment(walls, ax, ay, bx, by) {
+        validateWallSegment(ax, ay, bx, by);
+        const next = new Float32Array(walls.length + WALL_STRIDE);
+        next.set(walls);
+        writeWallSegment(next, walls.length, ax, ay, bx, by);
+        return next;
+    }
+
+    function concatWallBuffers(left, right) {
+        validateWallBuffer(left, "left wall buffer");
+        validateWallBuffer(right, "right wall buffer");
+        const out = new Float32Array(left.length + right.length);
+        out.set(left);
+        out.set(right, left.length);
+        return out;
+    }
+
+    function cloneWallBuffer(walls, label = "wall buffer") {
+        validateWallBuffer(walls, label);
+        return walls.slice();
+    }
+
+    function writeWallSegment(walls, base, ax, ay, bx, by) {
+        walls[base + WALL_X1] = ax;
+        walls[base + WALL_Y1] = ay;
+        walls[base + WALL_X2] = bx;
+        walls[base + WALL_Y2] = by;
+        walls[base + 4] = 0;
+        walls[base + 5] = 0;
+        walls[base + 6] = 0;
+        walls[base + 7] = 0;
+    }
+
+    function validateWallSegment(ax, ay, bx, by) {
+        if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) {
+            throw new Error("Wizard of Flatland wall segment requires finite coordinates");
+        }
+        if (Math.hypot(bx - ax, by - ay) <= 0.001) {
+            throw new Error("Wizard of Flatland wall segment requires separated endpoints");
+        }
     }
 
     function removeFurthestGeneratedMazeSection(options, protectedKeys) {
@@ -730,7 +980,42 @@
         }
         if (!furthest) return false;
         state.generatedMazeChunkKeys.delete(furthest.key);
+        freezeAgentsInMazeSection(furthest.key, options);
         return true;
+    }
+
+    function freezeAgentsInMazeSection(sectionKey, options) {
+        for (const agent of state.agents) {
+            if (getActorMazeSectionKey(agent, options) !== sectionKey) continue;
+            freezeAgentForUnloadedSection(agent);
+        }
+    }
+
+    function freezeAgentForUnloadedSection(agent) {
+        agent.vx = 0;
+        agent.vy = 0;
+        agent.wallClamps = 0;
+        agent.pathMode = PATH_MODE_DIRECT;
+        agent.pathRequestPending = false;
+        agent.pathRequestId = 0;
+        agent.pathNodeKeys = [];
+        agent.pathCursor = 0;
+        agent.pathGoalX = agent.x;
+        agent.pathGoalY = agent.y;
+    }
+
+    function getActorMazeSectionKey(actor, options = getMazeOptions()) {
+        const coord = worldToMazeSectionCoord(actor.x, actor.y, options);
+        return mazeSectionKey(coord.q, coord.r);
+    }
+
+    function isAgentInInstalledMazeSection(agent) {
+        if (!isProceduralMazeScenario()) return true;
+        if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland procedural maze requires installed section tracking");
+        }
+        const sectionKey = getActorMazeSectionKey(agent);
+        return state.generatedMazeInstalledChunkKeys.has(sectionKey) && state.generatedMazeChunkKeys.has(sectionKey);
     }
 
     function refreshMazePathBoundsIfNeeded() {
@@ -993,22 +1278,15 @@
         };
     }
 
-    function addWall(walls, ax, ay, bx, by, nx, ny, kind = WALL_KIND_BOUNDARY) {
-        const len = Math.hypot(nx, ny);
-        if (!(len > 0)) throw new Error("wall normal must be non-zero");
-        walls.push({ ax, ay, bx, by, nx: nx / len, ny: ny / len, kind });
-    }
-
     function addSegmentWall(ax, ay, bx, by) {
-        const wall = createSegmentWall(ax, ay, bx, by);
-        if (!wall) return false;
+        if (!isUsableWallSegment(ax, ay, bx, by)) return false;
         if (isProceduralMazeScenario()) {
-            state.manualWalls.push(wall);
-            state.walls = state.generatedMazeWalls.concat(state.manualWalls);
+            state.manualWalls = appendWallSegment(state.manualWalls, ax, ay, bx, by);
+            state.walls = concatWallBuffers(state.generatedMazeWalls, state.manualWalls);
             state.generatedMazeSignature = "";
             refreshGeneratedMazeIfNeeded(true);
         } else {
-            state.walls.push(wall);
+            state.walls = appendWallSegment(state.walls, ax, ay, bx, by);
             state.worldVersion += 1;
             rebuildPathfindingNodeLayer();
         }
@@ -1025,10 +1303,11 @@
         state.agents = [];
         state.fireballs = [];
         state.fireballExplosions = [];
-        state.walls = [];
-        state.manualWalls = [];
-        state.generatedMazeWalls = [];
+        state.walls = createEmptyWallBuffer();
+        state.manualWalls = createEmptyWallBuffer();
+        state.generatedMazeWalls = createEmptyWallBuffer();
         state.generatedMazeChunkKeys = new Set();
+        state.generatedMazeInstalledChunkKeys = new Set();
         state.generatedMazeSignature = "";
         state.generatedMazePendingSignature = "";
         state.generatedMazeLoading = false;
@@ -1090,10 +1369,10 @@
     }
 
     function addRoomWalls(minX, minY, maxX, maxY) {
-        addWall(state.walls, minX, minY, maxX, minY, 0, 1);
-        addWall(state.walls, maxX, minY, maxX, maxY, -1, 0);
-        addWall(state.walls, maxX, maxY, minX, maxY, 0, -1);
-        addWall(state.walls, minX, maxY, minX, minY, 1, 0);
+        state.walls = appendWallSegment(state.walls, minX, minY, maxX, minY);
+        state.walls = appendWallSegment(state.walls, maxX, minY, maxX, maxY);
+        state.walls = appendWallSegment(state.walls, maxX, maxY, minX, maxY);
+        state.walls = appendWallSegment(state.walls, minX, maxY, minX, minY);
     }
 
     function spawnRing(count, radius, jitter) {
@@ -1340,10 +1619,18 @@
             throw new Error("Wizard of Flatland fireball wall hit test requires finite movement");
         }
         let best = null;
-        for (const wall of state.walls) {
-            const hit = wall.kind === WALL_KIND_SEGMENT
-                ? sweptCircleSegmentHit(fromX, fromY, toX, toY, wall.ax, wall.ay, wall.bx, wall.by, FIREBALL_DAMAGE_RADIUS)
-                : sweptCircleBoundaryWallHit(fromX, fromY, toX, toY, wall, FIREBALL_DAMAGE_RADIUS);
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            const hit = sweptCircleSegmentHit(
+                fromX,
+                fromY,
+                toX,
+                toY,
+                state.walls[i + WALL_X1],
+                state.walls[i + WALL_Y1],
+                state.walls[i + WALL_X2],
+                state.walls[i + WALL_Y2],
+                FIREBALL_DAMAGE_RADIUS
+            );
             if (!hit || (best && hit.t >= best.t)) continue;
             best = {
                 t: hit.t,
@@ -1352,19 +1639,6 @@
             };
         }
         return best;
-    }
-
-    function sweptCircleBoundaryWallHit(fromX, fromY, toX, toY, wall, radius) {
-        if (!wall || !Number.isFinite(wall.ax) || !Number.isFinite(wall.ay) || !Number.isFinite(wall.nx) || !Number.isFinite(wall.ny) || !Number.isFinite(radius)) {
-            throw new Error("Wizard of Flatland fireball boundary hit test requires finite wall data");
-        }
-        const startSigned = (fromX - wall.ax) * wall.nx + (fromY - wall.ay) * wall.ny;
-        const endSigned = (toX - wall.ax) * wall.nx + (toY - wall.ay) * wall.ny;
-        if (startSigned <= radius) return { t: 0 };
-        if (endSigned > radius) return null;
-        const delta = startSigned - endSigned;
-        if (!(delta > 0.000001)) return null;
-        return { t: Math.max(0, Math.min(1, (startSigned - radius) / delta)) };
     }
 
     function findAgentIntersectingPolygon(polygon) {
@@ -1624,28 +1898,21 @@
         constrainActorToWalls(agent, agent.radius);
     }
 
-    function constrainActorToWalls(actor, radius, maxPasses = 4) {
-        for (let pass = 0; pass < maxPasses; pass++) {
+    function constrainActorToWalls(actor, radius) {
+        for (let pass = 0; pass < 4; pass++) {
             let changed = false;
-            for (const wall of state.walls) {
-                if (wall.kind === WALL_KIND_SEGMENT) {
-                    const distance = pointSegmentDistance(actor.x, actor.y, wall.ax, wall.ay, wall.bx, wall.by);
-                    if (distance >= radius) continue;
-                    const normal = segmentRepulsionNormal(actor.x, actor.y, wall.ax, wall.ay, wall.bx, wall.by);
-                    const correction = radius - distance + TARGET_NPC_PUSH_SLOP;
-                    actor.x += normal.x * correction;
-                    actor.y += normal.y * correction;
-                    changed = true;
-                    continue;
-                }
-
-                const signed = (actor.x - wall.ax) * wall.nx + (actor.y - wall.ay) * wall.ny;
-                if (signed < radius) {
-                    const correction = radius - signed;
-                    actor.x += wall.nx * correction;
-                    actor.y += wall.ny * correction;
-                    changed = true;
-                }
+            for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+                const ax = state.walls[i + WALL_X1];
+                const ay = state.walls[i + WALL_Y1];
+                const bx = state.walls[i + WALL_X2];
+                const by = state.walls[i + WALL_Y2];
+                const distance = pointSegmentDistance(actor.x, actor.y, ax, ay, bx, by);
+                if (distance >= radius) continue;
+                const normal = segmentRepulsionNormal(actor.x, actor.y, ax, ay, bx, by);
+                const correction = radius - distance + TARGET_NPC_PUSH_SLOP;
+                actor.x += normal.x * correction;
+                actor.y += normal.y * correction;
+                changed = true;
             }
             if (!changed) break;
         }
@@ -1675,38 +1942,34 @@
     }
 
     function assertActorWallSeparation(label, actor, radius) {
-        for (let wallIndex = 0; wallIndex < state.walls.length; wallIndex++) {
-            const wall = state.walls[wallIndex];
-            if (wall.kind === WALL_KIND_SEGMENT) {
-                const distance = pointSegmentDistance(actor.x, actor.y, wall.ax, wall.ay, wall.bx, wall.by);
-                if (distance < radius - TARGET_NPC_PUSH_SLOP * 4) {
-                    throw new Error(formatWallSeparationError(label, actor, radius, wall, wallIndex, distance, "segment"));
-                }
-                continue;
-            }
-            const signed = (actor.x - wall.ax) * wall.nx + (actor.y - wall.ay) * wall.ny;
-            if (signed < radius - TARGET_NPC_PUSH_SLOP * 4) {
-                throw new Error(formatWallSeparationError(label, actor, radius, wall, wallIndex, signed, "boundary"));
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            const distance = pointSegmentDistance(
+                actor.x,
+                actor.y,
+                state.walls[i + WALL_X1],
+                state.walls[i + WALL_Y1],
+                state.walls[i + WALL_X2],
+                state.walls[i + WALL_Y2]
+            );
+            if (distance < radius - TARGET_NPC_PUSH_SLOP * 4) {
+                throw new Error(`Wizard of Flatland ${label} segment wall collision unresolved`);
             }
         }
     }
 
-    function formatWallSeparationError(label, actor, radius, wall, wallIndex, distance, kind) {
-        return [
-            `Wizard of Flatland ${label} ${kind} wall collision unresolved`,
-            `actor=(${actor.x.toFixed(3)},${actor.y.toFixed(3)})`,
-            `radius=${radius.toFixed(3)}`,
-            `distance=${distance.toFixed(4)}`,
-            `wallIndex=${wallIndex}`,
-            `wall=(${wall.ax.toFixed(3)},${wall.ay.toFixed(3)})->(${wall.bx.toFixed(3)},${wall.by.toFixed(3)})`
-        ].join(" ");
-    }
-
     function packAgents() {
-        const packed = new Float32Array(state.agents.length * STRIDE);
+        const activeAgents = [];
+        for (const agent of state.agents) {
+            if (!isAgentInInstalledMazeSection(agent)) {
+                freezeAgentForUnloadedSection(agent);
+                continue;
+            }
+            activeAgents.push(agent);
+        }
+        const packed = new Float32Array(activeAgents.length * STRIDE);
         const forceDirectPathing = isProceduralMazeScenario() && state.generatedMazeLoading;
-        for (let i = 0; i < state.agents.length; i++) {
-            const agent = state.agents[i];
+        for (let i = 0; i < activeAgents.length; i++) {
+            const agent = activeAgents[i];
             const base = i * STRIDE;
             packed[base] = agent.id;
             packed[base + 1] = agent.x;
@@ -1729,22 +1992,6 @@
         return packed;
     }
 
-    function packWalls() {
-        const packed = new Float32Array(state.walls.length * WALL_STRIDE);
-        for (let i = 0; i < state.walls.length; i++) {
-            const wall = state.walls[i];
-            const base = i * WALL_STRIDE;
-            packed[base] = wall.ax;
-            packed[base + 1] = wall.ay;
-            packed[base + 2] = wall.bx;
-            packed[base + 3] = wall.by;
-            packed[base + 4] = wall.nx;
-            packed[base + 5] = wall.ny;
-            packed[base + 6] = wall.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY;
-        }
-        return packed;
-    }
-
     function requestStep(dt) {
         if (state.waitingForWorker) return;
         if (isProceduralMazeScenario() && state.nodeLayer.nodes.length === 0) {
@@ -1759,14 +2006,14 @@
         ) > 0.001;
         state.lastSentTarget = { x: state.target.x, y: state.target.y };
         const agents = packAgents();
-        const walls = packWalls();
-        worker.postMessage({
+        const includeWalls = state.solverWallVersion !== state.worldVersion;
+        const walls = includeWalls ? cloneWallBuffer(state.walls, "solver walls") : null;
+        const message = {
             type: "step",
             requestId: state.requestId++,
             worldVersion: state.worldVersion,
             dt,
             agents,
-            walls,
             params: {
                 targetX: state.target.x,
                 targetY: state.target.y,
@@ -1776,7 +2023,14 @@
                 speedScale: getSpeedScale(),
                 targetMoved
             }
-        }, [agents.buffer, walls.buffer]);
+        };
+        const transfer = [agents.buffer];
+        if (includeWalls) {
+            message.walls = walls;
+            transfer.push(walls.buffer);
+            state.solverWallVersion = state.worldVersion;
+        }
+        worker.postMessage(message, transfer);
     }
 
     function handleWorkerMessage(event) {
@@ -1788,6 +2042,7 @@
         }
         if (message.type === "error") {
             state.waitingForWorker = false;
+            state.solverWallVersion = 0;
             labels.workerStatus.textContent = message.message || "solver error";
             return;
         }
@@ -1982,6 +2237,10 @@
         const now = performance.now();
         const goalNode = nearestPassablePathfindingNode(state.target.x, state.target.y);
         for (const agent of state.agents) {
+            if (!isAgentInInstalledMazeSection(agent)) {
+                freezeAgentForUnloadedSection(agent);
+                continue;
+            }
             const hasLos = hasDirectLineOfSight(agent.x, agent.y, state.target.x, state.target.y, agent.radius);
             if (hasLos) {
                 agent.pathMode = PATH_MODE_DIRECT;
@@ -2020,12 +2279,12 @@
 
     function hasDirectLineOfSight(fromX, fromY, toX, toY, radius) {
         const wallGeometry = getWallGeometryApi();
-        for (const wall of state.walls) {
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
             if (wallGeometry.connectionCrossesWallFaces(
                 { x: fromX, y: fromY },
                 { x: toX, y: toY },
-                { x: wall.ax, y: wall.ay },
-                { x: wall.bx, y: wall.by },
+                { x: state.walls[i + WALL_X1], y: state.walls[i + WALL_Y1] },
+                { x: state.walls[i + WALL_X2], y: state.walls[i + WALL_Y2] },
                 {
                     thickness: Math.max(PATH_NODE_WALL_THICKNESS, radius * 0.35),
                     extend: PATH_NODE_WALL_FACE_EXTEND
@@ -2064,9 +2323,9 @@
 
     function advanceAgentPathCursor(agent) {
         while (agent.pathCursor < agent.pathNodeKeys.length) {
-            const key = agent.pathNodeKeys[agent.pathCursor];
-            const node = state.nodeLayer.nodeByKey.get(key);
-            if (!node) throw new Error(`Wizard of Flatland path contains unknown node ${key}`);
+            const pathIndex = agent.pathNodeKeys[agent.pathCursor];
+            const node = getPathfindingNodeByPathIndex(pathIndex);
+            if (!node) throw new Error(`Wizard of Flatland path contains unknown node index ${pathIndex}`);
             const distance = Math.hypot(node.x - agent.x, node.y - agent.y);
             if (distance > PATH_WAYPOINT_REACHED_DISTANCE) return;
             agent.pathCursor += 1;
@@ -2075,10 +2334,16 @@
 
     function getAgentPathWaypoint(agent) {
         if (agent.pathCursor >= agent.pathNodeKeys.length) return null;
-        const key = agent.pathNodeKeys[agent.pathCursor];
-        const node = state.nodeLayer.nodeByKey.get(key);
-        if (!node) throw new Error(`Wizard of Flatland path waypoint missing for ${key}`);
+        const pathIndex = agent.pathNodeKeys[agent.pathCursor];
+        const node = getPathfindingNodeByPathIndex(pathIndex);
+        if (!node) throw new Error(`Wizard of Flatland path waypoint missing for index ${pathIndex}`);
         return node;
+    }
+
+    function getPathfindingNodeByPathIndex(pathIndex) {
+        if (!Number.isInteger(pathIndex) || pathIndex < 0) return null;
+        const node = state.nodeLayer.nodes[pathIndex];
+        return node && node.pathIndex === pathIndex ? node : null;
     }
 
     function requestAgentPath(agent, rawStartNode, startNode, goalNode, now) {
@@ -2100,8 +2365,8 @@
                 canBreakDoors: false,
                 canBreakTreesLargerThanSelf: false
             },
-            startNodeKey: startNode.key,
-            destinationNodeKey: goalNode.key,
+            startNodeIndex: startNode.pathIndex,
+            destinationNodeIndex: goalNode.pathIndex,
             options: {
                 allowBlockedDestination: false,
                 maxPathLength: null,
@@ -2128,13 +2393,14 @@
             agent.pathGoalY = agent.y;
             return;
         }
-        if (!Array.isArray(message.pathNodeKeys)) {
+        if (!(message.pathNodeIndices instanceof Int32Array) && !Array.isArray(message.pathNodeIndices)) {
             throw new Error("Wizard of Flatland pathfinding worker returned a malformed path");
         }
-        const pathNodeKeys = message.pathNodeKeys.slice();
+        const pathNodeKeys = Array.from(message.pathNodeIndices);
         if (agent.pathRequestedStartKey && agent.pathRequestedStartKey !== agent.pathRequestedRawStartKey) {
-            if (pathNodeKeys[0] !== agent.pathRequestedStartKey) {
-                pathNodeKeys.unshift(agent.pathRequestedStartKey);
+            const requestedStartNode = state.nodeLayer.nodeByKey.get(agent.pathRequestedStartKey);
+            if (requestedStartNode && pathNodeKeys[0] !== requestedStartNode.pathIndex) {
+                pathNodeKeys.unshift(requestedStartNode.pathIndex);
             }
         }
         agent.pathNodeKeys = pathNodeKeys;
@@ -2324,12 +2590,15 @@
 
         const blockedEdges = [];
         const blockedKeys = new Set();
-        for (let w = 0; w < state.walls.length; w++) {
-            const wall = state.walls[w];
-            const wallMinX = Math.min(wall.ax, wall.bx) - HEX_GRID_WIDTH;
-            const wallMaxX = Math.max(wall.ax, wall.bx) + HEX_GRID_WIDTH;
-            const wallMinY = Math.min(wall.ay, wall.by) - HEX_GRID_HEIGHT;
-            const wallMaxY = Math.max(wall.ay, wall.by) + HEX_GRID_HEIGHT;
+        for (let w = 0; w < state.walls.length; w += WALL_STRIDE) {
+            const ax = state.walls[w + WALL_X1];
+            const ay = state.walls[w + WALL_Y1];
+            const bx = state.walls[w + WALL_X2];
+            const by = state.walls[w + WALL_Y2];
+            const wallMinX = Math.min(ax, bx) - HEX_GRID_WIDTH;
+            const wallMaxX = Math.max(ax, bx) + HEX_GRID_WIDTH;
+            const wallMinY = Math.min(ay, by) - HEX_GRID_HEIGHT;
+            const wallMaxY = Math.max(ay, by) + HEX_GRID_HEIGHT;
             for (const node of nodes) {
                 if (node.x < wallMinX || node.x > wallMaxX || node.y < wallMinY || node.y > wallMaxY) continue;
                 for (let dir = 0; dir < 12; dir++) {
@@ -2340,8 +2609,8 @@
                     if (!wallGeometry.connectionCrossesWallFaces(
                         node,
                         neighbor,
-                        { x: wall.ax, y: wall.ay },
-                        { x: wall.bx, y: wall.by },
+                        { x: ax, y: ay },
+                        { x: bx, y: by },
                         {
                             thickness: PATH_NODE_WALL_THICKNESS,
                             extend: PATH_NODE_WALL_FACE_EXTEND
@@ -2350,15 +2619,18 @@
                         continue;
                     }
                     blockedKeys.add(edgeKey);
-                    addDirectionalBlock(node, dir, wall);
+                    addDirectionalBlock(node, dir, w / WALL_STRIDE);
                     const reverseDir = neighbor.neighbors.indexOf(node);
-                    if (reverseDir >= 0) addDirectionalBlock(neighbor, reverseDir, wall);
-                    blockedEdges.push({ a: node, b: neighbor, wallIndex: w });
+                    if (reverseDir >= 0) addDirectionalBlock(neighbor, reverseDir, w / WALL_STRIDE);
+                    blockedEdges.push({ a: node, b: neighbor, wallIndex: w / WALL_STRIDE });
                 }
             }
         }
         for (const node of nodes) {
             node.blocked = !isPathfindingNodeTerrainPassable(node);
+        }
+        for (let i = 0; i < nodes.length; i++) {
+            nodes[i].pathIndex = i;
         }
 
         state.nodeLayer.nodes = nodes;
@@ -2371,45 +2643,67 @@
 
     function publishPathfindingSnapshot() {
         state.pathfindingSnapshotVersion = state.worldVersion;
-        pathfindingWorker.postMessage({
-            type: "replace_snapshot",
-            snapshot: buildPathfindingWorkerSnapshot()
+        const snapshot = profiler.span("build packed path snapshot", () => buildPathfindingWorkerSnapshot());
+        profiler.span("transfer packed path snapshot", () => {
+            pathfindingWorker.postMessage({
+                type: "replace_snapshot",
+                snapshot
+            }, [snapshot.nodes.buffer, snapshot.edges.buffer]);
         });
     }
 
     function buildPathfindingWorkerSnapshot() {
-        const nodes = state.nodeLayer.nodes.map((node) => ({
-            key: node.key,
-            x: node.x,
-            y: node.y,
-            blocked: node.blocked === true,
-            clearance: null
-        }));
-        const edges = [];
-        const emitted = new Set();
-        for (const node of state.nodeLayer.nodes) {
+        const sourceNodes = state.nodeLayer.nodes;
+        const nodes = new Float32Array(sourceNodes.length * PATH_SNAPSHOT_NODE_STRIDE);
+        for (let i = 0; i < sourceNodes.length; i++) {
+            const node = sourceNodes[i];
+            if (node.pathIndex !== i) {
+                throw new Error("Wizard of Flatland packed path snapshot requires contiguous node indices");
+            }
+            const base = i * PATH_SNAPSHOT_NODE_STRIDE;
+            nodes[base] = node.x;
+            nodes[base + 1] = node.y;
+            nodes[base + 2] = node.blocked === true ? 1 : 0;
+            nodes[base + 3] = Infinity;
+            nodes[base + 4] = node.xindex;
+            nodes[base + 5] = node.yindex;
+            nodes[base + 6] = 0;
+            nodes[base + 7] = 0;
+        }
+
+        let edgeCount = 0;
+        for (const node of sourceNodes) {
             for (let dir = 0; dir < node.neighbors.length; dir++) {
                 const neighbor = node.neighbors[dir];
                 if (!neighbor) continue;
                 if (node.blockedNeighbors.has(dir)) continue;
-                const id = `${node.key}->${neighbor.key}`;
-                if (emitted.has(id)) continue;
-                emitted.add(id);
-                edges.push({
-                    id,
-                    fromKey: node.key,
-                    toKey: neighbor.key,
-                    terrainBlocked: false,
-                    directionalObstacleIds: []
-                });
+                edgeCount += 1;
+            }
+        }
+        const edges = new Int32Array(edgeCount * PATH_SNAPSHOT_EDGE_STRIDE);
+        let edgeOffset = 0;
+        for (const node of sourceNodes) {
+            for (let dir = 0; dir < node.neighbors.length; dir++) {
+                const neighbor = node.neighbors[dir];
+                if (!neighbor) continue;
+                if (node.blockedNeighbors.has(dir)) continue;
+                if (!Number.isInteger(neighbor.pathIndex) || neighbor.pathIndex < 0) {
+                    throw new Error("Wizard of Flatland packed path snapshot requires indexed neighbors");
+                }
+                edges[edgeOffset] = node.pathIndex;
+                edges[edgeOffset + 1] = neighbor.pathIndex;
+                edges[edgeOffset + 2] = dir;
+                edges[edgeOffset + 3] = 0;
+                edgeOffset += PATH_SNAPSHOT_EDGE_STRIDE;
             }
         }
         return {
+            format: "wizard-flatland-packed-v1",
             version: state.pathfindingSnapshotVersion,
+            nodeStride: PATH_SNAPSHOT_NODE_STRIDE,
+            edgeStride: PATH_SNAPSHOT_EDGE_STRIDE,
             nodes,
-            edges,
-            obstacles: [],
-            tileObstacleIdsByNodeKey: {}
+            edges
         };
     }
 
@@ -2441,11 +2735,11 @@
         let minY = Infinity;
         let maxX = -Infinity;
         let maxY = -Infinity;
-        for (const wall of state.walls) {
-            minX = Math.min(minX, wall.ax, wall.bx);
-            minY = Math.min(minY, wall.ay, wall.by);
-            maxX = Math.max(maxX, wall.ax, wall.bx);
-            maxY = Math.max(maxY, wall.ay, wall.by);
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            minX = Math.min(minX, state.walls[i + WALL_X1], state.walls[i + WALL_X2]);
+            minY = Math.min(minY, state.walls[i + WALL_Y1], state.walls[i + WALL_Y2]);
+            maxX = Math.max(maxX, state.walls[i + WALL_X1], state.walls[i + WALL_X2]);
+            maxY = Math.max(maxY, state.walls[i + WALL_Y1], state.walls[i + WALL_Y2]);
         }
         if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
             throw new Error("Wizard of Flatland pathfinding node layer requires finite wall bounds");
@@ -2460,6 +2754,7 @@
             xindex,
             yindex,
             key: pathfindingNodeKey(xindex, yindex),
+            pathIndex: -1,
             neighbors: new Array(12).fill(null),
             blockedNeighbors: new Map()
         };
@@ -2525,20 +2820,16 @@
         if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) {
             throw new Error("Wizard of Flatland pathfinding passability requires a finite node");
         }
-        for (const wall of state.walls) {
-            const kind = wall.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY;
-            if (kind === WALL_KIND_SEGMENT) {
-                const distance = pointSegmentDistance(node.x, node.y, wall.ax, wall.ay, wall.bx, wall.by);
-                if (distance < TARGET_RADIUS) return false;
-                continue;
-            }
-            const nx = Number(wall.nx);
-            const ny = Number(wall.ny);
-            if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
-                throw new Error("Wizard of Flatland pathfinding passability requires finite wall normals");
-            }
-            const signed = (node.x - wall.ax) * nx + (node.y - wall.ay) * ny;
-            if (signed < TARGET_RADIUS) return false;
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            const distance = pointSegmentDistance(
+                node.x,
+                node.y,
+                state.walls[i + WALL_X1],
+                state.walls[i + WALL_Y1],
+                state.walls[i + WALL_X2],
+                state.walls[i + WALL_Y2]
+            );
+            if (distance < TARGET_RADIUS) return false;
         }
         return true;
     }
@@ -2630,13 +2921,11 @@
     function drawWalls() {
         ctx.save();
         ctx.lineCap = "round";
-        for (const wall of state.walls) {
-            const a = worldToScreen(wall.ax, wall.ay);
-            const b = worldToScreen(wall.bx, wall.by);
-            ctx.lineWidth = wall.kind === WALL_KIND_SEGMENT
-                ? Math.max(3, state.view.scale * 0.1)
-                : Math.max(2, state.view.scale * 0.08);
-            ctx.strokeStyle = wall.kind === WALL_KIND_SEGMENT ? "#f4c95d" : "#d9e4ea";
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            const a = worldToScreen(state.walls[i + WALL_X1], state.walls[i + WALL_Y1]);
+            const b = worldToScreen(state.walls[i + WALL_X2], state.walls[i + WALL_Y2]);
+            ctx.lineWidth = Math.max(3, state.view.scale * 0.1);
+            ctx.strokeStyle = "#f4c95d";
             ctx.beginPath();
             ctx.moveTo(a.x, a.y);
             ctx.lineTo(b.x, b.y);
@@ -2831,8 +3120,17 @@
         for (let i = 1; i < points.length; i++) {
             const previous = points[i - 1];
             const current = points[i];
-            for (const wall of state.walls) {
-                const hit = segmentIntersectionParameters(previous.x, previous.y, current.x, current.y, wall.ax, wall.ay, wall.bx, wall.by);
+            for (let w = 0; w < state.walls.length; w += WALL_STRIDE) {
+                const hit = segmentIntersectionParameters(
+                    previous.x,
+                    previous.y,
+                    current.x,
+                    current.y,
+                    state.walls[w + WALL_X1],
+                    state.walls[w + WALL_Y1],
+                    state.walls[w + WALL_X2],
+                    state.walls[w + WALL_Y2]
+                );
                 if (!hit || hit.t <= 0.000001) continue;
                 const point = {
                     x: previous.x + (current.x - previous.x) * hit.t,
@@ -3103,11 +3401,12 @@
         const targetNearestNode = nearestPathfindingNode(state.target.x, state.target.y);
         const targetPassableNode = nearestPassablePathfindingNode(state.target.x, state.target.y);
         const waypoint = getAgentPathWaypoint(agent);
-        const pathNodes = agent.pathNodeKeys.map((key, index) => {
-            const node = state.nodeLayer.nodeByKey.get(key);
+        const pathNodes = agent.pathNodeKeys.map((pathIndex, index) => {
+            const node = getPathfindingNodeByPathIndex(pathIndex);
             return {
                 index,
-                key,
+                pathIndex,
+                key: node ? node.key : null,
                 current: index === agent.pathCursor,
                 exists: !!node,
                 x: node ? node.x : null,
@@ -3117,13 +3416,23 @@
                 distanceFromAgent: node ? Math.hypot(node.x - agent.x, node.y - agent.y) : null
             };
         });
-        const wallClearances = state.walls.map((wall, index) => ({
-            index,
-            kind: wall.kind === WALL_KIND_SEGMENT ? "segment" : "boundary",
-            clearance: wall.kind === WALL_KIND_SEGMENT
-                ? pointSegmentDistance(agent.x, agent.y, wall.ax, wall.ay, wall.bx, wall.by)
-                : (agent.x - wall.ax) * wall.nx + (agent.y - wall.ay) * wall.ny
-        })).sort((a, b) => a.clearance - b.clearance).slice(0, 5);
+        const wallClearances = [];
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            wallClearances.push({
+                index: i / WALL_STRIDE,
+                kind: "segment",
+                clearance: pointSegmentDistance(
+                    agent.x,
+                    agent.y,
+                    state.walls[i + WALL_X1],
+                    state.walls[i + WALL_Y1],
+                    state.walls[i + WALL_X2],
+                    state.walls[i + WALL_Y2]
+                )
+            });
+        }
+        wallClearances.sort((a, b) => a.clearance - b.clearance);
+        wallClearances.length = Math.min(wallClearances.length, 5);
         const dump = {
             id: agent.id,
             position: { x: agent.x, y: agent.y },
@@ -3283,9 +3592,18 @@
 
     function findEarliestSegmentWallHit(fromX, fromY, toX, toY, radius) {
         let best = null;
-        for (const wall of state.walls) {
-            if (wall.kind !== WALL_KIND_SEGMENT) continue;
-            const hit = sweptCircleSegmentHit(fromX, fromY, toX, toY, wall.ax, wall.ay, wall.bx, wall.by, radius);
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            const hit = sweptCircleSegmentHit(
+                fromX,
+                fromY,
+                toX,
+                toY,
+                state.walls[i + WALL_X1],
+                state.walls[i + WALL_Y1],
+                state.walls[i + WALL_X2],
+                state.walls[i + WALL_Y2],
+                radius
+            );
             if (hit && (!best || hit.t < best.t)) best = hit;
         }
         return best;
@@ -3394,17 +3712,34 @@
     }
 
     function tick(now) {
+        const frameStarted = performance.now();
+        const frameParts = [];
+        function framePart(label, fn) {
+            const started = performance.now();
+            try {
+                return fn();
+            } finally {
+                frameParts.push({
+                    label,
+                    duration: performance.now() - started
+                });
+            }
+        }
         const dt = Math.min(0.05, Math.max(0.001, (now - state.lastTime) / 1000));
         state.lastTime = now;
         state.targetFlashTime = Math.max(0, state.targetFlashTime - dt);
-        updateProjectedCursorKeyboardControls(dt);
-        updateTargetHeadingFromProjectedCursor(dt);
-        updateTargetKeyboardMovement(dt);
-        refreshGeneratedMazeIfNeeded(false);
-        refreshMazePathBoundsIfNeeded();
-        updateFireballs(dt);
-        if (state.running) requestStep(dt);
-        draw();
+        framePart("projected cursor input", () => updateProjectedCursorKeyboardControls(dt));
+        framePart("target heading", () => updateTargetHeadingFromProjectedCursor(dt));
+        framePart("target movement", () => updateTargetKeyboardMovement(dt));
+        framePart("refresh maze sections", () => refreshGeneratedMazeIfNeeded(false));
+        framePart("refresh path bounds", () => refreshMazePathBoundsIfNeeded());
+        framePart("fireballs", () => updateFireballs(dt));
+        if (state.running) framePart("request solver step", () => requestStep(dt));
+        framePart("draw", () => draw());
+        const frameDuration = performance.now() - frameStarted;
+        frameParts.sort((a, b) => b.duration - a.duration);
+        profiler.noteFrame(frameDuration, frameParts);
+        profiler.noteFirstFrameAfterLoad(frameDuration, frameParts);
         requestAnimationFrame(tick);
     }
 

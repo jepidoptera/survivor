@@ -1,16 +1,14 @@
 "use strict";
 
-importScripts("/assets/javascript/wallGeometry.js?v=wizard-of-flatland-1");
+importScripts("/wizard-of-flatland/wallGeometry.js?v=wizard-of-flatland-1");
 
-const WALL_STRIDE = 7;
+const WALL_STRIDE = 8;
 const HEX_GRID_COL_STEP = 0.866;
 const HEX_GRID_WIDTH = 1 / HEX_GRID_COL_STEP;
 const HEX_GRID_HEIGHT = 1;
 const PATH_NODE_LAYER_PADDING = 4;
 const PATH_NODE_WALL_THICKNESS = 0.1;
 const PATH_NODE_WALL_FACE_EXTEND = 0.501;
-const WALL_KIND_BOUNDARY = 0;
-const WALL_KIND_SEGMENT = 1;
 const MAZE_CHUNK_MIN_SIZE = 28;
 const MAZE_CHUNK_MAX_SIZE = 72;
 const MAZE_ROOM_EDGE_INSET_TILES = 2;
@@ -52,24 +50,23 @@ self.addEventListener("message", (event) => {
 function buildMazeSections(message) {
     const options = normalizeMazeOptions(message.options);
     const keys = normalizeSectionKeys(message.keys);
-    const generatedWalls = [];
+    const generatedWallBuilder = createWallBufferBuilder();
     for (const key of keys) {
         const coord = parseMazeSectionKey(key);
-        appendMazeSectionWalls(generatedWalls, coord.q, coord.r, options);
+        appendMazeSectionWalls(generatedWallBuilder, coord.q, coord.r, options);
     }
+    const generatedWalls = finishWallBuffer(generatedWallBuilder);
     const manualWalls = normalizeWalls(message.manualWalls || [], "manual walls");
-    const allWalls = generatedWalls.concat(manualWalls);
+    const allWalls = concatWallBuffers(generatedWalls, manualWalls);
     const bounds = normalizeBounds(message.bounds);
     const targetRadius = finiteNumber(message.targetRadius, "targetRadius");
     const nodeLayer = buildPathfindingNodeLayer(allWalls, bounds, targetRadius);
-    const packedGeneratedWalls = packWalls(generatedWalls);
-    const packedAllWalls = packWalls(allWalls);
     return {
         type: "maze_sections_result",
         requestId: message.requestId,
         signature: String(message.signature || ""),
-        generatedWalls: packedGeneratedWalls,
-        allWalls: packedAllWalls,
+        generatedWalls,
+        allWalls,
         nodeLayer
     };
 }
@@ -104,19 +101,12 @@ function normalizeBounds(bounds) {
 }
 
 function normalizeWalls(walls, label) {
-    if (!Array.isArray(walls)) throw new Error(`Wizard of Flatland maze worker ${label} must be an array`);
-    return walls.map((wall, index) => {
-        if (!wall || typeof wall !== "object") throw new Error(`Wizard of Flatland maze worker ${label}.${index} is missing`);
-        return {
-            ax: finiteNumber(wall.ax, `${label}.${index}.ax`),
-            ay: finiteNumber(wall.ay, `${label}.${index}.ay`),
-            bx: finiteNumber(wall.bx, `${label}.${index}.bx`),
-            by: finiteNumber(wall.by, `${label}.${index}.by`),
-            nx: finiteNumber(wall.nx, `${label}.${index}.nx`),
-            ny: finiteNumber(wall.ny, `${label}.${index}.ny`),
-            kind: Math.round(Number(wall.kind)) === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY
-        };
-    });
+    if (!(walls instanceof Float32Array)) throw new Error(`Wizard of Flatland maze worker ${label} must be a wall buffer`);
+    if (walls.length % WALL_STRIDE !== 0) throw new Error(`Wizard of Flatland maze worker ${label} has an invalid wall stride`);
+    for (let i = 0; i < walls.length; i += WALL_STRIDE) {
+        validateWallSegment(walls[i], walls[i + 1], walls[i + 2], walls[i + 3]);
+    }
+    return walls.slice();
 }
 
 function finiteNumber(value, label) {
@@ -143,27 +133,59 @@ function seededRandom(seed) {
     };
 }
 
-function createSegmentWall(ax, ay, bx, by) {
-    const dx = bx - ax;
-    const dy = by - ay;
-    const len = Math.hypot(dx, dy);
-    if (!(len > 0.001)) return null;
+function appendSegmentWall(walls, ax, ay, bx, by) {
+    if (!isUsableWallSegment(ax, ay, bx, by)) return false;
+    ensureWallBufferCapacity(walls, walls.length + WALL_STRIDE);
+    walls.buffer[walls.length] = ax;
+    walls.buffer[walls.length + 1] = ay;
+    walls.buffer[walls.length + 2] = bx;
+    walls.buffer[walls.length + 3] = by;
+    walls.buffer[walls.length + 4] = 0;
+    walls.buffer[walls.length + 5] = 0;
+    walls.buffer[walls.length + 6] = 0;
+    walls.buffer[walls.length + 7] = 0;
+    walls.length += WALL_STRIDE;
+    return true;
+}
+
+function createWallBufferBuilder() {
     return {
-        ax,
-        ay,
-        bx,
-        by,
-        nx: -dy / len,
-        ny: dx / len,
-        kind: WALL_KIND_SEGMENT
+        buffer: new Float32Array(WALL_STRIDE * 64),
+        length: 0
     };
 }
 
-function appendSegmentWall(walls, ax, ay, bx, by) {
-    const wall = createSegmentWall(ax, ay, bx, by);
-    if (!wall) return false;
-    walls.push(wall);
-    return true;
+function ensureWallBufferCapacity(walls, requiredLength) {
+    if (walls.buffer.length >= requiredLength) return;
+    let nextLength = walls.buffer.length;
+    while (nextLength < requiredLength) nextLength *= 2;
+    const next = new Float32Array(nextLength);
+    next.set(walls.buffer.subarray(0, walls.length));
+    walls.buffer = next;
+}
+
+function finishWallBuffer(walls) {
+    return walls.buffer.slice(0, walls.length);
+}
+
+function concatWallBuffers(left, right) {
+    const out = new Float32Array(left.length + right.length);
+    out.set(left);
+    out.set(right, left.length);
+    return out;
+}
+
+function validateWallSegment(ax, ay, bx, by) {
+    if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) {
+        throw new Error("Wizard of Flatland maze worker wall segment requires finite coordinates");
+    }
+    if (!isUsableWallSegment(ax, ay, bx, by)) {
+        throw new Error("Wizard of Flatland maze worker wall segment requires separated endpoints");
+    }
+}
+
+function isUsableWallSegment(ax, ay, bx, by) {
+    return Math.hypot(bx - ax, by - ay) > 0.001;
 }
 
 function getMazeSectionRadius(options) {
@@ -411,12 +433,15 @@ function buildPathfindingNodeLayer(walls, bounds, targetRadius) {
 
     const blockedEdges = [];
     const blockedKeys = new Set();
-    for (let w = 0; w < walls.length; w++) {
-        const wall = walls[w];
-        const wallMinX = Math.min(wall.ax, wall.bx) - HEX_GRID_WIDTH;
-        const wallMaxX = Math.max(wall.ax, wall.bx) + HEX_GRID_WIDTH;
-        const wallMinY = Math.min(wall.ay, wall.by) - HEX_GRID_HEIGHT;
-        const wallMaxY = Math.max(wall.ay, wall.by) + HEX_GRID_HEIGHT;
+    for (let w = 0; w < walls.length; w += WALL_STRIDE) {
+        const ax = walls[w];
+        const ay = walls[w + 1];
+        const bx = walls[w + 2];
+        const by = walls[w + 3];
+        const wallMinX = Math.min(ax, bx) - HEX_GRID_WIDTH;
+        const wallMaxX = Math.max(ax, bx) + HEX_GRID_WIDTH;
+        const wallMinY = Math.min(ay, by) - HEX_GRID_HEIGHT;
+        const wallMaxY = Math.max(ay, by) + HEX_GRID_HEIGHT;
         for (const node of nodes) {
             if (node.x < wallMinX || node.x > wallMaxX || node.y < wallMinY || node.y > wallMaxY) continue;
             for (let dir = 0; dir < 12; dir++) {
@@ -427,8 +452,8 @@ function buildPathfindingNodeLayer(walls, bounds, targetRadius) {
                 if (!wallGeometry.connectionCrossesWallFaces(
                     node,
                     neighbor,
-                    { x: wall.ax, y: wall.ay },
-                    { x: wall.bx, y: wall.by },
+                    { x: ax, y: ay },
+                    { x: bx, y: by },
                     { thickness: PATH_NODE_WALL_THICKNESS, extend: PATH_NODE_WALL_FACE_EXTEND }
                 )) {
                     continue;
@@ -437,7 +462,7 @@ function buildPathfindingNodeLayer(walls, bounds, targetRadius) {
                 node.blockedNeighbors.add(dir);
                 const reverseDir = neighbor.neighbors.indexOf(node);
                 if (reverseDir >= 0) neighbor.blockedNeighbors.add(reverseDir);
-                blockedEdges.push(node.index, neighbor.index, w);
+                blockedEdges.push(node.index, neighbor.index, w / WALL_STRIDE);
             }
         }
     }
@@ -513,20 +538,9 @@ function isPathfindingNodeTerrainPassable(node, walls, targetRadius) {
     if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) {
         throw new Error("Wizard of Flatland maze worker passability requires a finite node");
     }
-    for (const wall of walls) {
-        const kind = wall.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY;
-        if (kind === WALL_KIND_SEGMENT) {
-            const distance = pointSegmentDistance(node.x, node.y, wall.ax, wall.ay, wall.bx, wall.by);
-            if (distance < targetRadius) return false;
-            continue;
-        }
-        const nx = Number(wall.nx);
-        const ny = Number(wall.ny);
-        if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
-            throw new Error("Wizard of Flatland maze worker passability requires finite wall normals");
-        }
-        const signed = (node.x - wall.ax) * nx + (node.y - wall.ay) * ny;
-        if (signed < targetRadius) return false;
+    for (let i = 0; i < walls.length; i += WALL_STRIDE) {
+        const distance = pointSegmentDistance(node.x, node.y, walls[i], walls[i + 1], walls[i + 2], walls[i + 3]);
+        if (distance < targetRadius) return false;
     }
     return true;
 }
@@ -544,20 +558,4 @@ function pointProjectionParameter(px, py, ax, ay, bx, by) {
     const lenSq = dx * dx + dy * dy;
     if (lenSq <= 0.000001) return 0;
     return ((px - ax) * dx + (py - ay) * dy) / lenSq;
-}
-
-function packWalls(walls) {
-    const packed = new Float32Array(walls.length * WALL_STRIDE);
-    for (let i = 0; i < walls.length; i++) {
-        const wall = walls[i];
-        const base = i * WALL_STRIDE;
-        packed[base] = wall.ax;
-        packed[base + 1] = wall.ay;
-        packed[base + 2] = wall.bx;
-        packed[base + 3] = wall.by;
-        packed[base + 4] = wall.nx;
-        packed[base + 5] = wall.ny;
-        packed[base + 6] = wall.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY;
-    }
-    return packed;
 }

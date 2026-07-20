@@ -140,6 +140,7 @@
         manualWalls: [],
         generatedMazeWalls: [],
         generatedMazeChunkKeys: new Set(),
+        generatedMazeInstalledChunkKeys: new Set(),
         generatedMazeSignature: "",
         generatedMazeRequestId: 1,
         generatedMazeActiveRequestId: 0,
@@ -589,10 +590,17 @@
         state.generatedMazePendingSignature = "";
         state.generatedMazeLoading = false;
         state.generatedMazeActiveRequestId = 0;
+        state.generatedMazeInstalledChunkKeys = new Set(state.generatedMazeChunkKeys);
         state.worldVersion += 1;
         installPathfindingNodeLayerFromWorker(message.nodeLayer);
         constrainTargetToWalls();
-        for (const agent of state.agents) constrainAgentToWalls(agent);
+        for (const agent of state.agents) {
+            if (isAgentInInstalledMazeSection(agent)) {
+                constrainAgentToWalls(agent);
+            } else {
+                freezeAgentForUnloadedSection(agent);
+            }
+        }
         resolveTargetNpcContacts();
         labels.workerStatus.textContent = "ready";
     }
@@ -722,7 +730,42 @@
         }
         if (!furthest) return false;
         state.generatedMazeChunkKeys.delete(furthest.key);
+        freezeAgentsInMazeSection(furthest.key, options);
         return true;
+    }
+
+    function freezeAgentsInMazeSection(sectionKey, options) {
+        for (const agent of state.agents) {
+            if (getActorMazeSectionKey(agent, options) !== sectionKey) continue;
+            freezeAgentForUnloadedSection(agent);
+        }
+    }
+
+    function freezeAgentForUnloadedSection(agent) {
+        agent.vx = 0;
+        agent.vy = 0;
+        agent.wallClamps = 0;
+        agent.pathMode = PATH_MODE_DIRECT;
+        agent.pathRequestPending = false;
+        agent.pathRequestId = 0;
+        agent.pathNodeKeys = [];
+        agent.pathCursor = 0;
+        agent.pathGoalX = agent.x;
+        agent.pathGoalY = agent.y;
+    }
+
+    function getActorMazeSectionKey(actor, options = getMazeOptions()) {
+        const coord = worldToMazeSectionCoord(actor.x, actor.y, options);
+        return mazeSectionKey(coord.q, coord.r);
+    }
+
+    function isAgentInInstalledMazeSection(agent) {
+        if (!isProceduralMazeScenario()) return true;
+        if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
+            throw new Error("NPC movement lab procedural maze requires installed section tracking");
+        }
+        const sectionKey = getActorMazeSectionKey(agent);
+        return state.generatedMazeInstalledChunkKeys.has(sectionKey) && state.generatedMazeChunkKeys.has(sectionKey);
     }
 
     function refreshMazePathBoundsIfNeeded() {
@@ -1021,6 +1064,7 @@
         state.manualWalls = [];
         state.generatedMazeWalls = [];
         state.generatedMazeChunkKeys = new Set();
+        state.generatedMazeInstalledChunkKeys = new Set();
         state.generatedMazeSignature = "";
         state.generatedMazePendingSignature = "";
         state.generatedMazeLoading = false;
@@ -1683,10 +1727,18 @@
     }
 
     function packAgents() {
-        const packed = new Float32Array(state.agents.length * STRIDE);
+        const activeAgents = [];
+        for (const agent of state.agents) {
+            if (!isAgentInInstalledMazeSection(agent)) {
+                freezeAgentForUnloadedSection(agent);
+                continue;
+            }
+            activeAgents.push(agent);
+        }
+        const packed = new Float32Array(activeAgents.length * STRIDE);
         const forceDirectPathing = isProceduralMazeScenario() && state.generatedMazeLoading;
-        for (let i = 0; i < state.agents.length; i++) {
-            const agent = state.agents[i];
+        for (let i = 0; i < activeAgents.length; i++) {
+            const agent = activeAgents[i];
             const base = i * STRIDE;
             packed[base] = agent.id;
             packed[base + 1] = agent.x;
@@ -1962,6 +2014,10 @@
         const now = performance.now();
         const goalNode = nearestPassablePathfindingNode(state.target.x, state.target.y);
         for (const agent of state.agents) {
+            if (!isAgentInInstalledMazeSection(agent)) {
+                freezeAgentForUnloadedSection(agent);
+                continue;
+            }
             const hasLos = hasDirectLineOfSight(agent.x, agent.y, state.target.x, state.target.y, agent.radius);
             if (hasLos) {
                 agent.pathMode = PATH_MODE_DIRECT;

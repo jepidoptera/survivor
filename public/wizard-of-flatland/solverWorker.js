@@ -1,11 +1,11 @@
 "use strict";
 
-importScripts("/assets/javascript/wallGeometry.js?v=wizard-of-flatland-1");
-importScripts("/assets/javascript/pathfinding/orcaSolver.js?v=wizard-of-flatland-1");
+importScripts("/wizard-of-flatland/wallGeometry.js?v=wizard-of-flatland-1");
+importScripts("/wizard-of-flatland/orcaSolver.js?v=wizard-of-flatland-1");
 
 const STRIDE = 17;
 const OUT_STRIDE = 14;
-const WALL_STRIDE = 7;
+const WALL_STRIDE = 8;
 const STATE_MILLING = 1;
 const STATE_ATTACKING = 3;
 const STATE_BLOCKED = 6;
@@ -73,12 +73,12 @@ const HEX_GRID_HEIGHT = 1;
 const PATH_NODE_LAYER_PADDING = 4;
 const PATH_NODE_WALL_THICKNESS = 0.1;
 const PATH_NODE_WALL_FACE_EXTEND = 0.501;
-const WALL_KIND_BOUNDARY = 0;
-const WALL_KIND_SEGMENT = 1;
 const PATH_MODE_DIRECT = 0;
 const PATH_MODE_WORKER = 1;
 
 let cachedPathfindingNodeLayer = null;
+let cachedWalls = null;
+let cachedWallsWorldVersion = 0;
 
 self.postMessage({ type: "ready" });
 
@@ -111,9 +111,8 @@ function validatePackedLength(array, stride, label) {
 function solveStep(message) {
     const start = performance.now();
     const agents = message.agents;
-    const walls = message.walls;
+    const walls = getStepWalls(message);
     validatePackedLength(agents, STRIDE, "agents");
-    validatePackedLength(walls, WALL_STRIDE, "walls");
 
     const count = agents.length / STRIDE;
     const next = new Float32Array(count * OUT_STRIDE);
@@ -650,6 +649,20 @@ function solveStep(message) {
     };
 }
 
+function getStepWalls(message) {
+    const version = Number.isFinite(Number(message.worldVersion)) ? Number(message.worldVersion) : 0;
+    if (message.walls !== undefined) {
+        validatePackedLength(message.walls, WALL_STRIDE, "walls");
+        cachedWalls = message.walls;
+        cachedWallsWorldVersion = version;
+        return cachedWalls;
+    }
+    if (!cachedWalls || cachedWallsWorldVersion !== version) {
+        throw new Error(`walls missing for world version ${version}`);
+    }
+    return cachedWalls;
+}
+
 function getPathfindingNodeLayer(worldVersion, walls) {
     const version = Number.isFinite(Number(worldVersion)) ? Number(worldVersion) : 0;
     if (cachedPathfindingNodeLayer && cachedPathfindingNodeLayer.worldVersion === version) {
@@ -721,10 +734,10 @@ function buildPathfindingNodeLayer(worldVersion, walls) {
                     continue;
                 }
                 blockedKeys.add(edgeKey);
-                addDirectionalBlock(node, dir, w);
+                addDirectionalBlock(node, dir, w / WALL_STRIDE);
                 const reverseDir = neighbor.neighbors.indexOf(node);
-                if (reverseDir >= 0) addDirectionalBlock(neighbor, reverseDir, w);
-                blockedEdges.push({ a: node, b: neighbor, wallOffset: w });
+                if (reverseDir >= 0) addDirectionalBlock(neighbor, reverseDir, w / WALL_STRIDE);
+                blockedEdges.push({ a: node, b: neighbor, wallIndex: w / WALL_STRIDE });
             }
         }
     }
@@ -1141,12 +1154,7 @@ function wallClearance(x, y, walls) {
         const ay = walls[i + 1];
         const bx = walls[i + 2];
         const by = walls[i + 3];
-        const nx = walls[i + 4];
-        const ny = walls[i + 5];
-        const kind = Math.round(walls[i + 6] || WALL_KIND_BOUNDARY);
-        const distance = kind === WALL_KIND_SEGMENT
-            ? pointSegmentDistance(x, y, ax, ay, bx, by)
-            : (x - ax) * nx + (y - ay) * ny;
+        const distance = pointSegmentDistance(x, y, ax, ay, bx, by);
         clearance = Math.min(clearance, distance);
     }
     return clearance;
@@ -1162,22 +1170,12 @@ function computeWallEscapeVector(x, y, radius, walls) {
         const ay = walls[i + 1];
         const bx = walls[i + 2];
         const by = walls[i + 3];
-        const nx = walls[i + 4];
-        const ny = walls[i + 5];
-        const kind = Math.round(walls[i + 6] || WALL_KIND_BOUNDARY);
-        const clearance = kind === WALL_KIND_SEGMENT
-            ? pointSegmentDistance(x, y, ax, ay, bx, by)
-            : (x - ax) * nx + (y - ay) * ny;
+        const clearance = pointSegmentDistance(x, y, ax, ay, bx, by);
         if (clearance >= activationDistance) continue;
         const push = (activationDistance - clearance) / activationDistance;
-        if (kind === WALL_KIND_SEGMENT) {
-            const normal = segmentRepulsionNormal(x, y, ax, ay, bx, by);
-            escapeX += normal.x * push;
-            escapeY += normal.y * push;
-        } else {
-            escapeX += nx * push;
-            escapeY += ny * push;
-        }
+        const normal = segmentRepulsionNormal(x, y, ax, ay, bx, by);
+        escapeX += normal.x * push;
+        escapeY += normal.y * push;
         pressure += push;
     }
     const length = Math.hypot(escapeX, escapeY);
@@ -1199,25 +1197,12 @@ function pushPointInsideWalls(x, y, radius, walls) {
             const ay = walls[i + 1];
             const bx = walls[i + 2];
             const by = walls[i + 3];
-            const nx = walls[i + 4];
-            const ny = walls[i + 5];
-            const kind = Math.round(walls[i + 6] || WALL_KIND_BOUNDARY);
-            if (kind === WALL_KIND_SEGMENT) {
-                const distance = pointSegmentDistance(outX, outY, ax, ay, bx, by);
-                if (distance < radius) {
-                    const normal = segmentRepulsionNormal(outX, outY, ax, ay, bx, by);
-                    const correction = radius - distance;
-                    outX += normal.x * correction;
-                    outY += normal.y * correction;
-                    changed = true;
-                }
-                continue;
-            }
-            const signed = (outX - ax) * nx + (outY - ay) * ny;
-            if (signed < radius) {
-                const correction = radius - signed;
-                outX += nx * correction;
-                outY += ny * correction;
+            const distance = pointSegmentDistance(outX, outY, ax, ay, bx, by);
+            if (distance < radius) {
+                const normal = segmentRepulsionNormal(outX, outY, ax, ay, bx, by);
+                const correction = radius - distance;
+                outX += normal.x * correction;
+                outY += normal.y * correction;
                 changed = true;
             }
         }

@@ -140,6 +140,7 @@
         manualWalls: [],
         generatedMazeWalls: [],
         generatedMazeChunkKeys: new Set(),
+        generatedMazeInstalledChunkKeys: new Set(),
         generatedMazeSignature: "",
         generatedMazeRequestId: 1,
         generatedMazeActiveRequestId: 0,
@@ -589,20 +590,19 @@
         state.generatedMazePendingSignature = "";
         state.generatedMazeLoading = false;
         state.generatedMazeActiveRequestId = 0;
+        state.generatedMazeInstalledChunkKeys = new Set(state.generatedMazeChunkKeys);
         state.worldVersion += 1;
         installPathfindingNodeLayerFromWorker(message.nodeLayer);
-        separateActorsFromWallsAfterMazeInstall();
+        constrainTargetToWalls();
+        for (const agent of state.agents) {
+            if (isAgentInInstalledMazeSection(agent)) {
+                constrainAgentToWalls(agent);
+            } else {
+                freezeAgentForUnloadedSection(agent);
+            }
+        }
         resolveTargetNpcContacts();
         labels.workerStatus.textContent = "ready";
-    }
-
-    function separateActorsFromWallsAfterMazeInstall() {
-        constrainActorToWalls(state.target, TARGET_RADIUS, 32);
-        assertActorWallSeparation("target after maze section install", state.target, TARGET_RADIUS);
-        for (const agent of state.agents) {
-            constrainActorToWalls(agent, agent.radius, 32);
-            assertActorWallSeparation(`agent ${agent.id} after maze section install`, agent, agent.radius);
-        }
     }
 
     function clearAgentPathRequestsForMapRebuild() {
@@ -730,7 +730,42 @@
         }
         if (!furthest) return false;
         state.generatedMazeChunkKeys.delete(furthest.key);
+        freezeAgentsInMazeSection(furthest.key, options);
         return true;
+    }
+
+    function freezeAgentsInMazeSection(sectionKey, options) {
+        for (const agent of state.agents) {
+            if (getActorMazeSectionKey(agent, options) !== sectionKey) continue;
+            freezeAgentForUnloadedSection(agent);
+        }
+    }
+
+    function freezeAgentForUnloadedSection(agent) {
+        agent.vx = 0;
+        agent.vy = 0;
+        agent.wallClamps = 0;
+        agent.pathMode = PATH_MODE_DIRECT;
+        agent.pathRequestPending = false;
+        agent.pathRequestId = 0;
+        agent.pathNodeKeys = [];
+        agent.pathCursor = 0;
+        agent.pathGoalX = agent.x;
+        agent.pathGoalY = agent.y;
+    }
+
+    function getActorMazeSectionKey(actor, options = getMazeOptions()) {
+        const coord = worldToMazeSectionCoord(actor.x, actor.y, options);
+        return mazeSectionKey(coord.q, coord.r);
+    }
+
+    function isAgentInInstalledMazeSection(agent) {
+        if (!isProceduralMazeScenario()) return true;
+        if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland procedural maze requires installed section tracking");
+        }
+        const sectionKey = getActorMazeSectionKey(agent);
+        return state.generatedMazeInstalledChunkKeys.has(sectionKey) && state.generatedMazeChunkKeys.has(sectionKey);
     }
 
     function refreshMazePathBoundsIfNeeded() {
@@ -1029,6 +1064,7 @@
         state.manualWalls = [];
         state.generatedMazeWalls = [];
         state.generatedMazeChunkKeys = new Set();
+        state.generatedMazeInstalledChunkKeys = new Set();
         state.generatedMazeSignature = "";
         state.generatedMazePendingSignature = "";
         state.generatedMazeLoading = false;
@@ -1624,8 +1660,8 @@
         constrainActorToWalls(agent, agent.radius);
     }
 
-    function constrainActorToWalls(actor, radius, maxPasses = 4) {
-        for (let pass = 0; pass < maxPasses; pass++) {
+    function constrainActorToWalls(actor, radius) {
+        for (let pass = 0; pass < 4; pass++) {
             let changed = false;
             for (const wall of state.walls) {
                 if (wall.kind === WALL_KIND_SEGMENT) {
@@ -1675,38 +1711,34 @@
     }
 
     function assertActorWallSeparation(label, actor, radius) {
-        for (let wallIndex = 0; wallIndex < state.walls.length; wallIndex++) {
-            const wall = state.walls[wallIndex];
+        for (const wall of state.walls) {
             if (wall.kind === WALL_KIND_SEGMENT) {
                 const distance = pointSegmentDistance(actor.x, actor.y, wall.ax, wall.ay, wall.bx, wall.by);
                 if (distance < radius - TARGET_NPC_PUSH_SLOP * 4) {
-                    throw new Error(formatWallSeparationError(label, actor, radius, wall, wallIndex, distance, "segment"));
+                    throw new Error(`Wizard of Flatland ${label} segment wall collision unresolved`);
                 }
                 continue;
             }
             const signed = (actor.x - wall.ax) * wall.nx + (actor.y - wall.ay) * wall.ny;
             if (signed < radius - TARGET_NPC_PUSH_SLOP * 4) {
-                throw new Error(formatWallSeparationError(label, actor, radius, wall, wallIndex, signed, "boundary"));
+                throw new Error(`Wizard of Flatland ${label} wall collision unresolved`);
             }
         }
     }
 
-    function formatWallSeparationError(label, actor, radius, wall, wallIndex, distance, kind) {
-        return [
-            `Wizard of Flatland ${label} ${kind} wall collision unresolved`,
-            `actor=(${actor.x.toFixed(3)},${actor.y.toFixed(3)})`,
-            `radius=${radius.toFixed(3)}`,
-            `distance=${distance.toFixed(4)}`,
-            `wallIndex=${wallIndex}`,
-            `wall=(${wall.ax.toFixed(3)},${wall.ay.toFixed(3)})->(${wall.bx.toFixed(3)},${wall.by.toFixed(3)})`
-        ].join(" ");
-    }
-
     function packAgents() {
-        const packed = new Float32Array(state.agents.length * STRIDE);
+        const activeAgents = [];
+        for (const agent of state.agents) {
+            if (!isAgentInInstalledMazeSection(agent)) {
+                freezeAgentForUnloadedSection(agent);
+                continue;
+            }
+            activeAgents.push(agent);
+        }
+        const packed = new Float32Array(activeAgents.length * STRIDE);
         const forceDirectPathing = isProceduralMazeScenario() && state.generatedMazeLoading;
-        for (let i = 0; i < state.agents.length; i++) {
-            const agent = state.agents[i];
+        for (let i = 0; i < activeAgents.length; i++) {
+            const agent = activeAgents[i];
             const base = i * STRIDE;
             packed[base] = agent.id;
             packed[base + 1] = agent.x;
@@ -1982,6 +2014,10 @@
         const now = performance.now();
         const goalNode = nearestPassablePathfindingNode(state.target.x, state.target.y);
         for (const agent of state.agents) {
+            if (!isAgentInInstalledMazeSection(agent)) {
+                freezeAgentForUnloadedSection(agent);
+                continue;
+            }
             const hasLos = hasDirectLineOfSight(agent.x, agent.y, state.target.x, state.target.y, agent.radius);
             if (hasLos) {
                 agent.pathMode = PATH_MODE_DIRECT;
