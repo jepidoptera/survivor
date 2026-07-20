@@ -23,13 +23,13 @@ The player character. Key properties:
 
 ## Character (gameobjects/Character.js)
 
-Base class for all living entities (Wizard extends it, Animal extends it).
+Base class for all living entities (Wizard extends it, NpcCharacter extends it).
 - Temperature system: `CHARACTER_FREEZE_TEMPERATURE_DEGREES = -20`
 - Fire warm rate: `CHARACTER_FIRE_WARM_RATE_DEGREES_PER_SECOND = 10`
 - `FrozenDeathBurstEffect` particle system — 60 snow particles on freeze-kill
 - Magic points: `ensureMagicPointsInitialized()`
 
-## Animal (gameobjects/Animal.js)
+## NpcCharacter (gameobjects/NpcCharacter.js)
 
 Extends Character. Key notes:
 - Uses external scheduler (`useExternalScheduler = true`) — no internal `moveTimeout`
