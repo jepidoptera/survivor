@@ -26,8 +26,24 @@
                 <select id="scenarioSelect" class="select-input">
                     <option value="sealedRoom">Sealed Room</option>
                     <option value="crowdedArena">Crowded Arena</option>
-                    <option value="openArena" selected>Open Arena</option>
+                    <option value="openArena">Open Arena</option>
+                    <option value="proceduralMaze" selected>Procedural Maze</option>
                 </select>
+            </section>
+
+            <section class="panel-section" id="mazeControlsSection">
+                <h2>Maze</h2>
+                <label class="field-label" for="mazeSeed">Seed</label>
+                <input id="mazeSeed" class="text-input" type="text" value="hex-maze-1" spellcheck="false">
+
+                <label class="field-label" for="mazeChunkSize">Section Size <span id="mazeChunkSizeValue"></span></label>
+                <input id="mazeChunkSize" type="range" min="28" max="72" step="2" value="44">
+
+                <label class="field-label" for="mazeRoomScale">Room Scale <span id="mazeRoomScaleValue"></span></label>
+                <input id="mazeRoomScale" type="range" min="0" max="1" step="0.01" value="0.56">
+
+                <label class="field-label" for="mazeTwistiness">Twistiness <span id="mazeTwistinessValue"></span></label>
+                <input id="mazeTwistiness" type="range" min="0" max="1" step="0.01" value="0.62">
             </section>
 
             <section class="panel-section">
@@ -73,11 +89,11 @@
 
             <section class="panel-section">
                 <h2>Target</h2>
-                <p class="hint-line">W/S move forward/back, A/D steer, and arrow keys still slide the target. Hold Shift for speed. Hold B and drag to build walls.</p>
+                <p class="hint-line">W/S move forward/back, A/D strafe. Arrow keys steer and move the projected cursor. Space shoots. Hold Shift for speed. Hold B and drag to build walls.</p>
             </section>
         </aside>
     </main>
     <script src="/assets/javascript/wallGeometry.js?v=npc-movement-lab-1"></script>
-    <script src="/npc-movement-lab/main.js?v=npc-movement-lab-66"></script>
+    <script src="/npc-movement-lab/main.js?v=npc-movement-lab-76"></script>
 </body>
 </html>

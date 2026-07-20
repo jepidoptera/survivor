@@ -18,8 +18,26 @@
     const COMBAT_RING_RADIUS = 1.6;
     const TARGET_KEYBOARD_MOVE_SPEED = 5.67;
     const TARGET_KEYBOARD_FAST_MOVE_SPEED = 14.49;
-    const TARGET_KEYBOARD_BACKWARD_SPEED_MULTIPLIER = 0.65;
-    const TARGET_KEYBOARD_STEER_RADIANS_PER_SECOND = Math.PI * 1.75;
+    const TARGET_KEYBOARD_SIDEWAYS_SPEED_MULTIPLIER = 2 / 3;
+    const TARGET_KEYBOARD_FORWARD_DIAGONAL_SPEED_MULTIPLIER = 5 / 6;
+    const TARGET_KEYBOARD_BACKWARD_SPEED_MULTIPLIER = 1 / 2;
+    const TARGET_KEYBOARD_BACKWARD_DIAGONAL_SPEED_MULTIPLIER = 7 / 12;
+    const TARGET_PROJECTED_CURSOR_DISTANCE = 5;
+    const TARGET_PROJECTED_CURSOR_MIN_DISTANCE = 1;
+    const TARGET_PROJECTED_CURSOR_MAX_DISTANCE = 10;
+    const TARGET_PROJECTED_CURSOR_MIN_TURN_RADIUS = 0.5;
+    const TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET = Math.PI / 2;
+    const TARGET_PROJECTED_CURSOR_ANGLE_SPEED = TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET;
+    const TARGET_PROJECTED_CURSOR_RETURN_ANGLE_SPEED_MULTIPLIER = 2.5;
+    const TARGET_PROJECTED_CURSOR_OUTWARD_ANGLE_SPEED_MIN_MULTIPLIER = 0.2;
+    const TARGET_PROJECTED_CURSOR_DISTANCE_SPEED = TARGET_PROJECTED_CURSOR_DISTANCE;
+    const FIREBALL_SPEED = 13;
+    const FIREBALL_MAX_AGE_SECONDS = 1.8;
+    const FIREBALL_HITBOX_LENGTH = 1.1;
+    const FIREBALL_HITBOX_WIDTH = 0.62;
+    const FIREBALL_DAMAGE_RADIUS = FIREBALL_HITBOX_WIDTH * 0.5;
+    const FIREBALL_EXPLOSION_DAMAGE_RADIUS = FIREBALL_DAMAGE_RADIUS * 3;
+    const FIREBALL_EXPLOSION_VISUAL_SECONDS = 0.16;
     const SPEED_SCALE_MIN = 0.05;
     const SPEED_SCALE_MAX = 0.8;
     const SPEED_SCALE_DEFAULT = 0.2;
@@ -37,6 +55,23 @@
     const PATH_NODE_LAYER_PADDING = 4;
     const PATH_NODE_WALL_THICKNESS = 0.1;
     const PATH_NODE_WALL_FACE_EXTEND = 0.501;
+    const MAZE_CHUNK_MIN_SIZE = 28;
+    const MAZE_CHUNK_MAX_SIZE = 72;
+    const MAZE_SECTION_CACHE_LIMIT = 10;
+    const MAZE_SECTION_NEARBY_LOAD_COUNT = 2;
+    const MAZE_WORKER_STATUS_PREFIX = "maze";
+    const MAZE_ROOM_EDGE_INSET_TILES = 2;
+    const MAZE_HALLWAY_GAP_WIDTH = 3.4;
+    const MAZE_OUTSIDE_DOOR_MIN_WIDTH = 1;
+    const MAZE_OUTSIDE_DOOR_MAX_WIDTH = 3;
+    const MAZE_SECTION_DIRECTIONS = [
+        { q: 1, r: 0 },
+        { q: 0, r: 1 },
+        { q: -1, r: 1 },
+        { q: -1, r: 0 },
+        { q: 0, r: -1 },
+        { q: 1, r: -1 }
+    ];
     const WALL_KIND_BOUNDARY = 0;
     const WALL_KIND_SEGMENT = 1;
     const PATH_MODE_DIRECT = 0;
@@ -45,19 +80,14 @@
     const PATH_WAYPOINT_REACHED_DISTANCE = 0.55;
     const HEADING_GLITCH_TURN_THRESHOLD = Math.PI / 5;
     const HEADING_GLITCH_RETURN_THRESHOLD = Math.PI / 10;
-    const TARGET_MOVEMENT_KEYS = {
-        ArrowLeft: [-1, 0],
-        ArrowRight: [1, 0],
-        ArrowUp: [0, -1],
-        ArrowDown: [0, 1]
-    };
-    const TARGET_STEER_KEYS = {
-        KeyA: -1,
-        KeyD: 1
-    };
+    const TARGET_CURSOR_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]);
     const TARGET_FORWARD_KEYS = {
         KeyW: 1,
         KeyS: -1
+    };
+    const TARGET_SIDEWAYS_KEYS = {
+        KeyA: -1,
+        KeyD: 1
     };
 
     const canvas = document.getElementById("solverCanvas");
@@ -69,11 +99,18 @@
     const agentCountInput = document.getElementById("agentCount");
     const separationInput = document.getElementById("separationStrength");
     const speedScaleInput = document.getElementById("speedScale");
+    const mazeSeedInput = document.getElementById("mazeSeed");
+    const mazeChunkSizeInput = document.getElementById("mazeChunkSize");
+    const mazeRoomScaleInput = document.getElementById("mazeRoomScale");
+    const mazeTwistinessInput = document.getElementById("mazeTwistiness");
 
     const labels = {
         agentCount: document.getElementById("agentCountValue"),
         separationStrength: document.getElementById("separationStrengthValue"),
         speedScale: document.getElementById("speedScaleValue"),
+        mazeChunkSize: document.getElementById("mazeChunkSizeValue"),
+        mazeRoomScale: document.getElementById("mazeRoomScaleValue"),
+        mazeTwistiness: document.getElementById("mazeTwistinessValue"),
         workerStatus: document.getElementById("workerStatus"),
         solveMs: document.getElementById("solveMs"),
         pairChecks: document.getElementById("pairChecks"),
@@ -95,12 +132,26 @@
         worldVersion: 1,
         lastTime: performance.now(),
         agents: [],
+        fireballs: [],
+        fireballExplosions: [],
         walls: [],
+        manualWalls: [],
+        generatedMazeWalls: [],
+        generatedMazeChunkKeys: new Set(),
+        generatedMazeSignature: "",
+        generatedMazeRequestId: 1,
+        generatedMazePendingSignature: "",
+        generatedMazeLoading: false,
         target: { x: 0, y: 0, heading: -Math.PI / 2 },
         lastSentTarget: { x: 0, y: 0 },
         targetFlashTime: 0,
         targetPushes: 0,
+        projectedCursor: {
+            angleOffset: 0,
+            distance: TARGET_PROJECTED_CURSOR_DISTANCE
+        },
         pressedMovementKeys: Object.create(null),
+        spaceHeld: false,
         fastMovementHeld: false,
         stats: null,
         debug: {
@@ -115,7 +166,7 @@
             startNode: null,
             hoverNode: null
         },
-        view: { width: 0, height: 0, dpr: 1, scale: 1, offsetX: 0, offsetY: 0 },
+        view: { width: 0, height: 0, dpr: 1, scale: 1, offsetX: 0, offsetY: 0, centerX: 0, centerY: 0 },
         hexGridLayer: {
             canvas: document.createElement("canvas"),
             ctx: null,
@@ -124,6 +175,8 @@
             scale: 0,
             offsetX: 0,
             offsetY: 0,
+            centerX: NaN,
+            centerY: NaN,
             dirty: true
         },
         nodeLayer: {
@@ -138,8 +191,12 @@
             scale: 0,
             offsetX: 0,
             offsetY: 0,
+            centerX: NaN,
+            centerY: NaN,
             renderedVersion: -1,
             renderedShowPathBlockedEdges: false,
+            pathCenterX: NaN,
+            pathCenterY: NaN,
             dirty: true
         }
     };
@@ -160,10 +217,20 @@
         labels.workerStatus.textContent = event.message || "pathfinding failed";
     });
 
+    const mazeWorker = new Worker("/npc-movement-lab/mazeSectionWorker.js?v=npc-movement-lab-1");
+    mazeWorker.addEventListener("message", handleMazeWorkerMessage);
+    mazeWorker.addEventListener("error", (event) => {
+        state.generatedMazeLoading = false;
+        labels.workerStatus.textContent = event.message || "maze worker failed";
+    });
+
     function updateControlLabels() {
         labels.agentCount.textContent = agentCountInput.value;
         labels.separationStrength.textContent = Number(separationInput.value).toFixed(1);
         labels.speedScale.textContent = getSpeedScale().toFixed(2);
+        labels.mazeChunkSize.textContent = String(getMazeChunkSize());
+        labels.mazeRoomScale.textContent = Number(mazeRoomScaleInput.value).toFixed(2);
+        labels.mazeTwistiness.textContent = Number(mazeTwistinessInput.value).toFixed(2);
     }
 
     function getSpeedScale() {
@@ -177,6 +244,489 @@
         speedScaleInput.value = String(Math.max(0, Math.min(1, t)));
     }
 
+    function getMazeChunkSize() {
+        return Math.max(
+            MAZE_CHUNK_MIN_SIZE,
+            Math.min(MAZE_CHUNK_MAX_SIZE, Math.round(Number(mazeChunkSizeInput.value) || 44))
+        );
+    }
+
+    function getMazeSeed() {
+        const seed = String(mazeSeedInput.value || "").trim();
+        return seed.length > 0 ? seed : "hex-maze-1";
+    }
+
+    function getMazeOptions() {
+        return {
+            seed: getMazeSeed(),
+            chunkSize: getMazeChunkSize(),
+            roomScale: Math.max(0, Math.min(1, Number(mazeRoomScaleInput.value) || 0)),
+            twistiness: Math.max(0, Math.min(1, Number(mazeTwistinessInput.value) || 0))
+        };
+    }
+
+    function isProceduralMazeScenario() {
+        return scenarioSelect.value === "proceduralMaze";
+    }
+
+    function hashString(value) {
+        const text = String(value || "");
+        let hash = 2166136261;
+        for (let i = 0; i < text.length; i++) {
+            hash ^= text.charCodeAt(i);
+            hash = Math.imul(hash, 16777619);
+        }
+        return hash >>> 0;
+    }
+
+    function seededRandom(seed) {
+        let stateValue = seed >>> 0;
+        return function nextRandom() {
+            stateValue = (Math.imul(stateValue, 1664525) + 1013904223) >>> 0;
+            return stateValue / 4294967296;
+        };
+    }
+
+    function createSegmentWall(ax, ay, bx, by) {
+        const dx = bx - ax;
+        const dy = by - ay;
+        const len = Math.hypot(dx, dy);
+        if (!(len > 0.001)) return null;
+        return {
+            ax,
+            ay,
+            bx,
+            by,
+            nx: -dy / len,
+            ny: dx / len,
+            kind: WALL_KIND_SEGMENT
+        };
+    }
+
+    function appendSegmentWall(walls, ax, ay, bx, by) {
+        const wall = createSegmentWall(ax, ay, bx, by);
+        if (!wall) return false;
+        walls.push(wall);
+        return true;
+    }
+
+    function getMazeSectionRadius(options) {
+        return Math.max(8, Number(options.chunkSize) * 0.5);
+    }
+
+    function mazeSectionKey(q, r) {
+        return `${q},${r}`;
+    }
+
+    function parseMazeSectionKey(key) {
+        const parts = String(key).split(",");
+        return {
+            q: Number(parts[0]),
+            r: Number(parts[1])
+        };
+    }
+
+    function mazeSectionCenter(q, r, options) {
+        const radius = getMazeSectionRadius(options);
+        return {
+            x: Math.sqrt(3) * radius * (q + r * 0.5),
+            y: 1.5 * radius * r
+        };
+    }
+
+    function worldToMazeSectionCoord(x, y, options) {
+        const radius = getMazeSectionRadius(options);
+        const qFloat = (Math.sqrt(3) / 3 * x - y / 3) / radius;
+        const rFloat = (2 / 3 * y) / radius;
+        return roundAxial(qFloat, rFloat);
+    }
+
+    function roundAxial(qFloat, rFloat) {
+        let q = Math.round(qFloat);
+        let r = Math.round(rFloat);
+        let s = Math.round(-qFloat - rFloat);
+        const qDiff = Math.abs(q - qFloat);
+        const rDiff = Math.abs(r - rFloat);
+        const sDiff = Math.abs(s + qFloat + rFloat);
+        if (qDiff > rDiff && qDiff > sDiff) q = -r - s;
+        else if (rDiff > sDiff) r = -q - s;
+        return { q, r };
+    }
+
+    function getMazeStartPoint() {
+        return mazeSectionCenter(0, 0, getMazeOptions());
+    }
+
+    function getRequiredMazeSectionKeys(options) {
+        const current = worldToMazeSectionCoord(state.target.x, state.target.y, options);
+        const currentKey = mazeSectionKey(current.q, current.r);
+        const neighbors = [];
+        for (let i = 0; i < MAZE_SECTION_DIRECTIONS.length; i++) {
+            const dir = MAZE_SECTION_DIRECTIONS[i];
+            const q = current.q + dir.q;
+            const r = current.r + dir.r;
+            const center = mazeSectionCenter(q, r, options);
+            neighbors.push({
+                key: mazeSectionKey(q, r),
+                distance: Math.hypot(center.x - state.target.x, center.y - state.target.y)
+            });
+        }
+        neighbors.sort((a, b) => a.distance - b.distance);
+        return [currentKey, ...neighbors.slice(0, MAZE_SECTION_NEARBY_LOAD_COUNT).map((entry) => entry.key)];
+    }
+
+    function getMazeSignature(options, keys) {
+        return [
+            options.seed,
+            options.chunkSize,
+            options.roomScale.toFixed(3),
+            options.twistiness.toFixed(3),
+            keys.join(";")
+        ].join("|");
+    }
+
+    function refreshGeneratedMazeIfNeeded(force = false) {
+        if (!isProceduralMazeScenario()) return false;
+        const options = getMazeOptions();
+        const requiredKeys = getRequiredMazeSectionKeys(options);
+        const requiredSet = new Set(requiredKeys);
+        let changed = force;
+
+        if (!(state.generatedMazeChunkKeys instanceof Set)) {
+            state.generatedMazeChunkKeys = new Set();
+            changed = true;
+        }
+        for (const key of requiredKeys) {
+            if (state.generatedMazeChunkKeys.has(key)) continue;
+            state.generatedMazeChunkKeys.add(key);
+            changed = true;
+        }
+        while (state.generatedMazeChunkKeys.size > MAZE_SECTION_CACHE_LIMIT) {
+            const removed = removeFurthestGeneratedMazeSection(options, requiredSet);
+            if (!removed) break;
+            changed = true;
+        }
+
+        const keys = Array.from(state.generatedMazeChunkKeys).sort();
+        const signature = getMazeSignature(options, keys);
+        if (!changed && signature === state.generatedMazeSignature) return false;
+        if (!changed && signature === state.generatedMazePendingSignature) return false;
+
+        requestGeneratedMazeRefresh(options, keys, signature);
+        return true;
+    }
+
+    function requestGeneratedMazeRefresh(options, keys, signature) {
+        if (!mazeWorker || typeof mazeWorker.postMessage !== "function") {
+            throw new Error("NPC movement lab procedural maze requires a section worker");
+        }
+        const bounds = getPathfindingLayerBounds();
+        const manualWalls = state.manualWalls.map(cloneWallRecord);
+        const requestId = state.generatedMazeRequestId++;
+        state.generatedMazePendingSignature = signature;
+        state.generatedMazeLoading = true;
+        labels.workerStatus.textContent = `${MAZE_WORKER_STATUS_PREFIX} loading`;
+        mazeWorker.postMessage({
+            type: "build_maze_sections",
+            requestId,
+            signature,
+            options,
+            keys,
+            manualWalls,
+            bounds,
+            targetRadius: TARGET_RADIUS
+        });
+    }
+
+    function cloneWallRecord(wall) {
+        if (!wall || typeof wall !== "object") throw new Error("NPC movement lab wall clone requires a wall record");
+        return {
+            ax: Number(wall.ax),
+            ay: Number(wall.ay),
+            bx: Number(wall.bx),
+            by: Number(wall.by),
+            nx: Number(wall.nx),
+            ny: Number(wall.ny),
+            kind: wall.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY
+        };
+    }
+
+    function removeFurthestGeneratedMazeSection(options, protectedKeys) {
+        let furthest = null;
+        for (const key of state.generatedMazeChunkKeys) {
+            if (protectedKeys.has(key)) continue;
+            const coord = parseMazeSectionKey(key);
+            const center = mazeSectionCenter(coord.q, coord.r, options);
+            const distance = Math.hypot(center.x - state.target.x, center.y - state.target.y);
+            if (!furthest || distance > furthest.distance) furthest = { key, distance };
+        }
+        if (!furthest) return false;
+        state.generatedMazeChunkKeys.delete(furthest.key);
+        return true;
+    }
+
+    function refreshMazePathBoundsIfNeeded() {
+        if (!isProceduralMazeScenario()) return false;
+        const radius = getMazeSectionRadius(getMazeOptions());
+        const dx = state.target.x - state.nodeLayer.pathCenterX;
+        const dy = state.target.y - state.nodeLayer.pathCenterY;
+        if (Number.isFinite(dx) && Number.isFinite(dy) && Math.hypot(dx, dy) < radius * 0.35) return false;
+        state.worldVersion += 1;
+        rebuildPathfindingNodeLayer();
+        return true;
+    }
+
+    function appendMazeSectionWalls(walls, q, r, options) {
+        const key = mazeSectionKey(q, r);
+        const center = mazeSectionCenter(q, r, options);
+        const sectionRadius = getMazeSectionRadius(options);
+        const roomRadius = Math.max(5, sectionRadius - MAZE_ROOM_EDGE_INSET_TILES / Math.cos(Math.PI / 6));
+        const room = {
+            q,
+            r,
+            key,
+            center,
+            radius: roomRadius,
+            corners: getHexCornersWorld(center.x, center.y, roomRadius)
+        };
+        const outgoingSides = getMazeSectionOutgoingSides(q, r, options);
+        const incomingSides = getMazeSectionIncomingSides(q, r, options);
+        const hallConnections = getMazeSectionHallConnections(q, r, outgoingSides, incomingSides, options);
+        const outsideDoor = getMazeSectionOutsideDoor(q, r, options, new Set(hallConnections.keys()));
+
+        appendMazeRoomWalls(walls, room, hallConnections, outsideDoor);
+        for (const [side, connection] of hallConnections.entries()) {
+            if (!connection) throw new Error(`NPC movement lab maze hallway ${key}:${side} is missing connection data`);
+            appendMazeHalfHallwayToNeighbor(walls, room, side, connection, options);
+        }
+    }
+
+    function getHexCornersWorld(cx, cy, radius) {
+        const corners = [];
+        for (let i = 0; i < 6; i++) {
+            const angle = (-30 + i * 60) * Math.PI / 180;
+            corners.push({
+                x: cx + Math.cos(angle) * radius,
+                y: cy + Math.sin(angle) * radius
+            });
+        }
+        return corners;
+    }
+
+    function getMazeSectionOutgoingSides(q, r, options) {
+        const random = seededRandom(hashString(`${options.seed}|section-outs|${q},${r}`));
+        const count = 1 + Math.floor(random() * 3);
+        const sides = [0, 1, 2, 3, 4, 5];
+        sides.sort((a, b) => mazeSideScore(options.seed, q, r, a) - mazeSideScore(options.seed, q, r, b));
+        return sides.slice(0, count).sort((a, b) => a - b);
+    }
+
+    function mazeSideScore(seed, q, r, side) {
+        return hashString(`${seed}|side-score|${q},${r}|${side}`);
+    }
+
+    function getMazeSectionIncomingSides(q, r, options) {
+        const sides = [];
+        for (let side = 0; side < 6; side++) {
+            const dir = MAZE_SECTION_DIRECTIONS[side];
+            const neighborQ = q + dir.q;
+            const neighborR = r + dir.r;
+            const neighborSide = (side + 3) % 6;
+            if (getMazeSectionOutgoingSides(neighborQ, neighborR, options).includes(neighborSide)) {
+                sides.push(side);
+            }
+        }
+        return sides;
+    }
+
+    function getMazeSectionHallConnections(q, r, outgoingSides, incomingSides, options) {
+        const connections = new Map();
+        for (const side of outgoingSides) {
+            connections.set(side, getMazeSharedHallConnection(q, r, side, options, true));
+        }
+        for (const side of incomingSides) {
+            connections.set(side, getMazeSharedHallConnection(q, r, side, options, true));
+        }
+        return connections;
+    }
+
+    function getMazeSharedHallConnection(q, r, side, options, requireOpen = false) {
+        const dir = MAZE_SECTION_DIRECTIONS[side];
+        if (!dir) throw new Error("NPC movement lab maze hallway side is invalid");
+        const neighborQ = q + dir.q;
+        const neighborR = r + dir.r;
+        const thisKey = mazeSectionKey(q, r);
+        const neighborKey = mazeSectionKey(neighborQ, neighborR);
+        const ordered = thisKey < neighborKey
+            ? `${thisKey}|${neighborKey}`
+            : `${neighborKey}|${thisKey}`;
+        const random = seededRandom(hashString(`${options.seed}|hall-edge|${ordered}`));
+        const edgeT = 0.28 + random() * 0.44;
+        const open = getMazeSectionOutgoingSides(q, r, options).includes(side) ||
+            getMazeSectionOutgoingSides(neighborQ, neighborR, options).includes((side + 3) % 6);
+        if (requireOpen && !open) {
+            throw new Error(`NPC movement lab maze hallway edge ${ordered} is not open`);
+        }
+        return {
+            side,
+            edgeKey: ordered,
+            open,
+            t: thisKey < neighborKey ? edgeT : 1 - edgeT,
+            width: MAZE_HALLWAY_GAP_WIDTH
+        };
+    }
+
+    function getMazeSectionOutsideDoor(q, r, options, hallSides) {
+        const random = seededRandom(hashString(`${options.seed}|outside-door|${q},${r}`));
+        const sideOptions = [0, 1, 2, 3, 4, 5]
+            .filter((side) => !hallSides.has(side) && canMazeSectionOwnOutsideDoorSide(q, r, side));
+        if (sideOptions.length === 0) return null;
+        const side = sideOptions[Math.floor(random() * sideOptions.length)];
+        return {
+            side,
+            t: 0.24 + random() * 0.52,
+            width: MAZE_OUTSIDE_DOOR_MIN_WIDTH + random() * (MAZE_OUTSIDE_DOOR_MAX_WIDTH - MAZE_OUTSIDE_DOOR_MIN_WIDTH)
+        };
+    }
+
+    function canMazeSectionOwnOutsideDoorSide(q, r, side) {
+        const dir = MAZE_SECTION_DIRECTIONS[side];
+        if (!dir) throw new Error("NPC movement lab maze outside door side is invalid");
+        const thisKey = mazeSectionKey(q, r);
+        const neighborKey = mazeSectionKey(q + dir.q, r + dir.r);
+        return thisKey < neighborKey;
+    }
+
+    function appendMazeRoomWalls(walls, room, hallConnections, outsideDoor) {
+        for (let side = 0; side < 6; side++) {
+            const a = room.corners[side];
+            const b = room.corners[(side + 1) % 6];
+            const connection = hallConnections.get(side);
+            if (connection) {
+                appendWallWithGap(walls, a, b, connection.t, connection.width);
+                continue;
+            }
+            if (outsideDoor && outsideDoor.side === side) {
+                appendWallWithGap(walls, a, b, outsideDoor.t, outsideDoor.width);
+                appendOutsideDoorPosts(walls, a, b, outsideDoor.t, outsideDoor.width, side);
+                continue;
+            }
+            appendSegmentWall(walls, a.x, a.y, b.x, b.y);
+        }
+    }
+
+    function appendWallWithGap(walls, a, b, gapT, gapWidth) {
+        const length = Math.hypot(b.x - a.x, b.y - a.y);
+        if (!(length > gapWidth + 0.5)) return;
+        const halfT = Math.max(0.02, gapWidth / length * 0.5);
+        const leftT = Math.max(0, gapT - halfT);
+        const rightT = Math.min(1, gapT + halfT);
+        if (leftT > 0.04) appendSegmentWall(walls, a.x, a.y, a.x + (b.x - a.x) * leftT, a.y + (b.y - a.y) * leftT);
+        if (rightT < 0.96) appendSegmentWall(walls, a.x + (b.x - a.x) * rightT, a.y + (b.y - a.y) * rightT, b.x, b.y);
+    }
+
+    function appendOutsideDoorPosts(walls, a, b, gapT, gapWidth, side) {
+        const length = Math.hypot(b.x - a.x, b.y - a.y);
+        if (!(length > gapWidth + 0.5)) return;
+        const halfT = Math.max(0.02, gapWidth / length * 0.5);
+        const leftT = Math.max(0, gapT - halfT);
+        const rightT = Math.min(1, gapT + halfT);
+        const normal = mazeSectionSideNormal(side);
+        const postLength = (0.7 + gapWidth * 0.65) / 3;
+        const halfPostLength = postLength * 0.5;
+        const left = { x: a.x + (b.x - a.x) * leftT, y: a.y + (b.y - a.y) * leftT };
+        const right = { x: a.x + (b.x - a.x) * rightT, y: a.y + (b.y - a.y) * rightT };
+        appendSegmentWall(
+            walls,
+            left.x - normal.x * halfPostLength,
+            left.y - normal.y * halfPostLength,
+            left.x + normal.x * halfPostLength,
+            left.y + normal.y * halfPostLength
+        );
+        appendSegmentWall(
+            walls,
+            right.x - normal.x * halfPostLength,
+            right.y - normal.y * halfPostLength,
+            right.x + normal.x * halfPostLength,
+            right.y + normal.y * halfPostLength
+        );
+    }
+
+    function appendMazeHalfHallwayToNeighbor(walls, room, side, connection, options) {
+        const dir = MAZE_SECTION_DIRECTIONS[side];
+        const neighborCenter = mazeSectionCenter(room.q + dir.q, room.r + dir.r, options);
+        const dx = neighborCenter.x - room.center.x;
+        const dy = neighborCenter.y - room.center.y;
+        const length = Math.hypot(dx, dy);
+        if (!(length > 0.001)) throw new Error("NPC movement lab maze hallway requires separated section centers");
+        const ux = dx / length;
+        const uy = dy / length;
+        const neighborRoomRadius = Math.max(
+            5,
+            getMazeSectionRadius(options) - MAZE_ROOM_EDGE_INSET_TILES / Math.cos(Math.PI / 6)
+        );
+        const startGap = getWallGapEndpoints(
+            room.corners[side],
+            room.corners[(side + 1) % 6],
+            connection.t,
+            connection.width
+        );
+        const neighborSide = (side + 3) % 6;
+        const neighborCorners = getHexCornersWorld(neighborCenter.x, neighborCenter.y, neighborRoomRadius);
+        const neighborConnection = getMazeSharedHallConnection(room.q + dir.q, room.r + dir.r, neighborSide, options, true);
+        if (neighborConnection.edgeKey !== connection.edgeKey || Math.abs(neighborConnection.width - connection.width) > 0.000001) {
+            throw new Error("NPC movement lab maze reciprocal hallway connection mismatch");
+        }
+        const neighborGap = getWallGapEndpoints(
+            neighborCorners[neighborSide],
+            neighborCorners[(neighborSide + 1) % 6],
+            neighborConnection.t,
+            neighborConnection.width
+        );
+
+        appendHalfHallwaySideWall(walls, startGap.left, neighborGap.right, ux, uy, connection.width);
+        appendHalfHallwaySideWall(walls, startGap.right, neighborGap.left, ux, uy, connection.width);
+    }
+
+    function appendHalfHallwaySideWall(walls, start, end, ux, uy, gapWidth) {
+        const startInset = gapWidth * 0.08;
+        const sx = start.x + ux * startInset;
+        const sy = start.y + uy * startInset;
+        const middle = {
+            x: (start.x + end.x) * 0.5,
+            y: (start.y + end.y) * 0.5
+        };
+        if (Math.hypot(middle.x - sx, middle.y - sy) <= 0.5) return;
+        appendSegmentWall(walls, sx, sy, middle.x, middle.y);
+    }
+
+    function getWallGapEndpoints(a, b, gapT, gapWidth) {
+        const length = Math.hypot(b.x - a.x, b.y - a.y);
+        if (!(length > gapWidth + 0.5)) {
+            throw new Error("NPC movement lab maze hallway gap requires a wall segment longer than the gap");
+        }
+        const halfT = Math.max(0.02, gapWidth / length * 0.5);
+        return {
+            left: pointOnHexSide(a, b, Math.max(0, gapT - halfT)),
+            right: pointOnHexSide(a, b, Math.min(1, gapT + halfT))
+        };
+    }
+
+    function pointOnHexSide(a, b, t) {
+        return {
+            x: a.x + (b.x - a.x) * t,
+            y: a.y + (b.y - a.y) * t
+        };
+    }
+
+    function mazeSectionSideNormal(side) {
+        const angle = side * Math.PI / 3;
+        return {
+            x: Math.cos(angle),
+            y: Math.sin(angle)
+        };
+    }
+
     function addWall(walls, ax, ay, bx, by, nx, ny, kind = WALL_KIND_BOUNDARY) {
         const len = Math.hypot(nx, ny);
         if (!(len > 0)) throw new Error("wall normal must be non-zero");
@@ -184,13 +734,18 @@
     }
 
     function addSegmentWall(ax, ay, bx, by) {
-        const dx = bx - ax;
-        const dy = by - ay;
-        const len = Math.hypot(dx, dy);
-        if (!(len > 0.001)) return false;
-        addWall(state.walls, ax, ay, bx, by, -dy / len, dx / len, WALL_KIND_SEGMENT);
-        state.worldVersion += 1;
-        rebuildPathfindingNodeLayer();
+        const wall = createSegmentWall(ax, ay, bx, by);
+        if (!wall) return false;
+        if (isProceduralMazeScenario()) {
+            state.manualWalls.push(wall);
+            state.walls = state.generatedMazeWalls.concat(state.manualWalls);
+            state.generatedMazeSignature = "";
+            refreshGeneratedMazeIfNeeded(true);
+        } else {
+            state.walls.push(wall);
+            state.worldVersion += 1;
+            rebuildPathfindingNodeLayer();
+        }
         constrainTargetToWalls();
         for (const agent of state.agents) {
             constrainAgentToWalls(agent);
@@ -202,7 +757,15 @@
     function createScenario() {
         state.worldVersion += 1;
         state.agents = [];
+        state.fireballs = [];
+        state.fireballExplosions = [];
         state.walls = [];
+        state.manualWalls = [];
+        state.generatedMazeWalls = [];
+        state.generatedMazeChunkKeys = new Set();
+        state.generatedMazeSignature = "";
+        state.generatedMazePendingSignature = "";
+        state.generatedMazeLoading = false;
         const count = Number(agentCountInput.value);
         const scenario = scenarioSelect.value;
         if (scenario === "openArena") {
@@ -213,6 +776,11 @@
             state.target = { x: 0, y: 0, heading: -Math.PI / 2 };
             addRoomWalls(-10, -7.5, 10, 7.5);
             spawnCluster(count, -4.2, 0, 4.4, 10);
+        } else if (scenario === "proceduralMaze") {
+            const start = getMazeStartPoint();
+            state.target = { x: start.x, y: start.y, heading: -Math.PI / 2 };
+            refreshGeneratedMazeIfNeeded(true);
+            spawnCluster(count, state.target.x + 5.5, state.target.y + 1.5, 7.5, 7.5);
         } else {
             state.target = { x: 0, y: 0, heading: -Math.PI / 2 };
             addRoomWalls(-8, -6, 8, 6);
@@ -220,8 +788,10 @@
             spawnCluster(count, 0, 0.8, 4.8, 5);
         }
         state.lastSentTarget = { x: state.target.x, y: state.target.y };
-        rebuildPathfindingNodeLayer();
-        enforceInitialWallConstraints();
+        if (!isProceduralMazeScenario()) {
+            rebuildPathfindingNodeLayer();
+            enforceInitialWallConstraints();
+        }
     }
 
     function respawnAgentsForCurrentScenario() {
@@ -232,6 +802,9 @@
             spawnRing(count, 10, 3.5);
         } else if (scenario === "crowdedArena") {
             spawnCluster(count, -4.2, 0, 4.4, 10);
+        } else if (scenario === "proceduralMaze") {
+            spawnCluster(count, state.target.x + 5.5, state.target.y + 1.5, 7.5, 7.5);
+            enforceInitialWallConstraints();
         } else {
             spawnCluster(count, 0, 0.8, 4.8, 5);
         }
@@ -313,39 +886,255 @@
 
     function updateTargetKeyboardMovement(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
-        let dirX = 0;
-        let dirY = 0;
-        let steer = 0;
         let forward = 0;
-        for (const key of Object.keys(TARGET_MOVEMENT_KEYS)) {
-            if (!state.pressedMovementKeys[key]) continue;
-            const delta = TARGET_MOVEMENT_KEYS[key];
-            dirX += delta[0];
-            dirY += delta[1];
-        }
-        for (const key of Object.keys(TARGET_STEER_KEYS)) {
-            if (state.pressedMovementKeys[key]) steer += TARGET_STEER_KEYS[key];
-        }
-        if (steer !== 0) {
-            state.target.heading = normalizeAngle(state.target.heading + Math.max(-1, Math.min(1, steer)) * TARGET_KEYBOARD_STEER_RADIANS_PER_SECOND * dt);
-        }
+        let sideways = 0;
+        let movementSpeedMultiplier = 1;
         for (const key of Object.keys(TARGET_FORWARD_KEYS)) {
             if (state.pressedMovementKeys[key]) forward += TARGET_FORWARD_KEYS[key];
         }
-        if (forward !== 0) {
-            const signedForward = Math.max(-1, Math.min(1, forward));
-            const multiplier = signedForward < 0 ? TARGET_KEYBOARD_BACKWARD_SPEED_MULTIPLIER : 1;
-            dirX += Math.cos(state.target.heading) * signedForward * multiplier;
-            dirY += Math.sin(state.target.heading) * signedForward * multiplier;
+        for (const key of Object.keys(TARGET_SIDEWAYS_KEYS)) {
+            if (state.pressedMovementKeys[key]) sideways += TARGET_SIDEWAYS_KEYS[key];
         }
-        if (dirX === 0 && dirY === 0) return;
+
+        const signedForward = Math.max(-1, Math.min(1, forward));
+        const signedSideways = Math.max(-1, Math.min(1, sideways));
+        if (signedForward === 0 && signedSideways === 0) return;
+
+        if (signedForward > 0 && signedSideways !== 0) {
+            movementSpeedMultiplier = TARGET_KEYBOARD_FORWARD_DIAGONAL_SPEED_MULTIPLIER;
+        } else if (signedForward < 0 && signedSideways !== 0) {
+            movementSpeedMultiplier = TARGET_KEYBOARD_BACKWARD_DIAGONAL_SPEED_MULTIPLIER;
+        } else if (signedForward < 0) {
+            movementSpeedMultiplier = TARGET_KEYBOARD_BACKWARD_SPEED_MULTIPLIER;
+        } else if (signedSideways !== 0) {
+            movementSpeedMultiplier = TARGET_KEYBOARD_SIDEWAYS_SPEED_MULTIPLIER;
+        }
+
+        const forwardX = Math.cos(state.target.heading);
+        const forwardY = Math.sin(state.target.heading);
+        const sideX = -forwardY;
+        const sideY = forwardX;
+        const dirX = forwardX * signedForward + sideX * signedSideways;
+        const dirY = forwardY * signedForward + sideY * signedSideways;
         const magnitude = Math.hypot(dirX, dirY);
         if (!(magnitude > 0)) throw new Error("NPC movement lab keyboard direction must be non-zero");
-        const speed = state.fastMovementHeld ? TARGET_KEYBOARD_FAST_MOVE_SPEED : TARGET_KEYBOARD_MOVE_SPEED;
+        const speed = (state.fastMovementHeld ? TARGET_KEYBOARD_FAST_MOVE_SPEED : TARGET_KEYBOARD_MOVE_SPEED) * movementSpeedMultiplier;
         moveTargetWithNpcPush(
             state.target.x + (dirX / magnitude) * speed * dt,
             state.target.y + (dirY / magnitude) * speed * dt
         );
+    }
+
+    function updateProjectedCursorKeyboardControls(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        const cursor = state.projectedCursor;
+        if (!cursor || typeof cursor !== "object") throw new Error("NPC movement lab projected cursor state is missing");
+
+        let bend = 0;
+        if (state.pressedMovementKeys.ArrowLeft) bend -= 1;
+        if (state.pressedMovementKeys.ArrowRight) bend += 1;
+        if (bend !== 0) {
+            const signedBend = Math.max(-1, Math.min(1, bend));
+            const currentSign = Math.sign(cursor.angleOffset);
+            const movingTowardStraight = currentSign !== 0 && currentSign !== Math.sign(signedBend);
+            const bendProgress = Math.min(1, Math.abs(cursor.angleOffset) / TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET);
+            const speedMultiplier = movingTowardStraight
+                ? TARGET_PROJECTED_CURSOR_RETURN_ANGLE_SPEED_MULTIPLIER
+                : Math.max(
+                    TARGET_PROJECTED_CURSOR_OUTWARD_ANGLE_SPEED_MIN_MULTIPLIER,
+                    1 - bendProgress
+                );
+            const distanceSpeedMultiplier = TARGET_PROJECTED_CURSOR_DISTANCE / Math.max(TARGET_PROJECTED_CURSOR_MIN_DISTANCE, cursor.distance);
+            cursor.angleOffset = Math.max(
+                -TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET,
+                Math.min(
+                    TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET,
+                    cursor.angleOffset + signedBend * TARGET_PROJECTED_CURSOR_ANGLE_SPEED * speedMultiplier * distanceSpeedMultiplier * dt
+                )
+            );
+        }
+
+        let extend = 0;
+        if (state.pressedMovementKeys.ArrowUp) extend += 1;
+        if (state.pressedMovementKeys.ArrowDown) extend -= 1;
+        if (extend !== 0) {
+            cursor.distance = Math.max(
+                TARGET_PROJECTED_CURSOR_MIN_DISTANCE,
+                Math.min(
+                    TARGET_PROJECTED_CURSOR_MAX_DISTANCE,
+                    cursor.distance + Math.max(-1, Math.min(1, extend)) * TARGET_PROJECTED_CURSOR_DISTANCE_SPEED * dt
+                )
+            );
+        }
+    }
+
+    function updateTargetHeadingFromProjectedCursor(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        const cursor = state.projectedCursor;
+        if (!cursor || typeof cursor !== "object") throw new Error("NPC movement lab projected cursor state is missing");
+        if (!Number.isFinite(cursor.angleOffset)) throw new Error("NPC movement lab projected cursor turn requires a finite bend");
+        if (!isTargetMovementInputActive() && !isProjectedCursorInputActive()) return;
+        const bendRatio = getProjectedCursorBendRatio(cursor.angleOffset);
+        if (bendRatio === 0) return;
+        const turnRadius = getProjectedCursorTurnRadius(cursor.distance, bendRatio);
+        const turnRate = TARGET_KEYBOARD_MOVE_SPEED / turnRadius;
+        state.target.heading = normalizeAngle(state.target.heading + Math.sign(bendRatio) * turnRate * dt);
+    }
+
+    function isTargetMovementInputActive() {
+        for (const key of Object.keys(TARGET_FORWARD_KEYS)) {
+            if (state.pressedMovementKeys[key]) return true;
+        }
+        for (const key of Object.keys(TARGET_SIDEWAYS_KEYS)) {
+            if (state.pressedMovementKeys[key]) return true;
+        }
+        return false;
+    }
+
+    function isProjectedCursorInputActive() {
+        for (const key of TARGET_CURSOR_KEYS) {
+            if (state.pressedMovementKeys[key]) return true;
+        }
+        return false;
+    }
+
+    function moveToward(value, target, maxDelta) {
+        const current = Number(value);
+        const goal = Number(target);
+        const delta = Number(maxDelta);
+        if (!Number.isFinite(current) || !Number.isFinite(goal) || !Number.isFinite(delta)) {
+            throw new Error("NPC movement lab moveToward requires finite values");
+        }
+        if (Math.abs(goal - current) <= delta) return goal;
+        return current + Math.sign(goal - current) * delta;
+    }
+
+    function shootFireball() {
+        const cursorPoint = getCurrentProjectedCursorWorldPoint();
+        const dx = cursorPoint.x - state.target.x;
+        const dy = cursorPoint.y - state.target.y;
+        const length = Math.hypot(dx, dy);
+        if (!(length > 0.000001)) return;
+        const dirX = dx / length;
+        const dirY = dy / length;
+        state.fireballs.push({
+            x: state.target.x + dirX * (TARGET_RADIUS + FIREBALL_HITBOX_LENGTH * 0.35),
+            y: state.target.y + dirY * (TARGET_RADIUS + FIREBALL_HITBOX_LENGTH * 0.35),
+            dirX,
+            dirY,
+            age: 0
+        });
+    }
+
+    function updateFireballs(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        const survivors = [];
+        for (const fireball of state.fireballs) {
+            fireball.age += dt;
+            fireball.x += fireball.dirX * FIREBALL_SPEED * dt;
+            fireball.y += fireball.dirY * FIREBALL_SPEED * dt;
+            const hitbox = getFireballHitboxPolygon(fireball);
+            if (findAgentIntersectingPolygon(hitbox)) {
+                detonateFireball(fireball);
+                continue;
+            }
+            if (fireball.age < FIREBALL_MAX_AGE_SECONDS) survivors.push(fireball);
+        }
+        state.fireballs = survivors;
+        updateFireballExplosions(dt);
+    }
+
+    function findAgentIntersectingPolygon(polygon) {
+        if (!Array.isArray(polygon) || polygon.length < 3) {
+            throw new Error("NPC movement lab fireball hit test requires a polygon");
+        }
+        return state.agents.find((agent) => polygonIntersectsCircle(polygon, agent.x, agent.y, agent.radius)) || null;
+    }
+
+    function detonateFireball(fireball) {
+        if (!fireball || !Number.isFinite(fireball.x) || !Number.isFinite(fireball.y)) {
+            throw new Error("NPC movement lab fireball explosion requires a finite fireball");
+        }
+        destroyAgentsIntersectingCircle(fireball.x, fireball.y, FIREBALL_EXPLOSION_DAMAGE_RADIUS);
+        state.fireballExplosions.push({
+            x: fireball.x,
+            y: fireball.y,
+            radius: FIREBALL_EXPLOSION_DAMAGE_RADIUS,
+            age: 0
+        });
+    }
+
+    function updateFireballExplosions(dt) {
+        state.fireballExplosions = state.fireballExplosions.filter((explosion) => {
+            explosion.age += dt;
+            return explosion.age < FIREBALL_EXPLOSION_VISUAL_SECONDS;
+        });
+    }
+
+    function destroyAgentsIntersectingCircle(circleX, circleY, radius) {
+        if (!Number.isFinite(circleX) || !Number.isFinite(circleY) || !Number.isFinite(radius)) {
+            throw new Error("NPC movement lab fireball explosion requires a finite damage circle");
+        }
+        state.agents = state.agents.filter((agent) => {
+            const distance = Math.hypot(agent.x - circleX, agent.y - circleY);
+            return distance > radius + agent.radius;
+        });
+    }
+
+    function getFireballHitboxPolygon(fireball) {
+        if (!fireball || !Number.isFinite(fireball.x) || !Number.isFinite(fireball.y) || !Number.isFinite(fireball.dirX) || !Number.isFinite(fireball.dirY)) {
+            throw new Error("NPC movement lab fireball hitbox requires a finite fireball");
+        }
+        const halfLength = FIREBALL_HITBOX_LENGTH * 0.5;
+        const halfWidth = FIREBALL_HITBOX_WIDTH * 0.5;
+        const sideX = -fireball.dirY;
+        const sideY = fireball.dirX;
+        return [
+            {
+                x: fireball.x + fireball.dirX * halfLength,
+                y: fireball.y + fireball.dirY * halfLength
+            },
+            {
+                x: fireball.x + sideX * halfWidth,
+                y: fireball.y + sideY * halfWidth
+            },
+            {
+                x: fireball.x - fireball.dirX * halfLength,
+                y: fireball.y - fireball.dirY * halfLength
+            },
+            {
+                x: fireball.x - sideX * halfWidth,
+                y: fireball.y - sideY * halfWidth
+            }
+        ];
+    }
+
+    function polygonIntersectsCircle(polygon, circleX, circleY, radius) {
+        if (!Number.isFinite(circleX) || !Number.isFinite(circleY) || !Number.isFinite(radius)) {
+            throw new Error("NPC movement lab polygon-circle hit test requires finite circle data");
+        }
+        if (pointInPolygon(circleX, circleY, polygon)) return true;
+        for (let i = 0; i < polygon.length; i++) {
+            const a = polygon[i];
+            const b = polygon[(i + 1) % polygon.length];
+            if (pointSegmentDistance(circleX, circleY, a.x, a.y, b.x, b.y) <= radius) return true;
+        }
+        return false;
+    }
+
+    function pointInPolygon(x, y, polygon) {
+        let inside = false;
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+            const a = polygon[i];
+            const b = polygon[j];
+            if (!Number.isFinite(a.x) || !Number.isFinite(a.y) || !Number.isFinite(b.x) || !Number.isFinite(b.y)) {
+                throw new Error("NPC movement lab polygon hit test requires finite polygon points");
+            }
+            const intersects = ((a.y > y) !== (b.y > y)) &&
+                x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x;
+            if (intersects) inside = !inside;
+        }
+        return inside;
     }
 
     function moveTargetWithNpcPush(desiredX, desiredY) {
@@ -1025,6 +1814,8 @@
         const previousScale = state.view.scale;
         const previousOffsetX = state.view.offsetX;
         const previousOffsetY = state.view.offsetY;
+        const previousCenterX = state.view.centerX;
+        const previousCenterY = state.view.centerY;
         let resized = false;
         if (canvas.width !== width || canvas.height !== height) {
             canvas.width = width;
@@ -1037,11 +1828,15 @@
         state.view.scale = Math.min(width / 42, height / 29);
         state.view.offsetX = width / 2;
         state.view.offsetY = height / 2;
+        state.view.centerX = Number.isFinite(state.target.x) ? state.target.x : 0;
+        state.view.centerY = Number.isFinite(state.target.y) ? state.target.y : 0;
         if (
             resized ||
             Math.abs(state.view.scale - previousScale) > 0.001 ||
             Math.abs(state.view.offsetX - previousOffsetX) > 0.001 ||
-            Math.abs(state.view.offsetY - previousOffsetY) > 0.001
+            Math.abs(state.view.offsetY - previousOffsetY) > 0.001 ||
+            Math.abs(state.view.centerX - previousCenterX) > 0.001 ||
+            Math.abs(state.view.centerY - previousCenterY) > 0.001
         ) {
             state.hexGridLayer.dirty = true;
             state.nodeLayer.dirty = true;
@@ -1050,8 +1845,8 @@
 
     function worldToScreen(x, y) {
         return {
-            x: state.view.offsetX + x * state.view.scale,
-            y: state.view.offsetY + y * state.view.scale
+            x: state.view.offsetX + (x - state.view.centerX) * state.view.scale,
+            y: state.view.offsetY + (y - state.view.centerY) * state.view.scale
         };
     }
 
@@ -1063,8 +1858,9 @@
         drawWalls();
         drawWallBuildPreview();
         drawTarget();
-        drawCombatRing();
         drawAgentPaths();
+        drawFireballs();
+        drawFireballExplosions();
         drawAgents();
     }
 
@@ -1077,7 +1873,9 @@
             layer.height !== state.view.height ||
             Math.abs(layer.scale - state.view.scale) > 0.001 ||
             Math.abs(layer.offsetX - state.view.offsetX) > 0.001 ||
-            Math.abs(layer.offsetY - state.view.offsetY) > 0.001
+            Math.abs(layer.offsetY - state.view.offsetY) > 0.001 ||
+            Math.abs(layer.centerX - state.view.centerX) > 0.001 ||
+            Math.abs(layer.centerY - state.view.centerY) > 0.001
         ) {
             rebuildHexGridLayer();
         }
@@ -1096,6 +1894,8 @@
         layer.scale = state.view.scale;
         layer.offsetX = state.view.offsetX;
         layer.offsetY = state.view.offsetY;
+        layer.centerX = state.view.centerX;
+        layer.centerY = state.view.centerY;
         layer.canvas.width = layer.width;
         layer.canvas.height = layer.height;
 
@@ -1105,10 +1905,10 @@
         gridCtx.lineWidth = Math.max(1, layer.scale * 0.018);
         gridCtx.strokeStyle = "rgba(236,244,248,0.13)";
 
-        const worldMinX = (0 - layer.offsetX) / layer.scale;
-        const worldMaxX = (layer.width - layer.offsetX) / layer.scale;
-        const worldMinY = (0 - layer.offsetY) / layer.scale;
-        const worldMaxY = (layer.height - layer.offsetY) / layer.scale;
+        const worldMinX = layer.centerX + (0 - layer.offsetX) / layer.scale;
+        const worldMaxX = layer.centerX + (layer.width - layer.offsetX) / layer.scale;
+        const worldMinY = layer.centerY + (0 - layer.offsetY) / layer.scale;
+        const worldMaxY = layer.centerY + (layer.height - layer.offsetY) / layer.scale;
         const colStart = Math.floor(worldMinX / HEX_GRID_COL_STEP) - HEX_GRID_PADDING;
         const colEnd = Math.ceil(worldMaxX / HEX_GRID_COL_STEP) + HEX_GRID_PADDING;
         const rowStart = Math.floor(worldMinY / HEX_GRID_ROW_STEP) - HEX_GRID_PADDING;
@@ -1118,9 +1918,9 @@
         const halfH = HEX_GRID_HEIGHT * layer.scale * 0.5;
 
         for (let col = colStart; col <= colEnd; col++) {
-            const centerX = layer.offsetX + col * HEX_GRID_COL_STEP * layer.scale;
+            const centerX = layer.offsetX + (col * HEX_GRID_COL_STEP - layer.centerX) * layer.scale;
             for (let row = rowStart; row <= rowEnd; row++) {
-                const centerY = layer.offsetY + (row + (isEvenGridColumn(col) ? 0.5 : 0)) * layer.scale;
+                const centerY = layer.offsetY + (row + (isEvenGridColumn(col) ? 0.5 : 0) - layer.centerY) * layer.scale;
                 gridCtx.beginPath();
                 gridCtx.moveTo(centerX - halfW, centerY);
                 gridCtx.lineTo(centerX - quarterW, centerY - halfH);
@@ -1144,6 +1944,8 @@
     function rebuildPathfindingNodeLayer() {
         const wallGeometry = getWallGeometryApi();
         const bounds = getPathfindingLayerBounds();
+        state.nodeLayer.pathCenterX = state.target.x;
+        state.nodeLayer.pathCenterY = state.target.y;
         const colStart = Math.floor(bounds.minX / HEX_GRID_COL_STEP) - PATH_NODE_LAYER_PADDING;
         const colEnd = Math.ceil(bounds.maxX / HEX_GRID_COL_STEP) + PATH_NODE_LAYER_PADDING;
         const rowStart = Math.floor(bounds.minY) - PATH_NODE_LAYER_PADDING;
@@ -1268,6 +2070,21 @@
     }
 
     function getPathfindingLayerBounds() {
+        if (isProceduralMazeScenario()) {
+            const halfWidth = state.view && state.view.scale > 0
+                ? state.view.width / state.view.scale * 0.5
+                : 28;
+            const halfHeight = state.view && state.view.scale > 0
+                ? state.view.height / state.view.scale * 0.5
+                : 20;
+            const padding = getMazeChunkSize() * 0.65;
+            return {
+                minX: state.target.x - halfWidth - padding,
+                minY: state.target.y - halfHeight - padding,
+                maxX: state.target.x + halfWidth + padding,
+                maxY: state.target.y + halfHeight + padding
+            };
+        }
         let minX = Infinity;
         let minY = Infinity;
         let maxX = -Infinity;
@@ -1395,6 +2212,8 @@
             Math.abs(layer.scale - state.view.scale) > 0.001 ||
             Math.abs(layer.offsetX - state.view.offsetX) > 0.001 ||
             Math.abs(layer.offsetY - state.view.offsetY) > 0.001 ||
+            Math.abs(layer.centerX - state.view.centerX) > 0.001 ||
+            Math.abs(layer.centerY - state.view.centerY) > 0.001 ||
             layer.renderedVersion !== layer.version ||
             layer.renderedShowPathBlockedEdges !== state.debug.showPathBlockedEdges
         ) {
@@ -1415,6 +2234,8 @@
         layer.scale = state.view.scale;
         layer.offsetX = state.view.offsetX;
         layer.offsetY = state.view.offsetY;
+        layer.centerX = state.view.centerX;
+        layer.centerY = state.view.centerY;
         layer.renderedVersion = layer.version;
         layer.renderedShowPathBlockedEdges = state.debug.showPathBlockedEdges;
         layer.canvas.width = layer.width;
@@ -1513,42 +2334,205 @@
         ctx.beginPath();
         ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
         ctx.fill();
-        drawTargetHeadingArrow(point.x, point.y, radius, state.target.heading, flash);
+        drawTargetHat(point.x, point.y + state.view.scale * 0.2, radius);
+        drawProjectedTargetCursor(state.target.x, state.target.y, state.target.heading);
         ctx.restore();
     }
 
-    function drawTargetHeadingArrow(x, y, radius, heading, flash) {
-        if (!Number.isFinite(heading)) throw new Error("NPC movement lab target heading arrow requires a finite heading");
-        const arrowRadius = radius * 3;
-        const cos = Math.cos(heading);
-        const sin = Math.sin(heading);
-        const sideX = -sin;
-        const sideY = cos;
-        const lineWidth = Math.max(1, arrowRadius * 0.1);
-        const tipDistance = arrowRadius * 0.64;
-        const baseDistance = tipDistance - (tipDistance - lineWidth) * 0.5;
-        const halfWidth = Math.max(1.5, arrowRadius * 0.17);
-        const tipX = x + cos * tipDistance;
-        const tipY = y + sin * tipDistance;
-        const baseX = x + cos * baseDistance;
-        const baseY = y + sin * baseDistance;
-        const connectorDistance = baseDistance - lineWidth;
-        const connectorX = x + cos * connectorDistance;
-        const connectorY = y + sin * connectorDistance;
-        const connectorHalfWidth = halfWidth * 4 / 3 * 1.37;
+    function drawTargetHat(x, y, radius) {
+        const hatRadius = radius * 3 * 0.7;
+        const brimY = y - hatRadius * 0.55;
+        const brimWidth = hatRadius * 1.15;
+        const brimHeight = hatRadius * 0.36;
+        const bandWidth = brimWidth * 0.82;
+        const bandHeight = brimHeight * 0.54;
+        const pointBaseY = brimY - brimHeight * 0.1;
+        const pointHeight = hatRadius * 0.95;
+        const pointWidth = hatRadius * 0.62;
 
-        ctx.strokeStyle = "#68b7ff";
-        ctx.lineWidth = lineWidth;
+        ctx.save();
+        ctx.fillStyle = "#000099";
         ctx.beginPath();
-        ctx.moveTo(connectorX + sideX * connectorHalfWidth, connectorY + sideY * connectorHalfWidth);
-        ctx.lineTo(connectorX - sideX * connectorHalfWidth, connectorY - sideY * connectorHalfWidth);
-        ctx.stroke();
+        ctx.ellipse(x, brimY, brimWidth * 0.5, brimHeight * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#ffd700";
         ctx.beginPath();
-        ctx.moveTo(tipX, tipY);
-        ctx.lineTo(baseX + sideX * halfWidth, baseY + sideY * halfWidth);
-        ctx.lineTo(baseX - sideX * halfWidth, baseY - sideY * halfWidth);
+        ctx.ellipse(x, brimY, bandWidth * 0.5, bandHeight * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#000099";
+        ctx.beginPath();
+        ctx.ellipse(x, brimY, pointWidth * 0.5, bandHeight * 0.35, 0, 0, Math.PI * 2);
+        ctx.rect(x - pointWidth * 0.5, brimY - bandHeight * 0.55, pointWidth, bandHeight * 0.7);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(x, pointBaseY - pointHeight);
+        ctx.lineTo(x - pointWidth * 0.5, pointBaseY);
+        ctx.lineTo(x + pointWidth * 0.5, pointBaseY);
         ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+    }
+
+    function drawProjectedTargetCursor(targetX, targetY, heading) {
+        if (!Number.isFinite(heading)) throw new Error("NPC movement lab projected cursor requires a finite heading");
+        const trace = getCurrentProjectedCursorTrace();
+        const projectedWorld = trace.point;
+        const cursorHeading = getCurrentProjectedCursorHeading();
+        drawProjectedCursorGuide(trace.points);
+        const projected = worldToScreen(projectedWorld.x, projectedWorld.y);
+        const cursorSize = 30;
+        const tenpoints = Array.from(
+            { length: 10 },
+            (_, i) => rotatePoint(Math.cos(i * 36 * Math.PI / 180) * cursorSize, Math.sin(i * 36 * Math.PI / 180) * cursorSize, cursorHeading)
+        );
+        const fivepoints = Array.from(
+            { length: 5 },
+            (_, i) => rotatePoint(Math.cos((i * 72 + 18) * Math.PI / 180) * cursorSize * 0.5, Math.sin((i * 72 + 18) * Math.PI / 180) * cursorSize * 0.5, cursorHeading)
+        );
+
+        ctx.strokeStyle = "#44aaff";
+        ctx.lineWidth = 2;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        for (let i = 0; i < 5; i++) {
+            ctx.moveTo(projected.x + tenpoints[i * 2].x, projected.y + tenpoints[i * 2].y);
+            ctx.lineTo(projected.x + fivepoints[i].x, projected.y + fivepoints[i].y);
+            ctx.lineTo(projected.x + tenpoints[i * 2 + 1].x, projected.y + tenpoints[i * 2 + 1].y);
+        }
         ctx.stroke();
+        ctx.fillStyle = "#44aaff";
+        ctx.fillRect(projected.x - 0.5, projected.y - 0.5, 1, 1);
+    }
+
+    function getCurrentProjectedCursorHeading() {
+        const cursor = state.projectedCursor;
+        if (!cursor || typeof cursor !== "object") throw new Error("NPC movement lab projected cursor state is missing");
+        if (!Number.isFinite(state.target.heading) || !Number.isFinite(cursor.angleOffset)) {
+            throw new Error("NPC movement lab projected cursor heading requires finite angles");
+        }
+        return normalizeAngle(state.target.heading + getProjectedCursorCurveHeadingDelta(cursor.distance, cursor.angleOffset));
+    }
+
+    function getCurrentProjectedCursorWorldPoint() {
+        return getCurrentProjectedCursorTrace().point;
+    }
+
+    function getCurrentProjectedCursorTrace() {
+        const cursor = state.projectedCursor;
+        if (!cursor || typeof cursor !== "object") throw new Error("NPC movement lab projected cursor state is missing");
+        return getWallClampedProjectedCursorCurveTrace(
+            state.target.x,
+            state.target.y,
+            state.target.heading,
+            cursor.angleOffset,
+            cursor.distance
+        );
+    }
+
+    function drawProjectedCursorGuide(points) {
+        if (!Array.isArray(points) || points.length < 2) throw new Error("NPC movement lab projected cursor guide requires curve points");
+        ctx.save();
+        ctx.strokeStyle = "rgba(68,170,255,0.72)";
+        ctx.lineWidth = 4;
+        ctx.lineCap = "round";
+        ctx.setLineDash([6, 24]);
+        ctx.beginPath();
+        for (let i = 0; i < points.length; i++) {
+            const point = worldToScreen(points[i].x, points[i].y);
+            if (i === 0) ctx.moveTo(point.x, point.y);
+            else ctx.lineTo(point.x, point.y);
+        }
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    function getWallClampedProjectedCursorCurveTrace(targetX, targetY, heading, angleOffset, distance) {
+        const points = getProjectedCursorCurvePoints(targetX, targetY, heading, angleOffset, distance);
+        const trace = [points[0]];
+        for (let i = 1; i < points.length; i++) {
+            const previous = points[i - 1];
+            const current = points[i];
+            for (const wall of state.walls) {
+                const hit = segmentIntersectionParameters(previous.x, previous.y, current.x, current.y, wall.ax, wall.ay, wall.bx, wall.by);
+                if (!hit || hit.t <= 0.000001) continue;
+                const point = {
+                    x: previous.x + (current.x - previous.x) * hit.t,
+                    y: previous.y + (current.y - previous.y) * hit.t
+                };
+                trace.push(point);
+                return { point, points: trace };
+            }
+            trace.push(current);
+        }
+        return { point: points[points.length - 1], points: trace };
+    }
+
+    function getProjectedCursorCurvePoints(targetX, targetY, heading, angleOffset, distance) {
+        if (!Number.isFinite(targetX) || !Number.isFinite(targetY) || !Number.isFinite(heading) || !Number.isFinite(angleOffset) || !Number.isFinite(distance)) {
+            throw new Error("NPC movement lab projected cursor curve requires finite inputs");
+        }
+        const bendRatio = getProjectedCursorBendRatio(angleOffset);
+        const headingDelta = getProjectedCursorCurveHeadingDelta(distance, angleOffset);
+        const sampleCount = 32;
+        const forwardX = Math.cos(heading);
+        const forwardY = Math.sin(heading);
+        const sideX = -forwardY;
+        const sideY = forwardX;
+        const points = [];
+        for (let i = 0; i <= sampleCount; i++) {
+            const t = i / sampleCount;
+            let localForward;
+            let localSide;
+            if (Math.abs(bendRatio) <= 0.000001 || Math.abs(headingDelta) <= 0.000001) {
+                localForward = distance * t;
+                localSide = 0;
+            } else {
+                const theta = headingDelta * t;
+                const radius = distance / headingDelta;
+                localForward = radius * Math.sin(theta);
+                localSide = radius * (1 - Math.cos(theta));
+            }
+            points.push({
+                x: targetX + forwardX * localForward + sideX * localSide,
+                y: targetY + forwardY * localForward + sideY * localSide
+            });
+        }
+        return points;
+    }
+
+    function getProjectedCursorBendRatio(angleOffset) {
+        if (!Number.isFinite(angleOffset)) throw new Error("NPC movement lab projected cursor bend requires a finite angle");
+        return Math.max(-1, Math.min(1, angleOffset / TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET));
+    }
+
+    function getProjectedCursorTurnRadius(distance, bendRatio) {
+        if (!Number.isFinite(distance) || !Number.isFinite(bendRatio)) {
+            throw new Error("NPC movement lab projected cursor turn radius requires finite values");
+        }
+        const normalizedBend = Math.min(1, Math.max(0, Math.abs(bendRatio)));
+        if (normalizedBend <= 0.000001) return Infinity;
+        return Math.max(TARGET_PROJECTED_CURSOR_MIN_TURN_RADIUS, Math.max(0, distance) / normalizedBend);
+    }
+
+    function getProjectedCursorCurveHeadingDelta(distance, angleOffset) {
+        const bendRatio = getProjectedCursorBendRatio(angleOffset);
+        if (Math.abs(bendRatio) <= 0.000001) return 0;
+        const turnRadius = getProjectedCursorTurnRadius(distance, bendRatio);
+        if (!Number.isFinite(turnRadius)) return 0;
+        return Math.sign(bendRatio) * Math.max(0, distance) / turnRadius;
+    }
+
+    function rotatePoint(x, y, angle) {
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        return {
+            x: x * cos - y * sin,
+            y: x * sin + y * cos
+        };
     }
 
     function drawCombatRing() {
@@ -1591,6 +2575,52 @@
             ctx.beginPath();
             ctx.moveTo(a.x, a.y);
             ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+
+    function drawFireballs() {
+        ctx.save();
+        for (const fireball of state.fireballs) {
+            const polygon = getFireballHitboxPolygon(fireball);
+            ctx.fillStyle = "rgba(255,115,36,0.62)";
+            ctx.strokeStyle = "#ffd166";
+            ctx.lineWidth = Math.max(1.5, state.view.scale * 0.045);
+            ctx.beginPath();
+            for (let i = 0; i < polygon.length; i++) {
+                const point = worldToScreen(polygon[i].x, polygon[i].y);
+                if (i === 0) ctx.moveTo(point.x, point.y);
+                else ctx.lineTo(point.x, point.y);
+            }
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+
+            const center = worldToScreen(fireball.x, fireball.y);
+            ctx.fillStyle = "rgba(255,230,122,0.85)";
+            ctx.beginPath();
+            ctx.arc(center.x, center.y, Math.max(3, state.view.scale * 0.12), 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.restore();
+    }
+
+    function drawFireballExplosions() {
+        ctx.save();
+        for (const explosion of state.fireballExplosions) {
+            if (!Number.isFinite(explosion.x) || !Number.isFinite(explosion.y) || !Number.isFinite(explosion.radius) || !Number.isFinite(explosion.age)) {
+                throw new Error("NPC movement lab fireball explosion render requires finite explosion data");
+            }
+            const center = worldToScreen(explosion.x, explosion.y);
+            const t = Math.max(0, Math.min(1, explosion.age / FIREBALL_EXPLOSION_VISUAL_SECONDS));
+            const radius = explosion.radius * state.view.scale * (0.72 + t * 0.28);
+            ctx.fillStyle = `rgba(255,115,36,${0.28 * (1 - t)})`;
+            ctx.strokeStyle = `rgba(255,209,102,${0.95 * (1 - t)})`;
+            ctx.lineWidth = Math.max(2, state.view.scale * 0.06);
+            ctx.beginPath();
+            ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+            ctx.fill();
             ctx.stroke();
         }
         ctx.restore();
@@ -1660,8 +2690,8 @@
 
     function screenToWorld(screenX, screenY) {
         return {
-            x: (screenX - state.view.offsetX) / state.view.scale,
-            y: (screenY - state.view.offsetY) / state.view.scale
+            x: state.view.centerX + (screenX - state.view.offsetX) / state.view.scale,
+            y: state.view.centerY + (screenY - state.view.offsetY) / state.view.scale
         };
     }
 
@@ -1992,7 +3022,12 @@
         const dt = Math.min(0.05, Math.max(0.001, (now - state.lastTime) / 1000));
         state.lastTime = now;
         state.targetFlashTime = Math.max(0, state.targetFlashTime - dt);
+        updateProjectedCursorKeyboardControls(dt);
+        updateTargetHeadingFromProjectedCursor(dt);
         updateTargetKeyboardMovement(dt);
+        refreshGeneratedMazeIfNeeded(false);
+        refreshMazePathBoundsIfNeeded();
+        updateFireballs(dt);
         if (state.running) requestStep(dt);
         draw();
         requestAnimationFrame(tick);
@@ -2011,6 +3046,14 @@
             if (input === agentCountInput) respawnAgentsForCurrentScenario();
         });
     }
+    for (const input of [mazeSeedInput, mazeChunkSizeInput, mazeRoomScaleInput, mazeTwistinessInput]) {
+        input.addEventListener("input", () => {
+            updateControlLabels();
+            if (!isProceduralMazeScenario()) return;
+            state.generatedMazeSignature = "";
+            refreshGeneratedMazeIfNeeded(true);
+        });
+    }
     canvas.addEventListener("pointerdown", (event) => {
         if (beginWallBuildDrag(event)) return;
         inspectAgentAtPointer(event);
@@ -2026,8 +3069,8 @@
     });
     function getTargetKeyboardControlKey(event) {
         if (!event) return null;
-        if (TARGET_MOVEMENT_KEYS[event.key]) return event.key;
-        if (TARGET_STEER_KEYS[event.code] || TARGET_FORWARD_KEYS[event.code]) return event.code;
+        if (TARGET_CURSOR_KEYS.has(event.key)) return event.key;
+        if (TARGET_SIDEWAYS_KEYS[event.code] || TARGET_FORWARD_KEYS[event.code]) return event.code;
         const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
         if (key === "a") return "KeyA";
         if (key === "d") return "KeyD";
@@ -2036,6 +3079,12 @@
         return null;
     }
     window.addEventListener("keydown", (event) => {
+        if (event.code === "Space" || event.key === " ") {
+            event.preventDefault();
+            if (!state.spaceHeld) shootFireball();
+            state.spaceHeld = true;
+            return;
+        }
         if (event.key === "b" || event.key === "B") {
             state.wallTool.active = true;
             return;
@@ -2051,6 +3100,11 @@
         state.pressedMovementKeys[movementKey] = true;
     });
     window.addEventListener("keyup", (event) => {
+        if (event.code === "Space" || event.key === " ") {
+            event.preventDefault();
+            state.spaceHeld = false;
+            return;
+        }
         if (event.key === "b" || event.key === "B") {
             state.wallTool.active = false;
             cancelWallBuildDrag();
@@ -2067,6 +3121,7 @@
     });
     window.addEventListener("blur", () => {
         state.pressedMovementKeys = Object.create(null);
+        state.spaceHeld = false;
         state.fastMovementHeld = false;
         state.wallTool.active = false;
         cancelWallBuildDrag();

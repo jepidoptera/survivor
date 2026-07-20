@@ -128,6 +128,16 @@ h2 {
     padding: 0 10px;
 }
 
+.text-input {
+    width: 100%;
+    min-height: 34px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--panel-2);
+    color: var(--text);
+    padding: 0 10px;
+}
+
 .field-label {
     display: flex;
     justify-content: space-between;
