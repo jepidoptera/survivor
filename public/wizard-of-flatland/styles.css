@@ -99,6 +99,7 @@ button:active {
 }
 
 .statusBar-background {
+    position: relative;
     width: 200px;
     height: 20px;
     overflow: hidden;
@@ -121,11 +122,69 @@ button:active {
     background-color: #0000ff;
 }
 
+#expBar {
+    background-color: #00c853;
+}
+
+.statusBar-counter {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ffffff;
+    font: 700 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    pointer-events: none;
+    text-shadow: 0 1px 2px #000000, 0 0 4px #000000;
+}
+
+.expLevelUpButton {
+    width: 20px;
+    height: 20px;
+    min-height: 20px;
+    padding: 0;
+    flex: 0 0 auto;
+    border-color: #ffe680;
+    border-radius: 50%;
+    background: #ffd21f;
+    color: #2f2100;
+    font-size: 18px;
+    font-weight: 900;
+    line-height: 18px;
+    pointer-events: auto;
+    box-shadow: 0 0 0 0 rgba(255, 235, 87, 0.95), 0 0 18px rgba(255, 209, 31, 0.95);
+    animation: expLevelUpFlash 1.1s ease-out 0s 3;
+}
+
+.expLevelUpButton.hidden {
+    visibility: hidden;
+    animation: none;
+}
+
+@keyframes expLevelUpFlash {
+    0% {
+        filter: brightness(2.4);
+        box-shadow: 0 0 0 0 rgba(255, 245, 130, 0.95), 0 0 26px rgba(255, 235, 87, 1);
+        transform: scale(1);
+    }
+    45% {
+        filter: brightness(1.35);
+        box-shadow: 0 0 0 12px rgba(255, 245, 130, 0), 0 0 20px rgba(255, 209, 31, 0.9);
+        transform: scale(1.18);
+    }
+    100% {
+        filter: brightness(1);
+        box-shadow: 0 0 0 0 rgba(255, 245, 130, 0), 0 0 14px rgba(255, 209, 31, 0.75);
+        transform: scale(1);
+    }
+}
+
 .debug-fps-counter {
     position: fixed;
     top: 10px;
-    left: 10px;
+    right: 10px;
     z-index: 20;
+    width: 25vw;
     padding: 6px 8px;
     border: 1px solid rgba(255, 255, 255, 0.26);
     border-radius: 4px;
@@ -134,7 +193,8 @@ button:active {
     font: 12px/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
     letter-spacing: 0;
     pointer-events: none;
-    white-space: pre;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
 }
 
 .debug-fps-counter.hidden {

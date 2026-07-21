@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Wizard of Flatland</title>
-    <link rel="stylesheet" href="/wizard-of-flatland/styles.css?v=wizard-of-flatland-33">
+    <link rel="stylesheet" href="/wizard-of-flatland/styles.css?v=wizard-of-flatland-35">
 </head>
 <body>
     <main class="app-shell">
@@ -25,13 +25,20 @@
                     <div id="magicBar" class="statusBar-fill"></div>
                 </div>
             </div>
+            <div class="statusBar statusBar-exp">
+                <button id="expLevelUpButton" class="expLevelUpButton hidden" type="button" aria-label="Level up">+</button>
+                <div class="statusBar-background">
+                    <div id="expBar" class="statusBar-fill"></div>
+                    <div id="expCounter" class="statusBar-counter">0/100</div>
+                </div>
+            </div>
         </div>
         <section class="workbench" aria-label="NPC movement solver workbench">
             <canvas id="solverCanvas"></canvas>
         </section>
     </main>
     <script src="/wizard-of-flatland/wallGeometry.js?v=wizard-of-flatland-1"></script>
-    <script src="/wizard-of-flatland/debug.js?v=wizard-of-flatland-2"></script>
-    <script src="/wizard-of-flatland/main.js?v=wizard-of-flatland-107"></script>
+    <script src="/wizard-of-flatland/debug.js?v=wizard-of-flatland-3"></script>
+    <script src="/wizard-of-flatland/main.js?v=wizard-of-flatland-116"></script>
 </body>
 </html>

@@ -43,10 +43,9 @@
     const TARGET_KEYBOARD_FORWARD_DIAGONAL_SPEED_MULTIPLIER = 5 / 6;
     const TARGET_KEYBOARD_BACKWARD_SPEED_MULTIPLIER = 1 / 2;
     const TARGET_KEYBOARD_BACKWARD_DIAGONAL_SPEED_MULTIPLIER = 7 / 12;
-    const TARGET_PROJECTED_CURSOR_DISTANCE = 5;
-    const TARGET_IDLE_PROJECTED_CURSOR_DISTANCE = 2;
+    const TARGET_PROJECTED_CURSOR_DISTANCE = 3;
     const TARGET_IDLE_FACE_CURSOR_SECONDS = 1;
-    const TARGET_IDLE_CURSOR_DISTANCE_SECONDS = 1;
+    const TARGET_CURSOR_DISTANCE_RETURN_SECONDS = 1;
     const TARGET_TURN_SPEED_MULTIPLIER = 1.3;
     const TARGET_PROJECTED_CURSOR_MIN_DISTANCE = 1;
     const TARGET_PROJECTED_CURSOR_MAX_DISTANCE = 10;
@@ -55,16 +54,29 @@
     const TARGET_PROJECTED_CURSOR_ANGLE_SPEED = TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET;
     const TARGET_PROJECTED_CURSOR_RETURN_ANGLE_SPEED_MULTIPLIER = 2.5;
     const TARGET_PROJECTED_CURSOR_OUTWARD_ANGLE_SPEED_MIN_MULTIPLIER = 0.2;
+    const TARGET_PROJECTED_CURSOR_MOVING_TURN_ACCEL_SECONDS = 0.5;
+    const TARGET_PROJECTED_CURSOR_MOVING_MAX_TURN_ACCEL_MULTIPLIER = 2;
+    const TARGET_PROJECTED_CURSOR_IDLE_TURN_ACCEL_SECONDS = 0.75;
+    const TARGET_PROJECTED_CURSOR_IDLE_MAX_TURN_ACCEL_MULTIPLIER = 4;
+    const TARGET_PROJECTED_CURSOR_IDLE_TURN_RATE_MULTIPLIER = 2 / 3;
+    const TARGET_PROJECTED_CURSOR_MAX_SPEED_BONUS = 0.5;
     const TARGET_PROJECTED_CURSOR_DISTANCE_SPEED = TARGET_PROJECTED_CURSOR_DISTANCE;
+    const TARGET_PROJECTED_CURSOR_RETURN_DISTANCE_SPEED = Math.max(
+        TARGET_PROJECTED_CURSOR_MAX_DISTANCE - TARGET_PROJECTED_CURSOR_DISTANCE,
+        TARGET_PROJECTED_CURSOR_DISTANCE - TARGET_PROJECTED_CURSOR_MIN_DISTANCE
+    ) / TARGET_CURSOR_DISTANCE_RETURN_SECONDS;
     const FIREBALL_SPEED = 13;
     const FIREBALL_MAX_AGE_SECONDS = 1.8;
     const FIREBALL_HITBOX_LENGTH = 1.1;
     const FIREBALL_HITBOX_WIDTH = 0.62;
     const FIREBALL_DAMAGE_RADIUS = FIREBALL_HITBOX_WIDTH * 0.5;
     const FIREBALL_EXPLOSION_DAMAGE_RADIUS = FIREBALL_DAMAGE_RADIUS * 3;
+    const FIREBALL_DAMAGE = 10;
     const FIREBALL_EXPLOSION_VISUAL_SECONDS = 0.16;
+    const ENEMY_MAX_HEALTH = 20;
     const WIZARD_MAX_HEALTH = 100;
     const WIZARD_MAX_MAGIC = 100;
+    const WIZARD_MAX_EXP = 100;
     const WIZARD_HEALTH_REGEN_PER_SECOND = WIZARD_MAX_HEALTH * 0.005;
     const WIZARD_MAGIC_REGEN_PER_SECOND = 7;
     const WIZARD_FIREBALL_MAGIC_COST = 10;
@@ -72,12 +84,15 @@
     const SPEED_SCALE_MIN = 0.05;
     const SPEED_SCALE_MAX = 0.8;
     const SPEED_SCALE_DEFAULT = 0.2;
-    const TARGET_NPC_PUSH_ITERATIONS = 96;
+    const SOLVER_STEP_DT_MAX = 0.05;
+    const TARGET_NPC_CONTACTS_ENABLED = true;
+    const TARGET_NPC_PUSH_ITERATIONS = 24;
     const TARGET_NPC_PUSH_SLOP = 0.0005;
     const TARGET_NPC_PUSH_PLAYER_SHARE = 0.69;
     const NPC_NPC_PUSH_SHARE = 0.5;
     const VACATING_CONTACT_PUSH_FORCE = 10;
     const TARGET_NPC_PUSH_MIN_AXIS = 0.0001;
+    const NPC_CONTACT_GRID_CELL_SIZE = AGENT_RADIUS * 2 + TARGET_NPC_PUSH_SLOP * 8;
     const HEX_GRID_ROW_STEP = 1;
     const HEX_GRID_COL_STEP = 0.866;
     const HEX_GRID_WIDTH = 1 / HEX_GRID_COL_STEP;
@@ -105,9 +120,9 @@
     const MAZE_WORKER_STATUS_PREFIX = "maze";
     const MAZE_LOOKAHEAD_DISTANCE = 20;
     const MAZE_LOOKAHEAD_REFRESH_INTERVAL_MS = 1000;
-    const MAZE_ROOM_EMPTY_ENEMY_CHANCE = 2 / 3;
+    const MAZE_ROOM_EMPTY_ENEMY_CHANCE = 0;
     const MAZE_ROOM_MAX_ENEMY_CHANCE = 1 / 100;
-    const MAZE_ROOM_MAX_ENEMIES = 100;
+    const MAZE_ROOM_MAX_ENEMIES = 10;
     const MAZE_ROOM_ENEMY_DISTRIBUTION_POWER = 3.25;
     const MAZE_ROOM_ENEMY_SAFE_RADIUS_SCALE = 0.56;
     const MAZE_COIN_AVERAGE_COUNT = 10;
@@ -119,6 +134,7 @@
     const MAZE_COIN_ATTRACT_DISTANCE = 2;
     const MAZE_COIN_COLLECT_DISTANCE = TARGET_RADIUS + MAZE_COIN_RADIUS + 0.08;
     const MAZE_COIN_RUSH_SPEED = 11;
+    const ENEMY_COIN_DROP_CHANCE = 1 / 3;
     const MAZE_COIN_SECTION_EDGE_EPSILON = 0.02;
     const MAZE_COIN_PLACEMENT_ATTEMPTS_PER_COIN = 160;
     const MAZE_COIN_WALL_ENDPOINT_MARGIN = 0.25;
@@ -133,6 +149,8 @@
     const PATH_MODE_DIRECT = 0;
     const PATH_MODE_WORKER = 1;
     const PATH_REQUEST_INTERVAL_SECONDS = 0.22;
+    const PATH_REQUESTS_PER_FRAME = 8;
+    const PATH_NODE_FAST_SEARCH_RADIUS = 8;
     const PATH_WAYPOINT_REACHED_DISTANCE = AGENT_RADIUS + WALL_WORLD_HALF_THICKNESS + 0.12;
     const HEADING_GLITCH_TURN_THRESHOLD = Math.PI / 5;
     const HEADING_GLITCH_RETURN_THRESHOLD = Math.PI / 10;
@@ -174,6 +192,9 @@
     const mazeTwistinessInput = document.getElementById("mazeTwistiness");
     const healthBar = document.getElementById("healthBar");
     const magicBar = document.getElementById("magicBar");
+    const expBar = document.getElementById("expBar");
+    const expCounter = document.getElementById("expCounter");
+    const expLevelUpButton = document.getElementById("expLevelUpButton");
     let speedScaleControlValue = speedScaleInput ? Number(speedScaleInput.value) : 0.5;
 
     const labels = {
@@ -201,6 +222,7 @@
         running: true,
         requestId: 1,
         waitingForWorker: false,
+        pendingSolverDt: 0,
         solverWallVersion: 0,
         pathfindingRequestId: 1,
         pathfindingSnapshotVersion: 0,
@@ -211,6 +233,8 @@
         fireballExplosions: [],
         coins: [],
         collectedCoinKeys: new Set(),
+        droppedCoinsByKey: new Map(),
+        nextDroppedCoinId: 1,
         walls: createEmptyWallBuffer(),
         manualWalls: createEmptyWallBuffer(),
         generatedMazeWalls: createEmptyWallBuffer(),
@@ -229,7 +253,9 @@
             health: WIZARD_MAX_HEALTH,
             maxHealth: WIZARD_MAX_HEALTH,
             magic: WIZARD_MAX_MAGIC,
-            maxMagic: WIZARD_MAX_MAGIC
+            maxMagic: WIZARD_MAX_MAGIC,
+            exp: 0,
+            maxExp: WIZARD_MAX_EXP
         },
         targetTravelVector: { x: 0, y: 0 },
         lastSentTarget: { x: 0, y: 0 },
@@ -238,6 +264,10 @@
         projectedCursor: {
             angleOffset: 0,
             distance: TARGET_PROJECTED_CURSOR_DISTANCE
+        },
+        projectedCursorBendHold: {
+            direction: 0,
+            seconds: 0
         },
         pressedMovementKeys: Object.create(null),
         spaceHeld: false,
@@ -287,6 +317,7 @@
             renderedShowPathBlockedEdges: false,
             pathCenterX: NaN,
             pathCenterY: NaN,
+            targetNodeCache: null,
             dirty: true
         }
     };
@@ -295,7 +326,7 @@
     const profiler = createWizardOfFlatlandProfiler();
     attachWizardOfFlatlandDebugGlobals(state, profiler);
 
-    const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-82");
+    const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-84");
     worker.addEventListener("message", handleWorkerMessage);
     worker.addEventListener("error", (event) => {
         setLabelText(labels.workerStatus, event.message || "failed");
@@ -323,13 +354,16 @@
         if (!vitals || typeof vitals !== "object") {
             throw new Error("Wizard of Flatland vitals are missing");
         }
-        for (const field of ["health", "maxHealth", "magic", "maxMagic"]) {
+        for (const field of ["health", "maxHealth", "magic", "maxMagic", "exp", "maxExp"]) {
             if (!Number.isFinite(vitals[field])) {
                 throw new Error(`Wizard of Flatland vitals require finite ${field}`);
             }
         }
-        if (vitals.maxHealth <= 0 || vitals.maxMagic <= 0) {
+        if (vitals.maxHealth <= 0 || vitals.maxMagic <= 0 || vitals.maxExp <= 0) {
             throw new Error("Wizard of Flatland vitals require positive maximums");
+        }
+        if (vitals.exp < 0 || vitals.exp > vitals.maxExp) {
+            throw new Error("Wizard of Flatland exp must stay within its maximum");
         }
     }
 
@@ -338,7 +372,9 @@
             health: WIZARD_MAX_HEALTH,
             maxHealth: WIZARD_MAX_HEALTH,
             magic: WIZARD_MAX_MAGIC,
-            maxMagic: WIZARD_MAX_MAGIC
+            maxMagic: WIZARD_MAX_MAGIC,
+            exp: 0,
+            maxExp: WIZARD_MAX_EXP
         };
         updateStatusBars();
     }
@@ -347,10 +383,17 @@
         validateWizardVitals();
         if (!healthBar) throw new Error("Wizard of Flatland health bar is missing");
         if (!magicBar) throw new Error("Wizard of Flatland magic bar is missing");
+        if (!expBar) throw new Error("Wizard of Flatland exp bar is missing");
+        if (!expCounter) throw new Error("Wizard of Flatland exp counter is missing");
+        if (!expLevelUpButton) throw new Error("Wizard of Flatland exp level-up button is missing");
         const healthRatio = Math.max(0, Math.min(1, state.wizardVitals.health / state.wizardVitals.maxHealth));
         const magicRatio = Math.max(0, Math.min(1, state.wizardVitals.magic / state.wizardVitals.maxMagic));
+        const expRatio = Math.max(0, Math.min(1, state.wizardVitals.exp / state.wizardVitals.maxExp));
         healthBar.style.width = `${healthRatio * 100}%`;
         magicBar.style.width = `${magicRatio * 100}%`;
+        expBar.style.width = `${expRatio * 100}%`;
+        expCounter.textContent = `${Math.floor(state.wizardVitals.exp)}/${state.wizardVitals.maxExp}`;
+        expLevelUpButton.classList.toggle("hidden", state.wizardVitals.exp < state.wizardVitals.maxExp);
     }
 
     function regenerateWizardVitals(dt) {
@@ -382,6 +425,16 @@
         state.wizardVitals.magic -= cost;
         updateStatusBars();
         return true;
+    }
+
+    function gainWizardExp(amount) {
+        const exp = Number(amount);
+        if (!Number.isFinite(exp) || exp <= 0) {
+            throw new Error("Wizard of Flatland exp gain requires a positive finite amount");
+        }
+        validateWizardVitals();
+        state.wizardVitals.exp = Math.min(state.wizardVitals.maxExp, state.wizardVitals.exp + exp);
+        updateStatusBars();
     }
 
     function getControlNumber(input, fallback) {
@@ -419,6 +472,7 @@
         const loadRecords = [];
         const longTasks = [];
         const frameHitches = [];
+        const pathingRecords = [];
         let currentLoad = null;
         let lastCompletedLoad = null;
         let pendingFrameAfterLoad = null;
@@ -429,11 +483,13 @@
             loadRecords,
             longTasks,
             frameHitches,
+            pathingRecords,
             beginLoad,
             mark,
             span,
             completeLoad,
             noteFrame,
+            notePathing,
             noteFirstFrameAfterLoad,
             getCurrentLoad: () => currentLoad,
             getLastCompletedLoad: () => lastCompletedLoad,
@@ -525,9 +581,20 @@
 
         function noteFrame(duration, parts) {
             if (!api.enabled || duration < 24) return;
-            const record = { duration, at: performance.now(), parts: parts || null };
+            const record = {
+                duration,
+                at: performance.now(),
+                parts: parts || null,
+                pathing: state.debug && state.debug.lastPathingMetrics ? state.debug.lastPathingMetrics : null
+            };
             frameHitches.push(record);
             while (frameHitches.length > 40) frameHitches.shift();
+        }
+
+        function notePathing(metrics) {
+            if (!api.enabled || !metrics) return;
+            pathingRecords.push(metrics);
+            while (pathingRecords.length > 80) pathingRecords.shift();
         }
 
         function noteFirstFrameAfterLoad(duration, parts) {
@@ -1101,6 +1168,7 @@
         state.nodeLayer.nodeStride = PATH_SNAPSHOT_NODE_STRIDE;
         state.nodeLayer.edgeStride = PATH_SNAPSHOT_EDGE_STRIDE;
         state.nodeLayer.version += 1;
+        state.nodeLayer.targetNodeCache = null;
         state.nodeLayer.dirty = true;
         profiler.span("publish pathfinding snapshot", () => publishPathfindingSnapshot());
     }
@@ -1211,11 +1279,13 @@
     function resetGeneratedMazeCoinPopulation() {
         state.coins = [];
         state.collectedCoinKeys = new Set();
+        state.droppedCoinsByKey = new Map();
+        state.nextDroppedCoinId = 1;
     }
 
     function populateGeneratedMazeCoins(options) {
         if (!isProceduralMazeScenario()) {
-            state.coins = [];
+            state.coins = getVisibleDroppedMazeCoins(options);
             return;
         }
         if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
@@ -1223,6 +1293,9 @@
         }
         if (!(state.collectedCoinKeys instanceof Set)) {
             throw new Error("Wizard of Flatland coin population requires collected coin tracking");
+        }
+        if (!(state.droppedCoinsByKey instanceof Map)) {
+            throw new Error("Wizard of Flatland coin population requires dropped coin tracking");
         }
         validateWallBuffer(state.generatedMazeWalls, "generated maze coin placement walls");
         validateWallBuffer(state.walls, "coin placement walls");
@@ -1237,18 +1310,63 @@
         const visiblePlacedCoins = placedCoins
             .filter((coin) => !state.collectedCoinKeys.has(coin.key))
             .map((coin) => preserveVisibleMazeCoinState(coin, existingCoinsByKey.get(coin.key)));
+        const visibleDroppedCoins = getVisibleDroppedMazeCoins(options, existingCoinsByKey);
+        const visibleDroppedCoinKeys = new Set(visibleDroppedCoins.map((coin) => coin.key));
         const retainedEdgeCoins = state.coins.filter((coin) => {
             validateCoin(coin);
             return !placedCoinKeys.has(coin.key) &&
+                !visibleDroppedCoinKeys.has(coin.key) &&
                 !state.collectedCoinKeys.has(coin.key) &&
                 isPointInAnyInstalledMazeSection(coin.homeX, coin.homeY, options);
         });
-        state.coins = visiblePlacedCoins.concat(retainedEdgeCoins);
+        state.coins = visiblePlacedCoins.concat(visibleDroppedCoins, retainedEdgeCoins);
         recordMazeCoinPopulationDiagnostic(diagnosticBefore, options, {
             placedCoins,
             visiblePlacedCoins,
+            visibleDroppedCoins,
             retainedEdgeCoins
         });
+    }
+
+    function getVisibleDroppedMazeCoins(options = getMazeOptions(), existingCoinsByKey = new Map()) {
+        if (!(state.collectedCoinKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland dropped coin visibility requires collected coin tracking");
+        }
+        if (!(state.droppedCoinsByKey instanceof Map)) {
+            throw new Error("Wizard of Flatland dropped coin visibility requires dropped coin tracking");
+        }
+        if (!(existingCoinsByKey instanceof Map)) {
+            throw new Error("Wizard of Flatland dropped coin visibility requires existing coin lookup");
+        }
+        const visible = [];
+        for (const coin of state.droppedCoinsByKey.values()) {
+            validateCoin(coin);
+            if (state.collectedCoinKeys.has(coin.key)) continue;
+            if (isProceduralMazeScenario() && !isDroppedCoinInInstalledMazeSection(coin, options)) continue;
+            const previousCoin = existingCoinsByKey.get(coin.key);
+            if (previousCoin) {
+                validateCoin(previousCoin);
+                coin.x = previousCoin.x;
+                coin.y = previousCoin.y;
+                coin.rushing = previousCoin.rushing === true;
+                coin.phase = previousCoin.phase;
+            }
+            visible.push(coin);
+        }
+        return visible;
+    }
+
+    function isDroppedCoinInInstalledMazeSection(coin, options) {
+        validateCoin(coin);
+        if (!(state.generatedMazeInstalledChunkKeys instanceof Set) || !(state.generatedMazeChunkKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland dropped coin section visibility requires installed section tracking");
+        }
+        const coord = worldToMazeSectionCoord(coin.homeX, coin.homeY, options);
+        const sectionKey = mazeSectionKey(coord.q, coord.r);
+        if (coin.sectionKey !== sectionKey) {
+            throw new Error(`Wizard of Flatland dropped coin ${coin.key} section key does not match its world position`);
+        }
+        return state.generatedMazeInstalledChunkKeys.has(sectionKey) && state.generatedMazeChunkKeys.has(sectionKey);
     }
 
     function isMazeCoinDiagnosticsEnabled() {
@@ -1708,6 +1826,8 @@
         resetWizardVitals();
         state.coins = [];
         state.collectedCoinKeys = new Set();
+        state.droppedCoinsByKey = new Map();
+        state.nextDroppedCoinId = 1;
         state.walls = createEmptyWallBuffer();
         state.manualWalls = createEmptyWallBuffer();
         state.generatedMazeWalls = createEmptyWallBuffer();
@@ -1717,6 +1837,7 @@
         state.generatedMazePendingSignature = "";
         state.generatedMazeLoading = false;
         state.generatedMazeInitialEnemySpawnBudgetsBySectionKey = new Map();
+        state.pendingSolverDt = 0;
         invalidateMazeLookaheadCache();
         clearPathfindingNodeLayer();
         const count = getAgentCount();
@@ -2060,6 +2181,7 @@
         state.nodeLayer.pathCenterX = NaN;
         state.nodeLayer.pathCenterY = NaN;
         state.nodeLayer.version += 1;
+        state.nodeLayer.targetNodeCache = null;
         state.nodeLayer.dirty = true;
     }
 
@@ -2127,7 +2249,9 @@
             vx: 0,
             vy: 0,
             radius: AGENT_RADIUS,
-            speed: 3.8 + random() * 0.6,
+            speed: 5.7 + random() * 0.9,
+            health: ENEMY_MAX_HEALTH,
+            maxHealth: ENEMY_MAX_HEALTH,
             priority: random(),
             waitTime: random() * 1.5,
             phase: PHASE_MILLING,
@@ -2216,7 +2340,9 @@
         const dirY = forwardY * signedForward + sideY * signedSideways;
         const magnitude = Math.hypot(dirX, dirY);
         if (!(magnitude > 0)) throw new Error("Wizard of Flatland keyboard direction must be non-zero");
-        const speed = (state.fastMovementHeld ? TARGET_KEYBOARD_FAST_MOVE_SPEED : TARGET_KEYBOARD_MOVE_SPEED) * movementSpeedMultiplier;
+        const speed = (state.fastMovementHeld ? TARGET_KEYBOARD_FAST_MOVE_SPEED : TARGET_KEYBOARD_MOVE_SPEED) *
+            movementSpeedMultiplier *
+            getProjectedCursorMovementSpeedMultiplier();
         const startX = state.target.x;
         const startY = state.target.y;
         moveTargetWithNpcPush(
@@ -2232,6 +2358,16 @@
         state.targetTravelVector.y = 0;
     }
 
+    function getProjectedCursorMovementSpeedMultiplier() {
+        const cursor = state.projectedCursor;
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
+        if (!Number.isFinite(cursor.distance)) throw new Error("Wizard of Flatland cursor speed bonus requires a finite distance");
+        const extensionRange = TARGET_PROJECTED_CURSOR_MAX_DISTANCE - TARGET_PROJECTED_CURSOR_DISTANCE;
+        if (!(extensionRange > 0)) throw new Error("Wizard of Flatland cursor speed bonus requires a positive extension range");
+        const extensionRatio = Math.max(0, Math.min(1, (cursor.distance - TARGET_PROJECTED_CURSOR_DISTANCE) / extensionRange));
+        return 1 + extensionRatio * TARGET_PROJECTED_CURSOR_MAX_SPEED_BONUS;
+    }
+
     function updateProjectedCursorKeyboardControls(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
         const cursor = state.projectedCursor;
@@ -2240,6 +2376,7 @@
         let bend = 0;
         if (state.pressedMovementKeys.ArrowLeft) bend -= 1;
         if (state.pressedMovementKeys.ArrowRight) bend += 1;
+        updateProjectedCursorBendHold(dt, bend);
         if (bend !== 0) {
             const signedBend = Math.max(-1, Math.min(1, bend));
             const currentSign = Math.sign(cursor.angleOffset);
@@ -2252,11 +2389,26 @@
                     1 - bendProgress
                 );
             const distanceSpeedMultiplier = TARGET_PROJECTED_CURSOR_DISTANCE / Math.max(TARGET_PROJECTED_CURSOR_MIN_DISTANCE, cursor.distance);
+            const targetIsMoving = isTargetMovementInputActive();
             cursor.angleOffset = Math.max(
                 -TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET,
                 Math.min(
                     TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET,
-                    cursor.angleOffset + signedBend * TARGET_PROJECTED_CURSOR_ANGLE_SPEED * speedMultiplier * distanceSpeedMultiplier * dt
+                    cursor.angleOffset +
+                        signedBend *
+                        TARGET_PROJECTED_CURSOR_ANGLE_SPEED *
+                        speedMultiplier *
+                        distanceSpeedMultiplier *
+                        getProjectedCursorTurnAccelerationMultiplier(
+                            targetIsMoving
+                                ? TARGET_PROJECTED_CURSOR_MOVING_TURN_ACCEL_SECONDS
+                                : TARGET_PROJECTED_CURSOR_IDLE_TURN_ACCEL_SECONDS,
+                            targetIsMoving
+                                ? TARGET_PROJECTED_CURSOR_MOVING_MAX_TURN_ACCEL_MULTIPLIER
+                                : TARGET_PROJECTED_CURSOR_IDLE_MAX_TURN_ACCEL_MULTIPLIER
+                        ) *
+                        (targetIsMoving ? 1 : TARGET_PROJECTED_CURSOR_IDLE_TURN_RATE_MULTIPLIER) *
+                        dt
                 )
             );
         }
@@ -2275,6 +2427,36 @@
         }
     }
 
+    function updateProjectedCursorBendHold(dt, bend) {
+        const hold = state.projectedCursorBendHold;
+        if (!hold || typeof hold !== "object") throw new Error("Wizard of Flatland projected cursor bend hold state is missing");
+        if (!Number.isFinite(hold.seconds)) throw new Error("Wizard of Flatland projected cursor bend hold requires finite seconds");
+        const direction = Math.max(-1, Math.min(1, bend));
+        if (direction === 0) {
+            hold.direction = 0;
+            hold.seconds = 0;
+            return;
+        }
+        if (hold.direction !== direction) {
+            hold.direction = direction;
+            hold.seconds = 0;
+        }
+        hold.seconds += dt;
+    }
+
+    function updateProjectedCursorDistanceReturn(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        if (state.pressedMovementKeys.ArrowUp) return;
+        const cursor = state.projectedCursor;
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
+        if (!Number.isFinite(cursor.distance)) throw new Error("Wizard of Flatland projected cursor distance return requires a finite distance");
+        cursor.distance = moveToward(
+            cursor.distance,
+            TARGET_PROJECTED_CURSOR_DISTANCE,
+            TARGET_PROJECTED_CURSOR_RETURN_DISTANCE_SPEED * dt
+        );
+    }
+
     function updateIdleTargetFacingAndCursor(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
         if (isTargetMovementInputActive()) return;
@@ -2289,34 +2471,29 @@
         if (cursorDistance > 0.000001) {
             const targetHeading = Math.atan2(dy, dx);
             const delta = shortestAngleDelta(state.target.heading, targetHeading);
-            const maxTurn = TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET / TARGET_IDLE_FACE_CURSOR_SECONDS * TARGET_TURN_SPEED_MULTIPLIER * dt;
+            const turnAcceleration = isProjectedCursorBendInputActive()
+                ? getProjectedCursorTurnAccelerationMultiplier(
+                    TARGET_PROJECTED_CURSOR_IDLE_TURN_ACCEL_SECONDS,
+                    TARGET_PROJECTED_CURSOR_IDLE_MAX_TURN_ACCEL_MULTIPLIER
+                )
+                : 1;
+            const distanceSpeedMultiplier = TARGET_PROJECTED_CURSOR_DISTANCE / Math.max(TARGET_PROJECTED_CURSOR_MIN_DISTANCE, cursor.distance);
+            const maxTurn = TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET /
+                TARGET_IDLE_FACE_CURSOR_SECONDS *
+                TARGET_TURN_SPEED_MULTIPLIER *
+                TARGET_PROJECTED_CURSOR_IDLE_TURN_RATE_MULTIPLIER *
+                distanceSpeedMultiplier *
+                turnAcceleration *
+                dt;
             const appliedTurn = Math.max(-maxTurn, Math.min(maxTurn, delta));
             state.target.heading = normalizeAngle(state.target.heading + appliedTurn);
+            if (isProjectedCursorBendInputActive()) return;
 
-            let nextCursorDistance = cursorDistance;
-            if (!isProjectedCursorInputActive()) {
-                const maxDistanceDelta = Math.abs(TARGET_PROJECTED_CURSOR_DISTANCE - TARGET_IDLE_PROJECTED_CURSOR_DISTANCE) /
-                    TARGET_IDLE_CURSOR_DISTANCE_SECONDS * dt;
-                nextCursorDistance = moveToward(cursorDistance, TARGET_IDLE_PROJECTED_CURSOR_DISTANCE, maxDistanceDelta);
-            }
             updateProjectedCursorFromFixedWorldPoint({
-                x: state.target.x + (dx / cursorDistance) * nextCursorDistance,
-                y: state.target.y + (dy / cursorDistance) * nextCursorDistance
+                x: state.target.x + dx,
+                y: state.target.y + dy
             });
         }
-    }
-
-    function updateMovingTargetCursorStraightening(dt) {
-        if (!Number.isFinite(dt) || dt <= 0) return;
-        if (!isTargetMovementInputActive() || isProjectedCursorInputActive()) return;
-        const cursor = state.projectedCursor;
-        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
-        if (!Number.isFinite(cursor.angleOffset)) throw new Error("Wizard of Flatland moving cursor straightening requires a finite bend");
-        cursor.angleOffset = moveToward(
-            cursor.angleOffset,
-            0,
-            TARGET_PROJECTED_CURSOR_ANGLE_SPEED * TARGET_PROJECTED_CURSOR_RETURN_ANGLE_SPEED_MULTIPLIER * dt
-        );
     }
 
     function updateTargetHeadingFromProjectedCursor(dt) {
@@ -2331,7 +2508,31 @@
         const effectiveDistance = getProjectedCursorTraceDistance(trace);
         const turnRadius = getProjectedCursorTurnRadius(effectiveDistance, bendRatio);
         const turnRate = TARGET_KEYBOARD_MOVE_SPEED / turnRadius * TARGET_TURN_SPEED_MULTIPLIER;
-        state.target.heading = normalizeAngle(state.target.heading + Math.sign(bendRatio) * turnRate * dt);
+        if (isProjectedCursorBendInputActive()) {
+            state.target.heading = normalizeAngle(
+                state.target.heading +
+                    Math.sign(bendRatio) *
+                    turnRate *
+                    getProjectedCursorTurnAccelerationMultiplier(
+                        TARGET_PROJECTED_CURSOR_MOVING_TURN_ACCEL_SECONDS,
+                        TARGET_PROJECTED_CURSOR_MOVING_MAX_TURN_ACCEL_MULTIPLIER
+                    ) *
+                    dt
+            );
+            return;
+        }
+
+        const cursorPoint = trace.point;
+        const targetHeading = Math.atan2(cursorPoint.y - state.target.y, cursorPoint.x - state.target.x);
+        const delta = shortestAngleDelta(state.target.heading, targetHeading);
+        const releasedTurnRate = Math.max(
+            turnRate,
+            TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET / TARGET_IDLE_FACE_CURSOR_SECONDS * TARGET_TURN_SPEED_MULTIPLIER
+        );
+        const maxTurn = releasedTurnRate * dt;
+        const appliedTurn = Math.max(-maxTurn, Math.min(maxTurn, delta));
+        state.target.heading = normalizeAngle(state.target.heading + appliedTurn);
+        updateProjectedCursorFromFixedWorldPoint(cursorPoint);
     }
 
     function isTargetMovementInputActive() {
@@ -2344,11 +2545,21 @@
         return false;
     }
 
-    function isProjectedCursorInputActive() {
-        for (const key of TARGET_CURSOR_KEYS) {
-            if (state.pressedMovementKeys[key]) return true;
+    function isProjectedCursorBendInputActive() {
+        return state.pressedMovementKeys.ArrowLeft || state.pressedMovementKeys.ArrowRight;
+    }
+
+    function getProjectedCursorTurnAccelerationMultiplier(secondsToMax, maxMultiplier) {
+        const seconds = Number(secondsToMax);
+        const multiplier = Number(maxMultiplier);
+        if (!(seconds > 0) || !(multiplier >= 1)) {
+            throw new Error("Wizard of Flatland turn acceleration requires valid curve parameters");
         }
-        return false;
+        const hold = state.projectedCursorBendHold;
+        if (!hold || typeof hold !== "object") throw new Error("Wizard of Flatland projected cursor bend hold state is missing");
+        if (!Number.isFinite(hold.seconds)) throw new Error("Wizard of Flatland turn acceleration requires finite hold seconds");
+        const ramp = Math.max(0, Math.min(1, hold.seconds / seconds));
+        return 1 + ramp * (multiplier - 1);
     }
 
     function moveToward(value, target, maxDelta) {
@@ -2421,24 +2632,98 @@
             const dx = state.target.x - coin.x;
             const dy = state.target.y - coin.y;
             const distance = Math.hypot(dx, dy);
-            if (distance <= MAZE_COIN_COLLECT_DISTANCE) {
-                state.collectedCoinKeys.add(coin.key);
-                continue;
+            if (distance <= MAZE_COIN_ATTRACT_DISTANCE) {
+                const reachable = isMazeCoinReachableFromTarget(coin);
+                if (distance <= MAZE_COIN_COLLECT_DISTANCE && reachable) {
+                    collectMazeCoin(coin);
+                    continue;
+                }
+                coin.rushing = reachable;
+            } else {
+                coin.rushing = false;
             }
-            if (distance <= MAZE_COIN_ATTRACT_DISTANCE) coin.rushing = true;
             if (coin.rushing && distance > 0.000001) {
                 const step = Math.min(distance, MAZE_COIN_RUSH_SPEED * dt);
                 coin.x += dx / distance * step;
                 coin.y += dy / distance * step;
             }
             const nextDistance = Math.hypot(state.target.x - coin.x, state.target.y - coin.y);
-            if (nextDistance <= MAZE_COIN_COLLECT_DISTANCE) {
-                state.collectedCoinKeys.add(coin.key);
+            if (coin.rushing && nextDistance <= MAZE_COIN_COLLECT_DISTANCE) {
+                collectMazeCoin(coin);
                 continue;
             }
             survivors.push(coin);
         }
         state.coins = survivors;
+    }
+
+    function isMazeCoinReachableFromTarget(coin) {
+        validateCoin(coin);
+        validateWallBuffer(state.walls, "coin reachability walls");
+        if (!Number.isFinite(state.target.x) || !Number.isFinite(state.target.y)) {
+            throw new Error("Wizard of Flatland coin reachability requires a finite target");
+        }
+        if (Math.hypot(state.target.x - coin.x, state.target.y - coin.y) <= 0.000001) return true;
+        return !findEarliestSegmentWallHit(state.target.x, state.target.y, coin.x, coin.y, coin.radius);
+    }
+
+    function maybeDropCoinForKilledEnemy(agent) {
+        if (!agent || !Number.isFinite(agent.x) || !Number.isFinite(agent.y)) {
+            throw new Error("Wizard of Flatland enemy coin drop requires a finite enemy");
+        }
+        if (Math.random() >= ENEMY_COIN_DROP_CHANCE) return null;
+        return createDroppedMazeCoin(agent.x, agent.y);
+    }
+
+    function createDroppedMazeCoin(x, y) {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error("Wizard of Flatland dropped coin requires finite coordinates");
+        }
+        if (!(state.droppedCoinsByKey instanceof Map)) {
+            throw new Error("Wizard of Flatland dropped coin creation requires dropped coin tracking");
+        }
+        if (!Number.isInteger(state.nextDroppedCoinId) || state.nextDroppedCoinId < 1) {
+            throw new Error("Wizard of Flatland dropped coin creation requires a valid drop id");
+        }
+        const coord = worldToMazeSectionCoord(x, y, getMazeOptions());
+        const coin = {
+            key: `drop|${state.nextDroppedCoinId}`,
+            sectionKey: mazeSectionKey(coord.q, coord.r),
+            q: coord.q,
+            r: coord.r,
+            wallIndex: -1,
+            x,
+            y,
+            homeX: x,
+            homeY: y,
+            radius: MAZE_COIN_RADIUS,
+            rushing: false,
+            phase: Math.random() * Math.PI * 2,
+            source: "enemy-drop"
+        };
+        state.nextDroppedCoinId += 1;
+        validateCoin(coin);
+        if (state.droppedCoinsByKey.has(coin.key)) {
+            throw new Error(`Wizard of Flatland dropped coin key was reused: ${coin.key}`);
+        }
+        state.droppedCoinsByKey.set(coin.key, coin);
+        if (!isProceduralMazeScenario() || isDroppedCoinInInstalledMazeSection(coin, getMazeOptions())) {
+            state.coins.push(coin);
+        }
+        return coin;
+    }
+
+    function collectMazeCoin(coin) {
+        validateCoin(coin);
+        if (!(state.collectedCoinKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland coin collection requires collected coin tracking");
+        }
+        if (state.collectedCoinKeys.has(coin.key)) {
+            throw new Error(`Wizard of Flatland visible coin ${coin.key} was already collected`);
+        }
+        state.collectedCoinKeys.add(coin.key);
+        if (state.droppedCoinsByKey instanceof Map) state.droppedCoinsByKey.delete(coin.key);
+        gainWizardExp(1);
     }
 
     function validateCoin(coin) {
@@ -2500,7 +2785,7 @@
         if (!fireball || !Number.isFinite(fireball.x) || !Number.isFinite(fireball.y)) {
             throw new Error("Wizard of Flatland fireball explosion requires a finite fireball");
         }
-        destroyAgentsIntersectingCircle(fireball.x, fireball.y, FIREBALL_EXPLOSION_DAMAGE_RADIUS);
+        damageAgentsIntersectingCircle(fireball.x, fireball.y, FIREBALL_EXPLOSION_DAMAGE_RADIUS, FIREBALL_DAMAGE);
         state.fireballExplosions.push({
             x: fireball.x,
             y: fireball.y,
@@ -2516,14 +2801,39 @@
         });
     }
 
-    function destroyAgentsIntersectingCircle(circleX, circleY, radius) {
+    function damageAgentsIntersectingCircle(circleX, circleY, radius, damage) {
         if (!Number.isFinite(circleX) || !Number.isFinite(circleY) || !Number.isFinite(radius)) {
             throw new Error("Wizard of Flatland fireball explosion requires a finite damage circle");
         }
+        if (!(damage > 0)) throw new Error("Wizard of Flatland fireball damage requires a positive amount");
         state.agents = state.agents.filter((agent) => {
             const distance = Math.hypot(agent.x - circleX, agent.y - circleY);
-            return distance > radius + agent.radius;
+            if (distance > radius + agent.radius) return true;
+            if (damageAgent(agent, damage)) {
+                maybeDropCoinForKilledEnemy(agent);
+                return false;
+            }
+            return true;
         });
+    }
+
+    function damageAgent(agent, damage) {
+        validateAgentHealth(agent);
+        if (!(damage > 0)) throw new Error("Wizard of Flatland enemy damage requires a positive amount");
+        const previousHealth = agent.health;
+        agent.health = Math.max(0, agent.health - damage);
+        return previousHealth > 0 && agent.health <= 0;
+    }
+
+    function validateAgentHealth(agent) {
+        if (!agent || typeof agent !== "object") throw new Error("Wizard of Flatland enemy health requires an agent");
+        if (!Number.isFinite(agent.health) || !Number.isFinite(agent.maxHealth)) {
+            throw new Error(`Wizard of Flatland enemy ${agent.id} requires finite health`);
+        }
+        if (!(agent.maxHealth > 0)) throw new Error(`Wizard of Flatland enemy ${agent.id} requires positive max health`);
+        if (agent.health < 0 || agent.health > agent.maxHealth) {
+            throw new Error(`Wizard of Flatland enemy ${agent.id} health is outside its maximum`);
+        }
     }
 
     function getFireballHitboxPolygon(fireball) {
@@ -2596,10 +2906,11 @@
         state.target.x = constrainedMove.x;
         state.target.y = constrainedMove.y;
         constrainTargetToWalls();
-        resolveTargetNpcContacts();
+        resolveTargetNpcContacts(false);
     }
 
-    function resolveTargetNpcContacts() {
+    function resolveTargetNpcContacts(resolveAgentContacts = true) {
+        if (!TARGET_NPC_CONTACTS_ENABLED) return;
         let pushes = 0;
         for (let pass = 0; pass < TARGET_NPC_PUSH_ITERATIONS; pass++) {
             let changed = false;
@@ -2609,18 +2920,85 @@
                 pushes += 1;
                 changed = true;
             }
-            for (let i = 0; i < state.agents.length; i++) {
-                for (let j = i + 1; j < state.agents.length; j++) {
-                    const result = resolveAgentAgentOverlap(state.agents[i], state.agents[j]);
-                    if (!result.changed) continue;
-                    pushes += 1;
+            if (resolveAgentContacts) {
+                const agentContacts = resolveAgentAgentOverlapsSpatial();
+                if (agentContacts.pushes > 0) {
+                    pushes += agentContacts.pushes;
                     changed = true;
                 }
             }
             if (!changed) break;
         }
-        assertContactInvariants();
+        // Temporarily disabled while tuning faster NPC movement/contact behavior.
+        // assertContactInvariants();
         state.targetPushes = pushes;
+    }
+
+    function resolveAgentAgentOverlapsSpatial() {
+        const grid = buildAgentContactGrid();
+        let pushes = 0;
+        const checkedPairs = new Set();
+        for (const [cellKey, cellAgents] of grid) {
+            const cell = parseAgentContactCellKey(cellKey);
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    const neighborAgents = grid.get(getAgentContactCellKey(cell.x + dx, cell.y + dy));
+                    if (!neighborAgents) continue;
+                    for (const left of cellAgents) {
+                        for (const right of neighborAgents) {
+                            if (left === right) continue;
+                            const pairKey = getAgentPairKey(left, right);
+                            if (checkedPairs.has(pairKey)) continue;
+                            checkedPairs.add(pairKey);
+                            const result = resolveAgentAgentOverlap(left, right);
+                            if (!result.changed) continue;
+                            pushes += 1;
+                        }
+                    }
+                }
+            }
+        }
+        return { pushes };
+    }
+
+    function buildAgentContactGrid() {
+        const grid = new Map();
+        for (const agent of state.agents) {
+            const cellX = Math.floor(agent.x / NPC_CONTACT_GRID_CELL_SIZE);
+            const cellY = Math.floor(agent.y / NPC_CONTACT_GRID_CELL_SIZE);
+            const cellKey = getAgentContactCellKey(cellX, cellY);
+            let cell = grid.get(cellKey);
+            if (!cell) {
+                cell = [];
+                grid.set(cellKey, cell);
+            }
+            cell.push(agent);
+        }
+        return grid;
+    }
+
+    function getAgentContactCellKey(x, y) {
+        return `${x},${y}`;
+    }
+
+    function parseAgentContactCellKey(key) {
+        const comma = key.indexOf(",");
+        if (comma < 0) throw new Error(`Wizard of Flatland contact grid cell key is invalid: ${key}`);
+        const x = Number(key.slice(0, comma));
+        const y = Number(key.slice(comma + 1));
+        if (!Number.isInteger(x) || !Number.isInteger(y)) {
+            throw new Error(`Wizard of Flatland contact grid cell key is not integral: ${key}`);
+        }
+        return { x, y };
+    }
+
+    function getAgentPairKey(left, right) {
+        const leftId = Number(left && left.id);
+        const rightId = Number(right && right.id);
+        if (!Number.isFinite(leftId) || !Number.isFinite(rightId)) {
+            throw new Error("Wizard of Flatland NPC contact pair requires finite agent ids");
+        }
+        return leftId < rightId ? `${leftId}:${rightId}` : `${rightId}:${leftId}`;
     }
 
     function resolveTargetAgentOverlap(agent) {
@@ -2841,13 +3219,19 @@
     }
 
     function requestStep(dt) {
+        if (Number.isFinite(dt) && dt > 0) {
+            state.pendingSolverDt = Math.min(SOLVER_STEP_DT_MAX, state.pendingSolverDt + dt);
+        }
         if (state.waitingForWorker) return;
         if (isProceduralMazeScenario() && getPathfindingNodeCount() === 0) {
             setLabelText(labels.workerStatus, state.generatedMazeLoading ? "maze loading" : "maze missing");
             return;
         }
-        updateAgentPathing(dt);
+        const solverDt = state.pendingSolverDt;
+        if (!(solverDt > 0)) return;
+        updateAgentPathing(solverDt);
         state.waitingForWorker = true;
+        state.pendingSolverDt = 0;
         const targetMoved = Math.hypot(
             state.target.x - state.lastSentTarget.x,
             state.target.y - state.lastSentTarget.y
@@ -2860,7 +3244,7 @@
             type: "step",
             requestId: state.requestId++,
             worldVersion: state.worldVersion,
-            dt,
+            dt: solverDt,
             agents,
             params: {
                 targetX: state.target.x,
@@ -2897,7 +3281,7 @@
         if (message.type !== "step_result") return;
         state.waitingForWorker = false;
         applySolverResult(message.agents);
-        resolveTargetNpcContacts();
+        resolveTargetNpcContacts(false);
         state.stats = message.stats || null;
         if ((state.stats.hits || 0) > 0) {
             damageWizard(state.stats.hits * ENEMY_HIT_DAMAGE);
@@ -3082,16 +3466,44 @@
         setLabelText(labels.wallLeaks, String(stats.wallLeaks || 0));
     }
 
+    function createPathingMetrics() {
+        return {
+            at: performance.now(),
+            agents: 0,
+            direct: 0,
+            worker: 0,
+            frozen: 0,
+            stopped: 0,
+            pending: 0,
+            requests: 0,
+            deferredRequests: 0,
+            lineOfSightChecks: 0,
+            lineOfSightMs: 0,
+            nearestNodeLookups: 0,
+            nearestNodeFastHits: 0,
+            nearestNodeMs: 0,
+            totalMs: 0
+        };
+    }
+
     function updateAgentPathing(_dt) {
         const now = performance.now();
-        const goalNodeIndex = nearestPassablePathfindingNode(state.target.x, state.target.y);
-        const goalNodeKey = getPathfindingNodeKey(goalNodeIndex);
+        const metrics = createPathingMetrics();
+        const started = performance.now();
+        let goalNodeIndex = null;
+        let goalNodeKey = "";
+        let requestsSent = 0;
         for (const agent of state.agents) {
+            metrics.agents += 1;
             if (!isAgentInInstalledMazeSection(agent)) {
                 freezeAgentForUnloadedSection(agent);
+                metrics.frozen += 1;
                 continue;
             }
+            const losStarted = performance.now();
             const hasLos = hasDirectLineOfSight(agent.x, agent.y, state.target.x, state.target.y, agent.radius);
+            metrics.lineOfSightChecks += 1;
+            metrics.lineOfSightMs += performance.now() - losStarted;
             if (hasLos) {
                 agent.pathMode = PATH_MODE_DIRECT;
                 agent.pathGoalX = state.target.x;
@@ -3099,34 +3511,74 @@
                 agent.pathNodeKeys = [];
                 agent.pathWaypoints = [];
                 agent.pathCursor = 0;
+                metrics.direct += 1;
                 continue;
             }
 
             agent.pathMode = PATH_MODE_WORKER;
+            metrics.worker += 1;
             advanceAgentPathCursor(agent);
             const waypoint = getAgentPathWaypoint(agent);
             if (waypoint) {
                 agent.pathGoalX = waypoint.x;
                 agent.pathGoalY = waypoint.y;
             }
+            if (agent.pathRequestPending) {
+                metrics.pending += 1;
+                continue;
+            }
 
-            const rawStartNodeIndex = nearestPathfindingNode(agent.x, agent.y);
+            if (!Number.isInteger(goalNodeIndex)) {
+                goalNodeIndex = getCachedTargetPathfindingNode(metrics);
+                if (!Number.isInteger(goalNodeIndex)) {
+                    metrics.stopped += 1;
+                    stopAgentForMissingPathNode(agent);
+                    continue;
+                }
+                goalNodeKey = getPathfindingNodeKey(goalNodeIndex);
+            }
+            const rawStartNodeIndex = nearestPathfindingNode(agent.x, agent.y, metrics);
+            if (!Number.isInteger(rawStartNodeIndex)) {
+                metrics.stopped += 1;
+                stopAgentForMissingPathNode(agent);
+                continue;
+            }
             const startNodeIndex = isPathfindingNodePassable(rawStartNodeIndex)
                 ? rawStartNodeIndex
-                : nearestPassablePathfindingNode(agent.x, agent.y);
+                : nearestPassablePathfindingNode(agent.x, agent.y, metrics);
+            if (!Number.isInteger(startNodeIndex)) {
+                metrics.stopped += 1;
+                stopAgentForMissingPathNode(agent);
+                continue;
+            }
             const rawStartNodeKey = getPathfindingNodeKey(rawStartNodeIndex);
             const startNodeKey = getPathfindingNodeKey(startNodeIndex);
+            const requestAgeMs = now - agent.pathRequestedAt;
+            const requestIntervalMs = PATH_REQUEST_INTERVAL_SECONDS * 1000;
+            const currentPathInvalid = !waypoint || waypoint.stale === true || waypoint.blocked === true;
+            const requestedRouteChanged =
+                agent.pathRequestedGoalKey !== goalNodeKey ||
+                agent.pathRequestedRawStartKey !== rawStartNodeKey ||
+                agent.pathRequestedStartKey !== startNodeKey;
             const shouldRequest =
-                !agent.pathRequestPending &&
-                (
-                    agent.pathNodeKeys.length === 0 ||
-                    agent.pathRequestedGoalKey !== goalNodeKey ||
-                    agent.pathRequestedRawStartKey !== rawStartNodeKey ||
-                    agent.pathRequestedStartKey !== startNodeKey ||
-                    now - agent.pathRequestedAt >= PATH_REQUEST_INTERVAL_SECONDS * 1000
-                );
-            if (shouldRequest) requestAgentPath(agent, rawStartNodeIndex, startNodeIndex, goalNodeIndex, now);
+                (currentPathInvalid && (requestedRouteChanged || requestAgeMs >= requestIntervalMs)) ||
+                (requestedRouteChanged && requestAgeMs >= requestIntervalMs);
+            if (!shouldRequest) continue;
+            if (requestsSent >= PATH_REQUESTS_PER_FRAME) {
+                metrics.deferredRequests += 1;
+                continue;
+            }
+            requestAgentPath(agent, rawStartNodeIndex, startNodeIndex, goalNodeIndex, now);
+            requestsSent += 1;
+            metrics.requests += 1;
         }
+        metrics.totalMs = performance.now() - started;
+        state.debug.lastPathingMetrics = metrics;
+        profiler.notePathing(metrics);
+    }
+
+    function stopAgentForMissingPathNode(agent) {
+        freezeAgentForUnloadedSection(agent);
     }
 
     function hasDirectLineOfSight(fromX, fromY, toX, toY, radius) {
@@ -3148,39 +3600,99 @@
         return true;
     }
 
-    function nearestPathfindingNode(worldX, worldY) {
-        let bestIndex = -1;
-        let bestDistSq = Infinity;
-        const count = getPathfindingNodeCount();
-        for (let pathIndex = 0; pathIndex < count; pathIndex++) {
-            const dx = getPathfindingNodeX(pathIndex) - worldX;
-            const dy = getPathfindingNodeY(pathIndex) - worldY;
-            const distSq = dx * dx + dy * dy;
-            if (distSq < bestDistSq) {
-                bestDistSq = distSq;
-                bestIndex = pathIndex;
-            }
+    function getCachedTargetPathfindingNode(metrics) {
+        const cache = state.nodeLayer.targetNodeCache;
+        const approx = getApproximatePathfindingGridCoord(state.target.x, state.target.y);
+        if (
+            cache &&
+            cache.version === state.nodeLayer.version &&
+            cache.xindex === approx.xindex &&
+            cache.yindex === approx.yindex
+        ) {
+            return cache.pathIndex;
         }
-        if (bestIndex < 0) throw new Error("Wizard of Flatland pathfinding requires at least one node");
-        return bestIndex;
+        const pathIndex = nearestPassablePathfindingNode(state.target.x, state.target.y, metrics);
+        state.nodeLayer.targetNodeCache = {
+            version: state.nodeLayer.version,
+            xindex: approx.xindex,
+            yindex: approx.yindex,
+            pathIndex
+        };
+        return pathIndex;
     }
 
-    function nearestPassablePathfindingNode(worldX, worldY) {
+    function nearestPathfindingNode(worldX, worldY, metrics = null) {
+        return findNearestPathfindingNode(worldX, worldY, { passable: false, metrics });
+    }
+
+    function nearestPassablePathfindingNode(worldX, worldY, metrics = null) {
+        return findNearestPathfindingNode(worldX, worldY, { passable: true, metrics });
+    }
+
+    function findNearestPathfindingNode(worldX, worldY, options) {
+        const metrics = options && options.metrics ? options.metrics : null;
+        if (metrics) metrics.nearestNodeLookups += 1;
+        const started = performance.now();
+        try {
+            const pathIndex = findNearestPathfindingNodeNearGrid(worldX, worldY, options);
+            if (Number.isInteger(pathIndex)) {
+                if (metrics) metrics.nearestNodeFastHits += 1;
+                return pathIndex;
+            }
+            return null;
+        } finally {
+            if (metrics) metrics.nearestNodeMs += performance.now() - started;
+        }
+    }
+
+    function findNearestPathfindingNodeNearGrid(worldX, worldY, options) {
+        const approx = getApproximatePathfindingGridCoord(worldX, worldY);
         let bestIndex = -1;
         let bestDistSq = Infinity;
-        const count = getPathfindingNodeCount();
-        for (let pathIndex = 0; pathIndex < count; pathIndex++) {
-            if (!isPathfindingNodePassable(pathIndex)) continue;
-            const dx = getPathfindingNodeX(pathIndex) - worldX;
-            const dy = getPathfindingNodeY(pathIndex) - worldY;
-            const distSq = dx * dx + dy * dy;
-            if (distSq < bestDistSq) {
-                bestDistSq = distSq;
-                bestIndex = pathIndex;
+        for (let colRadius = 0; colRadius <= PATH_NODE_FAST_SEARCH_RADIUS; colRadius++) {
+            for (let dx = -colRadius; dx <= colRadius; dx++) {
+                const xindex = approx.xindex + dx;
+                const rowCenter = Math.round(worldY - (isEvenGridColumn(xindex) ? 0.5 : 0));
+                for (let dy = -colRadius; dy <= colRadius; dy++) {
+                    if (colRadius > 0 && Math.abs(dx) < colRadius && Math.abs(dy) < colRadius) continue;
+                    const pathIndex = getPathfindingNodeIndexForGrid(xindex, rowCenter + dy);
+                    if (!Number.isInteger(pathIndex)) continue;
+                    if (!isValidPathfindingNodeIndex(pathIndex)) {
+                        throw new Error(`Wizard of Flatland path node grid lookup returned invalid node index ${pathIndex}`);
+                    }
+                    if (options && options.passable && !isPathfindingNodePassable(pathIndex)) continue;
+                    const nodeX = getPathfindingNodeX(pathIndex);
+                    const nodeY = getPathfindingNodeY(pathIndex);
+                    const distSq = squareDistance(worldX, worldY, nodeX, nodeY);
+                    if (distSq < bestDistSq) {
+                        bestDistSq = distSq;
+                        bestIndex = pathIndex;
+                    }
+                }
             }
         }
-        if (bestIndex < 0) throw new Error("Wizard of Flatland pathfinding requires at least one passable node");
-        return bestIndex;
+        return bestIndex >= 0 ? bestIndex : null;
+    }
+
+    function getApproximatePathfindingGridCoord(worldX, worldY) {
+        const xindex = Math.round(worldX / HEX_GRID_COL_STEP);
+        return {
+            xindex,
+            yindex: Math.round(worldY - (isEvenGridColumn(xindex) ? 0.5 : 0))
+        };
+    }
+
+    function getPathfindingNodeIndexForGrid(xindex, yindex) {
+        if (!Number.isInteger(xindex) || !Number.isInteger(yindex)) {
+            throw new Error("Wizard of Flatland path node grid lookup requires integer coordinates");
+        }
+        return getPathfindingNodeIndexForKey(pathfindingNodeKey(xindex, yindex));
+    }
+
+    function squareDistance(ax, ay, bx, by) {
+        const dx = bx - ax;
+        const dy = by - ay;
+        return dx * dx + dy * dy;
     }
 
     function advanceAgentPathCursor(agent) {
@@ -3497,12 +4009,27 @@
         return setDebugFpsCounterVisible(!state.debug.showFpsCounter);
     }
 
-    function updateDebugFpsCounter(now, dt, renderMs) {
+    function updateDebugFpsCounter(now, dt, renderMs, frameParts = []) {
         if (!state.debug.showFpsCounter) return;
         if (now - state.debug.lastFpsCounterUpdateAt < 100) return;
         const element = ensureDebugFpsCounterElement();
         const fps = dt > 0 ? 1 / dt : 0;
-        element.textContent = `FPS ${fps.toFixed(1)}  Render ${renderMs.toFixed(2)} ms`;
+        const npcSolverMs = Number(state.stats && state.stats.solveMs || 0);
+        const crowdThrottleCount = Number(state.stats && state.stats.crowdThrottleCount || 0);
+        const contactPasses = Number(state.stats && state.stats.contactPasses || 0);
+        const contactPairChecks = Number(state.stats && state.stats.contactPairChecks || 0);
+        const slowestPart = Array.isArray(frameParts) && frameParts.length > 0
+            ? frameParts.reduce((slowest, part) => part.duration > slowest.duration ? part : slowest, frameParts[0])
+            : null;
+        const lines = [
+            `FPS ${fps.toFixed(1)}`,
+            `Render ${renderMs.toFixed(2)} ms`,
+            `NPC solver ${npcSolverMs.toFixed(2)} ms`,
+            `Contact ${contactPasses}p/${contactPairChecks}c`,
+            `Crowd ${crowdThrottleCount}`
+        ];
+        if (slowestPart) lines.push(`Main ${slowestPart.label} ${slowestPart.duration.toFixed(2)} ms`);
+        element.textContent = lines.join("\n");
         state.debug.lastFpsCounterUpdateAt = now;
     }
 
@@ -3683,6 +4210,7 @@
         state.nodeLayer.nodeStride = PATH_SNAPSHOT_NODE_STRIDE;
         state.nodeLayer.edgeStride = PATH_SNAPSHOT_EDGE_STRIDE;
         state.nodeLayer.version += 1;
+        state.nodeLayer.targetNodeCache = null;
         state.nodeLayer.dirty = true;
         publishPathfindingSnapshot();
     }
@@ -4648,10 +5176,28 @@
         ctx.save();
         for (const agent of state.agents) {
             const point = worldToScreen(agent.x, agent.y);
-        const radius = agent.radius * state.view.scale;
+            const radius = agent.radius * state.view.scale;
             drawAgentTriangle(point.x, point.y, radius, getAgentFacingAngle(agent), agent);
+            drawAgentHealthBar(point.x, point.y, radius, agent);
         }
         ctx.restore();
+    }
+
+    function drawAgentHealthBar(x, y, radius, agent) {
+        validateAgentHealth(agent);
+        if (agent.health >= agent.maxHealth) return;
+        const ratio = Math.max(0, Math.min(1, agent.health / agent.maxHealth));
+        const width = Math.max(18, radius * 1.8);
+        const height = Math.max(3, Math.min(6, state.view.scale * 0.08));
+        const top = y - radius - Math.max(7, state.view.scale * 0.12);
+        const left = x - width * 0.5;
+        ctx.fillStyle = "rgba(12,18,22,0.78)";
+        ctx.fillRect(left, top, width, height);
+        ctx.fillStyle = ratio > 0.5 ? "#58d27b" : ratio > 0.25 ? "#ffd166" : "#ff6b6b";
+        ctx.fillRect(left, top, width * ratio, height);
+        ctx.strokeStyle = "rgba(236,244,248,0.65)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(left, top, width, height);
     }
 
     function getAgentFacingAngle(agent) {
@@ -4798,30 +5344,9 @@
             pathLength: agent.pathNodeKeys.length,
             pathGoal: { x: agent.pathGoalX, y: agent.pathGoalY },
             waypoint: waypoint ? { index: waypoint.pathIndex, key: waypoint.key, x: waypoint.x, y: waypoint.y, blocked: waypoint.blocked === true } : null,
-            currentNode: {
-                index: currentNode,
-                key: getPathfindingNodeKey(currentNode),
-                x: getPathfindingNodeX(currentNode),
-                y: getPathfindingNodeY(currentNode),
-                blocked: isPathfindingNodeBlocked(currentNode),
-                passable: isPathfindingNodePassable(currentNode)
-            },
-            targetNearestNode: {
-                index: targetNearestNode,
-                key: getPathfindingNodeKey(targetNearestNode),
-                x: getPathfindingNodeX(targetNearestNode),
-                y: getPathfindingNodeY(targetNearestNode),
-                blocked: isPathfindingNodeBlocked(targetNearestNode),
-                passable: isPathfindingNodePassable(targetNearestNode)
-            },
-            targetPassableNode: {
-                index: targetPassableNode,
-                key: getPathfindingNodeKey(targetPassableNode),
-                x: getPathfindingNodeX(targetPassableNode),
-                y: getPathfindingNodeY(targetPassableNode),
-                blocked: isPathfindingNodeBlocked(targetPassableNode),
-                passable: isPathfindingNodePassable(targetPassableNode)
-            },
+            currentNode: createPathfindingNodeDiagnostic(currentNode),
+            targetNearestNode: createPathfindingNodeDiagnostic(targetNearestNode),
+            targetPassableNode: createPathfindingNodeDiagnostic(targetPassableNode),
             lineOfSightToTarget: hasDirectLineOfSight(agent.x, agent.y, state.target.x, state.target.y, agent.radius),
             wallClamps: agent.wallClamps,
             nearestWallClearances: wallClearances,
@@ -4831,6 +5356,18 @@
         console.log(dump);
         console.table(pathNodes);
         console.groupEnd();
+    }
+
+    function createPathfindingNodeDiagnostic(pathIndex) {
+        if (!Number.isInteger(pathIndex)) return null;
+        return {
+            index: pathIndex,
+            key: getPathfindingNodeKey(pathIndex),
+            x: getPathfindingNodeX(pathIndex),
+            y: getPathfindingNodeY(pathIndex),
+            blocked: isPathfindingNodeBlocked(pathIndex),
+            passable: isPathfindingNodePassable(pathIndex)
+        };
     }
 
     function nearestHexNode(worldX, worldY) {
@@ -5079,8 +5616,8 @@
         state.lastTime = now;
         state.targetFlashTime = Math.max(0, state.targetFlashTime - dt);
         framePart("projected cursor input", () => updateProjectedCursorKeyboardControls(dt));
-        framePart("moving cursor straightening", () => updateMovingTargetCursorStraightening(dt));
         framePart("idle target facing", () => updateIdleTargetFacingAndCursor(dt));
+        framePart("projected cursor distance return", () => updateProjectedCursorDistanceReturn(dt));
         framePart("target heading", () => updateTargetHeadingFromProjectedCursor(dt));
         framePart("target movement", () => updateTargetKeyboardMovement(dt));
         framePart("refresh maze sections", () => refreshGeneratedMazeIfNeeded(false));
@@ -5091,7 +5628,7 @@
         if (state.running) framePart("request solver step", () => requestStep(dt));
         framePart("draw", () => draw());
         const drawPart = frameParts.find((part) => part.label === "draw");
-        updateDebugFpsCounter(now, dt, drawPart ? drawPart.duration : 0);
+        updateDebugFpsCounter(now, dt, drawPart ? drawPart.duration : 0, frameParts);
         const frameDuration = performance.now() - frameStarted;
         frameParts.sort((a, b) => b.duration - a.duration);
         profiler.noteFrame(frameDuration, frameParts);

@@ -69,6 +69,20 @@ const WAITING_RING_SLIDE_SPEED_SCALE = 0.65;
 const WALL_WORLD_THICKNESS = 0.3;
 const WALL_WORLD_HALF_THICKNESS = WALL_WORLD_THICKNESS * 0.5;
 const WALL_SLIDE_CLEARANCE_SCALE = 1.55;
+const TARGET_NPC_PUSH_ITERATIONS = 8;
+const TARGET_NPC_PUSH_SLOP = 0.0005;
+const NPC_NPC_PUSH_SHARE = 0.5;
+const VACATING_CONTACT_PUSH_FORCE = 10;
+const TARGET_NPC_PUSH_MIN_AXIS = 0.0001;
+const NPC_CONTACT_GRID_CELL_SIZE = 0.42 * 2 + TARGET_NPC_PUSH_SLOP * 8;
+const NPC_AGENT_CONTACTS_ENABLED = true;
+const NPC_CONTACT_ACTIVE_RADIUS_EXTRA = 2.5;
+const NPC_CONTACT_NEIGHBOR_LIMIT = 8;
+const NPC_CONTACT_PAIR_BUDGET = 2000;
+const CROWD_THROTTLE_RADIUS_SCALE = 3.5;
+const CROWD_THROTTLE_PRESSURE_THRESHOLD = 3.5;
+const CROWD_THROTTLE_MIN_ROUTE_SCALE = 0.16;
+const CROWD_THROTTLE_INWARD_DOT_MIN = 0.15;
 const PATH_MODE_DIRECT = 0;
 const PATH_MODE_WORKER = 1;
 
@@ -133,6 +147,8 @@ function solveStep(message) {
     let retreating = 0;
     let blocked = 0;
     let hits = 0;
+    let crowdThrottleCount = 0;
+    let crowdThrottlePressure = 0;
 
     for (let i = 0; i < count; i++) {
         const base = i * STRIDE;
@@ -486,6 +502,18 @@ function solveStep(message) {
             }
         }
 
+        if (state !== STATE_ATTACKING && state !== STATE_RECOVERING && state !== STATE_VACATING) {
+            const crowdThrottle = computeCrowdRouteThrottle(agents, count, i, x, y, radius, targetX, targetY, desiredX, desiredY);
+            if (crowdThrottle.pressure > 0) {
+                desiredX *= crowdThrottle.routeScale;
+                desiredY *= crowdThrottle.routeScale;
+                movementGoalX = x + desiredX;
+                movementGoalY = y + desiredY;
+                crowdThrottleCount += 1;
+                crowdThrottlePressure += crowdThrottle.pressure;
+            }
+        }
+
         if (state !== STATE_ATTACKING) {
             const wallSlide = projectVectorAlongNearbyWalls(x, y, radius, desiredX, desiredY, walls);
             desiredX = wallSlide.x;
@@ -628,6 +656,12 @@ function solveStep(message) {
         next[outBase + 13] = nextMillingWallTurnLock;
     }
 
+    const contactStats = NPC_AGENT_CONTACTS_ENABLED
+        ? resolvePackedAgentAgentContacts(agents, next, count, walls, dt, targetX, targetY, ringRadius + NPC_CONTACT_ACTIVE_RADIUS_EXTRA)
+        : { pushes: 0, passes: 0, pairChecks: 0, wallClamps: 0, budgetHits: 0 };
+    pairChecks += contactStats.pairChecks;
+    wallClamps += contactStats.wallClamps;
+
     return {
         type: "step_result",
         requestId: message.requestId,
@@ -647,9 +681,226 @@ function solveStep(message) {
             retreating,
             attacking,
             hits,
-            blocked
+            blocked,
+            contactPushes: contactStats.pushes,
+            contactPasses: contactStats.passes,
+            contactPairChecks: contactStats.pairChecks,
+            contactBudgetHits: contactStats.budgetHits,
+            crowdThrottleCount,
+            crowdThrottlePressure
         }
     };
+}
+
+function resolvePackedAgentAgentContacts(agents, next, count, walls, dt, targetX, targetY, activeRadius) {
+    let pushes = 0;
+    let passes = 0;
+    let pairChecks = 0;
+    let wallClamps = 0;
+    let budgetHits = 0;
+    const activeRadiusSq = activeRadius * activeRadius;
+    for (let pass = 0; pass < TARGET_NPC_PUSH_ITERATIONS; pass++) {
+        let changed = false;
+        const contactGrid = buildPackedAgentContactGrid(next, count);
+        const checkedPairs = new Set();
+        for (let leftIndex = 0; leftIndex < count; leftIndex++) {
+            if (pairChecks >= NPC_CONTACT_PAIR_BUDGET) {
+                budgetHits += 1;
+                break;
+            }
+            if (!isPackedAgentInContactActiveRadius(next, leftIndex, targetX, targetY, activeRadiusSq)) continue;
+            const candidates = collectNearestPackedContactCandidates(contactGrid, next, leftIndex, targetX, targetY, activeRadiusSq);
+            for (const candidate of candidates) {
+                if (pairChecks >= NPC_CONTACT_PAIR_BUDGET) {
+                    budgetHits += 1;
+                    break;
+                }
+                const rightIndex = candidate.index;
+                const pairKey = getPackedAgentPairKey(leftIndex, rightIndex);
+                if (checkedPairs.has(pairKey)) continue;
+                checkedPairs.add(pairKey);
+                pairChecks += 1;
+                const result = resolvePackedAgentAgentOverlap(agents, next, leftIndex, rightIndex, walls, dt);
+                wallClamps += result.wallClamps;
+                if (!result.changed) continue;
+                pushes += 1;
+                changed = true;
+            }
+        }
+        if (!changed) break;
+        passes += 1;
+        if (pairChecks >= NPC_CONTACT_PAIR_BUDGET) break;
+    }
+    return { pushes, passes, pairChecks, wallClamps, budgetHits };
+}
+
+function buildPackedAgentContactGrid(next, count) {
+    const grid = new Map();
+    for (let index = 0; index < count; index++) {
+        const outBase = index * OUT_STRIDE;
+        const cellX = Math.floor(next[outBase + 1] / NPC_CONTACT_GRID_CELL_SIZE);
+        const cellY = Math.floor(next[outBase + 2] / NPC_CONTACT_GRID_CELL_SIZE);
+        const cellKey = getPackedContactCellKey(cellX, cellY);
+        let cell = grid.get(cellKey);
+        if (!cell) {
+            cell = [];
+            grid.set(cellKey, cell);
+        }
+        cell.push(index);
+    }
+    return grid;
+}
+
+function collectNearestPackedContactCandidates(contactGrid, next, leftIndex, targetX, targetY, activeRadiusSq) {
+    const leftOutBase = leftIndex * OUT_STRIDE;
+    const leftX = next[leftOutBase + 1];
+    const leftY = next[leftOutBase + 2];
+    const cellX = Math.floor(leftX / NPC_CONTACT_GRID_CELL_SIZE);
+    const cellY = Math.floor(leftY / NPC_CONTACT_GRID_CELL_SIZE);
+    const candidates = [];
+    for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+            const neighborAgents = contactGrid.get(getPackedContactCellKey(cellX + dx, cellY + dy));
+            if (!neighborAgents) continue;
+            for (const index of neighborAgents) {
+                if (index === leftIndex) continue;
+                if (!isPackedAgentInContactActiveRadius(next, index, targetX, targetY, activeRadiusSq)) continue;
+                const outBase = index * OUT_STRIDE;
+                const distSq = squareDistance(leftX, leftY, next[outBase + 1], next[outBase + 2]);
+                candidates.push({ index, distSq });
+            }
+        }
+    }
+    candidates.sort((a, b) => a.distSq - b.distSq);
+    return candidates.length > NPC_CONTACT_NEIGHBOR_LIMIT
+        ? candidates.slice(0, NPC_CONTACT_NEIGHBOR_LIMIT)
+        : candidates;
+}
+
+function isPackedAgentInContactActiveRadius(next, index, targetX, targetY, activeRadiusSq) {
+    const outBase = index * OUT_STRIDE;
+    return squareDistance(next[outBase + 1], next[outBase + 2], targetX, targetY) <= activeRadiusSq;
+}
+
+function squareDistance(ax, ay, bx, by) {
+    const dx = bx - ax;
+    const dy = by - ay;
+    return dx * dx + dy * dy;
+}
+
+function getPackedContactCellKey(x, y) {
+    return `${x},${y}`;
+}
+
+function parsePackedContactCellKey(key) {
+    const comma = key.indexOf(",");
+    if (comma < 0) throw new Error(`contact grid cell key is invalid: ${key}`);
+    const x = Number(key.slice(0, comma));
+    const y = Number(key.slice(comma + 1));
+    if (!Number.isInteger(x) || !Number.isInteger(y)) {
+        throw new Error(`contact grid cell key is not integral: ${key}`);
+    }
+    return { x, y };
+}
+
+function getPackedAgentPairKey(leftIndex, rightIndex) {
+    return leftIndex < rightIndex ? `${leftIndex}:${rightIndex}` : `${rightIndex}:${leftIndex}`;
+}
+
+function resolvePackedAgentAgentOverlap(agents, next, leftIndex, rightIndex, walls, dt) {
+    const leftBase = leftIndex * STRIDE;
+    const rightBase = rightIndex * STRIDE;
+    const leftOutBase = leftIndex * OUT_STRIDE;
+    const rightOutBase = rightIndex * OUT_STRIDE;
+    const leftRadius = agents[leftBase + 3];
+    const rightRadius = agents[rightBase + 3];
+    const combinedRadius = leftRadius + rightRadius;
+    let dx = next[rightOutBase + 1] - next[leftOutBase + 1];
+    let dy = next[rightOutBase + 2] - next[leftOutBase + 2];
+    let dist = Math.hypot(dx, dy);
+    if (dist >= combinedRadius - TARGET_NPC_PUSH_SLOP) return { changed: false, wallClamps: 0 };
+
+    if (!(dist > TARGET_NPC_PUSH_MIN_AXIS)) {
+        const angle = ((agents[leftBase] * 928371 + agents[rightBase] * 689287) % 360) / 360 * Math.PI * 2;
+        dx = Math.cos(angle);
+        dy = Math.sin(angle);
+        dist = 1;
+    }
+
+    const nx = dx / dist;
+    const ny = dy / dist;
+    const correction = combinedRadius - dist + TARGET_NPC_PUSH_SLOP;
+    const pushShare = getPackedAgentAgentPushShare(next, leftIndex, rightIndex);
+    const leftPreviousX = next[leftOutBase + 1];
+    const leftPreviousY = next[leftOutBase + 2];
+    const rightPreviousX = next[rightOutBase + 1];
+    const rightPreviousY = next[rightOutBase + 2];
+
+    const leftApplied = movePackedAgentWithWallConstraint(next, leftIndex, leftRadius, -nx * correction * pushShare.left, -ny * correction * pushShare.left, walls);
+    const rightApplied = movePackedAgentWithWallConstraint(
+        next,
+        rightIndex,
+        rightRadius,
+        nx * correction * pushShare.right - leftApplied.blockedX,
+        ny * correction * pushShare.right - leftApplied.blockedY,
+        walls
+    );
+    let wallClamps = leftApplied.clamps + rightApplied.clamps;
+    if (rightApplied.blockedX !== 0 || rightApplied.blockedY !== 0) {
+        const pushBack = movePackedAgentWithWallConstraint(next, leftIndex, leftRadius, -rightApplied.blockedX, -rightApplied.blockedY, walls);
+        wallClamps += pushBack.clamps;
+    }
+
+    const changed = next[leftOutBase + 1] !== leftPreviousX ||
+        next[leftOutBase + 2] !== leftPreviousY ||
+        next[rightOutBase + 1] !== rightPreviousX ||
+        next[rightOutBase + 2] !== rightPreviousY;
+    if (changed) {
+        updatePackedContactVelocity(agents, next, leftIndex, dt);
+        updatePackedContactVelocity(agents, next, rightIndex, dt);
+    }
+    return { changed, wallClamps };
+}
+
+function getPackedAgentAgentPushShare(next, leftIndex, rightIndex) {
+    const leftForce = getPackedAgentContactPushForce(next, leftIndex);
+    const rightForce = getPackedAgentContactPushForce(next, rightIndex);
+    const total = leftForce + rightForce;
+    if (!(total > 0)) {
+        return { left: NPC_NPC_PUSH_SHARE, right: 1 - NPC_NPC_PUSH_SHARE };
+    }
+    return {
+        left: rightForce / total,
+        right: leftForce / total
+    };
+}
+
+function getPackedAgentContactPushForce(next, index) {
+    const outBase = index * OUT_STRIDE;
+    return next[outBase + 5] === STATE_VACATING || next[outBase + 7] === PHASE_VACATING
+        ? VACATING_CONTACT_PUSH_FORCE
+        : 1;
+}
+
+function movePackedAgentWithWallConstraint(next, index, radius, dx, dy, walls) {
+    const outBase = index * OUT_STRIDE;
+    const intendedX = next[outBase + 1] + dx;
+    const intendedY = next[outBase + 2] + dy;
+    const constrained = pushPointInsideWalls(intendedX, intendedY, radius + TARGET_NPC_PUSH_SLOP, walls);
+    next[outBase + 1] = constrained.x;
+    next[outBase + 2] = constrained.y;
+    return {
+        blockedX: intendedX - constrained.x,
+        blockedY: intendedY - constrained.y,
+        clamps: constrained.clamps
+    };
+}
+
+function updatePackedContactVelocity(agents, next, index, dt) {
+    const base = index * STRIDE;
+    const outBase = index * OUT_STRIDE;
+    next[outBase + 3] = (next[outBase + 1] - agents[base + 1]) / dt;
+    next[outBase + 4] = (next[outBase + 2] - agents[base + 2]) / dt;
 }
 
 function getStepWalls(message) {
@@ -1055,6 +1306,7 @@ function projectVectorAlongNearbyWalls(x, y, radius, vectorX, vectorY, walls) {
 function pushPointInsideWalls(x, y, radius, walls) {
     let outX = x;
     let outY = y;
+    let clamps = 0;
     for (let pass = 0; pass < 4; pass++) {
         let changed = false;
         for (let i = 0; i < walls.length; i += WALL_STRIDE) {
@@ -1070,11 +1322,12 @@ function pushPointInsideWalls(x, y, radius, walls) {
                 outX += normal.x * correction;
                 outY += normal.y * correction;
                 changed = true;
+                clamps += 1;
             }
         }
         if (!changed) break;
     }
-    return { x: outX, y: outY };
+    return { x: outX, y: outY, clamps };
 }
 
 function countUsableRingSlots(agents, count, targetX, targetY, ringRadius, walls) {
@@ -1437,6 +1690,37 @@ function computeSeparation(agents, count, selfIndex, x, y, radius, priority, opt
         sy += dy / dist * push;
     }
     return { x: sx, y: sy, checks, pressure };
+}
+
+function computeCrowdRouteThrottle(agents, count, selfIndex, x, y, radius, targetX, targetY, desiredX, desiredY) {
+    const desiredLength = Math.hypot(desiredX, desiredY);
+    if (desiredLength <= EPSILON) return { pressure: 0, routeScale: 1 };
+    const toTargetX = targetX - x;
+    const toTargetY = targetY - y;
+    const targetDistance = Math.hypot(toTargetX, toTargetY);
+    if (targetDistance <= EPSILON) return { pressure: 0, routeScale: 1 };
+    const inwardDot = (desiredX / desiredLength) * (toTargetX / targetDistance) +
+        (desiredY / desiredLength) * (toTargetY / targetDistance);
+    if (inwardDot < CROWD_THROTTLE_INWARD_DOT_MIN) return { pressure: 0, routeScale: 1 };
+
+    const activationDistance = radius * CROWD_THROTTLE_RADIUS_SCALE;
+    const activationDistanceSq = activationDistance * activationDistance;
+    let pressure = 0;
+    for (let i = 0; i < count; i++) {
+        if (i === selfIndex) continue;
+        const base = i * STRIDE;
+        const dx = x - agents[base + 1];
+        const dy = y - agents[base + 2];
+        const distSq = dx * dx + dy * dy;
+        if (distSq >= activationDistanceSq) continue;
+        const dist = Math.sqrt(Math.max(distSq, EPSILON));
+        pressure += 1 - dist / activationDistance;
+    }
+
+    if (pressure <= CROWD_THROTTLE_PRESSURE_THRESHOLD) return { pressure: 0, routeScale: 1 };
+    const excess = pressure - CROWD_THROTTLE_PRESSURE_THRESHOLD;
+    const routeScale = Math.max(CROWD_THROTTLE_MIN_ROUTE_SCALE, 1 / (1 + excess));
+    return { pressure, routeScale };
 }
 
 function clampDartToTargetContact(previousX, previousY, x, y, targetX, targetY, touchDistance) {

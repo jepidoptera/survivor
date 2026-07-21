@@ -10,6 +10,7 @@
             coinDiagnostics: [],
             headingGlitchFrame: 0,
             headingGlitchLogged: false,
+            lastPathingMetrics: null,
             showFpsCounter: false,
             fpsCounterElement: null,
             lastFpsCounterUpdateAt: 0
