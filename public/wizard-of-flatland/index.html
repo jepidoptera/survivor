@@ -4,16 +4,34 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Wizard of Flatland</title>
-    <link rel="stylesheet" href="/wizard-of-flatland/styles.css?v=wizard-of-flatland-32">
+    <link rel="stylesheet" href="/wizard-of-flatland/styles.css?v=wizard-of-flatland-33">
 </head>
 <body>
     <main class="app-shell">
+        <div id="statusBars" aria-label="Wizard status">
+            <div class="statusBar">
+                <div class="statusIcon" aria-hidden="true">
+                    <img src="/assets/images/thumbnails/cross.png" alt="">
+                </div>
+                <div class="statusBar-background">
+                    <div id="healthBar" class="statusBar-fill"></div>
+                </div>
+            </div>
+            <div class="statusBar">
+                <div class="statusIcon" aria-hidden="true">
+                    <img src="/assets/images/thumbnails/fireball.png" alt="">
+                </div>
+                <div class="statusBar-background">
+                    <div id="magicBar" class="statusBar-fill"></div>
+                </div>
+            </div>
+        </div>
         <section class="workbench" aria-label="NPC movement solver workbench">
             <canvas id="solverCanvas"></canvas>
         </section>
     </main>
     <script src="/wizard-of-flatland/wallGeometry.js?v=wizard-of-flatland-1"></script>
     <script src="/wizard-of-flatland/debug.js?v=wizard-of-flatland-2"></script>
-    <script src="/wizard-of-flatland/main.js?v=wizard-of-flatland-106"></script>
+    <script src="/wizard-of-flatland/main.js?v=wizard-of-flatland-107"></script>
 </body>
 </html>

@@ -63,6 +63,12 @@
     const FIREBALL_DAMAGE_RADIUS = FIREBALL_HITBOX_WIDTH * 0.5;
     const FIREBALL_EXPLOSION_DAMAGE_RADIUS = FIREBALL_DAMAGE_RADIUS * 3;
     const FIREBALL_EXPLOSION_VISUAL_SECONDS = 0.16;
+    const WIZARD_MAX_HEALTH = 100;
+    const WIZARD_MAX_MAGIC = 100;
+    const WIZARD_HEALTH_REGEN_PER_SECOND = WIZARD_MAX_HEALTH * 0.005;
+    const WIZARD_MAGIC_REGEN_PER_SECOND = 7;
+    const WIZARD_FIREBALL_MAGIC_COST = 10;
+    const ENEMY_HIT_DAMAGE = 10;
     const SPEED_SCALE_MIN = 0.05;
     const SPEED_SCALE_MAX = 0.8;
     const SPEED_SCALE_DEFAULT = 0.2;
@@ -166,6 +172,8 @@
     const mazeChunkSizeInput = document.getElementById("mazeChunkSize");
     const mazeRoomScaleInput = document.getElementById("mazeRoomScale");
     const mazeTwistinessInput = document.getElementById("mazeTwistiness");
+    const healthBar = document.getElementById("healthBar");
+    const magicBar = document.getElementById("magicBar");
     let speedScaleControlValue = speedScaleInput ? Number(speedScaleInput.value) : 0.5;
 
     const labels = {
@@ -217,6 +225,12 @@
         generatedMazeLookaheadNextRefreshAt: 0,
         generatedMazeInitialEnemySpawnBudgetsBySectionKey: new Map(),
         target: { x: 0, y: 0, heading: -Math.PI / 2 },
+        wizardVitals: {
+            health: WIZARD_MAX_HEALTH,
+            maxHealth: WIZARD_MAX_HEALTH,
+            magic: WIZARD_MAX_MAGIC,
+            maxMagic: WIZARD_MAX_MAGIC
+        },
         targetTravelVector: { x: 0, y: 0 },
         lastSentTarget: { x: 0, y: 0 },
         targetFlashTime: 0,
@@ -302,6 +316,72 @@
 
     function setLabelText(label, text) {
         if (label) label.textContent = text;
+    }
+
+    function validateWizardVitals() {
+        const vitals = state.wizardVitals;
+        if (!vitals || typeof vitals !== "object") {
+            throw new Error("Wizard of Flatland vitals are missing");
+        }
+        for (const field of ["health", "maxHealth", "magic", "maxMagic"]) {
+            if (!Number.isFinite(vitals[field])) {
+                throw new Error(`Wizard of Flatland vitals require finite ${field}`);
+            }
+        }
+        if (vitals.maxHealth <= 0 || vitals.maxMagic <= 0) {
+            throw new Error("Wizard of Flatland vitals require positive maximums");
+        }
+    }
+
+    function resetWizardVitals() {
+        state.wizardVitals = {
+            health: WIZARD_MAX_HEALTH,
+            maxHealth: WIZARD_MAX_HEALTH,
+            magic: WIZARD_MAX_MAGIC,
+            maxMagic: WIZARD_MAX_MAGIC
+        };
+        updateStatusBars();
+    }
+
+    function updateStatusBars() {
+        validateWizardVitals();
+        if (!healthBar) throw new Error("Wizard of Flatland health bar is missing");
+        if (!magicBar) throw new Error("Wizard of Flatland magic bar is missing");
+        const healthRatio = Math.max(0, Math.min(1, state.wizardVitals.health / state.wizardVitals.maxHealth));
+        const magicRatio = Math.max(0, Math.min(1, state.wizardVitals.magic / state.wizardVitals.maxMagic));
+        healthBar.style.width = `${healthRatio * 100}%`;
+        magicBar.style.width = `${magicRatio * 100}%`;
+    }
+
+    function regenerateWizardVitals(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        validateWizardVitals();
+        const vitals = state.wizardVitals;
+        vitals.health = Math.min(vitals.maxHealth, vitals.health + WIZARD_HEALTH_REGEN_PER_SECOND * dt);
+        vitals.magic = Math.min(vitals.maxMagic, vitals.magic + WIZARD_MAGIC_REGEN_PER_SECOND * dt);
+        updateStatusBars();
+    }
+
+    function damageWizard(amount) {
+        const damage = Number(amount);
+        if (!Number.isFinite(damage) || damage <= 0) return 0;
+        validateWizardVitals();
+        const previousHealth = state.wizardVitals.health;
+        state.wizardVitals.health = Math.max(0, previousHealth - damage);
+        updateStatusBars();
+        return previousHealth - state.wizardVitals.health;
+    }
+
+    function spendWizardMagic(amount) {
+        const cost = Number(amount);
+        if (!Number.isFinite(cost) || cost <= 0) {
+            throw new Error("Wizard of Flatland magic spend requires a positive finite cost");
+        }
+        validateWizardVitals();
+        if (state.wizardVitals.magic < cost) return false;
+        state.wizardVitals.magic -= cost;
+        updateStatusBars();
+        return true;
     }
 
     function getControlNumber(input, fallback) {
@@ -1625,6 +1705,7 @@
         state.agents = [];
         state.fireballs = [];
         state.fireballExplosions = [];
+        resetWizardVitals();
         state.coins = [];
         state.collectedCoinKeys = new Set();
         state.walls = createEmptyWallBuffer();
@@ -2287,6 +2368,7 @@
         const dy = cursorPoint.y - state.target.y;
         const length = Math.hypot(dx, dy);
         if (!(length > 0.000001)) return;
+        if (!spendWizardMagic(WIZARD_FIREBALL_MAGIC_COST)) return;
         const dirX = dx / length;
         const dirY = dy / length;
         state.fireballs.push({
@@ -2818,6 +2900,7 @@
         resolveTargetNpcContacts();
         state.stats = message.stats || null;
         if ((state.stats.hits || 0) > 0) {
+            damageWizard(state.stats.hits * ENEMY_HIT_DAMAGE);
             state.targetFlashTime = 0.18;
         }
         setLabelText(labels.workerStatus, "ready");
@@ -5004,6 +5087,7 @@
         framePart("refresh path bounds", () => refreshMazePathBoundsIfNeeded());
         framePart("fireballs", () => updateFireballs(dt));
         framePart("coins", () => updateCoins(dt));
+        framePart("wizard vitals", () => regenerateWizardVitals(dt));
         if (state.running) framePart("request solver step", () => requestStep(dt));
         framePart("draw", () => draw());
         const drawPart = frameParts.find((part) => part.label === "draw");
