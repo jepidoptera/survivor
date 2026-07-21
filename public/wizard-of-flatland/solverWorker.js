@@ -68,6 +68,7 @@ const VACATING_SEPARATION_PUSH_MULTIPLIER = 100;
 const WAITING_RING_SLIDE_SPEED_SCALE = 0.65;
 const WALL_WORLD_THICKNESS = 0.3;
 const WALL_WORLD_HALF_THICKNESS = WALL_WORLD_THICKNESS * 0.5;
+const WALL_SLIDE_CLEARANCE_SCALE = 1.55;
 const PATH_MODE_DIRECT = 0;
 const PATH_MODE_WORKER = 1;
 
@@ -426,7 +427,7 @@ function solveStep(message) {
             }
         }
 
-        if (!followingWorkerPath && state !== STATE_HOLDING && state !== STATE_MILLING) {
+        if (state !== STATE_HOLDING && state !== STATE_MILLING) {
             const goalX = state === STATE_ATTACKING ? targetX : movementGoalX;
             const goalY = state === STATE_ATTACKING ? targetY : movementGoalY;
             const detour = computeWallDetour(x, y, goalX, goalY, radius, walls);
@@ -483,6 +484,12 @@ function solveStep(message) {
                 movementGoalX = x + desiredX;
                 movementGoalY = y + desiredY;
             }
+        }
+
+        if (state !== STATE_ATTACKING) {
+            const wallSlide = projectVectorAlongNearbyWalls(x, y, radius, desiredX, desiredY, walls);
+            desiredX = wallSlide.x;
+            desiredY = wallSlide.y;
         }
 
         let len = Math.hypot(desiredX, desiredY);
@@ -558,6 +565,11 @@ function solveStep(message) {
             const outward = enforceMinimumOutwardVelocity(vx, vy, x, y, targetX, targetY, ringRadius, speed);
             vx = outward.vx;
             vy = outward.vy;
+        }
+        if (state !== STATE_ATTACKING) {
+            const wallSlideVelocity = projectVectorAlongNearbyWalls(x, y, radius, vx, vy, walls);
+            vx = wallSlideVelocity.x;
+            vy = wallSlideVelocity.y;
         }
 
         let candidateX = x + vx * dt;
@@ -1009,6 +1021,35 @@ function computeWallEscapeVector(x, y, radius, walls) {
         y: escapeY / length * Math.min(1, pressure),
         pressure
     };
+}
+
+function projectVectorAlongNearbyWalls(x, y, radius, vectorX, vectorY, walls) {
+    let outX = vectorX;
+    let outY = vectorY;
+    if (Math.hypot(outX, outY) <= EPSILON) return { x: 0, y: 0 };
+
+    const activationClearance = radius * WALL_SLIDE_CLEARANCE_SCALE;
+    for (let pass = 0; pass < 3; pass++) {
+        let changed = false;
+        for (let i = 0; i < walls.length; i += WALL_STRIDE) {
+            const ax = walls[i];
+            const ay = walls[i + 1];
+            const bx = walls[i + 2];
+            const by = walls[i + 3];
+            const clearance = pointSegmentDistance(x, y, ax, ay, bx, by) - WALL_WORLD_HALF_THICKNESS;
+            if (clearance > activationClearance) continue;
+            const normal = segmentRepulsionNormal(x, y, ax, ay, bx, by);
+            const intoNormal = outX * normal.x + outY * normal.y;
+            if (intoNormal >= 0) continue;
+            outX -= normal.x * intoNormal;
+            outY -= normal.y * intoNormal;
+            changed = true;
+        }
+        if (!changed) break;
+    }
+
+    if (Math.hypot(outX, outY) <= EPSILON) return { x: 0, y: 0 };
+    return { x: outX, y: outY };
 }
 
 function pushPointInsideWalls(x, y, radius, walls) {

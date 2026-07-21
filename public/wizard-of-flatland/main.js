@@ -115,7 +115,7 @@
     const PATH_MODE_DIRECT = 0;
     const PATH_MODE_WORKER = 1;
     const PATH_REQUEST_INTERVAL_SECONDS = 0.22;
-    const PATH_WAYPOINT_REACHED_DISTANCE = 0.55;
+    const PATH_WAYPOINT_REACHED_DISTANCE = AGENT_RADIUS + WALL_WORLD_HALF_THICKNESS + 0.12;
     const HEADING_GLITCH_TURN_THRESHOLD = Math.PI / 5;
     const HEADING_GLITCH_RETURN_THRESHOLD = Math.PI / 10;
     const TARGET_CURSOR_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]);
@@ -265,7 +265,7 @@
     const profiler = createWizardOfFlatlandProfiler();
     attachWizardOfFlatlandDebugGlobals(state, profiler);
 
-    const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-80");
+    const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-82");
     worker.addEventListener("message", handleWorkerMessage);
     worker.addEventListener("error", (event) => {
         setLabelText(labels.workerStatus, event.message || "failed");
