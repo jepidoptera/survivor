@@ -1,6 +1,5 @@
 "use strict";
 
-importScripts("/wizard-of-flatland/wallGeometry.js?v=wizard-of-flatland-1");
 importScripts("/wizard-of-flatland/orcaSolver.js?v=wizard-of-flatland-1");
 
 const STRIDE = 17;
@@ -67,16 +66,11 @@ const VACATING_LANE_YIELD_SIDE_STRENGTH = 3.4;
 const VACATING_LANE_YIELD_OUTWARD_STRENGTH = 2.6;
 const VACATING_SEPARATION_PUSH_MULTIPLIER = 100;
 const WAITING_RING_SLIDE_SPEED_SCALE = 0.65;
-const HEX_GRID_COL_STEP = 0.866;
-const HEX_GRID_WIDTH = 1 / HEX_GRID_COL_STEP;
-const HEX_GRID_HEIGHT = 1;
-const PATH_NODE_LAYER_PADDING = 4;
-const PATH_NODE_WALL_THICKNESS = 0.1;
-const PATH_NODE_WALL_FACE_EXTEND = 0.501;
+const WALL_WORLD_THICKNESS = 0.3;
+const WALL_WORLD_HALF_THICKNESS = WALL_WORLD_THICKNESS * 0.5;
 const PATH_MODE_DIRECT = 0;
 const PATH_MODE_WORKER = 1;
 
-let cachedPathfindingNodeLayer = null;
 let cachedWalls = null;
 let cachedWallsWorldVersion = 0;
 
@@ -118,7 +112,6 @@ function solveStep(message) {
     const next = new Float32Array(count * OUT_STRIDE);
     const dt = Math.min(0.05, Math.max(0.001, finiteNumber(message.dt, "dt")));
     const params = message.params || {};
-    const pathfindingNodeLayer = getPathfindingNodeLayer(message.worldVersion, walls);
     const targetX = finiteNumber(params.targetX, "targetX");
     const targetY = finiteNumber(params.targetY, "targetY");
     const targetRadius = Math.max(0.1, finiteNumber(params.targetRadius, "targetRadius"));
@@ -642,9 +635,7 @@ function solveStep(message) {
             retreating,
             attacking,
             hits,
-            blocked,
-            pathNodes: pathfindingNodeLayer.nodes.length,
-            pathBlockedEdges: pathfindingNodeLayer.blockedEdges.length
+            blocked
         }
     };
 }
@@ -661,173 +652,6 @@ function getStepWalls(message) {
         throw new Error(`walls missing for world version ${version}`);
     }
     return cachedWalls;
-}
-
-function getPathfindingNodeLayer(worldVersion, walls) {
-    const version = Number.isFinite(Number(worldVersion)) ? Number(worldVersion) : 0;
-    if (cachedPathfindingNodeLayer && cachedPathfindingNodeLayer.worldVersion === version) {
-        return cachedPathfindingNodeLayer;
-    }
-    cachedPathfindingNodeLayer = buildPathfindingNodeLayer(version, walls);
-    return cachedPathfindingNodeLayer;
-}
-
-function buildPathfindingNodeLayer(worldVersion, walls) {
-    const wallGeometry = self.WallGeometry;
-    if (!wallGeometry || typeof wallGeometry.connectionCrossesWallFaces !== "function") {
-        throw new Error("Wizard of Flatland solver pathfinding node layer requires WallGeometry.connectionCrossesWallFaces");
-    }
-    const bounds = getPathfindingLayerBounds(walls);
-    const colStart = Math.floor(bounds.minX / HEX_GRID_COL_STEP) - PATH_NODE_LAYER_PADDING;
-    const colEnd = Math.ceil(bounds.maxX / HEX_GRID_COL_STEP) + PATH_NODE_LAYER_PADDING;
-    const rowStart = Math.floor(bounds.minY) - PATH_NODE_LAYER_PADDING;
-    const rowEnd = Math.ceil(bounds.maxY) + PATH_NODE_LAYER_PADDING;
-    const nodes = [];
-    const nodeByKey = new Map();
-
-    for (let col = colStart; col <= colEnd; col++) {
-        for (let row = rowStart; row <= rowEnd; row++) {
-            const node = createPathfindingNode(col, row);
-            nodes.push(node);
-            nodeByKey.set(node.key, node);
-        }
-    }
-
-    for (let i = 0; i < nodes.length; i++) {
-        const node = nodes[i];
-        const offsets = getPathfindingNeighborOffsets(node.xindex);
-        for (let dir = 0; dir < 12; dir++) {
-            const offset = offsets[dir];
-            node.neighbors[dir] = nodeByKey.get(pathfindingNodeKey(node.xindex + offset.x, node.yindex + offset.y)) || null;
-        }
-    }
-
-    const blockedEdges = [];
-    const blockedKeys = new Set();
-    for (let w = 0; w < walls.length; w += WALL_STRIDE) {
-        const ax = walls[w];
-        const ay = walls[w + 1];
-        const bx = walls[w + 2];
-        const by = walls[w + 3];
-        const wallMinX = Math.min(ax, bx) - HEX_GRID_WIDTH;
-        const wallMaxX = Math.max(ax, bx) + HEX_GRID_WIDTH;
-        const wallMinY = Math.min(ay, by) - HEX_GRID_HEIGHT;
-        const wallMaxY = Math.max(ay, by) + HEX_GRID_HEIGHT;
-        for (let n = 0; n < nodes.length; n++) {
-            const node = nodes[n];
-            if (node.x < wallMinX || node.x > wallMaxX || node.y < wallMinY || node.y > wallMaxY) continue;
-            for (let dir = 0; dir < 12; dir++) {
-                const neighbor = node.neighbors[dir];
-                if (!neighbor) continue;
-                const edgeKey = pathfindingEdgeKey(node, neighbor);
-                if (blockedKeys.has(edgeKey)) continue;
-                if (!wallGeometry.connectionCrossesWallFaces(
-                    node,
-                    neighbor,
-                    { x: ax, y: ay },
-                    { x: bx, y: by },
-                    {
-                        thickness: PATH_NODE_WALL_THICKNESS,
-                        extend: PATH_NODE_WALL_FACE_EXTEND
-                    }
-                )) {
-                    continue;
-                }
-                blockedKeys.add(edgeKey);
-                addDirectionalBlock(node, dir, w / WALL_STRIDE);
-                const reverseDir = neighbor.neighbors.indexOf(node);
-                if (reverseDir >= 0) addDirectionalBlock(neighbor, reverseDir, w / WALL_STRIDE);
-                blockedEdges.push({ a: node, b: neighbor, wallIndex: w / WALL_STRIDE });
-            }
-        }
-    }
-
-    return { worldVersion, nodes, nodeByKey, blockedEdges };
-}
-
-function getPathfindingLayerBounds(walls) {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (let i = 0; i < walls.length; i += WALL_STRIDE) {
-        minX = Math.min(minX, walls[i], walls[i + 2]);
-        minY = Math.min(minY, walls[i + 1], walls[i + 3]);
-        maxX = Math.max(maxX, walls[i], walls[i + 2]);
-        maxY = Math.max(maxY, walls[i + 1], walls[i + 3]);
-    }
-    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
-        throw new Error("Wizard of Flatland solver pathfinding node layer requires finite wall bounds");
-    }
-    return { minX, minY, maxX, maxY };
-}
-
-function createPathfindingNode(xindex, yindex) {
-    return {
-        x: xindex * HEX_GRID_COL_STEP,
-        y: yindex + (isEvenGridColumn(xindex) ? 0.5 : 0),
-        xindex,
-        yindex,
-        key: pathfindingNodeKey(xindex, yindex),
-        neighbors: new Array(12).fill(null),
-        blockedNeighbors: new Map()
-    };
-}
-
-function getPathfindingNeighborOffsets(xindex) {
-    if (isEvenGridColumn(xindex)) {
-        return [
-            { x: -2, y: 0 },
-            { x: -1, y: 0 },
-            { x: -1, y: -1 },
-            { x: 0, y: -1 },
-            { x: 1, y: -1 },
-            { x: 1, y: 0 },
-            { x: 2, y: 0 },
-            { x: 1, y: 1 },
-            { x: 1, y: 2 },
-            { x: 0, y: 1 },
-            { x: -1, y: 2 },
-            { x: -1, y: 1 }
-        ];
-    }
-    return [
-        { x: -2, y: 0 },
-        { x: -1, y: -1 },
-        { x: -1, y: -2 },
-        { x: 0, y: -1 },
-        { x: 1, y: -2 },
-        { x: 1, y: -1 },
-        { x: 2, y: 0 },
-        { x: 1, y: 0 },
-        { x: 1, y: 1 },
-        { x: 0, y: 1 },
-        { x: -1, y: 1 },
-        { x: -1, y: 0 }
-    ];
-}
-
-function isEvenGridColumn(col) {
-    return Math.abs(col % 2) === 0;
-}
-
-function pathfindingNodeKey(xindex, yindex) {
-    return `${xindex},${yindex}`;
-}
-
-function pathfindingEdgeKey(a, b) {
-    return a.key <= b.key ? `${a.key}|${b.key}` : `${b.key}|${a.key}`;
-}
-
-function addDirectionalBlock(node, direction, blockerId) {
-    if (!node || !Number.isInteger(direction) || direction < 0 || direction > 11) {
-        throw new Error("Wizard of Flatland solver pathfinding block requires a valid node direction");
-    }
-    if (!node.neighbors[direction]) {
-        throw new Error("Wizard of Flatland solver pathfinding block requires an existing neighbor connection");
-    }
-    if (!node.blockedNeighbors.has(direction)) node.blockedNeighbors.set(direction, new Set());
-    node.blockedNeighbors.get(direction).add(blockerId);
 }
 
 function normalizeAngle(angle) {
@@ -1157,7 +981,7 @@ function wallClearance(x, y, walls) {
         const distance = pointSegmentDistance(x, y, ax, ay, bx, by);
         clearance = Math.min(clearance, distance);
     }
-    return clearance;
+    return clearance - WALL_WORLD_HALF_THICKNESS;
 }
 
 function computeWallEscapeVector(x, y, radius, walls) {
@@ -1170,7 +994,7 @@ function computeWallEscapeVector(x, y, radius, walls) {
         const ay = walls[i + 1];
         const bx = walls[i + 2];
         const by = walls[i + 3];
-        const clearance = pointSegmentDistance(x, y, ax, ay, bx, by);
+        const clearance = pointSegmentDistance(x, y, ax, ay, bx, by) - WALL_WORLD_HALF_THICKNESS;
         if (clearance >= activationDistance) continue;
         const push = (activationDistance - clearance) / activationDistance;
         const normal = segmentRepulsionNormal(x, y, ax, ay, bx, by);
@@ -1198,9 +1022,10 @@ function pushPointInsideWalls(x, y, radius, walls) {
             const bx = walls[i + 2];
             const by = walls[i + 3];
             const distance = pointSegmentDistance(outX, outY, ax, ay, bx, by);
-            if (distance < radius) {
+            const blockingRadius = radius + WALL_WORLD_HALF_THICKNESS;
+            if (distance < blockingRadius) {
                 const normal = segmentRepulsionNormal(outX, outY, ax, ay, bx, by);
-                const correction = radius - distance;
+                const correction = blockingRadius - distance;
                 outX += normal.x * correction;
                 outY += normal.y * correction;
                 changed = true;
@@ -1709,7 +1534,7 @@ function findEarliestSegmentHit(fromX, fromY, toX, toY, radius, walls) {
             walls[i + 1],
             walls[i + 2],
             walls[i + 3],
-            radius
+            radius + WALL_WORLD_HALF_THICKNESS
         );
         if (hit && (!best || hit.t < best.t)) {
             best = {
@@ -1837,7 +1662,7 @@ function violatesWalls(x, y, radius, walls) {
         const ay = walls[i + 1];
         const bx = walls[i + 2];
         const by = walls[i + 3];
-        if (pointSegmentDistance(x, y, ax, ay, bx, by) < radius - 0.002) return true;
+        if (pointSegmentDistance(x, y, ax, ay, bx, by) < radius + WALL_WORLD_HALF_THICKNESS - 0.002) return true;
     }
     return false;
 }
