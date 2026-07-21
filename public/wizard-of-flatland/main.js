@@ -104,6 +104,18 @@
     const MAZE_ROOM_MAX_ENEMIES = 100;
     const MAZE_ROOM_ENEMY_DISTRIBUTION_POWER = 3.25;
     const MAZE_ROOM_ENEMY_SAFE_RADIUS_SCALE = 0.56;
+    const MAZE_COIN_AVERAGE_COUNT = 10;
+    const MAZE_COIN_MIN_COUNT = 7;
+    const MAZE_COIN_MAX_COUNT = 13;
+    const MAZE_COIN_RADIUS = 0.16;
+    const MAZE_COIN_OWNING_WALL_DISTANCE = 2;
+    const MAZE_COIN_OTHER_WALL_MIN_DISTANCE = 1;
+    const MAZE_COIN_ATTRACT_DISTANCE = 2;
+    const MAZE_COIN_COLLECT_DISTANCE = TARGET_RADIUS + MAZE_COIN_RADIUS + 0.08;
+    const MAZE_COIN_RUSH_SPEED = 11;
+    const MAZE_COIN_SECTION_EDGE_EPSILON = 0.02;
+    const MAZE_COIN_PLACEMENT_ATTEMPTS_PER_COIN = 160;
+    const MAZE_COIN_WALL_ENDPOINT_MARGIN = 0.25;
     const MAZE_SECTION_DIRECTIONS = [
         { q: 1, r: 0 },
         { q: 0, r: 1 },
@@ -135,6 +147,8 @@
     const DEFAULT_MAZE_ROOM_SCALE = 0.56;
     const DEFAULT_MAZE_TWISTINESS = 0.62;
     const WIZARD_POSITION_STORAGE_KEY = "wizardOfFlatland.savedWizardPosition.v1";
+    const WIZARD_FILL_COLOR = "#008000";
+    const WIZARD_OUTLINE_COLOR = "#44ff44";
     const VIEW_ZOOM_MIN = 0.45;
     const VIEW_ZOOM_MAX = 3.2;
     const VIEW_ZOOM_WHEEL_STEP = 0.0015;
@@ -187,6 +201,8 @@
         agents: [],
         fireballs: [],
         fireballExplosions: [],
+        coins: [],
+        collectedCoinKeys: new Set(),
         walls: createEmptyWallBuffer(),
         manualWalls: createEmptyWallBuffer(),
         generatedMazeWalls: createEmptyWallBuffer(),
@@ -199,7 +215,7 @@
         generatedMazeLoading: false,
         generatedMazeLookaheadKeys: [],
         generatedMazeLookaheadNextRefreshAt: 0,
-        generatedMazePopulatedSectionKeys: new Set(),
+        generatedMazeInitialEnemySpawnBudgetsBySectionKey: new Map(),
         target: { x: 0, y: 0, heading: -Math.PI / 2 },
         targetTravelVector: { x: 0, y: 0 },
         lastSentTarget: { x: 0, y: 0 },
@@ -930,6 +946,7 @@
             state.generatedMazeInstalledChunkKeys = new Set(state.generatedMazeChunkKeys);
             state.worldVersion += 1;
         });
+        profiler.span("populate maze coins", () => populateGeneratedMazeCoins(getMazeOptions()));
         profiler.span("populate maze rooms", () => populateGeneratedMazeRooms(getMazeOptions()));
         profiler.span("install pathfinding node layer", () => {
             installPathfindingNodeLayerFromWorker(message.nodeLayer);
@@ -1107,22 +1124,416 @@
         }
         if (!furthest) return false;
         state.generatedMazeChunkKeys.delete(furthest.key);
-        removeAutoSpawnedAgentsInMazeSection(furthest.key);
-        state.generatedMazePopulatedSectionKeys.delete(furthest.key);
         freezeAgentsInMazeSection(furthest.key, options);
         return true;
     }
 
-    function removeAutoSpawnedAgentsInMazeSection(sectionKey) {
-        if (typeof sectionKey !== "string" || sectionKey.length === 0) {
-            throw new Error("Wizard of Flatland auto enemy cleanup requires a section key");
+    function resetGeneratedMazeCoinPopulation() {
+        state.coins = [];
+        state.collectedCoinKeys = new Set();
+    }
+
+    function populateGeneratedMazeCoins(options) {
+        if (!isProceduralMazeScenario()) {
+            state.coins = [];
+            return;
         }
-        state.agents = state.agents.filter((agent) => agent.autoSpawnSectionKey !== sectionKey);
+        if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland coin population requires installed section tracking");
+        }
+        if (!(state.collectedCoinKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland coin population requires collected coin tracking");
+        }
+        validateWallBuffer(state.generatedMazeWalls, "generated maze coin placement walls");
+        validateWallBuffer(state.walls, "coin placement walls");
+        const diagnosticBefore = captureMazeCoinDiagnosticSnapshot("before-populate", options);
+        const placedCoins = [];
+        const keys = Array.from(state.generatedMazeInstalledChunkKeys).sort();
+        for (const sectionKey of keys) {
+            placedCoins.push(...createMazeCoinsForSection(sectionKey, options, placedCoins));
+        }
+        const existingCoinsByKey = new Map(state.coins.map((coin) => [coin.key, coin]));
+        const placedCoinKeys = new Set(placedCoins.map((coin) => coin.key));
+        const visiblePlacedCoins = placedCoins
+            .filter((coin) => !state.collectedCoinKeys.has(coin.key))
+            .map((coin) => preserveVisibleMazeCoinState(coin, existingCoinsByKey.get(coin.key)));
+        const retainedEdgeCoins = state.coins.filter((coin) => {
+            validateCoin(coin);
+            return !placedCoinKeys.has(coin.key) &&
+                !state.collectedCoinKeys.has(coin.key) &&
+                isPointInAnyInstalledMazeSection(coin.homeX, coin.homeY, options);
+        });
+        state.coins = visiblePlacedCoins.concat(retainedEdgeCoins);
+        recordMazeCoinPopulationDiagnostic(diagnosticBefore, options, {
+            placedCoins,
+            visiblePlacedCoins,
+            retainedEdgeCoins
+        });
+    }
+
+    function isMazeCoinDiagnosticsEnabled() {
+        return !!(state.debug && state.debug.coinDiagnosticsEnabled);
+    }
+
+    function captureMazeCoinDiagnosticSnapshot(stage, options) {
+        if (!isMazeCoinDiagnosticsEnabled()) return null;
+        return createMazeCoinDiagnosticSnapshot(stage, options, state.coins);
+    }
+
+    function createMazeCoinDiagnosticSnapshot(stage, options, coins) {
+        if (!Array.isArray(coins)) {
+            throw new Error("Wizard of Flatland coin diagnostics require a coin array");
+        }
+        const installedKeys = state.generatedMazeInstalledChunkKeys instanceof Set
+            ? Array.from(state.generatedMazeInstalledChunkKeys).sort()
+            : [];
+        const chunkKeys = state.generatedMazeChunkKeys instanceof Set
+            ? Array.from(state.generatedMazeChunkKeys).sort()
+            : [];
+        const collectedKeys = state.collectedCoinKeys instanceof Set
+            ? Array.from(state.collectedCoinKeys).sort()
+            : [];
+        return {
+            stage,
+            at: performance.now(),
+            signature: state.generatedMazeSignature,
+            pendingSignature: state.generatedMazePendingSignature,
+            worldVersion: state.worldVersion,
+            installedKeys,
+            chunkKeys,
+            collectedCount: collectedKeys.length,
+            target: { x: state.target.x, y: state.target.y },
+            coins: coins.map((coin) => createMazeCoinDiagnosticEntry(coin, options))
+        };
+    }
+
+    function createMazeCoinDiagnosticEntry(coin, options) {
+        validateCoin(coin);
+        const homeCoord = worldToMazeSectionCoord(coin.homeX, coin.homeY, options);
+        return {
+            key: coin.key,
+            sectionKey: coin.sectionKey,
+            homeSectionKey: mazeSectionKey(homeCoord.q, homeCoord.r),
+            wallIndex: coin.wallIndex,
+            x: roundDiagnosticNumber(coin.x),
+            y: roundDiagnosticNumber(coin.y),
+            homeX: roundDiagnosticNumber(coin.homeX),
+            homeY: roundDiagnosticNumber(coin.homeY),
+            rushing: coin.rushing === true,
+            targetDistance: roundDiagnosticNumber(Math.hypot(coin.x - state.target.x, coin.y - state.target.y))
+        };
+    }
+
+    function recordMazeCoinPopulationDiagnostic(before, options, details) {
+        if (!isMazeCoinDiagnosticsEnabled()) return;
+        const after = createMazeCoinDiagnosticSnapshot("after-populate", options, state.coins);
+        const placed = Array.isArray(details && details.placedCoins) ? details.placedCoins : [];
+        const visiblePlaced = Array.isArray(details && details.visiblePlacedCoins) ? details.visiblePlacedCoins : [];
+        const retainedEdge = Array.isArray(details && details.retainedEdgeCoins) ? details.retainedEdgeCoins : [];
+        const changes = diffMazeCoinDiagnosticSnapshots(before, after);
+        const record = {
+            at: after.at,
+            signature: after.signature,
+            pendingSignature: after.pendingSignature,
+            worldVersion: after.worldVersion,
+            before,
+            after,
+            counts: {
+                before: before ? before.coins.length : 0,
+                after: after.coins.length,
+                placed: placed.length,
+                visiblePlaced: visiblePlaced.length,
+                retainedEdge: retainedEdge.length,
+                collected: after.collectedCount
+            },
+            changes
+        };
+        pushMazeCoinDiagnosticRecord(record);
+        if (changes.appeared.length > 0 || changes.disappeared.length > 0 || changes.homeMoved.length > 0) {
+            logMazeCoinDiagnosticRecord(record);
+        }
+    }
+
+    function diffMazeCoinDiagnosticSnapshots(before, after) {
+        const beforeByKey = new Map((before ? before.coins : []).map((coin) => [coin.key, coin]));
+        const afterByKey = new Map(after.coins.map((coin) => [coin.key, coin]));
+        const appeared = [];
+        const disappeared = [];
+        const homeMoved = [];
+        for (const coin of after.coins) {
+            const previous = beforeByKey.get(coin.key);
+            if (!previous) {
+                appeared.push(coin);
+                continue;
+            }
+            const homeMoveDistance = Math.hypot(coin.homeX - previous.homeX, coin.homeY - previous.homeY);
+            if (homeMoveDistance > 0.001) {
+                homeMoved.push({
+                    key: coin.key,
+                    sectionKey: coin.sectionKey,
+                    before: previous,
+                    after: coin,
+                    homeMoveDistance: roundDiagnosticNumber(homeMoveDistance)
+                });
+            }
+        }
+        for (const coin of beforeByKey.values()) {
+            if (!afterByKey.has(coin.key)) disappeared.push(coin);
+        }
+        return { appeared, disappeared, homeMoved };
+    }
+
+    function pushMazeCoinDiagnosticRecord(record) {
+        if (!state.debug || typeof state.debug !== "object") {
+            throw new Error("Wizard of Flatland coin diagnostics require debug state");
+        }
+        if (!Array.isArray(state.debug.coinDiagnostics)) state.debug.coinDiagnostics = [];
+        state.debug.coinDiagnostics.push(record);
+        while (state.debug.coinDiagnostics.length > 40) state.debug.coinDiagnostics.shift();
+    }
+
+    function logMazeCoinDiagnosticRecord(record) {
+        if (typeof console === "undefined") return;
+        console.groupCollapsed(
+            `Wizard of Flatland coin population changed: +${record.changes.appeared.length} `
+                + `-${record.changes.disappeared.length} moved ${record.changes.homeMoved.length}`
+        );
+        console.log(record);
+        if (record.changes.appeared.length > 0) console.table(record.changes.appeared);
+        if (record.changes.disappeared.length > 0) console.table(record.changes.disappeared);
+        if (record.changes.homeMoved.length > 0) {
+            console.table(record.changes.homeMoved.map((entry) => ({
+                key: entry.key,
+                sectionKey: entry.sectionKey,
+                homeMoveDistance: entry.homeMoveDistance,
+                beforeHomeX: entry.before.homeX,
+                beforeHomeY: entry.before.homeY,
+                afterHomeX: entry.after.homeX,
+                afterHomeY: entry.after.homeY,
+                beforeWallIndex: entry.before.wallIndex,
+                afterWallIndex: entry.after.wallIndex
+            })));
+        }
+        console.groupEnd();
+    }
+
+    function roundDiagnosticNumber(value) {
+        return Number.isFinite(value) ? Math.round(value * 1000) / 1000 : value;
+    }
+
+    function preserveVisibleMazeCoinState(coin, previousCoin) {
+        if (!previousCoin) return coin;
+        validateCoin(previousCoin);
+        if (
+            Math.abs(previousCoin.homeX - coin.homeX) > 0.001 ||
+            Math.abs(previousCoin.homeY - coin.homeY) > 0.001
+        ) {
+            return coin;
+        }
+        return {
+            ...coin,
+            x: previousCoin.x,
+            y: previousCoin.y,
+            rushing: previousCoin.rushing === true,
+            phase: previousCoin.phase
+        };
+    }
+
+    function createMazeCoinsForSection(sectionKey, options, existingCoins) {
+        const coord = parseMazeSectionKey(sectionKey);
+        const count = getMazeCoinCount(sectionKey, options);
+        const sectionPolygon = getMazeSectionPolygonForCoord(coord, options);
+        const eligibleWalls = getMazeCoinEligibleWallsForSection(sectionKey, sectionPolygon);
+        if (eligibleWalls.length === 0) {
+            throw new Error(`Wizard of Flatland coin placement found no eligible walls for section ${sectionKey}`);
+        }
+        const random = seededRandom(hashString(`${options.seed}|coin-position|${sectionKey}`));
+        const coins = [];
+        for (let coinIndex = 0; coinIndex < count; coinIndex++) {
+            const key = getMazeCoinKey(options, sectionKey, coinIndex);
+            const coin = createMazeCoinForSectionSlot(
+                sectionKey,
+                coord,
+                coinIndex,
+                key,
+                eligibleWalls,
+                random,
+                sectionPolygon,
+                existingCoins.concat(coins)
+            );
+            coins.push(coin);
+        }
+        return coins;
+    }
+
+    function getMazeCoinCount(sectionKey, options) {
+        if (typeof sectionKey !== "string" || sectionKey.length === 0) {
+            throw new Error("Wizard of Flatland coin count requires a section key");
+        }
+        const random = seededRandom(hashString(`${options.seed}|coin-count|${sectionKey}`));
+        const midpoint = (MAZE_COIN_MIN_COUNT + MAZE_COIN_MAX_COUNT) * 0.5;
+        const offset = MAZE_COIN_MIN_COUNT + Math.floor(random() * (MAZE_COIN_MAX_COUNT - MAZE_COIN_MIN_COUNT + 1)) - midpoint;
+        return Math.max(1, Math.round(MAZE_COIN_AVERAGE_COUNT + offset));
+    }
+
+    function getMazeCoinKey(options, sectionKey, coinIndex) {
+        if (!Number.isInteger(coinIndex) || coinIndex < 0) {
+            throw new Error("Wizard of Flatland coin key requires a valid coin index");
+        }
+        return `${options.seed}|${options.chunkSize}|${options.roomScale.toFixed(3)}|${options.twistiness.toFixed(3)}|${sectionKey}|${coinIndex}`;
+    }
+
+    function getMazeSectionPolygonForCoord(coord, options) {
+        if (!coord || !Number.isFinite(coord.q) || !Number.isFinite(coord.r)) {
+            throw new Error("Wizard of Flatland section polygon requires a section coordinate");
+        }
+        const center = mazeSectionCenter(coord.q, coord.r, options);
+        return getHexCornersWorld(center.x, center.y, getMazeSectionRadius(options));
+    }
+
+    function getMazeCoinEligibleWallsForSection(sectionKey, sectionPolygon) {
+        if (typeof sectionKey !== "string" || sectionKey.length === 0) {
+            throw new Error("Wizard of Flatland coin wall lookup requires a section key");
+        }
+        const walls = [];
+        for (let i = 0; i < state.generatedMazeWalls.length; i += WALL_STRIDE) {
+            const ax = state.generatedMazeWalls[i + WALL_X1];
+            const ay = state.generatedMazeWalls[i + WALL_Y1];
+            const bx = state.generatedMazeWalls[i + WALL_X2];
+            const by = state.generatedMazeWalls[i + WALL_Y2];
+            if (!isPointInOrNearPolygon(ax, ay, sectionPolygon, MAZE_COIN_SECTION_EDGE_EPSILON)) continue;
+            if (!isPointInOrNearPolygon(bx, by, sectionPolygon, MAZE_COIN_SECTION_EDGE_EPSILON)) continue;
+            walls.push({
+                wallIndex: i / WALL_STRIDE,
+                ax,
+                ay,
+                bx,
+                by,
+                length: Math.hypot(bx - ax, by - ay)
+            });
+        }
+        return walls;
+    }
+
+    function createMazeCoinForSectionSlot(sectionKey, coord, coinIndex, key, eligibleWalls, random, sectionPolygon, existingCoins) {
+        if (typeof random !== "function") throw new Error("Wizard of Flatland coin placement requires a random source");
+        const attempts = MAZE_COIN_PLACEMENT_ATTEMPTS_PER_COIN;
+        for (let attempt = 0; attempt < attempts; attempt++) {
+            const wall = eligibleWalls[Math.floor(random() * eligibleWalls.length)];
+            if (!wall || !(wall.length > 0.001)) continue;
+            const candidate = createMazeCoinCandidateFromWall(wall, random);
+            if (!candidate) continue;
+            const validation = validateMazeCoinCandidate(candidate, wall, sectionPolygon, existingCoins);
+            if (!validation.ok) continue;
+            return {
+                key,
+                sectionKey,
+                q: coord.q,
+                r: coord.r,
+                wallIndex: wall.wallIndex,
+                x: candidate.x,
+                y: candidate.y,
+                homeX: candidate.x,
+                homeY: candidate.y,
+                radius: MAZE_COIN_RADIUS,
+                rushing: false,
+                phase: random() * Math.PI * 2
+            };
+        }
+        throw new Error(`Wizard of Flatland coin placement failed for section ${sectionKey} coin ${coinIndex} after ${attempts} attempts`);
+    }
+
+    function createMazeCoinCandidateFromWall(wall, random) {
+        const dx = wall.bx - wall.ax;
+        const dy = wall.by - wall.ay;
+        const length = Math.hypot(dx, dy);
+        if (!(length > MAZE_COIN_WALL_ENDPOINT_MARGIN * 2)) return null;
+        const minT = MAZE_COIN_WALL_ENDPOINT_MARGIN / length;
+        const maxT = 1 - minT;
+        const t = minT + random() * (maxT - minT);
+        const baseX = wall.ax + dx * t;
+        const baseY = wall.ay + dy * t;
+        const normalX = -dy / length;
+        const normalY = dx / length;
+        const side = random() < 0.5 ? -1 : 1;
+        return {
+            x: baseX + normalX * side * MAZE_COIN_OWNING_WALL_DISTANCE,
+            y: baseY + normalY * side * MAZE_COIN_OWNING_WALL_DISTANCE
+        };
+    }
+
+    function validateMazeCoinCandidate(candidate, owningWall, sectionPolygon, existingCoins) {
+        if (!candidate || !Number.isFinite(candidate.x) || !Number.isFinite(candidate.y)) {
+            throw new Error("Wizard of Flatland coin placement candidate requires finite coordinates");
+        }
+        const owningDistance = pointSegmentDistance(
+            candidate.x,
+            candidate.y,
+            owningWall.ax,
+            owningWall.ay,
+            owningWall.bx,
+            owningWall.by
+        );
+        if (Math.abs(owningDistance - MAZE_COIN_OWNING_WALL_DISTANCE) > 0.001) {
+            return { ok: false, reason: "owning-wall-distance" };
+        }
+        if (!isPointInOrNearPolygon(candidate.x, candidate.y, sectionPolygon, MAZE_COIN_SECTION_EDGE_EPSILON)) {
+            return { ok: false, reason: "outside-owner-section" };
+        }
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            if (i / WALL_STRIDE === owningWall.wallIndex) continue;
+            const distance = pointSegmentDistance(
+                candidate.x,
+                candidate.y,
+                state.walls[i + WALL_X1],
+                state.walls[i + WALL_Y1],
+                state.walls[i + WALL_X2],
+                state.walls[i + WALL_Y2]
+            );
+            if (distance < MAZE_COIN_OTHER_WALL_MIN_DISTANCE) {
+                return { ok: false, reason: "other-wall-clearance" };
+            }
+        }
+        for (const coin of existingCoins) {
+            if (Math.hypot(coin.x - candidate.x, coin.y - candidate.y) < MAZE_COIN_OTHER_WALL_MIN_DISTANCE) {
+                return { ok: false, reason: "coin-clearance" };
+            }
+        }
+        return { ok: true };
+    }
+
+    function isPointInAnyInstalledMazeSection(x, y, options) {
+        if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland coin section validation requires installed section tracking");
+        }
+        for (const sectionKey of state.generatedMazeInstalledChunkKeys) {
+            const coord = parseMazeSectionKey(sectionKey);
+            const center = mazeSectionCenter(coord.q, coord.r, options);
+            const polygon = getHexCornersWorld(center.x, center.y, getMazeSectionRadius(options));
+            if (isPointInOrNearPolygon(x, y, polygon, MAZE_COIN_SECTION_EDGE_EPSILON)) return true;
+        }
+        return false;
+    }
+
+    function isPointInOrNearPolygon(x, y, polygon, epsilon) {
+        if (!Array.isArray(polygon) || polygon.length < 3) {
+            throw new Error("Wizard of Flatland polygon edge test requires a polygon");
+        }
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(epsilon)) {
+            throw new Error("Wizard of Flatland polygon edge test requires finite inputs");
+        }
+        if (pointInPolygon(x, y, polygon)) return true;
+        for (let i = 0; i < polygon.length; i++) {
+            const a = polygon[i];
+            const b = polygon[(i + 1) % polygon.length];
+            if (pointSegmentDistance(x, y, a.x, a.y, b.x, b.y) <= epsilon) return true;
+        }
+        return false;
     }
 
     function resetGeneratedMazeEnemyPopulation() {
         state.agents = state.agents.filter((agent) => typeof agent.autoSpawnSectionKey !== "string");
-        state.generatedMazePopulatedSectionKeys = new Set();
+        state.generatedMazeInitialEnemySpawnBudgetsBySectionKey = new Map();
     }
 
     function freezeAgentsInMazeSection(sectionKey, options) {
@@ -1214,6 +1625,8 @@
         state.agents = [];
         state.fireballs = [];
         state.fireballExplosions = [];
+        state.coins = [];
+        state.collectedCoinKeys = new Set();
         state.walls = createEmptyWallBuffer();
         state.manualWalls = createEmptyWallBuffer();
         state.generatedMazeWalls = createEmptyWallBuffer();
@@ -1222,7 +1635,7 @@
         state.generatedMazeSignature = "";
         state.generatedMazePendingSignature = "";
         state.generatedMazeLoading = false;
-        state.generatedMazePopulatedSectionKeys = new Set();
+        state.generatedMazeInitialEnemySpawnBudgetsBySectionKey = new Map();
         invalidateMazeLookaheadCache();
         clearPathfindingNodeLayer();
         const count = getAgentCount();
@@ -1370,6 +1783,58 @@
         key: WIZARD_POSITION_STORAGE_KEY
     });
 
+    function enableCoinDiagnosticsFromConsole() {
+        state.debug.coinDiagnosticsEnabled = true;
+        state.debug.coinDiagnostics = [];
+        const snapshot = createMazeCoinDiagnosticSnapshot("manual-enable", getMazeOptions(), state.coins);
+        console.log("Wizard of Flatland coin diagnostics enabled", snapshot);
+        return snapshot;
+    }
+
+    function disableCoinDiagnosticsFromConsole() {
+        state.debug.coinDiagnosticsEnabled = false;
+        console.log("Wizard of Flatland coin diagnostics disabled");
+        return true;
+    }
+
+    function snapshotCoinsFromConsole() {
+        const snapshot = createMazeCoinDiagnosticSnapshot("manual-snapshot", getMazeOptions(), state.coins);
+        console.log("Wizard of Flatland coin snapshot", snapshot);
+        console.table(snapshot.coins);
+        return snapshot;
+    }
+
+    function getCoinDiagnosticsHistoryFromConsole() {
+        if (!Array.isArray(state.debug.coinDiagnostics)) state.debug.coinDiagnostics = [];
+        return state.debug.coinDiagnostics.slice();
+    }
+
+    function printLastCoinDiagnosticFromConsole() {
+        const history = getCoinDiagnosticsHistoryFromConsole();
+        const record = history[history.length - 1] || null;
+        if (!record) {
+            console.log("Wizard of Flatland coin diagnostics have no records");
+            return null;
+        }
+        logMazeCoinDiagnosticRecord(record);
+        return record;
+    }
+
+    function clearCoinDiagnosticsFromConsole() {
+        state.debug.coinDiagnostics = [];
+        console.log("Wizard of Flatland coin diagnostics cleared");
+        return true;
+    }
+
+    window.wizardCoins = Object.freeze({
+        enableDiagnostics: enableCoinDiagnosticsFromConsole,
+        disableDiagnostics: disableCoinDiagnosticsFromConsole,
+        snapshot: snapshotCoinsFromConsole,
+        history: getCoinDiagnosticsHistoryFromConsole,
+        printLastDiagnostic: printLastCoinDiagnosticFromConsole,
+        clearDiagnostics: clearCoinDiagnosticsFromConsole
+    });
+
     function spawnEnemiesAtNearestSectionCenterFromConsole(count = 1) {
         const spawnCount = Number(count);
         if (!Number.isInteger(spawnCount) || spawnCount < 1) {
@@ -1409,20 +1874,18 @@
         if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
             throw new Error("Wizard of Flatland enemy population requires installed section tracking");
         }
-        if (!(state.generatedMazePopulatedSectionKeys instanceof Set)) {
-            throw new Error("Wizard of Flatland enemy population requires populated section tracking");
+        if (!(state.generatedMazeInitialEnemySpawnBudgetsBySectionKey instanceof Map)) {
+            throw new Error("Wizard of Flatland enemy population requires initial spawn budget tracking");
         }
         const keys = Array.from(state.generatedMazeInstalledChunkKeys).sort();
         for (const sectionKey of keys) {
-            if (state.generatedMazePopulatedSectionKeys.has(sectionKey)) continue;
             populateGeneratedMazeRoom(sectionKey, options);
-            state.generatedMazePopulatedSectionKeys.add(sectionKey);
         }
     }
 
     function populateGeneratedMazeRoom(sectionKey, options) {
         const coord = parseMazeSectionKey(sectionKey);
-        const count = getMazeRoomEnemyCount(sectionKey, options);
+        const count = consumeMazeRoomEnemySpawnBudget(sectionKey, options);
         if (count <= 0) return;
         const center = mazeSectionCenter(coord.q, coord.r, options);
         const roomRadius = getMazeRoomSpawnRadius(options);
@@ -1431,6 +1894,30 @@
         for (let i = 0; i < count; i++) {
             const point = getMazeRoomEnemySpawnPoint(center, roomRadius, i, count, random);
             addAgent(point.x, point.y, firstId + i, random, { autoSpawnSectionKey: sectionKey });
+        }
+    }
+
+    function consumeMazeRoomEnemySpawnBudget(sectionKey, options) {
+        const budget = getMazeRoomInitialEnemySpawnBudget(sectionKey, options);
+        if (budget <= 0) return 0;
+        state.generatedMazeInitialEnemySpawnBudgetsBySectionKey.set(sectionKey, 0);
+        return budget;
+    }
+
+    function getMazeRoomInitialEnemySpawnBudget(sectionKey, options) {
+        validateMazeRoomEnemyBudgetSectionKey(sectionKey);
+        if (!(state.generatedMazeInitialEnemySpawnBudgetsBySectionKey instanceof Map)) {
+            throw new Error("Wizard of Flatland enemy budget lookup requires initial spawn budget tracking");
+        }
+        if (!state.generatedMazeInitialEnemySpawnBudgetsBySectionKey.has(sectionKey)) {
+            state.generatedMazeInitialEnemySpawnBudgetsBySectionKey.set(sectionKey, getMazeRoomEnemyCount(sectionKey, options));
+        }
+        return state.generatedMazeInitialEnemySpawnBudgetsBySectionKey.get(sectionKey);
+    }
+
+    function validateMazeRoomEnemyBudgetSectionKey(sectionKey) {
+        if (typeof sectionKey !== "string" || sectionKey.length === 0) {
+            throw new Error("Wizard of Flatland enemy spawn budget requires a section key");
         }
     }
 
@@ -1838,6 +2325,59 @@
         }
         state.fireballs = survivors;
         updateFireballExplosions(dt);
+    }
+
+    function updateCoins(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        if (!Array.isArray(state.coins) || state.coins.length === 0) return;
+        if (!(state.collectedCoinKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland coin collection requires collected coin tracking");
+        }
+        const survivors = [];
+        for (const coin of state.coins) {
+            validateCoin(coin);
+            const dx = state.target.x - coin.x;
+            const dy = state.target.y - coin.y;
+            const distance = Math.hypot(dx, dy);
+            if (distance <= MAZE_COIN_COLLECT_DISTANCE) {
+                state.collectedCoinKeys.add(coin.key);
+                continue;
+            }
+            if (distance <= MAZE_COIN_ATTRACT_DISTANCE) coin.rushing = true;
+            if (coin.rushing && distance > 0.000001) {
+                const step = Math.min(distance, MAZE_COIN_RUSH_SPEED * dt);
+                coin.x += dx / distance * step;
+                coin.y += dy / distance * step;
+            }
+            const nextDistance = Math.hypot(state.target.x - coin.x, state.target.y - coin.y);
+            if (nextDistance <= MAZE_COIN_COLLECT_DISTANCE) {
+                state.collectedCoinKeys.add(coin.key);
+                continue;
+            }
+            survivors.push(coin);
+        }
+        state.coins = survivors;
+    }
+
+    function validateCoin(coin) {
+        if (!coin || typeof coin !== "object") {
+            throw new Error("Wizard of Flatland coin is missing");
+        }
+        if (typeof coin.key !== "string" || coin.key.length === 0) {
+            throw new Error("Wizard of Flatland coin requires a key");
+        }
+        if (typeof coin.sectionKey !== "string" || coin.sectionKey.length === 0) {
+            throw new Error(`Wizard of Flatland coin ${coin.key} requires a section key`);
+        }
+        if (
+            !Number.isFinite(coin.x) ||
+            !Number.isFinite(coin.y) ||
+            !Number.isFinite(coin.homeX) ||
+            !Number.isFinite(coin.homeY) ||
+            !Number.isFinite(coin.radius)
+        ) {
+            throw new Error(`Wizard of Flatland coin ${coin.key} requires finite render data`);
+        }
     }
 
     function findEarliestFireballWallHit(fromX, fromY, toX, toY) {
@@ -2892,6 +3432,7 @@
         drawSectionBoundaries();
         drawWallLabels();
         drawWallBuildPreview();
+        drawCoins();
         drawTarget();
         drawAgentPaths();
         drawFireballs();
@@ -3568,14 +4109,14 @@
         const flash = Math.max(0, Math.min(1, state.targetFlashTime / 0.18));
         const radius = TARGET_RADIUS * state.view.scale;
         ctx.save();
-        ctx.strokeStyle = flash > 0 ? "#ff4d4d" : "#1f7a3a";
+        ctx.strokeStyle = flash > 0 ? "#ff4d4d" : WIZARD_OUTLINE_COLOR;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
         ctx.stroke();
         ctx.fillStyle = flash > 0
             ? `rgba(255,77,77,${0.25 + flash * 0.45})`
-            : "rgba(31,122,58,0.42)";
+            : WIZARD_FILL_COLOR;
         ctx.beginPath();
         ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
         ctx.fill();
@@ -3967,6 +4508,39 @@
         ctx.restore();
     }
 
+    function drawCoins() {
+        if (!Array.isArray(state.coins) || state.coins.length === 0) return;
+        ctx.save();
+        for (const coin of state.coins) {
+            validateCoin(coin);
+            const point = worldToScreen(coin.x, coin.y);
+            const radius = Math.max(3.5, coin.radius * state.view.scale);
+            const glowRadius = Math.max(radius * 1.9, state.view.scale * 0.22);
+            const shineAngle = (performance.now() * 0.006 + coin.phase) % (Math.PI * 2);
+            ctx.fillStyle = coin.rushing ? "rgba(255,238,128,0.24)" : "rgba(255,214,74,0.18)";
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, glowRadius, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = "#d99818";
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = "#fff1a8";
+            ctx.lineWidth = Math.max(1.25, radius * 0.18);
+            ctx.stroke();
+
+            ctx.strokeStyle = "rgba(255,255,255,0.88)";
+            ctx.lineWidth = Math.max(1, radius * 0.14);
+            ctx.lineCap = "round";
+            ctx.beginPath();
+            ctx.moveTo(point.x + Math.cos(shineAngle) * radius * 0.12, point.y + Math.sin(shineAngle) * radius * 0.12);
+            ctx.lineTo(point.x + Math.cos(shineAngle) * radius * 0.62, point.y + Math.sin(shineAngle) * radius * 0.62);
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+
     function drawFireballExplosions() {
         ctx.save();
         for (const explosion of state.fireballExplosions) {
@@ -3989,9 +4563,6 @@
 
     function drawAgents() {
         ctx.save();
-        for (const agent of state.agents) {
-            drawAgentSlot(agent);
-        }
         for (const agent of state.agents) {
             const point = worldToScreen(agent.x, agent.y);
         const radius = agent.radius * state.view.scale;
@@ -4432,6 +5003,7 @@
         framePart("refresh maze sections", () => refreshGeneratedMazeIfNeeded(false));
         framePart("refresh path bounds", () => refreshMazePathBoundsIfNeeded());
         framePart("fireballs", () => updateFireballs(dt));
+        framePart("coins", () => updateCoins(dt));
         if (state.running) framePart("request solver step", () => requestStep(dt));
         framePart("draw", () => draw());
         const drawPart = frameParts.find((part) => part.label === "draw");
@@ -4466,6 +5038,7 @@
             if (!isProceduralMazeScenario()) return;
             state.generatedMazeSignature = "";
             resetGeneratedMazeEnemyPopulation();
+            resetGeneratedMazeCoinPopulation();
             invalidateMazeLookaheadCache();
             refreshGeneratedMazeIfNeeded(true);
         });

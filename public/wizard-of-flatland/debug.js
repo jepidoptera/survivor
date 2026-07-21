@@ -6,6 +6,8 @@
             showPathBlockedEdges: false,
             showWallLabels: false,
             showSectionBoundaries: false,
+            coinDiagnosticsEnabled: false,
+            coinDiagnostics: [],
             headingGlitchFrame: 0,
             headingGlitchLogged: false,
             showFpsCounter: false,
