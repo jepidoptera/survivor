@@ -1,7 +1,7 @@
 "use strict";
 
-importScripts("/assets/javascript/wallGeometry.js?v=npc-movement-lab-1");
-importScripts("/assets/javascript/pathfinding/orcaSolver.js?v=npc-movement-lab-1");
+importScripts("./wallGeometry.js");
+importScripts("./orcaSolver.js");
 
 const STRIDE = 17;
 const OUT_STRIDE = 14;
@@ -662,7 +662,7 @@ function getPathfindingNodeLayer(worldVersion, walls) {
 function buildPathfindingNodeLayer(worldVersion, walls) {
     const wallGeometry = self.WallGeometry;
     if (!wallGeometry || typeof wallGeometry.connectionCrossesWallFaces !== "function") {
-        throw new Error("NPC movement lab solver pathfinding node layer requires WallGeometry.connectionCrossesWallFaces");
+        throw new Error("Wizard of Flatland solver pathfinding node layer requires WallGeometry.connectionCrossesWallFaces");
     }
     const bounds = getPathfindingLayerBounds(walls);
     const colStart = Math.floor(bounds.minX / HEX_GRID_COL_STEP) - PATH_NODE_LAYER_PADDING;
@@ -744,7 +744,7 @@ function getPathfindingLayerBounds(walls) {
         maxY = Math.max(maxY, walls[i + 1], walls[i + 3]);
     }
     if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
-        throw new Error("NPC movement lab solver pathfinding node layer requires finite wall bounds");
+        throw new Error("Wizard of Flatland solver pathfinding node layer requires finite wall bounds");
     }
     return { minX, minY, maxX, maxY };
 }
@@ -808,10 +808,10 @@ function pathfindingEdgeKey(a, b) {
 
 function addDirectionalBlock(node, direction, blockerId) {
     if (!node || !Number.isInteger(direction) || direction < 0 || direction > 11) {
-        throw new Error("NPC movement lab solver pathfinding block requires a valid node direction");
+        throw new Error("Wizard of Flatland solver pathfinding block requires a valid node direction");
     }
     if (!node.neighbors[direction]) {
-        throw new Error("NPC movement lab solver pathfinding block requires an existing neighbor connection");
+        throw new Error("Wizard of Flatland solver pathfinding block requires an existing neighbor connection");
     }
     if (!node.blockedNeighbors.has(direction)) node.blockedNeighbors.set(direction, new Set());
     node.blockedNeighbors.get(direction).add(blockerId);
@@ -1461,7 +1461,7 @@ function computeVacatingLaneYield(agents, count, selfIndex, x, y, radius, target
 function computeMillingOrcaVelocity(agents, count, selfIndex, desiredX, desiredY, targetX, targetY, ringRadius, baseSpeed, speedScale, dt) {
     const orca = self.NpcMovementOrca;
     if (!orca || typeof orca.computeAgentVelocity !== "function") {
-        throw new Error("NPC movement lab milling ORCA requires NpcMovementOrca.computeAgentVelocity");
+        throw new Error("Wizard of Flatland milling ORCA requires NpcMovementOrca.computeAgentVelocity");
     }
     const preferredLength = Math.hypot(desiredX, desiredY);
     if (!(preferredLength > EPSILON)) return { vx: 0, vy: 0 };

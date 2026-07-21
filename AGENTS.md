@@ -19,3 +19,9 @@ The wizard should stay in hitbox/geometry movement all the time for maximum move
 ## WebGL Testing
 
 Do not spend time trying to verify WebGL rendering with headless Playwright/Chromium in this environment. It repeatedly fails before Pixi initializes with "WebGL unsupported in this browser", even with SwiftShader flags. For shader and Pixi-rendering changes, use static checks, targeted unit tests, and browser-facing diagnostics or metrics; ask for a real-browser visual check when visual confirmation is required.
+
+## Wizard of Flatland
+
+Wizard of Flatland is a separate game within this game. It may borrow pieces from the existing codebase for now, but the intent is to spin it out into its own repository later.
+
+Do not automatically replicate Wizard of Flatland changes into every similar movement/prototype folder. In particular, `public/npc-movement-lab` should now be treated as frozen unless the user explicitly asks to edit it.

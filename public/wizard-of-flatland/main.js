@@ -3,7 +3,28 @@
 
     const STRIDE = 17;
     const OUT_STRIDE = 14;
-    const WALL_STRIDE = 7;
+    const WALL_STRIDE = 8;
+    const WALL_X1 = 0;
+    const WALL_Y1 = 1;
+    const WALL_X2 = 2;
+    const WALL_Y2 = 3;
+    const WALL_LABEL_CODE = 4;
+    const WALL_LABEL_SIDE = 5;
+    const WALL_LABEL_MANUAL_TOOL = 1;
+    const WALL_LABEL_ARENA_BOUNDARY = 2;
+    const WALL_LABEL_ROOM_BOUNDARY = 10;
+    const WALL_LABEL_ROOM_HALL_GAP = 11;
+    const WALL_LABEL_ROOM_OUTSIDE_DOOR_GAP = 12;
+    const WALL_LABEL_ROOM_POCKET_OVERRIDE = 13;
+    const WALL_LABEL_ROOM_POCKET_OVERRIDE_HALL_GAP = 14;
+    const WALL_LABEL_ROOM_POCKET_CONNECTOR = 15;
+    const WALL_LABEL_SQUARE_SIDE_PARALLEL = 20;
+    const WALL_LABEL_SQUARE_SIDE_PERPENDICULAR = 21;
+    const WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL = 22;
+    const WALL_LABEL_HALLWAY_SIDE_HALF = 30;
+    const WALL_LABEL_HALLWAY_SIDE_FULL = 31;
+    const PATH_SNAPSHOT_NODE_STRIDE = 8;
+    const PATH_SNAPSHOT_EDGE_STRIDE = 4;
     const STATE_MILLING = 1;
     const STATE_ATTACKING = 3;
     const STATE_BLOCKED = 6;
@@ -23,6 +44,10 @@
     const TARGET_KEYBOARD_BACKWARD_SPEED_MULTIPLIER = 1 / 2;
     const TARGET_KEYBOARD_BACKWARD_DIAGONAL_SPEED_MULTIPLIER = 7 / 12;
     const TARGET_PROJECTED_CURSOR_DISTANCE = 5;
+    const TARGET_IDLE_PROJECTED_CURSOR_DISTANCE = 2;
+    const TARGET_IDLE_FACE_CURSOR_SECONDS = 1;
+    const TARGET_IDLE_CURSOR_DISTANCE_SECONDS = 1;
+    const TARGET_TURN_SPEED_MULTIPLIER = 1.3;
     const TARGET_PROJECTED_CURSOR_MIN_DISTANCE = 1;
     const TARGET_PROJECTED_CURSOR_MAX_DISTANCE = 10;
     const TARGET_PROJECTED_CURSOR_MIN_TURN_RADIUS = 0.5;
@@ -53,19 +78,32 @@
     const HEX_GRID_HEIGHT = 1;
     const HEX_GRID_PADDING = 2;
     const PATH_NODE_LAYER_PADDING = 4;
-    const PATH_NODE_WALL_THICKNESS = 0.1;
+    const WALL_WORLD_THICKNESS = 0.3;
+    const WALL_WORLD_HALF_THICKNESS = WALL_WORLD_THICKNESS * 0.5;
+    const PATH_NODE_WALL_THICKNESS = WALL_WORLD_THICKNESS;
     const PATH_NODE_WALL_FACE_EXTEND = 0.501;
+    const PATH_NODE_X = 0;
+    const PATH_NODE_Y = 1;
+    const PATH_NODE_BLOCKED = 2;
+    const PATH_NODE_CLEARANCE = 3;
+    const PATH_NODE_XINDEX = 4;
+    const PATH_NODE_YINDEX = 5;
+    const PATH_NODE_HAS_UNBLOCKED_NEIGHBOR = 6;
+    const PATH_EDGE_FROM = 0;
+    const PATH_EDGE_TO = 1;
+    const PATH_EDGE_DIRECTION = 2;
     const MAZE_CHUNK_MIN_SIZE = 28;
     const MAZE_CHUNK_MAX_SIZE = 72;
-    const MAZE_SECTION_CACHE_LIMIT = 10;
+    const MAZE_SECTION_CACHE_LIMIT = 15;
     const MAZE_SECTION_NEARBY_LOAD_COUNT = 2;
     const MAZE_WORKER_STATUS_PREFIX = "maze";
     const MAZE_LOOKAHEAD_DISTANCE = 20;
     const MAZE_LOOKAHEAD_REFRESH_INTERVAL_MS = 1000;
-    const MAZE_ROOM_EDGE_INSET_TILES = 2;
-    const MAZE_HALLWAY_GAP_WIDTH = 3.4;
-    const MAZE_OUTSIDE_DOOR_MIN_WIDTH = 1;
-    const MAZE_OUTSIDE_DOOR_MAX_WIDTH = 3;
+    const MAZE_ROOM_EMPTY_ENEMY_CHANCE = 2 / 3;
+    const MAZE_ROOM_MAX_ENEMY_CHANCE = 1 / 100;
+    const MAZE_ROOM_MAX_ENEMIES = 100;
+    const MAZE_ROOM_ENEMY_DISTRIBUTION_POWER = 3.25;
+    const MAZE_ROOM_ENEMY_SAFE_RADIUS_SCALE = 0.56;
     const MAZE_SECTION_DIRECTIONS = [
         { q: 1, r: 0 },
         { q: 0, r: 1 },
@@ -74,8 +112,6 @@
         { q: 0, r: -1 },
         { q: 1, r: -1 }
     ];
-    const WALL_KIND_BOUNDARY = 0;
-    const WALL_KIND_SEGMENT = 1;
     const PATH_MODE_DIRECT = 0;
     const PATH_MODE_WORKER = 1;
     const PATH_REQUEST_INTERVAL_SECONDS = 0.22;
@@ -91,6 +127,17 @@
         KeyA: -1,
         KeyD: 1
     };
+    const DEFAULT_SCENARIO = "proceduralMaze";
+    const DEFAULT_AGENT_COUNT = 0;
+    const DEFAULT_SEPARATION_STRENGTH = 7;
+    const DEFAULT_MAZE_SEED = "hex-maze-1";
+    const DEFAULT_MAZE_CHUNK_SIZE = 44;
+    const DEFAULT_MAZE_ROOM_SCALE = 0.56;
+    const DEFAULT_MAZE_TWISTINESS = 0.62;
+    const WIZARD_POSITION_STORAGE_KEY = "wizardOfFlatland.savedWizardPosition.v1";
+    const VIEW_ZOOM_MIN = 0.45;
+    const VIEW_ZOOM_MAX = 3.2;
+    const VIEW_ZOOM_WHEEL_STEP = 0.0015;
 
     const canvas = document.getElementById("solverCanvas");
     const ctx = canvas.getContext("2d");
@@ -105,6 +152,7 @@
     const mazeChunkSizeInput = document.getElementById("mazeChunkSize");
     const mazeRoomScaleInput = document.getElementById("mazeRoomScale");
     const mazeTwistinessInput = document.getElementById("mazeTwistiness");
+    let speedScaleControlValue = speedScaleInput ? Number(speedScaleInput.value) : 0.5;
 
     const labels = {
         agentCount: document.getElementById("agentCountValue"),
@@ -122,13 +170,16 @@
         attackingCount: document.getElementById("attackingCount"),
         retreatingCount: document.getElementById("retreatingCount"),
         blockedCount: document.getElementById("blockedCount"),
-        wallLeaks: document.getElementById("wallLeaks")
+        wallLeaks: document.getElementById("wallLeaks"),
+        profilerSummary: document.getElementById("profilerSummary"),
+        profilerRows: document.getElementById("profilerRows")
     };
 
     const state = {
         running: true,
         requestId: 1,
         waitingForWorker: false,
+        solverWallVersion: 0,
         pathfindingRequestId: 1,
         pathfindingSnapshotVersion: 0,
         worldVersion: 1,
@@ -136,9 +187,9 @@
         agents: [],
         fireballs: [],
         fireballExplosions: [],
-        walls: [],
-        manualWalls: [],
-        generatedMazeWalls: [],
+        walls: createEmptyWallBuffer(),
+        manualWalls: createEmptyWallBuffer(),
+        generatedMazeWalls: createEmptyWallBuffer(),
         generatedMazeChunkKeys: new Set(),
         generatedMazeInstalledChunkKeys: new Set(),
         generatedMazeSignature: "",
@@ -148,7 +199,9 @@
         generatedMazeLoading: false,
         generatedMazeLookaheadKeys: [],
         generatedMazeLookaheadNextRefreshAt: 0,
+        generatedMazePopulatedSectionKeys: new Set(),
         target: { x: 0, y: 0, heading: -Math.PI / 2 },
+        targetTravelVector: { x: 0, y: 0 },
         lastSentTarget: { x: 0, y: 0 },
         targetFlashTime: 0,
         targetPushes: 0,
@@ -158,13 +211,10 @@
         },
         pressedMovementKeys: Object.create(null),
         spaceHeld: false,
+        zoomHeld: false,
         fastMovementHeld: false,
         stats: null,
-        debug: {
-            showPathBlockedEdges: false,
-            headingGlitchFrame: 0,
-            headingGlitchLogged: false
-        },
+        debug: createWizardOfFlatlandDebugState(),
         wallTool: {
             active: false,
             dragging: false,
@@ -172,7 +222,7 @@
             startNode: null,
             hoverNode: null
         },
-        view: { width: 0, height: 0, dpr: 1, scale: 1, offsetX: 0, offsetY: 0, centerX: 0, centerY: 0 },
+        view: { width: 0, height: 0, dpr: 1, scale: 1, baseScale: 1, zoom: 1, offsetX: 0, offsetY: 0, centerX: 0, centerY: 0 },
         hexGridLayer: {
             canvas: document.createElement("canvas"),
             ctx: null,
@@ -186,9 +236,13 @@
             dirty: true
         },
         nodeLayer: {
-            nodes: [],
-            nodeByKey: new Map(),
-            blockedEdges: [],
+            nodes: new Float32Array(0),
+            snapshotNodes: new Float32Array(0),
+            edges: new Int32Array(0),
+            blockedEdges: new Int32Array(0),
+            indexByKey: new Map(),
+            nodeStride: PATH_SNAPSHOT_NODE_STRIDE,
+            edgeStride: PATH_SNAPSHOT_EDGE_STRIDE,
             version: 0,
             canvas: document.createElement("canvas"),
             ctx: null,
@@ -208,71 +262,330 @@
     };
     state.hexGridLayer.ctx = state.hexGridLayer.canvas.getContext("2d");
     state.nodeLayer.ctx = state.nodeLayer.canvas.getContext("2d");
-    window.__npcMovementLabDebug = state;
-    window.debug = state.debug;
+    const profiler = createWizardOfFlatlandProfiler();
+    attachWizardOfFlatlandDebugGlobals(state, profiler);
 
-    const worker = new Worker("/npc-movement-lab/solverWorker.js?v=npc-movement-lab-77");
+    const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-80");
     worker.addEventListener("message", handleWorkerMessage);
     worker.addEventListener("error", (event) => {
-        labels.workerStatus.textContent = event.message || "failed";
+        setLabelText(labels.workerStatus, event.message || "failed");
     });
 
-    const pathfindingWorker = new Worker("/assets/javascript/pathfinding/pathfindingWorker.js?v=npc-movement-lab-1");
+    const pathfindingWorker = new Worker("/wizard-of-flatland/pathfindingWorker.js?v=wizard-of-flatland-1");
     pathfindingWorker.addEventListener("message", handlePathfindingWorkerMessage);
     pathfindingWorker.addEventListener("error", (event) => {
-        labels.workerStatus.textContent = event.message || "pathfinding failed";
+        setLabelText(labels.workerStatus, event.message || "pathfinding failed");
     });
 
-    const mazeWorker = new Worker("/npc-movement-lab/mazeSectionWorker.js?v=npc-movement-lab-2");
+    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-26");
     mazeWorker.addEventListener("message", handleMazeWorkerMessage);
     mazeWorker.addEventListener("error", (event) => {
         state.generatedMazeLoading = false;
-        labels.workerStatus.textContent = event.message || "maze worker failed";
+        setLabelText(labels.workerStatus, event.message || "maze worker failed");
     });
 
+    function setLabelText(label, text) {
+        if (label) label.textContent = text;
+    }
+
+    function getControlNumber(input, fallback) {
+        if (!input) return fallback;
+        const value = Number(input.value);
+        return Number.isFinite(value) ? value : fallback;
+    }
+
+    function getWizardOfFlatlandDebugApi() {
+        if (typeof window === "undefined" || !window.WizardOfFlatlandDebug) {
+            throw new Error("Wizard of Flatland requires /wizard-of-flatland/debug.js");
+        }
+        return window.WizardOfFlatlandDebug;
+    }
+
+    function createWizardOfFlatlandDebugState() {
+        const api = getWizardOfFlatlandDebugApi();
+        if (typeof api.createDebugState !== "function") {
+            throw new Error("Wizard of Flatland debug.js requires createDebugState");
+        }
+        return api.createDebugState();
+    }
+
+    function attachWizardOfFlatlandDebugGlobals(stateRef, profilerRef) {
+        const api = getWizardOfFlatlandDebugApi();
+        if (typeof api.attachDebugGlobals !== "function") {
+            throw new Error("Wizard of Flatland debug.js requires attachDebugGlobals");
+        }
+        return api.attachDebugGlobals(stateRef, profilerRef);
+    }
+
+    function createWizardOfFlatlandProfiler() {
+        const maxLoads = 12;
+        const maxRows = 12;
+        const loadRecords = [];
+        const longTasks = [];
+        const frameHitches = [];
+        let currentLoad = null;
+        let lastCompletedLoad = null;
+        let pendingFrameAfterLoad = null;
+
+        const api = {
+            enabled: true,
+            consoleLogging: false,
+            loadRecords,
+            longTasks,
+            frameHitches,
+            beginLoad,
+            mark,
+            span,
+            completeLoad,
+            noteFrame,
+            noteFirstFrameAfterLoad,
+            getCurrentLoad: () => currentLoad,
+            getLastCompletedLoad: () => lastCompletedLoad,
+            printLastLoad: () => {
+                if (lastCompletedLoad) printLoadRecord(lastCompletedLoad);
+            }
+        };
+
+        if (typeof PerformanceObserver === "function") {
+            try {
+                const observer = new PerformanceObserver((list) => {
+                    for (const entry of list.getEntries()) {
+                        const record = {
+                            name: entry.name || "longtask",
+                            start: entry.startTime,
+                            duration: entry.duration
+                        };
+                        longTasks.push(record);
+                        while (longTasks.length > 40) longTasks.shift();
+                        if (currentLoad && record.start >= currentLoad.start && record.start <= performance.now()) {
+                            currentLoad.longTasks.push(record);
+                        }
+                    }
+                });
+                observer.observe({ type: "longtask", buffered: true });
+                api.longTaskObserver = observer;
+            } catch (_error) {
+                api.longTaskObserver = null;
+            }
+        }
+
+        function beginLoad(meta) {
+            if (!api.enabled) return null;
+            const now = performance.now();
+            currentLoad = {
+                requestId: Number(meta && meta.requestId) || 0,
+                signature: String(meta && meta.signature || ""),
+                keys: Array.isArray(meta && meta.keys) ? meta.keys.slice() : [],
+                start: now,
+                marks: [{ label: "request", at: now, duration: 0 }],
+                spans: [],
+                longTasks: [],
+                firstFrame: null,
+                completed: false,
+                totalMs: 0,
+                mainThreadMs: 0,
+                counts: {}
+            };
+            updateProfilerPanel();
+            return currentLoad;
+        }
+
+        function mark(label, extra) {
+            if (!api.enabled || !currentLoad) return;
+            currentLoad.marks.push({
+                label,
+                at: performance.now(),
+                duration: 0,
+                extra: extra || null
+            });
+        }
+
+        function span(label, fn) {
+            if (!api.enabled || !currentLoad) return fn();
+            const started = performance.now();
+            try {
+                return fn();
+            } finally {
+                const duration = performance.now() - started;
+                currentLoad.spans.push({ label, duration, at: started });
+            }
+        }
+
+        function completeLoad(counts) {
+            if (!api.enabled || !currentLoad) return;
+            currentLoad.completed = true;
+            currentLoad.totalMs = performance.now() - currentLoad.start;
+            currentLoad.counts = counts || {};
+            currentLoad.spans.sort((a, b) => b.duration - a.duration);
+            currentLoad.mainThreadMs = currentLoad.spans.reduce((total, entry) => total + entry.duration, 0);
+            loadRecords.push(currentLoad);
+            while (loadRecords.length > maxLoads) loadRecords.shift();
+            lastCompletedLoad = currentLoad;
+            pendingFrameAfterLoad = currentLoad;
+            currentLoad = null;
+            updateProfilerPanel();
+            if (api.consoleLogging) printLoadRecord(lastCompletedLoad);
+        }
+
+        function noteFrame(duration, parts) {
+            if (!api.enabled || duration < 24) return;
+            const record = { duration, at: performance.now(), parts: parts || null };
+            frameHitches.push(record);
+            while (frameHitches.length > 40) frameHitches.shift();
+        }
+
+        function noteFirstFrameAfterLoad(duration, parts) {
+            if (!api.enabled || !pendingFrameAfterLoad) return;
+            pendingFrameAfterLoad.firstFrame = { duration, parts: parts || null };
+            if (api.consoleLogging && typeof console !== "undefined") {
+                console.groupCollapsed(`Wizard of Flatland first frame after section load: ${duration.toFixed(2)} ms`);
+                console.table((parts || []).map((entry) => ({
+                    span: entry.label,
+                    ms: Number(entry.duration.toFixed(3))
+                })));
+                console.groupEnd();
+            }
+            pendingFrameAfterLoad = null;
+            updateProfilerPanel();
+        }
+
+        function updateProfilerPanel() {
+            if (!labels.profilerSummary || !labels.profilerRows) return;
+            const record = currentLoad || lastCompletedLoad;
+            if (!record) {
+                labels.profilerSummary.textContent = "waiting for section load";
+                labels.profilerRows.textContent = "";
+                return;
+            }
+            const counts = record.counts || {};
+            const status = record.completed ? "last" : "loading";
+            const firstFrameText = record.firstFrame
+                ? `, first frame ${record.firstFrame.duration.toFixed(2)} ms`
+                : "";
+            const mainThreadMs = record.completed
+                ? record.mainThreadMs
+                : record.spans.reduce((total, entry) => total + entry.duration, 0);
+            labels.profilerSummary.textContent = `${status} request ${record.requestId}: ${mainThreadMs.toFixed(2)} ms main thread, ${record.totalMs.toFixed(2)} ms elapsed${firstFrameText} (${counts.sections || record.keys.length || 0} sections, ${counts.walls || 0} walls, ${counts.nodes || 0} nodes)`;
+            const rows = record.spans.map((spanRecord) => ({
+                label: spanRecord.label,
+                duration: spanRecord.duration
+            }));
+            if (record.firstFrame && Array.isArray(record.firstFrame.parts)) {
+                rows.push({
+                    label: "first frame total",
+                    duration: record.firstFrame.duration
+                });
+                for (const part of record.firstFrame.parts.slice(0, 5)) {
+                    rows.push({
+                        label: `first frame: ${part.label}`,
+                        duration: part.duration
+                    });
+                }
+            }
+            rows.sort((a, b) => b.duration - a.duration);
+            labels.profilerRows.replaceChildren(...rows.slice(0, maxRows).map((spanRecord) => {
+                const row = document.createElement("div");
+                row.className = "profiler-row";
+                const name = document.createElement("strong");
+                name.textContent = spanRecord.label;
+                const value = document.createElement("span");
+                value.textContent = `${spanRecord.duration.toFixed(2)} ms`;
+                row.append(name, value);
+                return row;
+            }));
+        }
+
+        function printLoadRecord(record) {
+            if (!record || typeof console === "undefined") return;
+            const rows = record.spans.map((entry) => ({
+                span: entry.label,
+                ms: Number(entry.duration.toFixed(3))
+            }));
+            console.groupCollapsed(
+                `Wizard of Flatland section load ${record.requestId}: ${record.mainThreadMs.toFixed(2)} ms main thread`
+            );
+            console.log({
+                requestId: record.requestId,
+                mainThreadMs: record.mainThreadMs,
+                elapsedMs: record.totalMs,
+                sections: record.counts.sections || record.keys.length || 0,
+                wallSegments: record.counts.walls || 0,
+                nodes: record.counts.nodes || 0,
+                blockedEdges: record.counts.blockedEdges || 0,
+                firstFrame: record.firstFrame,
+                longTasks: record.longTasks
+            });
+            console.table(rows);
+            console.groupEnd();
+        }
+
+        return api;
+    }
+
     function updateControlLabels() {
-        labels.agentCount.textContent = agentCountInput.value;
-        labels.separationStrength.textContent = Number(separationInput.value).toFixed(1);
-        labels.speedScale.textContent = getSpeedScale().toFixed(2);
-        labels.mazeChunkSize.textContent = String(getMazeChunkSize());
-        labels.mazeRoomScale.textContent = Number(mazeRoomScaleInput.value).toFixed(2);
-        labels.mazeTwistiness.textContent = Number(mazeTwistinessInput.value).toFixed(2);
+        setLabelText(labels.agentCount, String(getAgentCount()));
+        setLabelText(labels.separationStrength, getSeparationStrength().toFixed(1));
+        setLabelText(labels.speedScale, getSpeedScale().toFixed(2));
+        setLabelText(labels.mazeChunkSize, String(getMazeChunkSize()));
+        setLabelText(labels.mazeRoomScale, getMazeRoomScale().toFixed(2));
+        setLabelText(labels.mazeTwistiness, getMazeTwistiness().toFixed(2));
     }
 
     function getSpeedScale() {
-        const t = Math.max(0, Math.min(1, Number(speedScaleInput.value)));
+        const t = Math.max(0, Math.min(1, getControlNumber(speedScaleInput, speedScaleControlValue)));
         return SPEED_SCALE_MIN * Math.pow(SPEED_SCALE_MAX / SPEED_SCALE_MIN, t);
     }
 
     function setSpeedScaleValue(value) {
         const scale = Math.max(SPEED_SCALE_MIN, Math.min(SPEED_SCALE_MAX, Number(value)));
         const t = Math.log(scale / SPEED_SCALE_MIN) / Math.log(SPEED_SCALE_MAX / SPEED_SCALE_MIN);
-        speedScaleInput.value = String(Math.max(0, Math.min(1, t)));
+        speedScaleControlValue = Math.max(0, Math.min(1, t));
+        if (speedScaleInput) speedScaleInput.value = String(speedScaleControlValue);
+    }
+
+    function getAgentCount() {
+        return Math.max(0, Math.round(getControlNumber(agentCountInput, DEFAULT_AGENT_COUNT)));
+    }
+
+    function getSeparationStrength() {
+        return getControlNumber(separationInput, DEFAULT_SEPARATION_STRENGTH);
+    }
+
+    function getScenarioValue() {
+        return scenarioSelect ? scenarioSelect.value : DEFAULT_SCENARIO;
     }
 
     function getMazeChunkSize() {
         return Math.max(
             MAZE_CHUNK_MIN_SIZE,
-            Math.min(MAZE_CHUNK_MAX_SIZE, Math.round(Number(mazeChunkSizeInput.value) || 44))
+            Math.min(MAZE_CHUNK_MAX_SIZE, Math.round(getControlNumber(mazeChunkSizeInput, DEFAULT_MAZE_CHUNK_SIZE)))
         );
     }
 
     function getMazeSeed() {
-        const seed = String(mazeSeedInput.value || "").trim();
-        return seed.length > 0 ? seed : "hex-maze-1";
+        const seed = String(mazeSeedInput ? mazeSeedInput.value : DEFAULT_MAZE_SEED).trim();
+        return seed.length > 0 ? seed : DEFAULT_MAZE_SEED;
+    }
+
+    function getMazeRoomScale() {
+        return Math.max(0, Math.min(1, getControlNumber(mazeRoomScaleInput, DEFAULT_MAZE_ROOM_SCALE)));
+    }
+
+    function getMazeTwistiness() {
+        return Math.max(0, Math.min(1, getControlNumber(mazeTwistinessInput, DEFAULT_MAZE_TWISTINESS)));
     }
 
     function getMazeOptions() {
         return {
             seed: getMazeSeed(),
             chunkSize: getMazeChunkSize(),
-            roomScale: Math.max(0, Math.min(1, Number(mazeRoomScaleInput.value) || 0)),
-            twistiness: Math.max(0, Math.min(1, Number(mazeTwistinessInput.value) || 0))
+            roomScale: getMazeRoomScale(),
+            twistiness: getMazeTwistiness()
         };
     }
 
     function isProceduralMazeScenario() {
-        return scenarioSelect.value === "proceduralMaze";
+        return getScenarioValue() === "proceduralMaze";
     }
 
     function hashString(value) {
@@ -293,26 +606,8 @@
         };
     }
 
-    function createSegmentWall(ax, ay, bx, by) {
-        const dx = bx - ax;
-        const dy = by - ay;
-        const len = Math.hypot(dx, dy);
-        if (!(len > 0.001)) return null;
-        return {
-            ax,
-            ay,
-            bx,
-            by,
-            nx: -dy / len,
-            ny: dx / len,
-            kind: WALL_KIND_SEGMENT
-        };
-    }
-
-    function appendSegmentWall(walls, ax, ay, bx, by) {
-        const wall = createSegmentWall(ax, ay, bx, by);
-        if (!wall) return false;
-        walls.push(wall);
+    function isUsableWallSegment(ax, ay, bx, by) {
+        if (Math.hypot(bx - ax, by - ay) <= 0.001) return null;
         return true;
     }
 
@@ -366,6 +661,11 @@
     function getRequiredMazeSectionKeys(options) {
         const current = worldToMazeSectionCoord(state.target.x, state.target.y, options);
         const currentKey = mazeSectionKey(current.q, current.r);
+        const keys = [currentKey];
+        const viewportKeys = computeMazeViewportSectionKeys(options);
+        for (const key of viewportKeys) {
+            if (!keys.includes(key)) keys.push(key);
+        }
         const neighbors = [];
         for (let i = 0; i < MAZE_SECTION_DIRECTIONS.length; i++) {
             const dir = MAZE_SECTION_DIRECTIONS[i];
@@ -378,13 +678,21 @@
             });
         }
         neighbors.sort((a, b) => a.distance - b.distance);
-        const keys = [currentKey, ...neighbors.slice(0, MAZE_SECTION_NEARBY_LOAD_COUNT).map((entry) => entry.key)];
+        for (const entry of neighbors.slice(0, MAZE_SECTION_NEARBY_LOAD_COUNT)) {
+            if (!keys.includes(entry.key)) keys.push(entry.key);
+        }
         const lookaheadKeys = getMazeLookaheadSectionKeys(options);
         for (const key of lookaheadKeys) {
             if (keys.length >= MAZE_SECTION_CACHE_LIMIT) break;
             if (!keys.includes(key)) keys.push(key);
         }
         return keys;
+    }
+
+    function computeMazeViewportSectionKeys(options) {
+        const rect = getCurrentMazeViewportRect();
+        if (!rect) return [];
+        return computeMazeSectionKeysIntersectingRect(options, rect);
     }
 
     function getMazeLookaheadSectionKeys(options) {
@@ -399,8 +707,12 @@
     }
 
     function computeMazeLookaheadSectionKeys(options) {
-        const rect = getProjectedMazeViewportRect(options);
+        const rect = getProjectedMazeViewportRect();
         if (!rect) return [];
+        return computeMazeSectionKeysIntersectingRect(options, rect);
+    }
+
+    function computeMazeSectionKeysIntersectingRect(options, rect) {
         const center = {
             x: (rect.minX + rect.maxX) * 0.5,
             y: (rect.minY + rect.maxY) * 0.5
@@ -427,7 +739,20 @@
         return hits.map((entry) => entry.key);
     }
 
-    function getProjectedMazeViewportRect(_options) {
+    function getCurrentMazeViewportRect() {
+        const view = state.view;
+        if (!view || !(view.width > 0 && view.height > 0 && view.scale > 0)) return null;
+        const halfWidth = view.width / view.scale * 0.5;
+        const halfHeight = view.height / view.scale * 0.5;
+        return {
+            minX: state.target.x - halfWidth,
+            minY: state.target.y - halfHeight,
+            maxX: state.target.x + halfWidth,
+            maxY: state.target.y + halfHeight
+        };
+    }
+
+    function getProjectedMazeViewportRect() {
         const view = state.view;
         if (!view || !(view.width > 0 && view.height > 0 && view.scale > 0)) return null;
         const dx = Math.cos(state.target.heading) * MAZE_LOOKAHEAD_DISTANCE;
@@ -449,10 +774,10 @@
 
     function polygonIntersectsAxisAlignedRect(polygon, rect) {
         if (!Array.isArray(polygon) || polygon.length < 3) {
-            throw new Error("NPC movement lab maze lookahead requires a section polygon");
+            throw new Error("Wizard of Flatland maze lookahead requires a section polygon");
         }
         if (!rect || !Number.isFinite(rect.minX) || !Number.isFinite(rect.minY) || !Number.isFinite(rect.maxX) || !Number.isFinite(rect.maxY)) {
-            throw new Error("NPC movement lab maze lookahead requires a finite viewport rectangle");
+            throw new Error("Wizard of Flatland maze lookahead requires a finite viewport rectangle");
         }
         for (const point of polygon) {
             if (point.x >= rect.minX && point.x <= rect.maxX && point.y >= rect.minY && point.y <= rect.maxY) return true;
@@ -527,26 +852,27 @@
 
     function requestGeneratedMazeRefresh(options, keys, signature) {
         if (!mazeWorker || typeof mazeWorker.postMessage !== "function") {
-            throw new Error("NPC movement lab procedural maze requires a section worker");
+            throw new Error("Wizard of Flatland procedural maze requires a section worker");
         }
         const bounds = getPathfindingLayerBounds();
-        const manualWalls = state.manualWalls.map(cloneWallRecord);
+        const manualWalls = cloneWallBuffer(state.manualWalls, "manual walls");
         const requestId = state.generatedMazeRequestId++;
         state.generatedMazeActiveRequestId = requestId;
         state.generatedMazePendingSignature = signature;
         state.generatedMazeLoading = true;
-        state.worldVersion += 1;
-        clearAgentPathRequestsForMapRebuild();
-        labels.workerStatus.textContent = `${MAZE_WORKER_STATUS_PREFIX} loading`;
-        mazeWorker.postMessage({
-            type: "build_maze_sections",
-            requestId,
-            signature,
-            options,
-            keys,
-            manualWalls,
-            bounds,
-            targetRadius: TARGET_RADIUS
+        profiler.beginLoad({ requestId, signature, keys });
+        setLabelText(labels.workerStatus, `${MAZE_WORKER_STATUS_PREFIX} loading`);
+        profiler.span("post maze worker request", () => {
+            mazeWorker.postMessage({
+                type: "build_maze_sections",
+                requestId,
+                signature,
+                options,
+                keys,
+                manualWalls,
+                bounds,
+                targetRadius: TARGET_RADIUS
+            }, [manualWalls.buffer]);
         });
     }
 
@@ -557,52 +883,77 @@
         if (message.type === "error") {
             if (Number(message.requestId) !== Number(state.generatedMazeActiveRequestId)) return;
             state.generatedMazeLoading = false;
-            labels.workerStatus.textContent = message.message || "maze error";
+            setLabelText(labels.workerStatus, message.message || "maze error");
             return;
         }
         if (message.type !== "maze_sections_result") return;
         if (Number(message.requestId) !== Number(state.generatedMazeActiveRequestId)) return;
         if (message.signature !== state.generatedMazePendingSignature) return;
+        profiler.mark("maze worker result received", {
+            generatedWallSegments: message.generatedWalls instanceof Float32Array ? message.generatedWalls.length / WALL_STRIDE : 0,
+            nodeCount: message.nodeLayer && message.nodeLayer.nodes instanceof Float32Array ? message.nodeLayer.nodes.length / 4 : 0
+        });
         installGeneratedMazeWorkerResult(message);
     }
 
     function installGeneratedMazeWorkerResult(message) {
         if (!message || typeof message.signature !== "string" || !message.nodeLayer) {
-            throw new Error("NPC movement lab maze worker result is malformed");
+            throw new Error("Wizard of Flatland maze worker result is malformed");
         }
-        const generatedWalls = unpackMazeWorkerWalls(message.generatedWalls, "generated maze walls");
-        const allWalls = unpackMazeWorkerWalls(message.allWalls, "maze pathfinding walls");
+        profiler.span("validate wall buffers", () => {
+            validateWallBuffer(message.generatedWalls, "generated maze walls");
+            validateWallBuffer(message.allWalls, "maze pathfinding walls");
+            validateWallLabelBuffer(message.generatedWalls, "generated maze wall labels");
+            validateWallLabelBuffer(message.allWalls, "maze pathfinding wall labels");
+        });
+        const generatedWalls = message.generatedWalls;
+        const allWalls = message.allWalls;
         const manualOffset = generatedWalls.length;
         if (allWalls.length !== generatedWalls.length + state.manualWalls.length) {
-            throw new Error("NPC movement lab maze worker wall count does not match active manual walls");
+            throw new Error("Wizard of Flatland maze worker wall count does not match active manual walls");
         }
-        for (let i = 0; i < state.manualWalls.length; i++) {
-            const expected = state.manualWalls[i];
-            const actual = allWalls[manualOffset + i];
-            if (!wallsMatch(expected, actual)) {
-                throw new Error("NPC movement lab maze worker result is stale for manual walls");
+        profiler.span("validate manual wall echo", () => {
+            for (let i = 0; i < state.manualWalls.length; i++) {
+                if (Math.abs(state.manualWalls[i] - allWalls[manualOffset + i]) > 0.0001) {
+                    throw new Error("Wizard of Flatland maze worker result is stale for manual walls");
+                }
             }
-        }
+        });
 
-        state.generatedMazeWalls = generatedWalls;
-        state.walls = allWalls;
-        state.generatedMazeSignature = message.signature;
-        state.generatedMazePendingSignature = "";
-        state.generatedMazeLoading = false;
-        state.generatedMazeActiveRequestId = 0;
-        state.generatedMazeInstalledChunkKeys = new Set(state.generatedMazeChunkKeys);
-        state.worldVersion += 1;
-        installPathfindingNodeLayerFromWorker(message.nodeLayer);
-        constrainTargetToWalls();
-        for (const agent of state.agents) {
-            if (isAgentInInstalledMazeSection(agent)) {
-                constrainAgentToWalls(agent);
-            } else {
-                freezeAgentForUnloadedSection(agent);
+        profiler.span("install wall buffers and section keys", () => {
+            state.generatedMazeWalls = generatedWalls;
+            state.walls = allWalls;
+            state.generatedMazeSignature = message.signature;
+            state.generatedMazePendingSignature = "";
+            state.generatedMazeLoading = false;
+            state.generatedMazeActiveRequestId = 0;
+            state.generatedMazeInstalledChunkKeys = new Set(state.generatedMazeChunkKeys);
+            state.worldVersion += 1;
+        });
+        profiler.span("populate maze rooms", () => populateGeneratedMazeRooms(getMazeOptions()));
+        profiler.span("install pathfinding node layer", () => {
+            installPathfindingNodeLayerFromWorker(message.nodeLayer);
+        });
+        profiler.span("constrain target to walls", () => constrainTargetToWalls());
+        profiler.span("constrain or freeze agents", () => {
+            for (const agent of state.agents) {
+                if (isAgentInInstalledMazeSection(agent)) {
+                    constrainAgentToWalls(agent);
+                } else {
+                    freezeAgentForUnloadedSection(agent);
+                }
             }
-        }
-        resolveTargetNpcContacts();
-        labels.workerStatus.textContent = "ready";
+        });
+        profiler.span("resolve target npc contacts", () => resolveTargetNpcContacts());
+        setLabelText(labels.workerStatus, "ready");
+        profiler.completeLoad({
+            sections: state.generatedMazeInstalledChunkKeys.size,
+            walls: getWallCount(state.walls),
+            generatedWalls: getWallCount(state.generatedMazeWalls),
+            manualWalls: getWallCount(state.manualWalls),
+            nodes: getPathfindingNodeCount(),
+            blockedEdges: getPathfindingBlockedEdgeCount()
+        });
     }
 
     function clearAgentPathRequestsForMapRebuild() {
@@ -615,108 +966,134 @@
             agent.pathRequestedStartKey = "";
             agent.pathRequestedGoalKey = "";
             agent.pathNodeKeys = [];
+            agent.pathWaypoints = [];
             agent.pathCursor = 0;
             agent.pathGoalX = agent.x;
             agent.pathGoalY = agent.y;
         }
     }
 
-    function unpackMazeWorkerWalls(packed, label) {
-        if (!(packed instanceof Float32Array)) throw new Error(`NPC movement lab ${label} must be packed`);
-        if (packed.length % WALL_STRIDE !== 0) throw new Error(`NPC movement lab ${label} has an invalid packed length`);
-        const walls = [];
-        for (let i = 0; i < packed.length; i += WALL_STRIDE) {
-            walls.push({
-                ax: packed[i],
-                ay: packed[i + 1],
-                bx: packed[i + 2],
-                by: packed[i + 3],
-                nx: packed[i + 4],
-                ny: packed[i + 5],
-                kind: Math.round(packed[i + 6]) === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY
-            });
-        }
-        return walls;
-    }
-
-    function wallsMatch(left, right) {
-        if (!left || !right) return false;
-        return Math.abs(Number(left.ax) - Number(right.ax)) < 0.0001 &&
-            Math.abs(Number(left.ay) - Number(right.ay)) < 0.0001 &&
-            Math.abs(Number(left.bx) - Number(right.bx)) < 0.0001 &&
-            Math.abs(Number(left.by) - Number(right.by)) < 0.0001 &&
-            Math.abs(Number(left.nx) - Number(right.nx)) < 0.0001 &&
-            Math.abs(Number(left.ny) - Number(right.ny)) < 0.0001 &&
-            (left.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY) ===
-                (right.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY);
-    }
-
     function installPathfindingNodeLayerFromWorker(workerLayer) {
         const packedNodes = workerLayer.nodes;
+        const snapshotNodes = workerLayer.snapshotNodes;
+        const packedEdges = workerLayer.edges;
         const packedBlockedEdges = workerLayer.blockedEdges;
-        if (!(packedNodes instanceof Float32Array) || packedNodes.length % 4 !== 0) {
-            throw new Error("NPC movement lab maze worker nodes are malformed");
+        if (!(packedNodes instanceof Float32Array) || packedNodes.length % PATH_SNAPSHOT_NODE_STRIDE !== 0) {
+            throw new Error("Wizard of Flatland maze worker nodes are malformed");
         }
-        if (!(packedBlockedEdges instanceof Int32Array) || packedBlockedEdges.length % 3 !== 0) {
-            throw new Error("NPC movement lab maze worker blocked edges are malformed");
+        if (!(snapshotNodes instanceof Float32Array) || snapshotNodes.length !== packedNodes.length) {
+            throw new Error("Wizard of Flatland maze worker snapshot nodes are malformed");
         }
-
-        const nodes = [];
-        const nodeByKey = new Map();
-        for (let i = 0; i < packedNodes.length; i += 4) {
-            const xindex = Math.round(packedNodes[i]);
-            const yindex = Math.round(packedNodes[i + 1]);
-            const node = createPathfindingNode(xindex, yindex);
-            node.blocked = packedNodes[i + 2] === 1;
-            nodes.push(node);
-            nodeByKey.set(node.key, node);
+        if (!(packedEdges instanceof Int32Array) || packedEdges.length % PATH_SNAPSHOT_EDGE_STRIDE !== 0) {
+            throw new Error("Wizard of Flatland maze worker path edges are malformed");
         }
-        for (const node of nodes) {
-            const offsets = getPathfindingNeighborOffsets(node.xindex);
-            for (let dir = 0; dir < 12; dir++) {
-                const offset = offsets[dir];
-                node.neighbors[dir] = nodeByKey.get(pathfindingNodeKey(node.xindex + offset.x, node.yindex + offset.y)) || null;
-            }
-        }
-
-        const blockedEdges = [];
-        for (let i = 0; i < packedBlockedEdges.length; i += 3) {
-            const a = nodes[packedBlockedEdges[i]];
-            const b = nodes[packedBlockedEdges[i + 1]];
-            const wall = state.walls[packedBlockedEdges[i + 2]];
-            if (!a || !b || !wall) throw new Error("NPC movement lab maze worker blocked edge references are invalid");
-            const aDir = a.neighbors.indexOf(b);
-            const bDir = b.neighbors.indexOf(a);
-            if (aDir < 0 || bDir < 0) throw new Error("NPC movement lab maze worker blocked edge is not between neighbors");
-            addDirectionalBlock(a, aDir, wall);
-            addDirectionalBlock(b, bDir, wall);
-            blockedEdges.push({ a, b, wallIndex: packedBlockedEdges[i + 2] });
+        if (!(packedBlockedEdges instanceof Int32Array) || packedBlockedEdges.length % PATH_SNAPSHOT_EDGE_STRIDE !== 0) {
+            throw new Error("Wizard of Flatland maze worker blocked edges are malformed");
         }
 
         state.nodeLayer.pathCenterX = Number(workerLayer.pathCenterX);
         state.nodeLayer.pathCenterY = Number(workerLayer.pathCenterY);
         if (!Number.isFinite(state.nodeLayer.pathCenterX) || !Number.isFinite(state.nodeLayer.pathCenterY)) {
-            throw new Error("NPC movement lab maze worker path center is invalid");
+            throw new Error("Wizard of Flatland maze worker path center is invalid");
         }
-        state.nodeLayer.nodes = nodes;
-        state.nodeLayer.nodeByKey = nodeByKey;
-        state.nodeLayer.blockedEdges = blockedEdges;
+        state.nodeLayer.nodes = packedNodes;
+        state.nodeLayer.snapshotNodes = snapshotNodes;
+        state.nodeLayer.edges = packedEdges;
+        state.nodeLayer.blockedEdges = packedBlockedEdges;
+        state.nodeLayer.indexByKey = buildPathfindingNodeIndexByKey(packedNodes);
+        state.nodeLayer.nodeStride = PATH_SNAPSHOT_NODE_STRIDE;
+        state.nodeLayer.edgeStride = PATH_SNAPSHOT_EDGE_STRIDE;
         state.nodeLayer.version += 1;
         state.nodeLayer.dirty = true;
-        publishPathfindingSnapshot();
+        profiler.span("publish pathfinding snapshot", () => publishPathfindingSnapshot());
     }
 
-    function cloneWallRecord(wall) {
-        if (!wall || typeof wall !== "object") throw new Error("NPC movement lab wall clone requires a wall record");
-        return {
-            ax: Number(wall.ax),
-            ay: Number(wall.ay),
-            bx: Number(wall.bx),
-            by: Number(wall.by),
-            nx: Number(wall.nx),
-            ny: Number(wall.ny),
-            kind: wall.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY
-        };
+    function buildPathfindingNodeIndexByKey(packedNodes) {
+        if (!(packedNodes instanceof Float32Array) || packedNodes.length % PATH_SNAPSHOT_NODE_STRIDE !== 0) {
+            throw new Error("Wizard of Flatland path node key index requires packed nodes");
+        }
+        const indexByKey = new Map();
+        const count = packedNodes.length / PATH_SNAPSHOT_NODE_STRIDE;
+        for (let pathIndex = 0; pathIndex < count; pathIndex++) {
+            const base = pathIndex * PATH_SNAPSHOT_NODE_STRIDE;
+            if (!Number.isFinite(packedNodes[base + PATH_NODE_XINDEX]) || !Number.isFinite(packedNodes[base + PATH_NODE_YINDEX])) {
+                throw new Error(`Wizard of Flatland path node key index found invalid node coordinates at index ${pathIndex}`);
+            }
+            const xindex = Math.round(packedNodes[base + PATH_NODE_XINDEX]);
+            const yindex = Math.round(packedNodes[base + PATH_NODE_YINDEX]);
+            const key = pathfindingNodeKey(xindex, yindex);
+            if (indexByKey.has(key)) {
+                throw new Error(`Wizard of Flatland path node key index found duplicate node key ${key}`);
+            }
+            indexByKey.set(key, pathIndex);
+        }
+        return indexByKey;
+    }
+
+    function createEmptyWallBuffer() {
+        return new Float32Array(0);
+    }
+
+    function getWallCount(walls) {
+        validateWallBuffer(walls, "walls");
+        return walls.length / WALL_STRIDE;
+    }
+
+    function validateWallBuffer(walls, label) {
+        if (!(walls instanceof Float32Array)) throw new Error(`Wizard of Flatland ${label} must be a wall buffer`);
+        if (walls.length % WALL_STRIDE !== 0) throw new Error(`Wizard of Flatland ${label} has an invalid wall stride`);
+    }
+
+    function appendWallSegment(walls, ax, ay, bx, by, labelCode, sideCode = -1) {
+        validateWallSegment(ax, ay, bx, by);
+        validateWallLabelCode(labelCode, sideCode);
+        const next = new Float32Array(walls.length + WALL_STRIDE);
+        next.set(walls);
+        writeWallSegment(next, walls.length, ax, ay, bx, by, labelCode, sideCode);
+        return next;
+    }
+
+    function concatWallBuffers(left, right) {
+        validateWallBuffer(left, "left wall buffer");
+        validateWallBuffer(right, "right wall buffer");
+        const out = new Float32Array(left.length + right.length);
+        out.set(left);
+        out.set(right, left.length);
+        return out;
+    }
+
+    function cloneWallBuffer(walls, label = "wall buffer") {
+        validateWallBuffer(walls, label);
+        return walls.slice();
+    }
+
+    function writeWallSegment(walls, base, ax, ay, bx, by, labelCode, sideCode) {
+        walls[base + WALL_X1] = ax;
+        walls[base + WALL_Y1] = ay;
+        walls[base + WALL_X2] = bx;
+        walls[base + WALL_Y2] = by;
+        walls[base + WALL_LABEL_CODE] = labelCode;
+        walls[base + WALL_LABEL_SIDE] = sideCode;
+        walls[base + 6] = 0;
+        walls[base + 7] = 0;
+    }
+
+    function validateWallLabelCode(labelCode, sideCode) {
+        if (!Number.isInteger(labelCode) || labelCode <= 0) {
+            throw new Error("Wizard of Flatland wall segment requires a label code");
+        }
+        if (!Number.isInteger(sideCode)) {
+            throw new Error("Wizard of Flatland wall segment requires a side code");
+        }
+    }
+
+    function validateWallSegment(ax, ay, bx, by) {
+        if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) {
+            throw new Error("Wizard of Flatland wall segment requires finite coordinates");
+        }
+        if (Math.hypot(bx - ax, by - ay) <= 0.001) {
+            throw new Error("Wizard of Flatland wall segment requires separated endpoints");
+        }
     }
 
     function removeFurthestGeneratedMazeSection(options, protectedKeys) {
@@ -730,8 +1107,22 @@
         }
         if (!furthest) return false;
         state.generatedMazeChunkKeys.delete(furthest.key);
+        removeAutoSpawnedAgentsInMazeSection(furthest.key);
+        state.generatedMazePopulatedSectionKeys.delete(furthest.key);
         freezeAgentsInMazeSection(furthest.key, options);
         return true;
+    }
+
+    function removeAutoSpawnedAgentsInMazeSection(sectionKey) {
+        if (typeof sectionKey !== "string" || sectionKey.length === 0) {
+            throw new Error("Wizard of Flatland auto enemy cleanup requires a section key");
+        }
+        state.agents = state.agents.filter((agent) => agent.autoSpawnSectionKey !== sectionKey);
+    }
+
+    function resetGeneratedMazeEnemyPopulation() {
+        state.agents = state.agents.filter((agent) => typeof agent.autoSpawnSectionKey !== "string");
+        state.generatedMazePopulatedSectionKeys = new Set();
     }
 
     function freezeAgentsInMazeSection(sectionKey, options) {
@@ -749,6 +1140,7 @@
         agent.pathRequestPending = false;
         agent.pathRequestId = 0;
         agent.pathNodeKeys = [];
+        agent.pathWaypoints = [];
         agent.pathCursor = 0;
         agent.pathGoalX = agent.x;
         agent.pathGoalY = agent.y;
@@ -762,7 +1154,7 @@
     function isAgentInInstalledMazeSection(agent) {
         if (!isProceduralMazeScenario()) return true;
         if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
-            throw new Error("NPC movement lab procedural maze requires installed section tracking");
+            throw new Error("Wizard of Flatland procedural maze requires installed section tracking");
         }
         const sectionKey = getActorMazeSectionKey(agent);
         return state.generatedMazeInstalledChunkKeys.has(sectionKey) && state.generatedMazeChunkKeys.has(sectionKey);
@@ -785,31 +1177,6 @@
         return true;
     }
 
-    function appendMazeSectionWalls(walls, q, r, options) {
-        const key = mazeSectionKey(q, r);
-        const center = mazeSectionCenter(q, r, options);
-        const sectionRadius = getMazeSectionRadius(options);
-        const roomRadius = Math.max(5, sectionRadius - MAZE_ROOM_EDGE_INSET_TILES / Math.cos(Math.PI / 6));
-        const room = {
-            q,
-            r,
-            key,
-            center,
-            radius: roomRadius,
-            corners: getHexCornersWorld(center.x, center.y, roomRadius)
-        };
-        const outgoingSides = getMazeSectionOutgoingSides(q, r, options);
-        const incomingSides = getMazeSectionIncomingSides(q, r, options);
-        const hallConnections = getMazeSectionHallConnections(q, r, outgoingSides, incomingSides, options);
-        const outsideDoor = getMazeSectionOutsideDoor(q, r, options, new Set(hallConnections.keys()));
-
-        appendMazeRoomWalls(walls, room, hallConnections, outsideDoor);
-        for (const [side, connection] of hallConnections.entries()) {
-            if (!connection) throw new Error(`NPC movement lab maze hallway ${key}:${side} is missing connection data`);
-            appendMazeHalfHallwayToNeighbor(walls, room, side, connection, options);
-        }
-    }
-
     function getHexCornersWorld(cx, cy, radius) {
         const corners = [];
         for (let i = 0; i < 6; i++) {
@@ -822,228 +1189,15 @@
         return corners;
     }
 
-    function getMazeSectionOutgoingSides(q, r, options) {
-        const sides = [];
-        for (let side = 0; side < 6; side++) {
-            if (isMazeSharedHallOpen(q, r, side, options)) sides.push(side);
-        }
-        return sides;
-    }
-
-    function getMazeSectionIncomingSides(q, r, options) {
-        return [];
-    }
-
-    function getMazeSectionHallConnections(q, r, outgoingSides, incomingSides, options) {
-        const connections = new Map();
-        for (const side of outgoingSides) {
-            connections.set(side, getMazeSharedHallConnection(q, r, side, options, true));
-        }
-        for (const side of incomingSides) {
-            connections.set(side, getMazeSharedHallConnection(q, r, side, options, true));
-        }
-        return connections;
-    }
-
-    function getMazeSharedHallConnection(q, r, side, options, requireOpen = false) {
-        const dir = MAZE_SECTION_DIRECTIONS[side];
-        if (!dir) throw new Error("NPC movement lab maze hallway side is invalid");
-        const neighborQ = q + dir.q;
-        const neighborR = r + dir.r;
-        const thisKey = mazeSectionKey(q, r);
-        const neighborKey = mazeSectionKey(neighborQ, neighborR);
-        const ordered = thisKey < neighborKey
-            ? `${thisKey}|${neighborKey}`
-            : `${neighborKey}|${thisKey}`;
-        const random = seededRandom(hashString(`${options.seed}|hall-edge|${ordered}`));
-        const edgeT = 0.28 + random() * 0.44;
-        const open = isMazeSharedHallOpen(q, r, side, options);
-        if (requireOpen && !open) {
-            throw new Error(`NPC movement lab maze hallway edge ${ordered} is not open`);
-        }
-        return {
-            side,
-            edgeKey: ordered,
-            open,
-            t: thisKey < neighborKey ? edgeT : 1 - edgeT,
-            width: MAZE_HALLWAY_GAP_WIDTH
-        };
-    }
-
-    function isMazeSharedHallOpen(q, r, side, options) {
-        const dir = MAZE_SECTION_DIRECTIONS[side];
-        if (!dir) throw new Error("NPC movement lab maze hallway side is invalid");
-        const thisKey = mazeSectionKey(q, r);
-        const neighborKey = mazeSectionKey(q + dir.q, r + dir.r);
-        const ordered = thisKey < neighborKey
-            ? `${thisKey}|${neighborKey}`
-            : `${neighborKey}|${thisKey}`;
-        const random = seededRandom(hashString(`${options.seed}|hall-open|${ordered}`));
-        return random() < 1 / 3;
-    }
-
-    function getMazeSectionOutsideDoor(q, r, options, hallSides) {
-        const random = seededRandom(hashString(`${options.seed}|outside-door|${q},${r}`));
-        const sideOptions = [0, 1, 2, 3, 4, 5]
-            .filter((side) => !hallSides.has(side) && canMazeSectionOwnOutsideDoorSide(q, r, side));
-        if (sideOptions.length === 0) return null;
-        const side = sideOptions[Math.floor(random() * sideOptions.length)];
-        return {
-            side,
-            t: 0.24 + random() * 0.52,
-            width: MAZE_OUTSIDE_DOOR_MIN_WIDTH + random() * (MAZE_OUTSIDE_DOOR_MAX_WIDTH - MAZE_OUTSIDE_DOOR_MIN_WIDTH)
-        };
-    }
-
-    function canMazeSectionOwnOutsideDoorSide(q, r, side) {
-        const dir = MAZE_SECTION_DIRECTIONS[side];
-        if (!dir) throw new Error("NPC movement lab maze outside door side is invalid");
-        const thisKey = mazeSectionKey(q, r);
-        const neighborKey = mazeSectionKey(q + dir.q, r + dir.r);
-        return thisKey < neighborKey;
-    }
-
-    function appendMazeRoomWalls(walls, room, hallConnections, outsideDoor) {
-        for (let side = 0; side < 6; side++) {
-            const a = room.corners[side];
-            const b = room.corners[(side + 1) % 6];
-            const connection = hallConnections.get(side);
-            if (connection) {
-                appendWallWithGap(walls, a, b, connection.t, connection.width);
-                continue;
-            }
-            if (outsideDoor && outsideDoor.side === side) {
-                appendWallWithGap(walls, a, b, outsideDoor.t, outsideDoor.width);
-                appendOutsideDoorPosts(walls, a, b, outsideDoor.t, outsideDoor.width, side);
-                continue;
-            }
-            appendSegmentWall(walls, a.x, a.y, b.x, b.y);
-        }
-    }
-
-    function appendWallWithGap(walls, a, b, gapT, gapWidth) {
-        const length = Math.hypot(b.x - a.x, b.y - a.y);
-        if (!(length > gapWidth + 0.5)) return;
-        const halfT = Math.max(0.02, gapWidth / length * 0.5);
-        const leftT = Math.max(0, gapT - halfT);
-        const rightT = Math.min(1, gapT + halfT);
-        if (leftT > 0.04) appendSegmentWall(walls, a.x, a.y, a.x + (b.x - a.x) * leftT, a.y + (b.y - a.y) * leftT);
-        if (rightT < 0.96) appendSegmentWall(walls, a.x + (b.x - a.x) * rightT, a.y + (b.y - a.y) * rightT, b.x, b.y);
-    }
-
-    function appendOutsideDoorPosts(walls, a, b, gapT, gapWidth, side) {
-        const length = Math.hypot(b.x - a.x, b.y - a.y);
-        if (!(length > gapWidth + 0.5)) return;
-        const halfT = Math.max(0.02, gapWidth / length * 0.5);
-        const leftT = Math.max(0, gapT - halfT);
-        const rightT = Math.min(1, gapT + halfT);
-        const normal = mazeSectionSideNormal(side);
-        const postLength = (0.7 + gapWidth * 0.65) / 3;
-        const halfPostLength = postLength * 0.5;
-        const left = { x: a.x + (b.x - a.x) * leftT, y: a.y + (b.y - a.y) * leftT };
-        const right = { x: a.x + (b.x - a.x) * rightT, y: a.y + (b.y - a.y) * rightT };
-        appendSegmentWall(
-            walls,
-            left.x - normal.x * halfPostLength,
-            left.y - normal.y * halfPostLength,
-            left.x + normal.x * halfPostLength,
-            left.y + normal.y * halfPostLength
-        );
-        appendSegmentWall(
-            walls,
-            right.x - normal.x * halfPostLength,
-            right.y - normal.y * halfPostLength,
-            right.x + normal.x * halfPostLength,
-            right.y + normal.y * halfPostLength
-        );
-    }
-
-    function appendMazeHalfHallwayToNeighbor(walls, room, side, connection, options) {
-        const dir = MAZE_SECTION_DIRECTIONS[side];
-        const neighborCenter = mazeSectionCenter(room.q + dir.q, room.r + dir.r, options);
-        const dx = neighborCenter.x - room.center.x;
-        const dy = neighborCenter.y - room.center.y;
-        const length = Math.hypot(dx, dy);
-        if (!(length > 0.001)) throw new Error("NPC movement lab maze hallway requires separated section centers");
-        const neighborRoomRadius = Math.max(
-            5,
-            getMazeSectionRadius(options) - MAZE_ROOM_EDGE_INSET_TILES / Math.cos(Math.PI / 6)
-        );
-        const startGap = getWallGapEndpoints(
-            room.corners[side],
-            room.corners[(side + 1) % 6],
-            connection.t,
-            connection.width
-        );
-        const neighborSide = (side + 3) % 6;
-        const neighborCorners = getHexCornersWorld(neighborCenter.x, neighborCenter.y, neighborRoomRadius);
-        const neighborConnection = getMazeSharedHallConnection(room.q + dir.q, room.r + dir.r, neighborSide, options, true);
-        if (neighborConnection.edgeKey !== connection.edgeKey || Math.abs(neighborConnection.width - connection.width) > 0.000001) {
-            throw new Error("NPC movement lab maze reciprocal hallway connection mismatch");
-        }
-        const neighborGap = getWallGapEndpoints(
-            neighborCorners[neighborSide],
-            neighborCorners[(neighborSide + 1) % 6],
-            neighborConnection.t,
-            neighborConnection.width
-        );
-
-        appendHalfHallwaySideWall(walls, startGap.left, neighborGap.right);
-        appendHalfHallwaySideWall(walls, startGap.right, neighborGap.left);
-    }
-
-    function appendHalfHallwaySideWall(walls, start, end) {
-        const middle = {
-            x: (start.x + end.x) * 0.5,
-            y: (start.y + end.y) * 0.5
-        };
-        if (Math.hypot(middle.x - start.x, middle.y - start.y) <= 0.5) return;
-        appendSegmentWall(walls, start.x, start.y, middle.x, middle.y);
-    }
-
-    function getWallGapEndpoints(a, b, gapT, gapWidth) {
-        const length = Math.hypot(b.x - a.x, b.y - a.y);
-        if (!(length > gapWidth + 0.5)) {
-            throw new Error("NPC movement lab maze hallway gap requires a wall segment longer than the gap");
-        }
-        const halfT = Math.max(0.02, gapWidth / length * 0.5);
-        return {
-            left: pointOnHexSide(a, b, Math.max(0, gapT - halfT)),
-            right: pointOnHexSide(a, b, Math.min(1, gapT + halfT))
-        };
-    }
-
-    function pointOnHexSide(a, b, t) {
-        return {
-            x: a.x + (b.x - a.x) * t,
-            y: a.y + (b.y - a.y) * t
-        };
-    }
-
-    function mazeSectionSideNormal(side) {
-        const angle = side * Math.PI / 3;
-        return {
-            x: Math.cos(angle),
-            y: Math.sin(angle)
-        };
-    }
-
-    function addWall(walls, ax, ay, bx, by, nx, ny, kind = WALL_KIND_BOUNDARY) {
-        const len = Math.hypot(nx, ny);
-        if (!(len > 0)) throw new Error("wall normal must be non-zero");
-        walls.push({ ax, ay, bx, by, nx: nx / len, ny: ny / len, kind });
-    }
-
     function addSegmentWall(ax, ay, bx, by) {
-        const wall = createSegmentWall(ax, ay, bx, by);
-        if (!wall) return false;
+        if (!isUsableWallSegment(ax, ay, bx, by)) return false;
         if (isProceduralMazeScenario()) {
-            state.manualWalls.push(wall);
-            state.walls = state.generatedMazeWalls.concat(state.manualWalls);
+            state.manualWalls = appendWallSegment(state.manualWalls, ax, ay, bx, by, WALL_LABEL_MANUAL_TOOL);
+            state.walls = concatWallBuffers(state.generatedMazeWalls, state.manualWalls);
             state.generatedMazeSignature = "";
             refreshGeneratedMazeIfNeeded(true);
         } else {
-            state.walls.push(wall);
+            state.walls = appendWallSegment(state.walls, ax, ay, bx, by, WALL_LABEL_MANUAL_TOOL);
             state.worldVersion += 1;
             rebuildPathfindingNodeLayer();
         }
@@ -1060,18 +1214,19 @@
         state.agents = [];
         state.fireballs = [];
         state.fireballExplosions = [];
-        state.walls = [];
-        state.manualWalls = [];
-        state.generatedMazeWalls = [];
+        state.walls = createEmptyWallBuffer();
+        state.manualWalls = createEmptyWallBuffer();
+        state.generatedMazeWalls = createEmptyWallBuffer();
         state.generatedMazeChunkKeys = new Set();
         state.generatedMazeInstalledChunkKeys = new Set();
         state.generatedMazeSignature = "";
         state.generatedMazePendingSignature = "";
         state.generatedMazeLoading = false;
+        state.generatedMazePopulatedSectionKeys = new Set();
         invalidateMazeLookaheadCache();
         clearPathfindingNodeLayer();
-        const count = Number(agentCountInput.value);
-        const scenario = scenarioSelect.value;
+        const count = getAgentCount();
+        const scenario = getScenarioValue();
         if (scenario === "openArena") {
             state.target = { x: 0, y: 0, heading: -Math.PI / 2 };
             addRoomWalls(-18, -12, 18, 12);
@@ -1092,16 +1247,248 @@
             spawnCluster(count, 0, 0.8, 4.8, 5);
         }
         state.lastSentTarget = { x: state.target.x, y: state.target.y };
+        clearTargetTravelVector();
         if (!isProceduralMazeScenario()) {
             rebuildPathfindingNodeLayer();
             enforceInitialWallConstraints();
         }
     }
 
+    function getWizardPositionStorage() {
+        if (typeof window === "undefined" || !window.localStorage) {
+            throw new Error("Wizard of Flatland position save requires window.localStorage");
+        }
+        return window.localStorage;
+    }
+
+    function getWizardPositionSnapshot() {
+        validateWizardPositionTarget(state.target, "current wizard position");
+        return {
+            version: 1,
+            savedAt: new Date().toISOString(),
+            scenario: getScenarioValue(),
+            maze: getMazeOptions(),
+            x: state.target.x,
+            y: state.target.y,
+            heading: state.target.heading
+        };
+    }
+
+    function validateWizardPositionTarget(target, label) {
+        if (!target || typeof target !== "object") {
+            throw new Error(`Wizard of Flatland ${label} is missing`);
+        }
+        for (const field of ["x", "y", "heading"]) {
+            if (!Number.isFinite(target[field])) {
+                throw new Error(`Wizard of Flatland ${label} requires finite ${field}`);
+            }
+        }
+    }
+
+    function parseWizardPositionSnapshot(text) {
+        if (typeof text !== "string" || text.length === 0) {
+            throw new Error("Wizard of Flatland saved wizard position is missing");
+        }
+        let snapshot = null;
+        try {
+            snapshot = JSON.parse(text);
+        } catch (error) {
+            throw new Error(`Wizard of Flatland saved wizard position is invalid JSON: ${error.message}`);
+        }
+        if (!snapshot || typeof snapshot !== "object") {
+            throw new Error("Wizard of Flatland saved wizard position must be an object");
+        }
+        if (snapshot.version !== 1) {
+            throw new Error(`Wizard of Flatland saved wizard position version is unsupported: ${snapshot.version}`);
+        }
+        validateWizardPositionTarget(snapshot, "saved wizard position");
+        return snapshot;
+    }
+
+    function applyWizardPositionSnapshot(snapshot) {
+        validateWizardPositionTarget(snapshot, "saved wizard position");
+        state.target = {
+            x: snapshot.x,
+            y: snapshot.y,
+            heading: normalizeAngle(snapshot.heading)
+        };
+        state.worldVersion += 1;
+        state.lastSentTarget = { x: state.target.x, y: state.target.y };
+        clearTargetTravelVector();
+        state.targetFlashTime = 0.18;
+        state.pressedMovementKeys = Object.create(null);
+        state.spaceHeld = false;
+        state.zoomHeld = false;
+        state.fastMovementHeld = false;
+        clearAgentPathRequestsForMapRebuild();
+        invalidateMazeLookaheadCache();
+        state.hexGridLayer.dirty = true;
+        state.nodeLayer.dirty = true;
+
+        if (isProceduralMazeScenario()) {
+            state.generatedMazeSignature = "";
+            refreshGeneratedMazeIfNeeded(true);
+        } else {
+            constrainTargetToWalls();
+            resolveTargetNpcContacts();
+            rebuildPathfindingNodeLayer();
+        }
+        return getWizardPositionSnapshot();
+    }
+
+    function saveWizardPositionToConsoleSlot() {
+        const snapshot = getWizardPositionSnapshot();
+        getWizardPositionStorage().setItem(WIZARD_POSITION_STORAGE_KEY, JSON.stringify(snapshot));
+        console.log("Wizard of Flatland position saved", snapshot);
+        return snapshot;
+    }
+
+    function loadWizardPositionFromConsoleSlot() {
+        const snapshot = parseWizardPositionSnapshot(getWizardPositionStorage().getItem(WIZARD_POSITION_STORAGE_KEY));
+        const applied = applyWizardPositionSnapshot(snapshot);
+        console.log("Wizard of Flatland position loaded", applied);
+        return applied;
+    }
+
+    function showSavedWizardPositionFromConsoleSlot() {
+        const snapshot = parseWizardPositionSnapshot(getWizardPositionStorage().getItem(WIZARD_POSITION_STORAGE_KEY));
+        console.log("Wizard of Flatland saved position", snapshot);
+        return snapshot;
+    }
+
+    function clearSavedWizardPositionFromConsoleSlot() {
+        getWizardPositionStorage().removeItem(WIZARD_POSITION_STORAGE_KEY);
+        console.log("Wizard of Flatland saved position cleared");
+        return true;
+    }
+
+    window.wizardPosition = Object.freeze({
+        save: saveWizardPositionToConsoleSlot,
+        load: loadWizardPositionFromConsoleSlot,
+        show: showSavedWizardPositionFromConsoleSlot,
+        clear: clearSavedWizardPositionFromConsoleSlot,
+        key: WIZARD_POSITION_STORAGE_KEY
+    });
+
+    function spawnEnemiesAtNearestSectionCenterFromConsole(count = 1) {
+        const spawnCount = Number(count);
+        if (!Number.isInteger(spawnCount) || spawnCount < 1) {
+            throw new Error("Wizard of Flatland enemy spawn count must be a positive integer");
+        }
+        const options = getMazeOptions();
+        const coord = worldToMazeSectionCoord(state.target.x, state.target.y, options);
+        const sectionKey = mazeSectionKey(coord.q, coord.r);
+        if (
+            isProceduralMazeScenario() &&
+            (!(state.generatedMazeInstalledChunkKeys instanceof Set) || !state.generatedMazeInstalledChunkKeys.has(sectionKey))
+        ) {
+            throw new Error(`Wizard of Flatland cannot spawn enemies in unloaded map section ${sectionKey}`);
+        }
+        const center = mazeSectionCenter(coord.q, coord.r, options);
+        const firstId = getNextAgentId();
+        for (let i = 0; i < spawnCount; i++) {
+            addAgent(center.x, center.y, firstId + i);
+        }
+        enforceInitialWallConstraints();
+        clearAgentPathRequestsForMapRebuild();
+        const result = {
+            spawned: spawnCount,
+            section: { key: sectionKey, q: coord.q, r: coord.r },
+            center: { x: center.x, y: center.y },
+            firstId,
+            totalAgents: state.agents.length
+        };
+        console.log("Wizard of Flatland enemies spawned", result);
+        return result;
+    }
+
+    window.spawnEnemiesAtNearestSectionCenter = spawnEnemiesAtNearestSectionCenterFromConsole;
+
+    function populateGeneratedMazeRooms(options) {
+        if (!isProceduralMazeScenario()) return;
+        if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland enemy population requires installed section tracking");
+        }
+        if (!(state.generatedMazePopulatedSectionKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland enemy population requires populated section tracking");
+        }
+        const keys = Array.from(state.generatedMazeInstalledChunkKeys).sort();
+        for (const sectionKey of keys) {
+            if (state.generatedMazePopulatedSectionKeys.has(sectionKey)) continue;
+            populateGeneratedMazeRoom(sectionKey, options);
+            state.generatedMazePopulatedSectionKeys.add(sectionKey);
+        }
+    }
+
+    function populateGeneratedMazeRoom(sectionKey, options) {
+        const coord = parseMazeSectionKey(sectionKey);
+        const count = getMazeRoomEnemyCount(sectionKey, options);
+        if (count <= 0) return;
+        const center = mazeSectionCenter(coord.q, coord.r, options);
+        const roomRadius = getMazeRoomSpawnRadius(options);
+        const random = seededRandom(hashString(`${options.seed}|enemy-position|${sectionKey}`));
+        const firstId = getNextAgentId();
+        for (let i = 0; i < count; i++) {
+            const point = getMazeRoomEnemySpawnPoint(center, roomRadius, i, count, random);
+            addAgent(point.x, point.y, firstId + i, random, { autoSpawnSectionKey: sectionKey });
+        }
+    }
+
+    function getMazeRoomEnemyCount(sectionKey, options) {
+        if (typeof sectionKey !== "string" || sectionKey.length === 0) {
+            throw new Error("Wizard of Flatland enemy count requires a section key");
+        }
+        const random = seededRandom(hashString(`${options.seed}|enemy-count|${sectionKey}`));
+        const roll = random();
+        if (roll < MAZE_ROOM_EMPTY_ENEMY_CHANCE) return 0;
+        if (roll >= 1 - MAZE_ROOM_MAX_ENEMY_CHANCE) return MAZE_ROOM_MAX_ENEMIES;
+        const nonEmptySpan = 1 - MAZE_ROOM_MAX_ENEMY_CHANCE - MAZE_ROOM_EMPTY_ENEMY_CHANCE;
+        if (!(nonEmptySpan > 0)) throw new Error("Wizard of Flatland enemy distribution has no middle span");
+        const t = (roll - MAZE_ROOM_EMPTY_ENEMY_CHANCE) / nonEmptySpan;
+        return Math.max(
+            1,
+            Math.min(
+                MAZE_ROOM_MAX_ENEMIES - 1,
+                Math.ceil(Math.pow(t, MAZE_ROOM_ENEMY_DISTRIBUTION_POWER) * (MAZE_ROOM_MAX_ENEMIES - 1))
+            )
+        );
+    }
+
+    function getMazeRoomSpawnRadius(options) {
+        return Math.max(2, getMazeSectionRadius(options) * MAZE_ROOM_ENEMY_SAFE_RADIUS_SCALE);
+    }
+
+    function getMazeRoomEnemySpawnPoint(center, radius, index, count, random) {
+        if (!center || !Number.isFinite(center.x) || !Number.isFinite(center.y)) {
+            throw new Error("Wizard of Flatland enemy spawn requires a finite room center");
+        }
+        if (!Number.isFinite(radius) || radius <= 0) {
+            throw new Error("Wizard of Flatland enemy spawn requires a positive room radius");
+        }
+        if (!Number.isInteger(index) || !Number.isInteger(count) || index < 0 || count < 1 || index >= count) {
+            throw new Error("Wizard of Flatland enemy spawn requires a valid spawn index");
+        }
+        if (typeof random !== "function") {
+            throw new Error("Wizard of Flatland enemy spawn requires a random source");
+        }
+        const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+        const packedRadius = radius * Math.sqrt((index + 0.5) / count);
+        const countRoot = Math.sqrt(count);
+        const jitterRadius = radius / Math.max(12, countRoot * 8);
+        const angle = index * goldenAngle + (random() - 0.5) * 0.1 / Math.max(1, countRoot);
+        const distance = Math.max(0, Math.min(radius, packedRadius + (random() - 0.5) * jitterRadius));
+        return {
+            x: center.x + Math.cos(angle) * distance,
+            y: center.y + Math.sin(angle) * distance
+        };
+    }
+
     function clearPathfindingNodeLayer() {
-        state.nodeLayer.nodes = [];
-        state.nodeLayer.nodeByKey = new Map();
-        state.nodeLayer.blockedEdges = [];
+        state.nodeLayer.nodes = new Float32Array(0);
+        state.nodeLayer.snapshotNodes = new Float32Array(0);
+        state.nodeLayer.edges = new Int32Array(0);
+        state.nodeLayer.blockedEdges = new Int32Array(0);
+        state.nodeLayer.indexByKey = new Map();
         state.nodeLayer.pathCenterX = NaN;
         state.nodeLayer.pathCenterY = NaN;
         state.nodeLayer.version += 1;
@@ -1110,8 +1497,8 @@
 
     function respawnAgentsForCurrentScenario() {
         state.agents = [];
-        const count = Number(agentCountInput.value);
-        const scenario = scenarioSelect.value;
+        const count = getAgentCount();
+        const scenario = getScenarioValue();
         if (scenario === "openArena") {
             spawnRing(count, 10, 3.5);
         } else if (scenario === "crowdedArena") {
@@ -1126,10 +1513,10 @@
     }
 
     function addRoomWalls(minX, minY, maxX, maxY) {
-        addWall(state.walls, minX, minY, maxX, minY, 0, 1);
-        addWall(state.walls, maxX, minY, maxX, maxY, -1, 0);
-        addWall(state.walls, maxX, maxY, minX, maxY, 0, -1);
-        addWall(state.walls, minX, maxY, minX, minY, 1, 0);
+        state.walls = appendWallSegment(state.walls, minX, minY, maxX, minY, WALL_LABEL_ARENA_BOUNDARY, 0);
+        state.walls = appendWallSegment(state.walls, maxX, minY, maxX, maxY, WALL_LABEL_ARENA_BOUNDARY, 1);
+        state.walls = appendWallSegment(state.walls, maxX, maxY, minX, maxY, WALL_LABEL_ARENA_BOUNDARY, 2);
+        state.walls = appendWallSegment(state.walls, minX, maxY, minX, minY, WALL_LABEL_ARENA_BOUNDARY, 3);
     }
 
     function spawnRing(count, radius, jitter) {
@@ -1142,30 +1529,43 @@
 
     function spawnCluster(count, centerX, centerY, width, height) {
         const cols = Math.ceil(Math.sqrt(count * width / height));
+        const firstId = getNextAgentId();
         for (let i = 0; i < count; i++) {
             const col = i % cols;
             const row = Math.floor(i / cols);
             const x = centerX + (col / Math.max(1, cols - 1) - 0.5) * width + (Math.random() - 0.5) * 0.25;
             const y = centerY + (row / Math.max(1, Math.ceil(count / cols) - 1) - 0.5) * height + (Math.random() - 0.5) * 0.25;
-            addAgent(x, y, i);
+            addAgent(x, y, firstId + i);
         }
     }
 
-    function addAgent(x, y, id) {
-        state.agents.push({
+    function getNextAgentId() {
+        let maxId = -1;
+        for (const agent of state.agents) {
+            const id = Number(agent && agent.id);
+            if (Number.isFinite(id)) maxId = Math.max(maxId, Math.floor(id));
+        }
+        return maxId + 1;
+    }
+
+    function addAgent(x, y, id, random = Math.random, metadata = null) {
+        if (typeof random !== "function") {
+            throw new Error("Wizard of Flatland agent creation requires a random source");
+        }
+        const agent = {
             id,
             x,
             y,
             vx: 0,
             vy: 0,
             radius: AGENT_RADIUS,
-            speed: 3.8 + Math.random() * 0.6,
-            priority: Math.random(),
-            waitTime: Math.random() * 1.5,
+            speed: 3.8 + random() * 0.6,
+            priority: random(),
+            waitTime: random() * 1.5,
             phase: PHASE_MILLING,
             phaseTime: 0,
             homeAngle: Math.atan2(y - state.target.y, x - state.target.x),
-            cooldown: Math.random() * 0.8,
+            cooldown: random() * 0.8,
             slotAngle: Math.atan2(y - state.target.y, x - state.target.x),
             heading: Math.atan2(state.target.y - y, state.target.x - x),
             headingHistory: [],
@@ -1182,10 +1582,20 @@
             pathRequestedStartKey: "",
             pathRequestedGoalKey: "",
             pathNodeKeys: [],
+            pathWaypoints: [],
             pathCursor: 0,
             pathGoalX: x,
             pathGoalY: y
-        });
+        };
+        if (metadata && typeof metadata === "object") {
+            if (metadata.autoSpawnSectionKey !== undefined) {
+                if (typeof metadata.autoSpawnSectionKey !== "string" || metadata.autoSpawnSectionKey.length === 0) {
+                    throw new Error("Wizard of Flatland auto-spawned enemy requires a section key");
+                }
+                agent.autoSpawnSectionKey = metadata.autoSpawnSectionKey;
+            }
+        }
+        state.agents.push(agent);
     }
 
     function enforceInitialWallConstraints() {
@@ -1199,7 +1609,10 @@
     }
 
     function updateTargetKeyboardMovement(dt) {
-        if (!Number.isFinite(dt) || dt <= 0) return;
+        if (!Number.isFinite(dt) || dt <= 0) {
+            clearTargetTravelVector();
+            return;
+        }
         let forward = 0;
         let sideways = 0;
         let movementSpeedMultiplier = 1;
@@ -1212,7 +1625,10 @@
 
         const signedForward = Math.max(-1, Math.min(1, forward));
         const signedSideways = Math.max(-1, Math.min(1, sideways));
-        if (signedForward === 0 && signedSideways === 0) return;
+        if (signedForward === 0 && signedSideways === 0) {
+            clearTargetTravelVector();
+            return;
+        }
 
         if (signedForward > 0 && signedSideways !== 0) {
             movementSpeedMultiplier = TARGET_KEYBOARD_FORWARD_DIAGONAL_SPEED_MULTIPLIER;
@@ -1231,18 +1647,27 @@
         const dirX = forwardX * signedForward + sideX * signedSideways;
         const dirY = forwardY * signedForward + sideY * signedSideways;
         const magnitude = Math.hypot(dirX, dirY);
-        if (!(magnitude > 0)) throw new Error("NPC movement lab keyboard direction must be non-zero");
+        if (!(magnitude > 0)) throw new Error("Wizard of Flatland keyboard direction must be non-zero");
         const speed = (state.fastMovementHeld ? TARGET_KEYBOARD_FAST_MOVE_SPEED : TARGET_KEYBOARD_MOVE_SPEED) * movementSpeedMultiplier;
+        const startX = state.target.x;
+        const startY = state.target.y;
         moveTargetWithNpcPush(
             state.target.x + (dirX / magnitude) * speed * dt,
             state.target.y + (dirY / magnitude) * speed * dt
         );
+        state.targetTravelVector.x = state.target.x - startX;
+        state.targetTravelVector.y = state.target.y - startY;
+    }
+
+    function clearTargetTravelVector() {
+        state.targetTravelVector.x = 0;
+        state.targetTravelVector.y = 0;
     }
 
     function updateProjectedCursorKeyboardControls(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
         const cursor = state.projectedCursor;
-        if (!cursor || typeof cursor !== "object") throw new Error("NPC movement lab projected cursor state is missing");
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
 
         let bend = 0;
         if (state.pressedMovementKeys.ArrowLeft) bend -= 1;
@@ -1282,18 +1707,62 @@
         }
     }
 
+    function updateIdleTargetFacingAndCursor(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        if (isTargetMovementInputActive()) return;
+        const cursor = state.projectedCursor;
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
+        if (!Number.isFinite(cursor.distance)) throw new Error("Wizard of Flatland idle cursor requires a finite distance");
+
+        const cursorPoint = getCurrentProjectedCursorWorldPoint();
+        const dx = cursorPoint.x - state.target.x;
+        const dy = cursorPoint.y - state.target.y;
+        const cursorDistance = Math.hypot(dx, dy);
+        if (cursorDistance > 0.000001) {
+            const targetHeading = Math.atan2(dy, dx);
+            const delta = shortestAngleDelta(state.target.heading, targetHeading);
+            const maxTurn = TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET / TARGET_IDLE_FACE_CURSOR_SECONDS * TARGET_TURN_SPEED_MULTIPLIER * dt;
+            const appliedTurn = Math.max(-maxTurn, Math.min(maxTurn, delta));
+            state.target.heading = normalizeAngle(state.target.heading + appliedTurn);
+
+            let nextCursorDistance = cursorDistance;
+            if (!isProjectedCursorInputActive()) {
+                const maxDistanceDelta = Math.abs(TARGET_PROJECTED_CURSOR_DISTANCE - TARGET_IDLE_PROJECTED_CURSOR_DISTANCE) /
+                    TARGET_IDLE_CURSOR_DISTANCE_SECONDS * dt;
+                nextCursorDistance = moveToward(cursorDistance, TARGET_IDLE_PROJECTED_CURSOR_DISTANCE, maxDistanceDelta);
+            }
+            updateProjectedCursorFromFixedWorldPoint({
+                x: state.target.x + (dx / cursorDistance) * nextCursorDistance,
+                y: state.target.y + (dy / cursorDistance) * nextCursorDistance
+            });
+        }
+    }
+
+    function updateMovingTargetCursorStraightening(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        if (!isTargetMovementInputActive() || isProjectedCursorInputActive()) return;
+        const cursor = state.projectedCursor;
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
+        if (!Number.isFinite(cursor.angleOffset)) throw new Error("Wizard of Flatland moving cursor straightening requires a finite bend");
+        cursor.angleOffset = moveToward(
+            cursor.angleOffset,
+            0,
+            TARGET_PROJECTED_CURSOR_ANGLE_SPEED * TARGET_PROJECTED_CURSOR_RETURN_ANGLE_SPEED_MULTIPLIER * dt
+        );
+    }
+
     function updateTargetHeadingFromProjectedCursor(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
         const cursor = state.projectedCursor;
-        if (!cursor || typeof cursor !== "object") throw new Error("NPC movement lab projected cursor state is missing");
-        if (!Number.isFinite(cursor.angleOffset)) throw new Error("NPC movement lab projected cursor turn requires a finite bend");
-        if (!isTargetMovementInputActive() && !isProjectedCursorInputActive()) return;
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
+        if (!Number.isFinite(cursor.angleOffset)) throw new Error("Wizard of Flatland projected cursor turn requires a finite bend");
+        if (!isTargetMovementInputActive()) return;
         const bendRatio = getProjectedCursorBendRatio(cursor.angleOffset);
         if (bendRatio === 0) return;
         const trace = getCurrentProjectedCursorTrace();
         const effectiveDistance = getProjectedCursorTraceDistance(trace);
         const turnRadius = getProjectedCursorTurnRadius(effectiveDistance, bendRatio);
-        const turnRate = TARGET_KEYBOARD_MOVE_SPEED / turnRadius;
+        const turnRate = TARGET_KEYBOARD_MOVE_SPEED / turnRadius * TARGET_TURN_SPEED_MULTIPLIER;
         state.target.heading = normalizeAngle(state.target.heading + Math.sign(bendRatio) * turnRate * dt);
     }
 
@@ -1319,7 +1788,7 @@
         const goal = Number(target);
         const delta = Number(maxDelta);
         if (!Number.isFinite(current) || !Number.isFinite(goal) || !Number.isFinite(delta)) {
-            throw new Error("NPC movement lab moveToward requires finite values");
+            throw new Error("Wizard of Flatland moveToward requires finite values");
         }
         if (Math.abs(goal - current) <= delta) return goal;
         return current + Math.sign(goal - current) * delta;
@@ -1373,13 +1842,21 @@
 
     function findEarliestFireballWallHit(fromX, fromY, toX, toY) {
         if (!Number.isFinite(fromX) || !Number.isFinite(fromY) || !Number.isFinite(toX) || !Number.isFinite(toY)) {
-            throw new Error("NPC movement lab fireball wall hit test requires finite movement");
+            throw new Error("Wizard of Flatland fireball wall hit test requires finite movement");
         }
         let best = null;
-        for (const wall of state.walls) {
-            const hit = wall.kind === WALL_KIND_SEGMENT
-                ? sweptCircleSegmentHit(fromX, fromY, toX, toY, wall.ax, wall.ay, wall.bx, wall.by, FIREBALL_DAMAGE_RADIUS)
-                : sweptCircleBoundaryWallHit(fromX, fromY, toX, toY, wall, FIREBALL_DAMAGE_RADIUS);
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            const hit = sweptCircleSegmentHit(
+                fromX,
+                fromY,
+                toX,
+                toY,
+                state.walls[i + WALL_X1],
+                state.walls[i + WALL_Y1],
+                state.walls[i + WALL_X2],
+                state.walls[i + WALL_Y2],
+                FIREBALL_DAMAGE_RADIUS + WALL_WORLD_HALF_THICKNESS
+            );
             if (!hit || (best && hit.t >= best.t)) continue;
             best = {
                 t: hit.t,
@@ -1390,29 +1867,16 @@
         return best;
     }
 
-    function sweptCircleBoundaryWallHit(fromX, fromY, toX, toY, wall, radius) {
-        if (!wall || !Number.isFinite(wall.ax) || !Number.isFinite(wall.ay) || !Number.isFinite(wall.nx) || !Number.isFinite(wall.ny) || !Number.isFinite(radius)) {
-            throw new Error("NPC movement lab fireball boundary hit test requires finite wall data");
-        }
-        const startSigned = (fromX - wall.ax) * wall.nx + (fromY - wall.ay) * wall.ny;
-        const endSigned = (toX - wall.ax) * wall.nx + (toY - wall.ay) * wall.ny;
-        if (startSigned <= radius) return { t: 0 };
-        if (endSigned > radius) return null;
-        const delta = startSigned - endSigned;
-        if (!(delta > 0.000001)) return null;
-        return { t: Math.max(0, Math.min(1, (startSigned - radius) / delta)) };
-    }
-
     function findAgentIntersectingPolygon(polygon) {
         if (!Array.isArray(polygon) || polygon.length < 3) {
-            throw new Error("NPC movement lab fireball hit test requires a polygon");
+            throw new Error("Wizard of Flatland fireball hit test requires a polygon");
         }
         return state.agents.find((agent) => polygonIntersectsCircle(polygon, agent.x, agent.y, agent.radius)) || null;
     }
 
     function detonateFireball(fireball) {
         if (!fireball || !Number.isFinite(fireball.x) || !Number.isFinite(fireball.y)) {
-            throw new Error("NPC movement lab fireball explosion requires a finite fireball");
+            throw new Error("Wizard of Flatland fireball explosion requires a finite fireball");
         }
         destroyAgentsIntersectingCircle(fireball.x, fireball.y, FIREBALL_EXPLOSION_DAMAGE_RADIUS);
         state.fireballExplosions.push({
@@ -1432,7 +1896,7 @@
 
     function destroyAgentsIntersectingCircle(circleX, circleY, radius) {
         if (!Number.isFinite(circleX) || !Number.isFinite(circleY) || !Number.isFinite(radius)) {
-            throw new Error("NPC movement lab fireball explosion requires a finite damage circle");
+            throw new Error("Wizard of Flatland fireball explosion requires a finite damage circle");
         }
         state.agents = state.agents.filter((agent) => {
             const distance = Math.hypot(agent.x - circleX, agent.y - circleY);
@@ -1442,7 +1906,7 @@
 
     function getFireballHitboxPolygon(fireball) {
         if (!fireball || !Number.isFinite(fireball.x) || !Number.isFinite(fireball.y) || !Number.isFinite(fireball.dirX) || !Number.isFinite(fireball.dirY)) {
-            throw new Error("NPC movement lab fireball hitbox requires a finite fireball");
+            throw new Error("Wizard of Flatland fireball hitbox requires a finite fireball");
         }
         const halfLength = FIREBALL_HITBOX_LENGTH * 0.5;
         const halfWidth = FIREBALL_HITBOX_WIDTH * 0.5;
@@ -1470,7 +1934,7 @@
 
     function polygonIntersectsCircle(polygon, circleX, circleY, radius) {
         if (!Number.isFinite(circleX) || !Number.isFinite(circleY) || !Number.isFinite(radius)) {
-            throw new Error("NPC movement lab polygon-circle hit test requires finite circle data");
+            throw new Error("Wizard of Flatland polygon-circle hit test requires finite circle data");
         }
         if (pointInPolygon(circleX, circleY, polygon)) return true;
         for (let i = 0; i < polygon.length; i++) {
@@ -1487,7 +1951,7 @@
             const a = polygon[i];
             const b = polygon[j];
             if (!Number.isFinite(a.x) || !Number.isFinite(a.y) || !Number.isFinite(b.x) || !Number.isFinite(b.y)) {
-                throw new Error("NPC movement lab polygon hit test requires finite polygon points");
+                throw new Error("Wizard of Flatland polygon hit test requires finite polygon points");
             }
             const intersects = ((a.y > y) !== (b.y > y)) &&
                 x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x;
@@ -1498,7 +1962,7 @@
 
     function moveTargetWithNpcPush(desiredX, desiredY) {
         if (!Number.isFinite(desiredX) || !Number.isFinite(desiredY)) {
-            throw new Error("NPC movement lab target move requires finite coordinates");
+            throw new Error("Wizard of Flatland target move requires finite coordinates");
         }
         const constrainedMove = constrainMovementToSegmentWalls(
             state.target.x,
@@ -1663,25 +2127,19 @@
     function constrainActorToWalls(actor, radius) {
         for (let pass = 0; pass < 4; pass++) {
             let changed = false;
-            for (const wall of state.walls) {
-                if (wall.kind === WALL_KIND_SEGMENT) {
-                    const distance = pointSegmentDistance(actor.x, actor.y, wall.ax, wall.ay, wall.bx, wall.by);
-                    if (distance >= radius) continue;
-                    const normal = segmentRepulsionNormal(actor.x, actor.y, wall.ax, wall.ay, wall.bx, wall.by);
-                    const correction = radius - distance + TARGET_NPC_PUSH_SLOP;
-                    actor.x += normal.x * correction;
-                    actor.y += normal.y * correction;
-                    changed = true;
-                    continue;
-                }
-
-                const signed = (actor.x - wall.ax) * wall.nx + (actor.y - wall.ay) * wall.ny;
-                if (signed < radius) {
-                    const correction = radius - signed;
-                    actor.x += wall.nx * correction;
-                    actor.y += wall.ny * correction;
-                    changed = true;
-                }
+            for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+                const ax = state.walls[i + WALL_X1];
+                const ay = state.walls[i + WALL_Y1];
+                const bx = state.walls[i + WALL_X2];
+                const by = state.walls[i + WALL_Y2];
+                const distance = pointSegmentDistance(actor.x, actor.y, ax, ay, bx, by);
+                const blockingRadius = radius + WALL_WORLD_HALF_THICKNESS;
+                if (distance >= blockingRadius) continue;
+                const normal = segmentRepulsionNormal(actor.x, actor.y, ax, ay, bx, by);
+                const correction = blockingRadius - distance + TARGET_NPC_PUSH_SLOP;
+                actor.x += normal.x * correction;
+                actor.y += normal.y * correction;
+                changed = true;
             }
             if (!changed) break;
         }
@@ -1694,7 +2152,7 @@
             const minDistance = TARGET_RADIUS + agent.radius - TARGET_NPC_PUSH_SLOP * 4;
             const distance = Math.hypot(agent.x - state.target.x, agent.y - state.target.y);
             if (distance < minDistance) {
-                throw new Error(`NPC movement lab target collision unresolved for agent ${agent.id}`);
+                throw new Error(`Wizard of Flatland target collision unresolved for agent ${agent.id}`);
             }
         }
         for (let i = 0; i < state.agents.length; i++) {
@@ -1704,24 +2162,24 @@
                 const minDistance = left.radius + right.radius - TARGET_NPC_PUSH_SLOP * 4;
                 const distance = Math.hypot(right.x - left.x, right.y - left.y);
                 if (distance < minDistance) {
-                    throw new Error(`NPC movement lab NPC collision unresolved for agents ${left.id} and ${right.id}`);
+                    throw new Error(`Wizard of Flatland NPC collision unresolved for agents ${left.id} and ${right.id}`);
                 }
             }
         }
     }
 
     function assertActorWallSeparation(label, actor, radius) {
-        for (const wall of state.walls) {
-            if (wall.kind === WALL_KIND_SEGMENT) {
-                const distance = pointSegmentDistance(actor.x, actor.y, wall.ax, wall.ay, wall.bx, wall.by);
-                if (distance < radius - TARGET_NPC_PUSH_SLOP * 4) {
-                    throw new Error(`NPC movement lab ${label} segment wall collision unresolved`);
-                }
-                continue;
-            }
-            const signed = (actor.x - wall.ax) * wall.nx + (actor.y - wall.ay) * wall.ny;
-            if (signed < radius - TARGET_NPC_PUSH_SLOP * 4) {
-                throw new Error(`NPC movement lab ${label} wall collision unresolved`);
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            const distance = pointSegmentDistance(
+                actor.x,
+                actor.y,
+                state.walls[i + WALL_X1],
+                state.walls[i + WALL_Y1],
+                state.walls[i + WALL_X2],
+                state.walls[i + WALL_Y2]
+            );
+            if (distance < radius + WALL_WORLD_HALF_THICKNESS - TARGET_NPC_PUSH_SLOP * 4) {
+                throw new Error(`Wizard of Flatland ${label} segment wall collision unresolved`);
             }
         }
     }
@@ -1736,7 +2194,6 @@
             activeAgents.push(agent);
         }
         const packed = new Float32Array(activeAgents.length * STRIDE);
-        const forceDirectPathing = isProceduralMazeScenario() && state.generatedMazeLoading;
         for (let i = 0; i < activeAgents.length; i++) {
             const agent = activeAgents[i];
             const base = i * STRIDE;
@@ -1754,36 +2211,20 @@
             packed[base + 11] = agent.heading;
             packed[base + 12] = agent.millingDirection;
             packed[base + 13] = agent.millingWallTurnLock || 0;
-            packed[base + 14] = !forceDirectPathing && agent.pathMode === PATH_MODE_WORKER ? PATH_MODE_WORKER : PATH_MODE_DIRECT;
-            packed[base + 15] = !forceDirectPathing && Number.isFinite(agent.pathGoalX) ? agent.pathGoalX : state.target.x;
-            packed[base + 16] = !forceDirectPathing && Number.isFinite(agent.pathGoalY) ? agent.pathGoalY : state.target.y;
-        }
-        return packed;
-    }
-
-    function packWalls() {
-        const packed = new Float32Array(state.walls.length * WALL_STRIDE);
-        for (let i = 0; i < state.walls.length; i++) {
-            const wall = state.walls[i];
-            const base = i * WALL_STRIDE;
-            packed[base] = wall.ax;
-            packed[base + 1] = wall.ay;
-            packed[base + 2] = wall.bx;
-            packed[base + 3] = wall.by;
-            packed[base + 4] = wall.nx;
-            packed[base + 5] = wall.ny;
-            packed[base + 6] = wall.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY;
+            packed[base + 14] = agent.pathMode === PATH_MODE_WORKER ? PATH_MODE_WORKER : PATH_MODE_DIRECT;
+            packed[base + 15] = Number.isFinite(agent.pathGoalX) ? agent.pathGoalX : state.target.x;
+            packed[base + 16] = Number.isFinite(agent.pathGoalY) ? agent.pathGoalY : state.target.y;
         }
         return packed;
     }
 
     function requestStep(dt) {
         if (state.waitingForWorker) return;
-        if (isProceduralMazeScenario() && state.nodeLayer.nodes.length === 0) {
-            labels.workerStatus.textContent = state.generatedMazeLoading ? "maze loading" : "maze missing";
+        if (isProceduralMazeScenario() && getPathfindingNodeCount() === 0) {
+            setLabelText(labels.workerStatus, state.generatedMazeLoading ? "maze loading" : "maze missing");
             return;
         }
-        if (!(isProceduralMazeScenario() && state.generatedMazeLoading)) updateAgentPathing(dt);
+        updateAgentPathing(dt);
         state.waitingForWorker = true;
         const targetMoved = Math.hypot(
             state.target.x - state.lastSentTarget.x,
@@ -1791,36 +2232,44 @@
         ) > 0.001;
         state.lastSentTarget = { x: state.target.x, y: state.target.y };
         const agents = packAgents();
-        const walls = packWalls();
-        worker.postMessage({
+        const includeWalls = state.solverWallVersion !== state.worldVersion;
+        const walls = includeWalls ? cloneWallBuffer(state.walls, "solver walls") : null;
+        const message = {
             type: "step",
             requestId: state.requestId++,
             worldVersion: state.worldVersion,
             dt,
             agents,
-            walls,
             params: {
                 targetX: state.target.x,
                 targetY: state.target.y,
                 targetRadius: TARGET_RADIUS,
                 ringRadius: COMBAT_RING_RADIUS,
-                separationStrength: Number(separationInput.value),
+                separationStrength: getSeparationStrength(),
                 speedScale: getSpeedScale(),
                 targetMoved
             }
-        }, [agents.buffer, walls.buffer]);
+        };
+        const transfer = [agents.buffer];
+        if (includeWalls) {
+            message.walls = walls;
+            transfer.push(walls.buffer);
+            state.solverWallVersion = state.worldVersion;
+        }
+        worker.postMessage(message, transfer);
     }
 
     function handleWorkerMessage(event) {
         const message = event && event.data ? event.data : null;
         if (!message) return;
         if (message.type === "ready") {
-            labels.workerStatus.textContent = "ready";
+            setLabelText(labels.workerStatus, "ready");
             return;
         }
         if (message.type === "error") {
             state.waitingForWorker = false;
-            labels.workerStatus.textContent = message.message || "solver error";
+            state.solverWallVersion = 0;
+            setLabelText(labels.workerStatus, message.message || "solver error");
             return;
         }
         if (message.type !== "step_result") return;
@@ -1831,7 +2280,7 @@
         if ((state.stats.hits || 0) > 0) {
             state.targetFlashTime = 0.18;
         }
-        labels.workerStatus.textContent = "ready";
+        setLabelText(labels.workerStatus, "ready");
         updateStats();
     }
 
@@ -1966,7 +2415,7 @@
             target: { x: state.target.x, y: state.target.y },
             stats: state.stats
         };
-        console.groupCollapsed(`NPC movement lab heading glitch: agent ${agent.id}`);
+        console.groupCollapsed(`Wizard of Flatland heading glitch: agent ${agent.id}`);
         console.log(dump);
         console.table(history);
         console.groupEnd();
@@ -1999,20 +2448,21 @@
 
     function updateStats() {
         const stats = state.stats || {};
-        labels.solveMs.textContent = `${Number(stats.solveMs || 0).toFixed(2)} ms`;
-        labels.pairChecks.textContent = String(stats.pairChecks || 0);
-        labels.movingCount.textContent = String(stats.moving || stats.milling || 0);
-        labels.seekingCount.textContent = String(stats.seeking || 0);
-        labels.waitingCount.textContent = String(stats.waiting || 0);
-        labels.attackingCount.textContent = String(stats.attacking || 0);
-        labels.retreatingCount.textContent = String(stats.retreating || 0);
-        labels.blockedCount.textContent = String(stats.blocked || 0);
-        labels.wallLeaks.textContent = String(stats.wallLeaks || 0);
+        setLabelText(labels.solveMs, `${Number(stats.solveMs || 0).toFixed(2)} ms`);
+        setLabelText(labels.pairChecks, String(stats.pairChecks || 0));
+        setLabelText(labels.movingCount, String(stats.moving || stats.milling || 0));
+        setLabelText(labels.seekingCount, String(stats.seeking || 0));
+        setLabelText(labels.waitingCount, String(stats.waiting || 0));
+        setLabelText(labels.attackingCount, String(stats.attacking || 0));
+        setLabelText(labels.retreatingCount, String(stats.retreating || 0));
+        setLabelText(labels.blockedCount, String(stats.blocked || 0));
+        setLabelText(labels.wallLeaks, String(stats.wallLeaks || 0));
     }
 
     function updateAgentPathing(_dt) {
         const now = performance.now();
-        const goalNode = nearestPassablePathfindingNode(state.target.x, state.target.y);
+        const goalNodeIndex = nearestPassablePathfindingNode(state.target.x, state.target.y);
+        const goalNodeKey = getPathfindingNodeKey(goalNodeIndex);
         for (const agent of state.agents) {
             if (!isAgentInInstalledMazeSection(agent)) {
                 freezeAgentForUnloadedSection(agent);
@@ -2024,6 +2474,7 @@
                 agent.pathGoalX = state.target.x;
                 agent.pathGoalY = state.target.y;
                 agent.pathNodeKeys = [];
+                agent.pathWaypoints = [];
                 agent.pathCursor = 0;
                 continue;
             }
@@ -2036,34 +2487,35 @@
                 agent.pathGoalY = waypoint.y;
             }
 
-            const rawStartNode = nearestPathfindingNode(agent.x, agent.y);
-            const startNode = isPathfindingNodePassable(rawStartNode)
-                ? rawStartNode
+            const rawStartNodeIndex = nearestPathfindingNode(agent.x, agent.y);
+            const startNodeIndex = isPathfindingNodePassable(rawStartNodeIndex)
+                ? rawStartNodeIndex
                 : nearestPassablePathfindingNode(agent.x, agent.y);
+            const rawStartNodeKey = getPathfindingNodeKey(rawStartNodeIndex);
+            const startNodeKey = getPathfindingNodeKey(startNodeIndex);
             const shouldRequest =
                 !agent.pathRequestPending &&
                 (
                     agent.pathNodeKeys.length === 0 ||
-                    agent.pathRequestedWorldVersion !== state.worldVersion ||
-                    agent.pathRequestedGoalKey !== goalNode.key ||
-                    agent.pathRequestedRawStartKey !== rawStartNode.key ||
-                    agent.pathRequestedStartKey !== startNode.key ||
+                    agent.pathRequestedGoalKey !== goalNodeKey ||
+                    agent.pathRequestedRawStartKey !== rawStartNodeKey ||
+                    agent.pathRequestedStartKey !== startNodeKey ||
                     now - agent.pathRequestedAt >= PATH_REQUEST_INTERVAL_SECONDS * 1000
                 );
-            if (shouldRequest) requestAgentPath(agent, rawStartNode, startNode, goalNode, now);
+            if (shouldRequest) requestAgentPath(agent, rawStartNodeIndex, startNodeIndex, goalNodeIndex, now);
         }
     }
 
     function hasDirectLineOfSight(fromX, fromY, toX, toY, radius) {
         const wallGeometry = getWallGeometryApi();
-        for (const wall of state.walls) {
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
             if (wallGeometry.connectionCrossesWallFaces(
                 { x: fromX, y: fromY },
                 { x: toX, y: toY },
-                { x: wall.ax, y: wall.ay },
-                { x: wall.bx, y: wall.by },
+                { x: state.walls[i + WALL_X1], y: state.walls[i + WALL_Y1] },
+                { x: state.walls[i + WALL_X2], y: state.walls[i + WALL_Y2] },
                 {
-                    thickness: Math.max(PATH_NODE_WALL_THICKNESS, radius * 0.35),
+                    thickness: WALL_WORLD_THICKNESS,
                     extend: PATH_NODE_WALL_FACE_EXTEND
                 }
             )) {
@@ -2074,36 +2526,45 @@
     }
 
     function nearestPathfindingNode(worldX, worldY) {
-        let best = null;
-        for (const node of state.nodeLayer.nodes) {
-            const dx = node.x - worldX;
-            const dy = node.y - worldY;
+        let bestIndex = -1;
+        let bestDistSq = Infinity;
+        const count = getPathfindingNodeCount();
+        for (let pathIndex = 0; pathIndex < count; pathIndex++) {
+            const dx = getPathfindingNodeX(pathIndex) - worldX;
+            const dy = getPathfindingNodeY(pathIndex) - worldY;
             const distSq = dx * dx + dy * dy;
-            if (!best || distSq < best.distSq) best = { node, distSq };
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                bestIndex = pathIndex;
+            }
         }
-        if (!best) throw new Error("NPC movement lab pathfinding requires at least one node");
-        return best.node;
+        if (bestIndex < 0) throw new Error("Wizard of Flatland pathfinding requires at least one node");
+        return bestIndex;
     }
 
     function nearestPassablePathfindingNode(worldX, worldY) {
-        let best = null;
-        for (const node of state.nodeLayer.nodes) {
-            if (!isPathfindingNodePassable(node)) continue;
-            const dx = node.x - worldX;
-            const dy = node.y - worldY;
+        let bestIndex = -1;
+        let bestDistSq = Infinity;
+        const count = getPathfindingNodeCount();
+        for (let pathIndex = 0; pathIndex < count; pathIndex++) {
+            if (!isPathfindingNodePassable(pathIndex)) continue;
+            const dx = getPathfindingNodeX(pathIndex) - worldX;
+            const dy = getPathfindingNodeY(pathIndex) - worldY;
             const distSq = dx * dx + dy * dy;
-            if (!best || distSq < best.distSq) best = { node, distSq };
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                bestIndex = pathIndex;
+            }
         }
-        if (!best) throw new Error("NPC movement lab pathfinding requires at least one passable node");
-        return best.node;
+        if (bestIndex < 0) throw new Error("Wizard of Flatland pathfinding requires at least one passable node");
+        return bestIndex;
     }
 
     function advanceAgentPathCursor(agent) {
         while (agent.pathCursor < agent.pathNodeKeys.length) {
-            const key = agent.pathNodeKeys[agent.pathCursor];
-            const node = state.nodeLayer.nodeByKey.get(key);
-            if (!node) throw new Error(`NPC movement lab path contains unknown node ${key}`);
-            const distance = Math.hypot(node.x - agent.x, node.y - agent.y);
+            const waypoint = getAgentPathWaypoint(agent);
+            if (!waypoint) return;
+            const distance = Math.hypot(waypoint.x - agent.x, waypoint.y - agent.y);
             if (distance > PATH_WAYPOINT_REACHED_DISTANCE) return;
             agent.pathCursor += 1;
         }
@@ -2111,21 +2572,138 @@
 
     function getAgentPathWaypoint(agent) {
         if (agent.pathCursor >= agent.pathNodeKeys.length) return null;
-        const key = agent.pathNodeKeys[agent.pathCursor];
-        const node = state.nodeLayer.nodeByKey.get(key);
-        if (!node) throw new Error(`NPC movement lab path waypoint missing for ${key}`);
-        return node;
+        const pathKey = agent.pathNodeKeys[agent.pathCursor];
+        if (typeof pathKey !== "string" || pathKey.length === 0) {
+            throw new Error(`Wizard of Flatland path contains malformed node key at cursor ${agent.pathCursor}`);
+        }
+        const currentPathIndex = getPathfindingNodeIndexForKey(pathKey);
+        const storedWaypoint = getStoredAgentPathWaypoint(agent, agent.pathCursor, pathKey);
+        if (Number.isInteger(currentPathIndex)) {
+            return {
+                pathIndex: currentPathIndex,
+                x: getPathfindingNodeX(currentPathIndex),
+                y: getPathfindingNodeY(currentPathIndex),
+                key: pathKey,
+                blocked: isPathfindingNodeBlocked(currentPathIndex),
+                stale: false
+            };
+        }
+        if (!storedWaypoint) {
+            throw new Error(`Wizard of Flatland path waypoint ${pathKey} is missing from current and stored path data`);
+        }
+        return {
+            pathIndex: null,
+            x: storedWaypoint.x,
+            y: storedWaypoint.y,
+            key: pathKey,
+            blocked: null,
+            stale: true
+        };
     }
 
-    function requestAgentPath(agent, rawStartNode, startNode, goalNode, now) {
+    function getStoredAgentPathWaypoint(agent, cursor, expectedKey) {
+        const waypoints = Array.isArray(agent.pathWaypoints) ? agent.pathWaypoints : [];
+        const waypoint = waypoints[cursor];
+        if (!waypoint || typeof waypoint !== "object") return null;
+        if (waypoint.key !== expectedKey) {
+            throw new Error(`Wizard of Flatland path waypoint key mismatch: expected ${expectedKey}, got ${waypoint.key}`);
+        }
+        if (!Number.isFinite(waypoint.x) || !Number.isFinite(waypoint.y)) {
+            throw new Error(`Wizard of Flatland path waypoint ${expectedKey} has invalid coordinates`);
+        }
+        return waypoint;
+    }
+
+    function getPathfindingNodeCount() {
+        return state.nodeLayer.nodes.length / PATH_SNAPSHOT_NODE_STRIDE;
+    }
+
+    function getPathfindingEdgeCount() {
+        return state.nodeLayer.edges.length / PATH_SNAPSHOT_EDGE_STRIDE;
+    }
+
+    function getPathfindingBlockedEdgeCount() {
+        return state.nodeLayer.blockedEdges.length / PATH_SNAPSHOT_EDGE_STRIDE;
+    }
+
+    function isValidPathfindingNodeIndex(pathIndex) {
+        return Number.isInteger(pathIndex) && pathIndex >= 0 && pathIndex < getPathfindingNodeCount();
+    }
+
+    function getPathfindingNodeBase(pathIndex) {
+        if (!isValidPathfindingNodeIndex(pathIndex)) {
+            throw new Error(`Wizard of Flatland path node index is invalid: ${pathIndex}`);
+        }
+        return pathIndex * PATH_SNAPSHOT_NODE_STRIDE;
+    }
+
+    function getPathfindingNodeX(pathIndex) {
+        return state.nodeLayer.nodes[getPathfindingNodeBase(pathIndex) + PATH_NODE_X];
+    }
+
+    function getPathfindingNodeY(pathIndex) {
+        return state.nodeLayer.nodes[getPathfindingNodeBase(pathIndex) + PATH_NODE_Y];
+    }
+
+    function isPathfindingNodeBlocked(pathIndex) {
+        return state.nodeLayer.nodes[getPathfindingNodeBase(pathIndex) + PATH_NODE_BLOCKED] === 1;
+    }
+
+    function getPathfindingNodeXIndex(pathIndex) {
+        return Math.round(state.nodeLayer.nodes[getPathfindingNodeBase(pathIndex) + PATH_NODE_XINDEX]);
+    }
+
+    function getPathfindingNodeYIndex(pathIndex) {
+        return Math.round(state.nodeLayer.nodes[getPathfindingNodeBase(pathIndex) + PATH_NODE_YINDEX]);
+    }
+
+    function getPathfindingNodeKey(pathIndex) {
+        return pathfindingNodeKey(getPathfindingNodeXIndex(pathIndex), getPathfindingNodeYIndex(pathIndex));
+    }
+
+    function getPathfindingNodeIndexForKey(pathKey) {
+        if (typeof pathKey !== "string" || pathKey.length === 0) {
+            throw new Error("Wizard of Flatland path node lookup requires a node key");
+        }
+        if (!(state.nodeLayer.indexByKey instanceof Map)) {
+            throw new Error("Wizard of Flatland path node lookup requires a node key index");
+        }
+        return state.nodeLayer.indexByKey.has(pathKey) ? state.nodeLayer.indexByKey.get(pathKey) : null;
+    }
+
+    function appendAgentPathWaypoint(pathNodeKeys, pathWaypoints, pathIndex, prepend = false) {
+        if (!Array.isArray(pathNodeKeys) || !Array.isArray(pathWaypoints)) {
+            throw new Error("Wizard of Flatland path waypoint append requires path arrays");
+        }
+        if (!isValidPathfindingNodeIndex(pathIndex)) {
+            throw new Error(`Wizard of Flatland path waypoint append received invalid node index ${pathIndex}`);
+        }
+        const waypoint = {
+            key: getPathfindingNodeKey(pathIndex),
+            x: getPathfindingNodeX(pathIndex),
+            y: getPathfindingNodeY(pathIndex)
+        };
+        if (prepend) {
+            pathNodeKeys.unshift(waypoint.key);
+            pathWaypoints.unshift(waypoint);
+            return;
+        }
+        pathNodeKeys.push(waypoint.key);
+        pathWaypoints.push(waypoint);
+    }
+
+    function requestAgentPath(agent, rawStartNodeIndex, startNodeIndex, goalNodeIndex, now) {
         const requestId = state.pathfindingRequestId++;
+        const rawStartNodeKey = getPathfindingNodeKey(rawStartNodeIndex);
+        const startNodeKey = getPathfindingNodeKey(startNodeIndex);
+        const goalNodeKey = getPathfindingNodeKey(goalNodeIndex);
         agent.pathRequestPending = true;
         agent.pathRequestId = requestId;
         agent.pathRequestedAt = now;
-        agent.pathRequestedWorldVersion = state.worldVersion;
-        agent.pathRequestedRawStartKey = rawStartNode.key;
-        agent.pathRequestedStartKey = startNode.key;
-        agent.pathRequestedGoalKey = goalNode.key;
+        agent.pathRequestedWorldVersion = state.pathfindingSnapshotVersion;
+        agent.pathRequestedRawStartKey = rawStartNodeKey;
+        agent.pathRequestedStartKey = startNodeKey;
+        agent.pathRequestedGoalKey = goalNodeKey;
         pathfindingWorker.postMessage({
             type: "request_path",
             requestId,
@@ -2136,8 +2714,8 @@
                 canBreakDoors: false,
                 canBreakTreesLargerThanSelf: false
             },
-            startNodeKey: startNode.key,
-            destinationNodeKey: goalNode.key,
+            startNodeIndex,
+            destinationNodeIndex: goalNodeIndex,
             options: {
                 allowBlockedDestination: false,
                 maxPathLength: null,
@@ -2152,28 +2730,37 @@
         if (!message || typeof message.type !== "string") return;
         if (message.type === "ready") return;
         if (message.type !== "path_result") return;
-        if (isProceduralMazeScenario() && state.generatedMazeLoading) return;
         const agent = state.agents.find((candidate) => candidate.pathRequestId === message.requestId);
         if (!agent) return;
         agent.pathRequestPending = false;
         if (Number(message.mapVersion) !== Number(state.pathfindingSnapshotVersion)) return;
         if (!message.ok) {
             agent.pathNodeKeys = [];
+            agent.pathWaypoints = [];
             agent.pathCursor = 0;
             agent.pathGoalX = agent.x;
             agent.pathGoalY = agent.y;
             return;
         }
-        if (!Array.isArray(message.pathNodeKeys)) {
-            throw new Error("NPC movement lab pathfinding worker returned a malformed path");
+        if (!(message.pathNodeIndices instanceof Int32Array) && !Array.isArray(message.pathNodeIndices)) {
+            throw new Error("Wizard of Flatland pathfinding worker returned a malformed path");
         }
-        const pathNodeKeys = message.pathNodeKeys.slice();
-        if (agent.pathRequestedStartKey && agent.pathRequestedStartKey !== agent.pathRequestedRawStartKey) {
-            if (pathNodeKeys[0] !== agent.pathRequestedStartKey) {
-                pathNodeKeys.unshift(agent.pathRequestedStartKey);
+        const pathNodeKeys = [];
+        const pathWaypoints = [];
+        for (const pathIndex of message.pathNodeIndices) {
+            if (!isValidPathfindingNodeIndex(pathIndex)) {
+                throw new Error(`Wizard of Flatland pathfinding worker returned unknown node index ${pathIndex}`);
+            }
+            appendAgentPathWaypoint(pathNodeKeys, pathWaypoints, pathIndex);
+        }
+        if (agent.pathRequestedStartKey !== agent.pathRequestedRawStartKey) {
+            const requestedStartIndex = getPathfindingNodeIndexForKey(agent.pathRequestedStartKey);
+            if (Number.isInteger(requestedStartIndex) && pathNodeKeys[0] !== agent.pathRequestedStartKey) {
+                appendAgentPathWaypoint(pathNodeKeys, pathWaypoints, requestedStartIndex, true);
             }
         }
         agent.pathNodeKeys = pathNodeKeys;
+        agent.pathWaypoints = pathWaypoints;
         agent.pathCursor = 0;
         advanceAgentPathCursor(agent);
         const waypoint = getAgentPathWaypoint(agent);
@@ -2202,7 +2789,8 @@
         state.view.width = width;
         state.view.height = height;
         state.view.dpr = dpr;
-        state.view.scale = Math.min(width / 42, height / 29);
+        state.view.baseScale = Math.min(width / 42, height / 29);
+        state.view.scale = state.view.baseScale * state.view.zoom;
         state.view.offsetX = width / 2;
         state.view.offsetY = height / 2;
         state.view.centerX = Number.isFinite(state.target.x) ? state.target.x : 0;
@@ -2238,12 +2826,71 @@
         };
     }
 
+    function handleZoomWheel(event) {
+        if (!state.zoomHeld) return false;
+        if (!event || !Number.isFinite(event.deltaY)) return false;
+        resizeCanvas();
+        const previousZoom = state.view.zoom;
+        const multiplier = Math.exp(-event.deltaY * VIEW_ZOOM_WHEEL_STEP);
+        const nextZoom = Math.max(VIEW_ZOOM_MIN, Math.min(VIEW_ZOOM_MAX, previousZoom * multiplier));
+        if (Math.abs(nextZoom - previousZoom) <= 0.0001) {
+            event.preventDefault();
+            return true;
+        }
+        state.view.zoom = nextZoom;
+        state.view.scale = state.view.baseScale * state.view.zoom;
+        state.hexGridLayer.dirty = true;
+        state.nodeLayer.dirty = true;
+        if (isProceduralMazeScenario()) {
+            invalidateMazeLookaheadCache();
+            state.nodeLayer.pathCenterX = NaN;
+            state.nodeLayer.pathCenterY = NaN;
+        }
+        event.preventDefault();
+        return true;
+    }
+
+    function ensureDebugFpsCounterElement() {
+        if (state.debug.fpsCounterElement) return state.debug.fpsCounterElement;
+        const element = document.createElement("div");
+        element.className = "debug-fps-counter hidden";
+        element.setAttribute("aria-live", "off");
+        document.body.appendChild(element);
+        state.debug.fpsCounterElement = element;
+        return element;
+    }
+
+    function setDebugFpsCounterVisible(visible) {
+        state.debug.showFpsCounter = !!visible;
+        const element = ensureDebugFpsCounterElement();
+        element.classList.toggle("hidden", !state.debug.showFpsCounter);
+        if (state.debug.showFpsCounter) {
+            state.debug.lastFpsCounterUpdateAt = 0;
+        }
+        return state.debug.showFpsCounter;
+    }
+
+    function toggleDebugFpsCounter() {
+        return setDebugFpsCounterVisible(!state.debug.showFpsCounter);
+    }
+
+    function updateDebugFpsCounter(now, dt, renderMs) {
+        if (!state.debug.showFpsCounter) return;
+        if (now - state.debug.lastFpsCounterUpdateAt < 100) return;
+        const element = ensureDebugFpsCounterElement();
+        const fps = dt > 0 ? 1 / dt : 0;
+        element.textContent = `FPS ${fps.toFixed(1)}  Render ${renderMs.toFixed(2)} ms`;
+        state.debug.lastFpsCounterUpdateAt = now;
+    }
+
     function draw() {
         resizeCanvas();
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        drawHexGridLayer();
+        ctx.fillStyle = "#777777";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         drawPathfindingNodeLayer();
         drawWalls();
+        drawSectionBoundaries();
+        drawWallLabels();
         drawWallBuildPreview();
         drawTarget();
         drawAgentPaths();
@@ -2254,7 +2901,7 @@
 
     function drawHexGridLayer() {
         const layer = state.hexGridLayer;
-        if (!layer.ctx) throw new Error("NPC movement lab hex grid layer requires a 2D context");
+        if (!layer.ctx) throw new Error("Wizard of Flatland hex grid layer requires a 2D context");
         if (
             layer.dirty ||
             layer.width !== state.view.width ||
@@ -2272,9 +2919,9 @@
 
     function rebuildHexGridLayer() {
         const layer = state.hexGridLayer;
-        if (!layer.ctx) throw new Error("NPC movement lab hex grid layer requires a 2D context");
+        if (!layer.ctx) throw new Error("Wizard of Flatland hex grid layer requires a 2D context");
         if (!(state.view.width > 0 && state.view.height > 0 && state.view.scale > 0)) {
-            throw new Error("NPC movement lab hex grid requires a valid viewport");
+            throw new Error("Wizard of Flatland hex grid requires a valid viewport");
         }
 
         layer.width = state.view.width;
@@ -2360,12 +3007,15 @@
 
         const blockedEdges = [];
         const blockedKeys = new Set();
-        for (let w = 0; w < state.walls.length; w++) {
-            const wall = state.walls[w];
-            const wallMinX = Math.min(wall.ax, wall.bx) - HEX_GRID_WIDTH;
-            const wallMaxX = Math.max(wall.ax, wall.bx) + HEX_GRID_WIDTH;
-            const wallMinY = Math.min(wall.ay, wall.by) - HEX_GRID_HEIGHT;
-            const wallMaxY = Math.max(wall.ay, wall.by) + HEX_GRID_HEIGHT;
+        for (let w = 0; w < state.walls.length; w += WALL_STRIDE) {
+            const ax = state.walls[w + WALL_X1];
+            const ay = state.walls[w + WALL_Y1];
+            const bx = state.walls[w + WALL_X2];
+            const by = state.walls[w + WALL_Y2];
+            const wallMinX = Math.min(ax, bx) - HEX_GRID_WIDTH;
+            const wallMaxX = Math.max(ax, bx) + HEX_GRID_WIDTH;
+            const wallMinY = Math.min(ay, by) - HEX_GRID_HEIGHT;
+            const wallMaxY = Math.max(ay, by) + HEX_GRID_HEIGHT;
             for (const node of nodes) {
                 if (node.x < wallMinX || node.x > wallMaxX || node.y < wallMinY || node.y > wallMaxY) continue;
                 for (let dir = 0; dir < 12; dir++) {
@@ -2376,8 +3026,8 @@
                     if (!wallGeometry.connectionCrossesWallFaces(
                         node,
                         neighbor,
-                        { x: wall.ax, y: wall.ay },
-                        { x: wall.bx, y: wall.by },
+                        { x: ax, y: ay },
+                        { x: bx, y: by },
                         {
                             thickness: PATH_NODE_WALL_THICKNESS,
                             extend: PATH_NODE_WALL_FACE_EXTEND
@@ -2386,73 +3036,120 @@
                         continue;
                     }
                     blockedKeys.add(edgeKey);
-                    addDirectionalBlock(node, dir, wall);
+                    addDirectionalBlock(node, dir, w / WALL_STRIDE);
                     const reverseDir = neighbor.neighbors.indexOf(node);
-                    if (reverseDir >= 0) addDirectionalBlock(neighbor, reverseDir, wall);
-                    blockedEdges.push({ a: node, b: neighbor, wallIndex: w });
+                    if (reverseDir >= 0) addDirectionalBlock(neighbor, reverseDir, w / WALL_STRIDE);
+                    blockedEdges.push({ a: node, b: neighbor, wallIndex: w / WALL_STRIDE });
                 }
             }
         }
         for (const node of nodes) {
             node.blocked = !isPathfindingNodeTerrainPassable(node);
         }
-
-        state.nodeLayer.nodes = nodes;
-        state.nodeLayer.nodeByKey = nodeByKey;
-        state.nodeLayer.blockedEdges = blockedEdges;
+        for (let i = 0; i < nodes.length; i++) {
+            nodes[i].pathIndex = i;
+        }
+        const packedNodes = packPathfindingNodeObjects(nodes);
+        const packedEdges = packPathfindingEdgeObjects(nodes);
+        state.nodeLayer.nodes = packedNodes;
+        state.nodeLayer.snapshotNodes = packedNodes.slice();
+        state.nodeLayer.edges = packedEdges;
+        state.nodeLayer.blockedEdges = packBlockedPathfindingEdgeObjects(blockedEdges);
+        state.nodeLayer.indexByKey = buildPathfindingNodeIndexByKey(packedNodes);
+        state.nodeLayer.nodeStride = PATH_SNAPSHOT_NODE_STRIDE;
+        state.nodeLayer.edgeStride = PATH_SNAPSHOT_EDGE_STRIDE;
         state.nodeLayer.version += 1;
         state.nodeLayer.dirty = true;
         publishPathfindingSnapshot();
     }
 
+    function packPathfindingNodeObjects(nodes) {
+        const packed = new Float32Array(nodes.length * PATH_SNAPSHOT_NODE_STRIDE);
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            const base = i * PATH_SNAPSHOT_NODE_STRIDE;
+            packed[base + PATH_NODE_X] = node.x;
+            packed[base + PATH_NODE_Y] = node.y;
+            packed[base + PATH_NODE_BLOCKED] = node.blocked === true ? 1 : 0;
+            packed[base + PATH_NODE_CLEARANCE] = Infinity;
+            packed[base + PATH_NODE_XINDEX] = node.xindex;
+            packed[base + PATH_NODE_YINDEX] = node.yindex;
+            packed[base + PATH_NODE_HAS_UNBLOCKED_NEIGHBOR] = hasUnblockedPathfindingObjectNeighbor(node) ? 1 : 0;
+            packed[base + 7] = 0;
+        }
+        return packed;
+    }
+
+    function packPathfindingEdgeObjects(nodes) {
+        let edgeCount = 0;
+        for (const node of nodes) {
+            for (let dir = 0; dir < node.neighbors.length; dir++) {
+                if (node.neighbors[dir] && !node.blockedNeighbors.has(dir)) edgeCount += 1;
+            }
+        }
+        const packed = new Int32Array(edgeCount * PATH_SNAPSHOT_EDGE_STRIDE);
+        let offset = 0;
+        for (const node of nodes) {
+            for (let dir = 0; dir < node.neighbors.length; dir++) {
+                const neighbor = node.neighbors[dir];
+                if (!neighbor || node.blockedNeighbors.has(dir)) continue;
+                packed[offset + PATH_EDGE_FROM] = node.pathIndex;
+                packed[offset + PATH_EDGE_TO] = neighbor.pathIndex;
+                packed[offset + PATH_EDGE_DIRECTION] = dir;
+                packed[offset + 3] = 0;
+                offset += PATH_SNAPSHOT_EDGE_STRIDE;
+            }
+        }
+        return packed;
+    }
+
+    function packBlockedPathfindingEdgeObjects(blockedEdges) {
+        const packed = new Int32Array(blockedEdges.length * PATH_SNAPSHOT_EDGE_STRIDE);
+        for (let i = 0; i < blockedEdges.length; i++) {
+            const edge = blockedEdges[i];
+            const base = i * PATH_SNAPSHOT_EDGE_STRIDE;
+            packed[base + PATH_EDGE_FROM] = edge.a.pathIndex;
+            packed[base + PATH_EDGE_TO] = edge.b.pathIndex;
+            packed[base + 2] = edge.wallIndex;
+            packed[base + 3] = 0;
+        }
+        return packed;
+    }
+
     function publishPathfindingSnapshot() {
         state.pathfindingSnapshotVersion = state.worldVersion;
-        pathfindingWorker.postMessage({
-            type: "replace_snapshot",
-            snapshot: buildPathfindingWorkerSnapshot()
+        const snapshot = profiler.span("build packed path snapshot", () => buildPathfindingWorkerSnapshot());
+        profiler.span("transfer packed path snapshot", () => {
+            pathfindingWorker.postMessage({
+                type: "replace_snapshot",
+                snapshot
+            }, [snapshot.nodes.buffer, snapshot.edges.buffer]);
         });
     }
 
     function buildPathfindingWorkerSnapshot() {
-        const nodes = state.nodeLayer.nodes.map((node) => ({
-            key: node.key,
-            x: node.x,
-            y: node.y,
-            blocked: node.blocked === true,
-            clearance: null
-        }));
-        const edges = [];
-        const emitted = new Set();
-        for (const node of state.nodeLayer.nodes) {
-            for (let dir = 0; dir < node.neighbors.length; dir++) {
-                const neighbor = node.neighbors[dir];
-                if (!neighbor) continue;
-                if (node.blockedNeighbors.has(dir)) continue;
-                const id = `${node.key}->${neighbor.key}`;
-                if (emitted.has(id)) continue;
-                emitted.add(id);
-                edges.push({
-                    id,
-                    fromKey: node.key,
-                    toKey: neighbor.key,
-                    terrainBlocked: false,
-                    directionalObstacleIds: []
-                });
-            }
+        const nodes = state.nodeLayer.snapshotNodes;
+        const edges = state.nodeLayer.edges;
+        if (!(nodes instanceof Float32Array) || nodes.length % PATH_SNAPSHOT_NODE_STRIDE !== 0) {
+            throw new Error("Wizard of Flatland packed path snapshot requires packed nodes");
+        }
+        if (!(edges instanceof Int32Array) || edges.length % PATH_SNAPSHOT_EDGE_STRIDE !== 0) {
+            throw new Error("Wizard of Flatland packed path snapshot requires packed edges");
         }
         return {
+            format: "wizard-flatland-packed-v1",
             version: state.pathfindingSnapshotVersion,
+            nodeStride: PATH_SNAPSHOT_NODE_STRIDE,
+            edgeStride: PATH_SNAPSHOT_EDGE_STRIDE,
             nodes,
-            edges,
-            obstacles: [],
-            tileObstacleIdsByNodeKey: {}
+            edges
         };
     }
 
     function getWallGeometryApi() {
         const api = window.WallGeometry;
         if (!api || typeof api.connectionCrossesWallFaces !== "function") {
-            throw new Error("NPC movement lab pathfinding node layer requires WallGeometry.connectionCrossesWallFaces");
+            throw new Error("Wizard of Flatland pathfinding node layer requires WallGeometry.connectionCrossesWallFaces");
         }
         return api;
     }
@@ -2477,14 +3174,14 @@
         let minY = Infinity;
         let maxX = -Infinity;
         let maxY = -Infinity;
-        for (const wall of state.walls) {
-            minX = Math.min(minX, wall.ax, wall.bx);
-            minY = Math.min(minY, wall.ay, wall.by);
-            maxX = Math.max(maxX, wall.ax, wall.bx);
-            maxY = Math.max(maxY, wall.ay, wall.by);
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            minX = Math.min(minX, state.walls[i + WALL_X1], state.walls[i + WALL_X2]);
+            minY = Math.min(minY, state.walls[i + WALL_Y1], state.walls[i + WALL_Y2]);
+            maxX = Math.max(maxX, state.walls[i + WALL_X1], state.walls[i + WALL_X2]);
+            maxY = Math.max(maxY, state.walls[i + WALL_Y1], state.walls[i + WALL_Y2]);
         }
         if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
-            throw new Error("NPC movement lab pathfinding node layer requires finite wall bounds");
+            throw new Error("Wizard of Flatland pathfinding node layer requires finite wall bounds");
         }
         return { minX, minY, maxX, maxY };
     }
@@ -2496,6 +3193,7 @@
             xindex,
             yindex,
             key: pathfindingNodeKey(xindex, yindex),
+            pathIndex: -1,
             neighbors: new Array(12).fill(null),
             blockedNeighbors: new Map()
         };
@@ -2542,11 +3240,13 @@
         return a.key <= b.key ? `${a.key}|${b.key}` : `${b.key}|${a.key}`;
     }
 
-    function isPathfindingNodePassable(node) {
-        return !!node && node.blocked !== true && hasUnblockedPathfindingNeighbor(node);
+    function isPathfindingNodePassable(pathIndex) {
+        return isValidPathfindingNodeIndex(pathIndex) &&
+            !isPathfindingNodeBlocked(pathIndex) &&
+            state.nodeLayer.nodes[getPathfindingNodeBase(pathIndex) + PATH_NODE_HAS_UNBLOCKED_NEIGHBOR] === 1;
     }
 
-    function hasUnblockedPathfindingNeighbor(node) {
+    function hasUnblockedPathfindingObjectNeighbor(node) {
         if (!node || !Array.isArray(node.neighbors)) return false;
         for (let dir = 0; dir < node.neighbors.length; dir++) {
             const neighbor = node.neighbors[dir];
@@ -2559,32 +3259,28 @@
 
     function isPathfindingNodeTerrainPassable(node) {
         if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) {
-            throw new Error("NPC movement lab pathfinding passability requires a finite node");
+            throw new Error("Wizard of Flatland pathfinding passability requires a finite node");
         }
-        for (const wall of state.walls) {
-            const kind = wall.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY;
-            if (kind === WALL_KIND_SEGMENT) {
-                const distance = pointSegmentDistance(node.x, node.y, wall.ax, wall.ay, wall.bx, wall.by);
-                if (distance < TARGET_RADIUS) return false;
-                continue;
-            }
-            const nx = Number(wall.nx);
-            const ny = Number(wall.ny);
-            if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
-                throw new Error("NPC movement lab pathfinding passability requires finite wall normals");
-            }
-            const signed = (node.x - wall.ax) * nx + (node.y - wall.ay) * ny;
-            if (signed < TARGET_RADIUS) return false;
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            const distance = pointSegmentDistance(
+                node.x,
+                node.y,
+                state.walls[i + WALL_X1],
+                state.walls[i + WALL_Y1],
+                state.walls[i + WALL_X2],
+                state.walls[i + WALL_Y2]
+            );
+            if (distance < TARGET_RADIUS + WALL_WORLD_HALF_THICKNESS) return false;
         }
         return true;
     }
 
     function addDirectionalBlock(node, direction, blocker) {
         if (!node || !Number.isInteger(direction) || direction < 0 || direction > 11) {
-            throw new Error("NPC movement lab pathfinding block requires a valid node direction");
+            throw new Error("Wizard of Flatland pathfinding block requires a valid node direction");
         }
         if (!node.neighbors[direction]) {
-            throw new Error("NPC movement lab pathfinding block requires an existing neighbor connection");
+            throw new Error("Wizard of Flatland pathfinding block requires an existing neighbor connection");
         }
         if (!node.blockedNeighbors.has(direction)) node.blockedNeighbors.set(direction, new Set());
         node.blockedNeighbors.get(direction).add(blocker);
@@ -2592,7 +3288,7 @@
 
     function drawPathfindingNodeLayer() {
         const layer = state.nodeLayer;
-        if (!layer.ctx) throw new Error("NPC movement lab pathfinding node layer requires a 2D context");
+        if (!layer.ctx) throw new Error("Wizard of Flatland pathfinding node layer requires a 2D context");
         if (
             layer.dirty ||
             layer.width !== state.view.width ||
@@ -2612,9 +3308,9 @@
 
     function rebuildPathfindingNodeRenderLayer() {
         const layer = state.nodeLayer;
-        if (!layer.ctx) throw new Error("NPC movement lab pathfinding node layer requires a 2D context");
+        if (!layer.ctx) throw new Error("Wizard of Flatland pathfinding node layer requires a 2D context");
         if (!(state.view.width > 0 && state.view.height > 0 && state.view.scale > 0)) {
-            throw new Error("NPC movement lab pathfinding node layer requires a valid viewport");
+            throw new Error("Wizard of Flatland pathfinding node layer requires a valid viewport");
         }
 
         layer.width = state.view.width;
@@ -2637,26 +3333,17 @@
             nodeCtx.strokeStyle = "rgba(255,107,107,0.78)";
             nodeCtx.lineWidth = Math.max(1.5, layer.scale * 0.035);
             nodeCtx.lineCap = "round";
-            for (const edge of layer.blockedEdges) {
-                const a = worldToScreen(edge.a.x, edge.a.y);
-                const b = worldToScreen(edge.b.x, edge.b.y);
+            for (let i = 0; i < layer.blockedEdges.length; i += PATH_SNAPSHOT_EDGE_STRIDE) {
+                const fromIndex = layer.blockedEdges[i + PATH_EDGE_FROM];
+                const toIndex = layer.blockedEdges[i + PATH_EDGE_TO];
+                if (!isValidPathfindingNodeIndex(fromIndex) || !isValidPathfindingNodeIndex(toIndex)) continue;
+                const a = worldToScreen(getPathfindingNodeX(fromIndex), getPathfindingNodeY(fromIndex));
+                const b = worldToScreen(getPathfindingNodeX(toIndex), getPathfindingNodeY(toIndex));
                 nodeCtx.beginPath();
                 nodeCtx.moveTo(a.x, a.y);
                 nodeCtx.lineTo(b.x, b.y);
                 nodeCtx.stroke();
             }
-        }
-
-        const nodeRadius = Math.max(1.2, Math.min(3, layer.scale * 0.045));
-        nodeCtx.fillStyle = "rgba(104,183,255,0.32)";
-        for (const node of layer.nodes) {
-            const point = worldToScreen(node.x, node.y);
-            if (point.x < -nodeRadius || point.x > layer.width + nodeRadius || point.y < -nodeRadius || point.y > layer.height + nodeRadius) {
-                continue;
-            }
-            nodeCtx.beginPath();
-            nodeCtx.arc(point.x, point.y, nodeRadius, 0, Math.PI * 2);
-            nodeCtx.fill();
         }
 
         nodeCtx.restore();
@@ -2666,19 +3353,189 @@
     function drawWalls() {
         ctx.save();
         ctx.lineCap = "round";
-        for (const wall of state.walls) {
-            const a = worldToScreen(wall.ax, wall.ay);
-            const b = worldToScreen(wall.bx, wall.by);
-            ctx.lineWidth = wall.kind === WALL_KIND_SEGMENT
-                ? Math.max(3, state.view.scale * 0.1)
-                : Math.max(2, state.view.scale * 0.08);
-            ctx.strokeStyle = wall.kind === WALL_KIND_SEGMENT ? "#f4c95d" : "#d9e4ea";
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            const a = worldToScreen(state.walls[i + WALL_X1], state.walls[i + WALL_Y1]);
+            const b = worldToScreen(state.walls[i + WALL_X2], state.walls[i + WALL_Y2]);
+            ctx.lineWidth = state.view.scale * WALL_WORLD_THICKNESS;
+            ctx.strokeStyle = "#000000";
             ctx.beginPath();
             ctx.moveTo(a.x, a.y);
             ctx.lineTo(b.x, b.y);
             ctx.stroke();
         }
         ctx.restore();
+    }
+
+    function drawSectionBoundaries() {
+        if (!state.debug.showSectionBoundaries) return;
+        if (!isProceduralMazeScenario()) return;
+        const sectionKeys = getDebugSectionBoundaryKeys();
+        if (sectionKeys.length === 0) return;
+        const options = getMazeOptions();
+        const radius = getMazeSectionRadius(options);
+
+        ctx.save();
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.82)";
+        ctx.lineWidth = Math.max(1.25, state.view.scale * 0.035);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.setLineDash([Math.max(2, state.view.scale * 0.11), Math.max(3, state.view.scale * 0.15)]);
+        for (const key of sectionKeys) {
+            const coord = parseMazeSectionKey(key);
+            const center = mazeSectionCenter(coord.q, coord.r, options);
+            const corners = getHexCornersWorld(center.x, center.y, radius);
+            drawSectionBoundaryPolygon(corners);
+        }
+        ctx.setLineDash([]);
+        ctx.restore();
+    }
+
+    function getDebugSectionBoundaryKeys() {
+        if (state.generatedMazeInstalledChunkKeys instanceof Set && state.generatedMazeInstalledChunkKeys.size > 0) {
+            return Array.from(state.generatedMazeInstalledChunkKeys).sort();
+        }
+        if (state.generatedMazeChunkKeys instanceof Set) return Array.from(state.generatedMazeChunkKeys).sort();
+        throw new Error("Wizard of Flatland section boundary debug requires section key tracking");
+    }
+
+    function drawSectionBoundaryPolygon(corners) {
+        if (!Array.isArray(corners) || corners.length < 3) {
+            throw new Error("Wizard of Flatland section boundary debug requires polygon corners");
+        }
+        const screenCorners = corners.map((corner) => worldToScreen(corner.x, corner.y));
+        if (!polygonMayBeVisible(screenCorners)) return;
+        ctx.beginPath();
+        ctx.moveTo(screenCorners[0].x, screenCorners[0].y);
+        for (let i = 1; i < screenCorners.length; i++) {
+            ctx.lineTo(screenCorners[i].x, screenCorners[i].y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+    }
+
+    function polygonMayBeVisible(points) {
+        const padding = 80;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const point of points) {
+            minX = Math.min(minX, point.x);
+            minY = Math.min(minY, point.y);
+            maxX = Math.max(maxX, point.x);
+            maxY = Math.max(maxY, point.y);
+        }
+        if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+            throw new Error("Wizard of Flatland section boundary debug requires finite screen points");
+        }
+        return maxX >= -padding && minX <= state.view.width + padding && maxY >= -padding && minY <= state.view.height + padding;
+    }
+
+    function drawWallLabels() {
+        if (!state.debug.showWallLabels) return;
+        validateWallLabelBuffer(state.walls, "rendered walls");
+        ctx.save();
+        ctx.font = `${Math.max(15, Math.min(21, state.view.scale * 0.33))}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            const ax = state.walls[i + WALL_X1];
+            const ay = state.walls[i + WALL_Y1];
+            const bx = state.walls[i + WALL_X2];
+            const by = state.walls[i + WALL_Y2];
+            const a = worldToScreen(ax, ay);
+            const b = worldToScreen(bx, by);
+            if (!segmentMayBeVisible(a, b)) continue;
+
+            const label = getWallDebugLabel(state.walls[i + WALL_LABEL_CODE], state.walls[i + WALL_LABEL_SIDE]);
+            const midX = (a.x + b.x) * 0.5;
+            const midY = (a.y + b.y) * 0.5;
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const length = Math.hypot(dx, dy);
+            if (!(length > 0.001)) {
+                throw new Error("Wizard of Flatland wall label render requires separated screen endpoints");
+            }
+            const offset = Math.max(15, state.view.scale * (WALL_WORLD_THICKNESS + 0.2));
+            const labelX = midX - dy / length * offset;
+            const labelY = midY + dx / length * offset;
+            let angle = Math.atan2(dy, dx);
+            if (angle > Math.PI / 2 || angle < -Math.PI / 2) angle += Math.PI;
+            const metrics = ctx.measureText(label);
+            const paddingX = 4;
+            const boxWidth = metrics.width + paddingX * 2;
+            const boxHeight = Math.max(13, Number.parseFloat(ctx.font) + 5);
+            ctx.save();
+            ctx.translate(labelX, labelY);
+            ctx.rotate(angle);
+            ctx.fillStyle = "rgba(12, 14, 16, 0.74)";
+            ctx.fillRect(-boxWidth * 0.5, -boxHeight * 0.5, boxWidth, boxHeight);
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.32)";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(-boxWidth * 0.5, -boxHeight * 0.5, boxWidth, boxHeight);
+            ctx.fillStyle = "#ffffff";
+            ctx.fillText(label, 0, 0);
+            ctx.restore();
+        }
+        ctx.restore();
+    }
+
+    function segmentMayBeVisible(a, b) {
+        const padding = 80;
+        const minX = Math.min(a.x, b.x);
+        const minY = Math.min(a.y, b.y);
+        const maxX = Math.max(a.x, b.x);
+        const maxY = Math.max(a.y, b.y);
+        return maxX >= -padding && minX <= state.view.width + padding && maxY >= -padding && minY <= state.view.height + padding;
+    }
+
+    function validateWallLabelBuffer(walls, label) {
+        validateWallBuffer(walls, label);
+        for (let i = 0; i < walls.length; i += WALL_STRIDE) {
+            getWallDebugLabel(walls[i + WALL_LABEL_CODE], walls[i + WALL_LABEL_SIDE]);
+        }
+    }
+
+    function getWallDebugLabel(labelCode, sideCode) {
+        const code = Number(labelCode);
+        const side = Number(sideCode);
+        if (!Number.isInteger(code) || code <= 0) {
+            throw new Error(`Wizard of Flatland wall label is missing for code ${labelCode}`);
+        }
+        if (!Number.isInteger(side)) {
+            throw new Error(`Wizard of Flatland wall label side is invalid for code ${code}`);
+        }
+        const sideText = side >= 0 ? ` s${side}` : "";
+        switch (code) {
+            case WALL_LABEL_MANUAL_TOOL:
+                return "manual tool | user drawn";
+            case WALL_LABEL_ARENA_BOUNDARY:
+                return `arena boundary${sideText} | unmodified`;
+            case WALL_LABEL_ROOM_BOUNDARY:
+                return `room boundary${sideText} | unmodified`;
+            case WALL_LABEL_ROOM_HALL_GAP:
+                return `room boundary${sideText} | hallway gap split`;
+            case WALL_LABEL_ROOM_OUTSIDE_DOOR_GAP:
+                return `room boundary${sideText} | outside-door gap split`;
+            case WALL_LABEL_ROOM_POCKET_OVERRIDE:
+                return `room boundary${sideText} | corner pocket reshaped`;
+            case WALL_LABEL_ROOM_POCKET_OVERRIDE_HALL_GAP:
+                return `room boundary${sideText} | corner pocket reshaped + hall gap`;
+            case WALL_LABEL_ROOM_POCKET_CONNECTOR:
+                return "corner pocket front wall | neighbor incorporated";
+            case WALL_LABEL_SQUARE_SIDE_PARALLEL:
+                return `corner pocket back wall${sideText}`;
+            case WALL_LABEL_SQUARE_SIDE_PERPENDICULAR:
+                return "corner pocket front wall";
+            case WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL:
+                return "corner pocket front wall | section boundary";
+            case WALL_LABEL_HALLWAY_SIDE_HALF:
+                return "hallway side | half-length";
+            case WALL_LABEL_HALLWAY_SIDE_FULL:
+                return "hallway side | corner pocket extended";
+            default:
+                throw new Error(`Wizard of Flatland wall label code is unknown: ${code}`);
+        }
     }
 
     function drawWallBuildPreview() {
@@ -2689,15 +3546,15 @@
         const sameNode = tool.startNode.key === tool.hoverNode.key;
         ctx.save();
         ctx.lineCap = "round";
-        ctx.lineWidth = Math.max(3, state.view.scale * 0.11);
-        ctx.strokeStyle = sameNode ? "rgba(255,107,107,0.82)" : "rgba(244,201,93,0.9)";
+        ctx.lineWidth = state.view.scale * WALL_WORLD_THICKNESS;
+        ctx.strokeStyle = sameNode ? "rgba(255,107,107,0.82)" : "rgba(0,0,0,0.9)";
         ctx.setLineDash(sameNode ? [6, 6] : [10, 7]);
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
         ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillStyle = sameNode ? "rgba(255,107,107,0.95)" : "rgba(244,201,93,0.95)";
+        ctx.fillStyle = sameNode ? "rgba(255,107,107,0.95)" : "rgba(0,0,0,0.95)";
         for (const point of [a, b]) {
             ctx.beginPath();
             ctx.arc(point.x, point.y, Math.max(4, state.view.scale * 0.09), 0, Math.PI * 2);
@@ -2711,20 +3568,62 @@
         const flash = Math.max(0, Math.min(1, state.targetFlashTime / 0.18));
         const radius = TARGET_RADIUS * state.view.scale;
         ctx.save();
-        ctx.strokeStyle = flash > 0 ? "#ff4d4d" : "#58d27b";
+        ctx.strokeStyle = flash > 0 ? "#ff4d4d" : "#1f7a3a";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
         ctx.stroke();
         ctx.fillStyle = flash > 0
             ? `rgba(255,77,77,${0.25 + flash * 0.45})`
-            : "rgba(88,210,123,0.28)";
+            : "rgba(31,122,58,0.42)";
         ctx.beginPath();
         ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
         ctx.fill();
+        drawTargetTravelChevrons(point.x, point.y, radius);
         drawTargetHat(point.x, point.y + state.view.scale * 0.2, radius);
         drawProjectedTargetCursor(state.target.x, state.target.y, state.target.heading);
         ctx.restore();
+    }
+
+    function drawTargetTravelChevrons(x, y, radius) {
+        const travel = state.targetTravelVector;
+        const dx = Number(travel && travel.x) || 0;
+        const dy = Number(travel && travel.y) || 0;
+        if (Math.hypot(dx, dy) <= 0.0001) return;
+
+        const angle = Math.atan2(dy, dx);
+        const chevronWidth = radius * (2 / 3);
+        const chevronHeight = chevronWidth * 2 * Math.tan(Math.PI / 3);
+        const gap = chevronWidth * 0.48;
+        const strokeWidth = Math.max(2, radius * 0.14);
+        const forwardOffset = radius + chevronWidth * 0.5 + Math.max(3, radius * 0.18);
+
+        ctx.save();
+        ctx.translate(x + Math.cos(angle) * forwardOffset, y + Math.sin(angle) * forwardOffset);
+        ctx.rotate(angle);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = "rgba(0,0,0,0.56)";
+        ctx.lineWidth = strokeWidth + Math.max(1, radius * 0.05);
+        drawTargetTravelChevronPair(chevronWidth, chevronHeight, gap);
+        ctx.strokeStyle = "rgba(255,255,255,0.96)";
+        ctx.lineWidth = strokeWidth;
+        drawTargetTravelChevronPair(chevronWidth, chevronHeight, gap);
+        ctx.restore();
+    }
+
+    function drawTargetTravelChevronPair(chevronWidth, chevronHeight, gap) {
+        const pointX = chevronWidth * 0.5;
+        const leftX = -chevronWidth * 0.5;
+        const halfHeight = chevronHeight * 0.5;
+        ctx.beginPath();
+        for (let i = 0; i < 2; i++) {
+            const offsetX = i * gap;
+            ctx.moveTo(leftX + offsetX, -halfHeight);
+            ctx.lineTo(pointX + offsetX, 0);
+            ctx.lineTo(leftX + offsetX, halfHeight);
+        }
+        ctx.stroke();
     }
 
     function drawTargetHat(x, y, radius) {
@@ -2765,7 +3664,7 @@
     }
 
     function drawProjectedTargetCursor(targetX, targetY, heading) {
-        if (!Number.isFinite(heading)) throw new Error("NPC movement lab projected cursor requires a finite heading");
+        if (!Number.isFinite(heading)) throw new Error("Wizard of Flatland projected cursor requires a finite heading");
         const trace = getCurrentProjectedCursorTrace();
         const projectedWorld = trace.point;
         const cursorHeading = getCurrentProjectedCursorHeading();
@@ -2798,9 +3697,9 @@
 
     function getCurrentProjectedCursorHeading() {
         const cursor = state.projectedCursor;
-        if (!cursor || typeof cursor !== "object") throw new Error("NPC movement lab projected cursor state is missing");
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
         if (!Number.isFinite(state.target.heading) || !Number.isFinite(cursor.angleOffset)) {
-            throw new Error("NPC movement lab projected cursor heading requires finite angles");
+            throw new Error("Wizard of Flatland projected cursor heading requires finite angles");
         }
         return normalizeAngle(state.target.heading + getProjectedCursorCurveHeadingDelta(cursor.distance, cursor.angleOffset));
     }
@@ -2811,7 +3710,7 @@
 
     function getCurrentProjectedCursorTrace() {
         const cursor = state.projectedCursor;
-        if (!cursor || typeof cursor !== "object") throw new Error("NPC movement lab projected cursor state is missing");
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
         return getWallClampedProjectedCursorCurveTrace(
             state.target.x,
             state.target.y,
@@ -2821,9 +3720,51 @@
         );
     }
 
+    function updateProjectedCursorFromFixedWorldPoint(point) {
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+            throw new Error("Wizard of Flatland fixed cursor point requires finite coordinates");
+        }
+        const cursor = state.projectedCursor;
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
+        const dx = point.x - state.target.x;
+        const dy = point.y - state.target.y;
+        const chord = Math.hypot(dx, dy);
+        if (!(chord > 0.000001)) {
+            cursor.angleOffset = 0;
+            cursor.distance = TARGET_PROJECTED_CURSOR_MIN_DISTANCE;
+            return;
+        }
+
+        const forwardX = Math.cos(state.target.heading);
+        const forwardY = Math.sin(state.target.heading);
+        const localForward = dx * forwardX + dy * forwardY;
+        const localSide = dx * -forwardY + dy * forwardX;
+        const rawHeadingDelta = 2 * Math.atan2(localSide, localForward);
+        const bendRatio = Math.max(-1, Math.min(1, rawHeadingDelta));
+        cursor.angleOffset = bendRatio * TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET;
+        if (Math.abs(bendRatio) <= 0.000001) {
+            cursor.distance = Math.max(
+                TARGET_PROJECTED_CURSOR_MIN_DISTANCE,
+                Math.min(TARGET_PROJECTED_CURSOR_MAX_DISTANCE, chord)
+            );
+            return;
+        }
+
+        const halfDelta = Math.abs(bendRatio) * 0.5;
+        const denominator = 2 * Math.sin(halfDelta);
+        if (!(denominator > 0.000001)) {
+            throw new Error("Wizard of Flatland fixed cursor projection produced an invalid arc");
+        }
+        const arcDistance = (chord / denominator) * Math.abs(bendRatio);
+        cursor.distance = Math.max(
+            TARGET_PROJECTED_CURSOR_MIN_DISTANCE,
+            Math.min(TARGET_PROJECTED_CURSOR_MAX_DISTANCE, arcDistance)
+        );
+    }
+
     function getProjectedCursorTraceDistance(trace) {
         if (!trace || !Array.isArray(trace.points) || trace.points.length < 2) {
-            throw new Error("NPC movement lab projected cursor trace requires at least two points");
+            throw new Error("Wizard of Flatland projected cursor trace requires at least two points");
         }
         let distance = 0;
         for (let i = 1; i < trace.points.length; i++) {
@@ -2837,7 +3778,7 @@
                 !Number.isFinite(current.x) ||
                 !Number.isFinite(current.y)
             ) {
-                throw new Error("NPC movement lab projected cursor trace contains invalid points");
+                throw new Error("Wizard of Flatland projected cursor trace contains invalid points");
             }
             distance += Math.hypot(current.x - previous.x, current.y - previous.y);
         }
@@ -2845,7 +3786,7 @@
     }
 
     function drawProjectedCursorGuide(points) {
-        if (!Array.isArray(points) || points.length < 2) throw new Error("NPC movement lab projected cursor guide requires curve points");
+        if (!Array.isArray(points) || points.length < 2) throw new Error("Wizard of Flatland projected cursor guide requires curve points");
         ctx.save();
         ctx.strokeStyle = "rgba(68,170,255,0.72)";
         ctx.lineWidth = 4;
@@ -2867,8 +3808,17 @@
         for (let i = 1; i < points.length; i++) {
             const previous = points[i - 1];
             const current = points[i];
-            for (const wall of state.walls) {
-                const hit = segmentIntersectionParameters(previous.x, previous.y, current.x, current.y, wall.ax, wall.ay, wall.bx, wall.by);
+            for (let w = 0; w < state.walls.length; w += WALL_STRIDE) {
+                const hit = segmentIntersectionParameters(
+                    previous.x,
+                    previous.y,
+                    current.x,
+                    current.y,
+                    state.walls[w + WALL_X1],
+                    state.walls[w + WALL_Y1],
+                    state.walls[w + WALL_X2],
+                    state.walls[w + WALL_Y2]
+                );
                 if (!hit || hit.t <= 0.000001) continue;
                 const point = {
                     x: previous.x + (current.x - previous.x) * hit.t,
@@ -2884,7 +3834,7 @@
 
     function getProjectedCursorCurvePoints(targetX, targetY, heading, angleOffset, distance) {
         if (!Number.isFinite(targetX) || !Number.isFinite(targetY) || !Number.isFinite(heading) || !Number.isFinite(angleOffset) || !Number.isFinite(distance)) {
-            throw new Error("NPC movement lab projected cursor curve requires finite inputs");
+            throw new Error("Wizard of Flatland projected cursor curve requires finite inputs");
         }
         const bendRatio = getProjectedCursorBendRatio(angleOffset);
         const headingDelta = getProjectedCursorCurveHeadingDelta(distance, angleOffset);
@@ -2916,13 +3866,13 @@
     }
 
     function getProjectedCursorBendRatio(angleOffset) {
-        if (!Number.isFinite(angleOffset)) throw new Error("NPC movement lab projected cursor bend requires a finite angle");
+        if (!Number.isFinite(angleOffset)) throw new Error("Wizard of Flatland projected cursor bend requires a finite angle");
         return Math.max(-1, Math.min(1, angleOffset / TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET));
     }
 
     function getProjectedCursorTurnRadius(distance, bendRatio) {
         if (!Number.isFinite(distance) || !Number.isFinite(bendRatio)) {
-            throw new Error("NPC movement lab projected cursor turn radius requires finite values");
+            throw new Error("Wizard of Flatland projected cursor turn radius requires finite values");
         }
         const normalizedBend = Math.min(1, Math.max(0, Math.abs(bendRatio)));
         if (normalizedBend <= 0.000001) return Infinity;
@@ -3021,7 +3971,7 @@
         ctx.save();
         for (const explosion of state.fireballExplosions) {
             if (!Number.isFinite(explosion.x) || !Number.isFinite(explosion.y) || !Number.isFinite(explosion.radius) || !Number.isFinite(explosion.age)) {
-                throw new Error("NPC movement lab fireball explosion render requires finite explosion data");
+                throw new Error("Wizard of Flatland fireball explosion render requires finite explosion data");
             }
             const center = worldToScreen(explosion.x, explosion.y);
             const t = Math.max(0, Math.min(1, explosion.age / FIREBALL_EXPLOSION_VISUAL_SECONDS));
@@ -3139,27 +4089,43 @@
         const targetNearestNode = nearestPathfindingNode(state.target.x, state.target.y);
         const targetPassableNode = nearestPassablePathfindingNode(state.target.x, state.target.y);
         const waypoint = getAgentPathWaypoint(agent);
-        const pathNodes = agent.pathNodeKeys.map((key, index) => {
-            const node = state.nodeLayer.nodeByKey.get(key);
+        const pathNodes = agent.pathNodeKeys.map((pathKey, index) => {
+            const currentPathIndex = typeof pathKey === "string" ? getPathfindingNodeIndexForKey(pathKey) : null;
+            const exists = Number.isInteger(currentPathIndex);
+            const stored = getStoredAgentPathWaypoint(agent, index, pathKey);
+            const x = exists ? getPathfindingNodeX(currentPathIndex) : (stored ? stored.x : null);
+            const y = exists ? getPathfindingNodeY(currentPathIndex) : (stored ? stored.y : null);
             return {
                 index,
-                key,
+                pathIndex: exists ? currentPathIndex : null,
+                key: pathKey,
                 current: index === agent.pathCursor,
-                exists: !!node,
-                x: node ? node.x : null,
-                y: node ? node.y : null,
-                blocked: node ? node.blocked === true : null,
-                passable: node ? isPathfindingNodePassable(node) : null,
-                distanceFromAgent: node ? Math.hypot(node.x - agent.x, node.y - agent.y) : null
+                exists,
+                x,
+                y,
+                blocked: exists ? isPathfindingNodeBlocked(currentPathIndex) : null,
+                passable: exists ? isPathfindingNodePassable(currentPathIndex) : null,
+                stale: !exists,
+                distanceFromAgent: Number.isFinite(x) && Number.isFinite(y) ? Math.hypot(x - agent.x, y - agent.y) : null
             };
         });
-        const wallClearances = state.walls.map((wall, index) => ({
-            index,
-            kind: wall.kind === WALL_KIND_SEGMENT ? "segment" : "boundary",
-            clearance: wall.kind === WALL_KIND_SEGMENT
-                ? pointSegmentDistance(agent.x, agent.y, wall.ax, wall.ay, wall.bx, wall.by)
-                : (agent.x - wall.ax) * wall.nx + (agent.y - wall.ay) * wall.ny
-        })).sort((a, b) => a.clearance - b.clearance).slice(0, 5);
+        const wallClearances = [];
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            wallClearances.push({
+                index: i / WALL_STRIDE,
+                kind: "segment",
+                clearance: pointSegmentDistance(
+                    agent.x,
+                    agent.y,
+                    state.walls[i + WALL_X1],
+                    state.walls[i + WALL_Y1],
+                    state.walls[i + WALL_X2],
+                    state.walls[i + WALL_Y2]
+                ) - WALL_WORLD_HALF_THICKNESS
+            });
+        }
+        wallClearances.sort((a, b) => a.clearance - b.clearance);
+        wallClearances.length = Math.min(wallClearances.length, 5);
         const dump = {
             id: agent.id,
             position: { x: agent.x, y: agent.y },
@@ -3177,26 +4143,29 @@
             pathCursor: agent.pathCursor,
             pathLength: agent.pathNodeKeys.length,
             pathGoal: { x: agent.pathGoalX, y: agent.pathGoalY },
-            waypoint: waypoint ? { key: waypoint.key, x: waypoint.x, y: waypoint.y, blocked: waypoint.blocked === true } : null,
+            waypoint: waypoint ? { index: waypoint.pathIndex, key: waypoint.key, x: waypoint.x, y: waypoint.y, blocked: waypoint.blocked === true } : null,
             currentNode: {
-                key: currentNode.key,
-                x: currentNode.x,
-                y: currentNode.y,
-                blocked: currentNode.blocked === true,
+                index: currentNode,
+                key: getPathfindingNodeKey(currentNode),
+                x: getPathfindingNodeX(currentNode),
+                y: getPathfindingNodeY(currentNode),
+                blocked: isPathfindingNodeBlocked(currentNode),
                 passable: isPathfindingNodePassable(currentNode)
             },
             targetNearestNode: {
-                key: targetNearestNode.key,
-                x: targetNearestNode.x,
-                y: targetNearestNode.y,
-                blocked: targetNearestNode.blocked === true,
+                index: targetNearestNode,
+                key: getPathfindingNodeKey(targetNearestNode),
+                x: getPathfindingNodeX(targetNearestNode),
+                y: getPathfindingNodeY(targetNearestNode),
+                blocked: isPathfindingNodeBlocked(targetNearestNode),
                 passable: isPathfindingNodePassable(targetNearestNode)
             },
             targetPassableNode: {
-                key: targetPassableNode.key,
-                x: targetPassableNode.x,
-                y: targetPassableNode.y,
-                blocked: targetPassableNode.blocked === true,
+                index: targetPassableNode,
+                key: getPathfindingNodeKey(targetPassableNode),
+                x: getPathfindingNodeX(targetPassableNode),
+                y: getPathfindingNodeY(targetPassableNode),
+                blocked: isPathfindingNodeBlocked(targetPassableNode),
                 passable: isPathfindingNodePassable(targetPassableNode)
             },
             lineOfSightToTarget: hasDirectLineOfSight(agent.x, agent.y, state.target.x, state.target.y, agent.radius),
@@ -3204,7 +4173,7 @@
             nearestWallClearances: wallClearances,
             pathNodes
         };
-        console.groupCollapsed(`NPC movement lab agent ${agent.id} pathfinding`);
+        console.groupCollapsed(`Wizard of Flatland agent ${agent.id} pathfinding`);
         console.log(dump);
         console.table(pathNodes);
         console.groupEnd();
@@ -3227,7 +4196,7 @@
                 if (!best || distSq < best.distSq) best = { ...node, distSq };
             }
         }
-        if (!best) throw new Error("NPC movement lab wall tool could not resolve nearest hex node");
+        if (!best) throw new Error("Wizard of Flatland wall tool could not resolve nearest hex node");
         return best;
     }
 
@@ -3319,9 +4288,18 @@
 
     function findEarliestSegmentWallHit(fromX, fromY, toX, toY, radius) {
         let best = null;
-        for (const wall of state.walls) {
-            if (wall.kind !== WALL_KIND_SEGMENT) continue;
-            const hit = sweptCircleSegmentHit(fromX, fromY, toX, toY, wall.ax, wall.ay, wall.bx, wall.by, radius);
+        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
+            const hit = sweptCircleSegmentHit(
+                fromX,
+                fromY,
+                toX,
+                toY,
+                state.walls[i + WALL_X1],
+                state.walls[i + WALL_Y1],
+                state.walls[i + WALL_X2],
+                state.walls[i + WALL_Y2],
+                radius + WALL_WORLD_HALF_THICKNESS
+            );
             if (hit && (!best || hit.t < best.t)) best = hit;
         }
         return best;
@@ -3430,38 +4408,64 @@
     }
 
     function tick(now) {
+        const frameStarted = performance.now();
+        const frameParts = [];
+        function framePart(label, fn) {
+            const started = performance.now();
+            try {
+                return fn();
+            } finally {
+                frameParts.push({
+                    label,
+                    duration: performance.now() - started
+                });
+            }
+        }
         const dt = Math.min(0.05, Math.max(0.001, (now - state.lastTime) / 1000));
         state.lastTime = now;
         state.targetFlashTime = Math.max(0, state.targetFlashTime - dt);
-        updateProjectedCursorKeyboardControls(dt);
-        updateTargetHeadingFromProjectedCursor(dt);
-        updateTargetKeyboardMovement(dt);
-        refreshGeneratedMazeIfNeeded(false);
-        refreshMazePathBoundsIfNeeded();
-        updateFireballs(dt);
-        if (state.running) requestStep(dt);
-        draw();
+        framePart("projected cursor input", () => updateProjectedCursorKeyboardControls(dt));
+        framePart("moving cursor straightening", () => updateMovingTargetCursorStraightening(dt));
+        framePart("idle target facing", () => updateIdleTargetFacingAndCursor(dt));
+        framePart("target heading", () => updateTargetHeadingFromProjectedCursor(dt));
+        framePart("target movement", () => updateTargetKeyboardMovement(dt));
+        framePart("refresh maze sections", () => refreshGeneratedMazeIfNeeded(false));
+        framePart("refresh path bounds", () => refreshMazePathBoundsIfNeeded());
+        framePart("fireballs", () => updateFireballs(dt));
+        if (state.running) framePart("request solver step", () => requestStep(dt));
+        framePart("draw", () => draw());
+        const drawPart = frameParts.find((part) => part.label === "draw");
+        updateDebugFpsCounter(now, dt, drawPart ? drawPart.duration : 0);
+        const frameDuration = performance.now() - frameStarted;
+        frameParts.sort((a, b) => b.duration - a.duration);
+        profiler.noteFrame(frameDuration, frameParts);
+        profiler.noteFirstFrameAfterLoad(frameDuration, frameParts);
         requestAnimationFrame(tick);
     }
 
-    playButton.addEventListener("click", () => {
-        state.running = !state.running;
-        playButton.textContent = state.running ? "Pause" : "Play";
-    });
-    stepButton.addEventListener("click", () => requestStep(1 / 60));
-    resetButton.addEventListener("click", createScenario);
-    scenarioSelect.addEventListener("change", createScenario);
+    if (playButton) {
+        playButton.addEventListener("click", () => {
+            state.running = !state.running;
+            playButton.textContent = state.running ? "Pause" : "Play";
+        });
+    }
+    if (stepButton) stepButton.addEventListener("click", () => requestStep(1 / 60));
+    if (resetButton) resetButton.addEventListener("click", createScenario);
+    if (scenarioSelect) scenarioSelect.addEventListener("change", createScenario);
     for (const input of [agentCountInput, separationInput, speedScaleInput]) {
+        if (!input) continue;
         input.addEventListener("input", () => {
             updateControlLabels();
             if (input === agentCountInput) respawnAgentsForCurrentScenario();
         });
     }
     for (const input of [mazeSeedInput, mazeChunkSizeInput, mazeRoomScaleInput, mazeTwistinessInput]) {
+        if (!input) continue;
         input.addEventListener("input", () => {
             updateControlLabels();
             if (!isProceduralMazeScenario()) return;
             state.generatedMazeSignature = "";
+            resetGeneratedMazeEnemyPopulation();
             invalidateMazeLookaheadCache();
             refreshGeneratedMazeIfNeeded(true);
         });
@@ -3479,6 +4483,16 @@
     canvas.addEventListener("pointercancel", (event) => {
         if (state.wallTool.pointerId === event.pointerId) cancelWallBuildDrag();
     });
+    canvas.addEventListener("wheel", (event) => {
+        handleZoomWheel(event);
+    }, { passive: false });
+
+    function isEditableEventTarget(target) {
+        if (!target || typeof target !== "object") return false;
+        const tagName = typeof target.tagName === "string" ? target.tagName.toLowerCase() : "";
+        return tagName === "input" || tagName === "textarea" || tagName === "select" || target.isContentEditable === true;
+    }
+
     function getTargetKeyboardControlKey(event) {
         if (!event) return null;
         if (TARGET_CURSOR_KEYS.has(event.key)) return event.key;
@@ -3491,6 +4505,21 @@
         return null;
     }
     window.addEventListener("keydown", (event) => {
+        if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key && event.key.toLowerCase() === "f") {
+            event.preventDefault();
+            if (!event.repeat) toggleDebugFpsCounter();
+            return;
+        }
+        if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key && event.key.toLowerCase() === "s") {
+            event.preventDefault();
+            saveWizardPositionToConsoleSlot();
+            return;
+        }
+        if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key && event.key.toLowerCase() === "l") {
+            event.preventDefault();
+            loadWizardPositionFromConsoleSlot();
+            return;
+        }
         if (event.code === "Space" || event.key === " ") {
             event.preventDefault();
             if (!state.spaceHeld) shootFireball();
@@ -3499,6 +4528,10 @@
         }
         if (event.key === "b" || event.key === "B") {
             state.wallTool.active = true;
+            return;
+        }
+        if ((event.key === "z" || event.key === "Z") && !isEditableEventTarget(event.target)) {
+            state.zoomHeld = true;
             return;
         }
         if (event.key === "Shift") {
@@ -3522,6 +4555,10 @@
             cancelWallBuildDrag();
             return;
         }
+        if (event.key === "z" || event.key === "Z") {
+            state.zoomHeld = false;
+            return;
+        }
         if (event.key === "Shift") {
             state.fastMovementHeld = false;
             return;
@@ -3534,6 +4571,7 @@
     window.addEventListener("blur", () => {
         state.pressedMovementKeys = Object.create(null);
         state.spaceHeld = false;
+        state.zoomHeld = false;
         state.fastMovementHeld = false;
         state.wallTool.active = false;
         cancelWallBuildDrag();

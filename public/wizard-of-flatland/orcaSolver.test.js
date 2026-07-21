@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("assert");
-const orca = require("../assets/javascript/pathfinding/orcaSolver.js");
+const orca = require("./orcaSolver.js");
 
 const OPTIONS = {
     timeHorizon: 1,

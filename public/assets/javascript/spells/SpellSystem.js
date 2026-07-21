@@ -448,9 +448,11 @@ const SpellSystem = (() => {
         squirrels: "attacksquirrel"
     };
     const SPELL_LEVEL_ID_BY_MAGIC_NAME = {
-        freeze: "iceball",
         attacksquirrel: "squirrels",
         moveobject: "telekinesis"
+    };
+    const SPELL_LEVEL_CANONICAL_ID_BY_LEGACY_ID = {
+        iceball: "freeze"
     };
     const SPELL_LEVEL_RUNTIME_NAMES = new Set([
         "freeze",
@@ -624,7 +626,7 @@ const SpellSystem = (() => {
     const textureAlphaMaskCache = new Map();
     let spellLevelDefinitions = null;
     let spellLevelFetchPromise = null;
-    let selectedSpellLevelId = "iceball";
+    let selectedSpellLevelId = "freeze";
     let spellLevelPanelControlsBound = false;
 
     function normalizeFloorEditLevel(level) {
@@ -1268,6 +1270,15 @@ const SpellSystem = (() => {
         if (!wizardRef.spellLevels || typeof wizardRef.spellLevels !== "object" || Array.isArray(wizardRef.spellLevels)) {
             wizardRef.spellLevels = {};
         }
+        Object.entries(SPELL_LEVEL_CANONICAL_ID_BY_LEGACY_ID).forEach(([legacyId, canonicalId]) => {
+            if (
+                Object.prototype.hasOwnProperty.call(wizardRef.spellLevels, legacyId) &&
+                !Object.prototype.hasOwnProperty.call(wizardRef.spellLevels, canonicalId)
+            ) {
+                wizardRef.spellLevels[canonicalId] = wizardRef.spellLevels[legacyId];
+            }
+            delete wizardRef.spellLevels[legacyId];
+        });
         Object.keys(wizardRef.spellLevels).forEach(spellId => {
             wizardRef.spellLevels[spellId] = clampSpellLevel(wizardRef.spellLevels[spellId]);
         });
@@ -1293,19 +1304,22 @@ const SpellSystem = (() => {
 
     function getMagicNameForSpellLevelId(spellId) {
         if (typeof spellId !== "string") return "";
-        const id = spellId.trim().toLowerCase();
+        const rawId = spellId.trim().toLowerCase();
+        const id = SPELL_LEVEL_CANONICAL_ID_BY_LEGACY_ID[rawId] || rawId;
         return SPELL_LEVEL_UNLOCK_NAME_BY_ID[id] || id;
     }
 
     function getSpellLevelIdForMagicName(magicName) {
         if (typeof magicName !== "string") return "";
         const normalizedName = magicName.trim().toLowerCase();
-        return SPELL_LEVEL_ID_BY_MAGIC_NAME[normalizedName] || normalizedName;
+        const id = SPELL_LEVEL_ID_BY_MAGIC_NAME[normalizedName] || normalizedName;
+        return SPELL_LEVEL_CANONICAL_ID_BY_LEGACY_ID[id] || id;
     }
 
     function getWizardSpellLevel(wizardRef, spellId) {
         if (!wizardRef || typeof spellId !== "string") return 0;
-        const id = spellId.trim().toLowerCase();
+        const rawId = spellId.trim().toLowerCase();
+        const id = SPELL_LEVEL_CANONICAL_ID_BY_LEGACY_ID[rawId] || rawId;
         if (typeof wizardRef.isGodMode === "function" && wizardRef.isGodMode()) {
             return SPELL_LEVEL_MAX;
         }
@@ -1323,7 +1337,8 @@ const SpellSystem = (() => {
 
     function setWizardSpellLevel(wizardRef, spellId, level) {
         if (!wizardRef || typeof spellId !== "string") return 0;
-        const id = spellId.trim().toLowerCase();
+        const rawId = spellId.trim().toLowerCase();
+        const id = SPELL_LEVEL_CANONICAL_ID_BY_LEGACY_ID[rawId] || rawId;
         if (!id) return 0;
         const nextLevel = clampSpellLevel(level);
         const spellLevels = normalizeWizardSpellLevels(wizardRef);

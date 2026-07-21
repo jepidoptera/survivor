@@ -143,7 +143,7 @@ function loadTraversalClasses() {
         path.join(__dirname, "../public/assets/javascript/shared/StairTraversal.js"),
         path.join(__dirname, "../public/assets/javascript/Map.js"),
         path.join(__dirname, "../public/assets/javascript/gameobjects/Character.js"),
-        path.join(__dirname, "../public/assets/javascript/gameobjects/Animal.js")
+        path.join(__dirname, "../public/assets/javascript/gameobjects/NpcCharacter.js")
     ];
 
     for (const filePath of files) {

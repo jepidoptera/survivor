@@ -1602,7 +1602,7 @@ function initRoadLayer() {
     // Legacy road layer disabled: roads render as regular sprites.
 }
 
-// Character, Wizard, Animal and animal subclasses moved to gameobjects/ folder
+// Character, Wizard, NpcCharacter and NPC subclasses moved to gameobjects/ folder
 
 function cloneWizardLoadDataForRuntime(data) {
     if (!data || typeof data !== "object") return data;
@@ -7416,7 +7416,14 @@ jQuery(() => {
                     // no-op: preview shown in render loop, cast on click
                 }
             }
-        } else if ((event.key === "a" || event.key === "A") && !event.repeat) {
+        } else if (
+            (event.key === "Shift" || event.code === "ShiftLeft" || event.code === "ShiftRight") &&
+            !event.repeat &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey
+        ) {
+            event.preventDefault();
             const now = Date.now();
             jumpKeyPressHistory.push(now);
             // Keep only presses within the last 0.5 seconds

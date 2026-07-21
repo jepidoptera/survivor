@@ -208,22 +208,22 @@
     };
     state.hexGridLayer.ctx = state.hexGridLayer.canvas.getContext("2d");
     state.nodeLayer.ctx = state.nodeLayer.canvas.getContext("2d");
-    window.__npcMovementLabDebug = state;
+    window.__wizardOfFlatlandDebug = state;
     window.debug = state.debug;
 
-    const worker = new Worker("/npc-movement-lab/solverWorker.js?v=npc-movement-lab-77");
+    const worker = new Worker("./npcMovementSolverWorker.js");
     worker.addEventListener("message", handleWorkerMessage);
     worker.addEventListener("error", (event) => {
         labels.workerStatus.textContent = event.message || "failed";
     });
 
-    const pathfindingWorker = new Worker("/assets/javascript/pathfinding/pathfindingWorker.js?v=npc-movement-lab-1");
+    const pathfindingWorker = new Worker("./pathfindingWorker.js");
     pathfindingWorker.addEventListener("message", handlePathfindingWorkerMessage);
     pathfindingWorker.addEventListener("error", (event) => {
         labels.workerStatus.textContent = event.message || "pathfinding failed";
     });
 
-    const mazeWorker = new Worker("/npc-movement-lab/mazeSectionWorker.js?v=npc-movement-lab-2");
+    const mazeWorker = new Worker("./mazeSectionWorker.reference.js");
     mazeWorker.addEventListener("message", handleMazeWorkerMessage);
     mazeWorker.addEventListener("error", (event) => {
         state.generatedMazeLoading = false;
@@ -449,10 +449,10 @@
 
     function polygonIntersectsAxisAlignedRect(polygon, rect) {
         if (!Array.isArray(polygon) || polygon.length < 3) {
-            throw new Error("NPC movement lab maze lookahead requires a section polygon");
+            throw new Error("Wizard of Flatland maze lookahead requires a section polygon");
         }
         if (!rect || !Number.isFinite(rect.minX) || !Number.isFinite(rect.minY) || !Number.isFinite(rect.maxX) || !Number.isFinite(rect.maxY)) {
-            throw new Error("NPC movement lab maze lookahead requires a finite viewport rectangle");
+            throw new Error("Wizard of Flatland maze lookahead requires a finite viewport rectangle");
         }
         for (const point of polygon) {
             if (point.x >= rect.minX && point.x <= rect.maxX && point.y >= rect.minY && point.y <= rect.maxY) return true;
@@ -527,7 +527,7 @@
 
     function requestGeneratedMazeRefresh(options, keys, signature) {
         if (!mazeWorker || typeof mazeWorker.postMessage !== "function") {
-            throw new Error("NPC movement lab procedural maze requires a section worker");
+            throw new Error("Wizard of Flatland procedural maze requires a section worker");
         }
         const bounds = getPathfindingLayerBounds();
         const manualWalls = state.manualWalls.map(cloneWallRecord);
@@ -568,19 +568,19 @@
 
     function installGeneratedMazeWorkerResult(message) {
         if (!message || typeof message.signature !== "string" || !message.nodeLayer) {
-            throw new Error("NPC movement lab maze worker result is malformed");
+            throw new Error("Wizard of Flatland maze worker result is malformed");
         }
         const generatedWalls = unpackMazeWorkerWalls(message.generatedWalls, "generated maze walls");
         const allWalls = unpackMazeWorkerWalls(message.allWalls, "maze pathfinding walls");
         const manualOffset = generatedWalls.length;
         if (allWalls.length !== generatedWalls.length + state.manualWalls.length) {
-            throw new Error("NPC movement lab maze worker wall count does not match active manual walls");
+            throw new Error("Wizard of Flatland maze worker wall count does not match active manual walls");
         }
         for (let i = 0; i < state.manualWalls.length; i++) {
             const expected = state.manualWalls[i];
             const actual = allWalls[manualOffset + i];
             if (!wallsMatch(expected, actual)) {
-                throw new Error("NPC movement lab maze worker result is stale for manual walls");
+                throw new Error("Wizard of Flatland maze worker result is stale for manual walls");
             }
         }
 
@@ -622,8 +622,8 @@
     }
 
     function unpackMazeWorkerWalls(packed, label) {
-        if (!(packed instanceof Float32Array)) throw new Error(`NPC movement lab ${label} must be packed`);
-        if (packed.length % WALL_STRIDE !== 0) throw new Error(`NPC movement lab ${label} has an invalid packed length`);
+        if (!(packed instanceof Float32Array)) throw new Error(`Wizard of Flatland ${label} must be packed`);
+        if (packed.length % WALL_STRIDE !== 0) throw new Error(`Wizard of Flatland ${label} has an invalid packed length`);
         const walls = [];
         for (let i = 0; i < packed.length; i += WALL_STRIDE) {
             walls.push({
@@ -655,10 +655,10 @@
         const packedNodes = workerLayer.nodes;
         const packedBlockedEdges = workerLayer.blockedEdges;
         if (!(packedNodes instanceof Float32Array) || packedNodes.length % 4 !== 0) {
-            throw new Error("NPC movement lab maze worker nodes are malformed");
+            throw new Error("Wizard of Flatland maze worker nodes are malformed");
         }
         if (!(packedBlockedEdges instanceof Int32Array) || packedBlockedEdges.length % 3 !== 0) {
-            throw new Error("NPC movement lab maze worker blocked edges are malformed");
+            throw new Error("Wizard of Flatland maze worker blocked edges are malformed");
         }
 
         const nodes = [];
@@ -684,10 +684,10 @@
             const a = nodes[packedBlockedEdges[i]];
             const b = nodes[packedBlockedEdges[i + 1]];
             const wall = state.walls[packedBlockedEdges[i + 2]];
-            if (!a || !b || !wall) throw new Error("NPC movement lab maze worker blocked edge references are invalid");
+            if (!a || !b || !wall) throw new Error("Wizard of Flatland maze worker blocked edge references are invalid");
             const aDir = a.neighbors.indexOf(b);
             const bDir = b.neighbors.indexOf(a);
-            if (aDir < 0 || bDir < 0) throw new Error("NPC movement lab maze worker blocked edge is not between neighbors");
+            if (aDir < 0 || bDir < 0) throw new Error("Wizard of Flatland maze worker blocked edge is not between neighbors");
             addDirectionalBlock(a, aDir, wall);
             addDirectionalBlock(b, bDir, wall);
             blockedEdges.push({ a, b, wallIndex: packedBlockedEdges[i + 2] });
@@ -696,7 +696,7 @@
         state.nodeLayer.pathCenterX = Number(workerLayer.pathCenterX);
         state.nodeLayer.pathCenterY = Number(workerLayer.pathCenterY);
         if (!Number.isFinite(state.nodeLayer.pathCenterX) || !Number.isFinite(state.nodeLayer.pathCenterY)) {
-            throw new Error("NPC movement lab maze worker path center is invalid");
+            throw new Error("Wizard of Flatland maze worker path center is invalid");
         }
         state.nodeLayer.nodes = nodes;
         state.nodeLayer.nodeByKey = nodeByKey;
@@ -707,7 +707,7 @@
     }
 
     function cloneWallRecord(wall) {
-        if (!wall || typeof wall !== "object") throw new Error("NPC movement lab wall clone requires a wall record");
+        if (!wall || typeof wall !== "object") throw new Error("Wizard of Flatland wall clone requires a wall record");
         return {
             ax: Number(wall.ax),
             ay: Number(wall.ay),
@@ -762,7 +762,7 @@
     function isAgentInInstalledMazeSection(agent) {
         if (!isProceduralMazeScenario()) return true;
         if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
-            throw new Error("NPC movement lab procedural maze requires installed section tracking");
+            throw new Error("Wizard of Flatland procedural maze requires installed section tracking");
         }
         const sectionKey = getActorMazeSectionKey(agent);
         return state.generatedMazeInstalledChunkKeys.has(sectionKey) && state.generatedMazeChunkKeys.has(sectionKey);
@@ -805,7 +805,7 @@
 
         appendMazeRoomWalls(walls, room, hallConnections, outsideDoor);
         for (const [side, connection] of hallConnections.entries()) {
-            if (!connection) throw new Error(`NPC movement lab maze hallway ${key}:${side} is missing connection data`);
+            if (!connection) throw new Error(`Wizard of Flatland maze hallway ${key}:${side} is missing connection data`);
             appendMazeHalfHallwayToNeighbor(walls, room, side, connection, options);
         }
     }
@@ -847,7 +847,7 @@
 
     function getMazeSharedHallConnection(q, r, side, options, requireOpen = false) {
         const dir = MAZE_SECTION_DIRECTIONS[side];
-        if (!dir) throw new Error("NPC movement lab maze hallway side is invalid");
+        if (!dir) throw new Error("Wizard of Flatland maze hallway side is invalid");
         const neighborQ = q + dir.q;
         const neighborR = r + dir.r;
         const thisKey = mazeSectionKey(q, r);
@@ -859,7 +859,7 @@
         const edgeT = 0.28 + random() * 0.44;
         const open = isMazeSharedHallOpen(q, r, side, options);
         if (requireOpen && !open) {
-            throw new Error(`NPC movement lab maze hallway edge ${ordered} is not open`);
+            throw new Error(`Wizard of Flatland maze hallway edge ${ordered} is not open`);
         }
         return {
             side,
@@ -872,7 +872,7 @@
 
     function isMazeSharedHallOpen(q, r, side, options) {
         const dir = MAZE_SECTION_DIRECTIONS[side];
-        if (!dir) throw new Error("NPC movement lab maze hallway side is invalid");
+        if (!dir) throw new Error("Wizard of Flatland maze hallway side is invalid");
         const thisKey = mazeSectionKey(q, r);
         const neighborKey = mazeSectionKey(q + dir.q, r + dir.r);
         const ordered = thisKey < neighborKey
@@ -897,7 +897,7 @@
 
     function canMazeSectionOwnOutsideDoorSide(q, r, side) {
         const dir = MAZE_SECTION_DIRECTIONS[side];
-        if (!dir) throw new Error("NPC movement lab maze outside door side is invalid");
+        if (!dir) throw new Error("Wizard of Flatland maze outside door side is invalid");
         const thisKey = mazeSectionKey(q, r);
         const neighborKey = mazeSectionKey(q + dir.q, r + dir.r);
         return thisKey < neighborKey;
@@ -964,7 +964,7 @@
         const dx = neighborCenter.x - room.center.x;
         const dy = neighborCenter.y - room.center.y;
         const length = Math.hypot(dx, dy);
-        if (!(length > 0.001)) throw new Error("NPC movement lab maze hallway requires separated section centers");
+        if (!(length > 0.001)) throw new Error("Wizard of Flatland maze hallway requires separated section centers");
         const neighborRoomRadius = Math.max(
             5,
             getMazeSectionRadius(options) - MAZE_ROOM_EDGE_INSET_TILES / Math.cos(Math.PI / 6)
@@ -979,7 +979,7 @@
         const neighborCorners = getHexCornersWorld(neighborCenter.x, neighborCenter.y, neighborRoomRadius);
         const neighborConnection = getMazeSharedHallConnection(room.q + dir.q, room.r + dir.r, neighborSide, options, true);
         if (neighborConnection.edgeKey !== connection.edgeKey || Math.abs(neighborConnection.width - connection.width) > 0.000001) {
-            throw new Error("NPC movement lab maze reciprocal hallway connection mismatch");
+            throw new Error("Wizard of Flatland maze reciprocal hallway connection mismatch");
         }
         const neighborGap = getWallGapEndpoints(
             neighborCorners[neighborSide],
@@ -1004,7 +1004,7 @@
     function getWallGapEndpoints(a, b, gapT, gapWidth) {
         const length = Math.hypot(b.x - a.x, b.y - a.y);
         if (!(length > gapWidth + 0.5)) {
-            throw new Error("NPC movement lab maze hallway gap requires a wall segment longer than the gap");
+            throw new Error("Wizard of Flatland maze hallway gap requires a wall segment longer than the gap");
         }
         const halfT = Math.max(0.02, gapWidth / length * 0.5);
         return {
@@ -1231,7 +1231,7 @@
         const dirX = forwardX * signedForward + sideX * signedSideways;
         const dirY = forwardY * signedForward + sideY * signedSideways;
         const magnitude = Math.hypot(dirX, dirY);
-        if (!(magnitude > 0)) throw new Error("NPC movement lab keyboard direction must be non-zero");
+        if (!(magnitude > 0)) throw new Error("Wizard of Flatland keyboard direction must be non-zero");
         const speed = (state.fastMovementHeld ? TARGET_KEYBOARD_FAST_MOVE_SPEED : TARGET_KEYBOARD_MOVE_SPEED) * movementSpeedMultiplier;
         moveTargetWithNpcPush(
             state.target.x + (dirX / magnitude) * speed * dt,
@@ -1242,7 +1242,7 @@
     function updateProjectedCursorKeyboardControls(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
         const cursor = state.projectedCursor;
-        if (!cursor || typeof cursor !== "object") throw new Error("NPC movement lab projected cursor state is missing");
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
 
         let bend = 0;
         if (state.pressedMovementKeys.ArrowLeft) bend -= 1;
@@ -1285,8 +1285,8 @@
     function updateTargetHeadingFromProjectedCursor(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
         const cursor = state.projectedCursor;
-        if (!cursor || typeof cursor !== "object") throw new Error("NPC movement lab projected cursor state is missing");
-        if (!Number.isFinite(cursor.angleOffset)) throw new Error("NPC movement lab projected cursor turn requires a finite bend");
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
+        if (!Number.isFinite(cursor.angleOffset)) throw new Error("Wizard of Flatland projected cursor turn requires a finite bend");
         if (!isTargetMovementInputActive() && !isProjectedCursorInputActive()) return;
         const bendRatio = getProjectedCursorBendRatio(cursor.angleOffset);
         if (bendRatio === 0) return;
@@ -1319,7 +1319,7 @@
         const goal = Number(target);
         const delta = Number(maxDelta);
         if (!Number.isFinite(current) || !Number.isFinite(goal) || !Number.isFinite(delta)) {
-            throw new Error("NPC movement lab moveToward requires finite values");
+            throw new Error("Wizard of Flatland moveToward requires finite values");
         }
         if (Math.abs(goal - current) <= delta) return goal;
         return current + Math.sign(goal - current) * delta;
@@ -1373,7 +1373,7 @@
 
     function findEarliestFireballWallHit(fromX, fromY, toX, toY) {
         if (!Number.isFinite(fromX) || !Number.isFinite(fromY) || !Number.isFinite(toX) || !Number.isFinite(toY)) {
-            throw new Error("NPC movement lab fireball wall hit test requires finite movement");
+            throw new Error("Wizard of Flatland fireball wall hit test requires finite movement");
         }
         let best = null;
         for (const wall of state.walls) {
@@ -1392,7 +1392,7 @@
 
     function sweptCircleBoundaryWallHit(fromX, fromY, toX, toY, wall, radius) {
         if (!wall || !Number.isFinite(wall.ax) || !Number.isFinite(wall.ay) || !Number.isFinite(wall.nx) || !Number.isFinite(wall.ny) || !Number.isFinite(radius)) {
-            throw new Error("NPC movement lab fireball boundary hit test requires finite wall data");
+            throw new Error("Wizard of Flatland fireball boundary hit test requires finite wall data");
         }
         const startSigned = (fromX - wall.ax) * wall.nx + (fromY - wall.ay) * wall.ny;
         const endSigned = (toX - wall.ax) * wall.nx + (toY - wall.ay) * wall.ny;
@@ -1405,14 +1405,14 @@
 
     function findAgentIntersectingPolygon(polygon) {
         if (!Array.isArray(polygon) || polygon.length < 3) {
-            throw new Error("NPC movement lab fireball hit test requires a polygon");
+            throw new Error("Wizard of Flatland fireball hit test requires a polygon");
         }
         return state.agents.find((agent) => polygonIntersectsCircle(polygon, agent.x, agent.y, agent.radius)) || null;
     }
 
     function detonateFireball(fireball) {
         if (!fireball || !Number.isFinite(fireball.x) || !Number.isFinite(fireball.y)) {
-            throw new Error("NPC movement lab fireball explosion requires a finite fireball");
+            throw new Error("Wizard of Flatland fireball explosion requires a finite fireball");
         }
         destroyAgentsIntersectingCircle(fireball.x, fireball.y, FIREBALL_EXPLOSION_DAMAGE_RADIUS);
         state.fireballExplosions.push({
@@ -1432,7 +1432,7 @@
 
     function destroyAgentsIntersectingCircle(circleX, circleY, radius) {
         if (!Number.isFinite(circleX) || !Number.isFinite(circleY) || !Number.isFinite(radius)) {
-            throw new Error("NPC movement lab fireball explosion requires a finite damage circle");
+            throw new Error("Wizard of Flatland fireball explosion requires a finite damage circle");
         }
         state.agents = state.agents.filter((agent) => {
             const distance = Math.hypot(agent.x - circleX, agent.y - circleY);
@@ -1442,7 +1442,7 @@
 
     function getFireballHitboxPolygon(fireball) {
         if (!fireball || !Number.isFinite(fireball.x) || !Number.isFinite(fireball.y) || !Number.isFinite(fireball.dirX) || !Number.isFinite(fireball.dirY)) {
-            throw new Error("NPC movement lab fireball hitbox requires a finite fireball");
+            throw new Error("Wizard of Flatland fireball hitbox requires a finite fireball");
         }
         const halfLength = FIREBALL_HITBOX_LENGTH * 0.5;
         const halfWidth = FIREBALL_HITBOX_WIDTH * 0.5;
@@ -1470,7 +1470,7 @@
 
     function polygonIntersectsCircle(polygon, circleX, circleY, radius) {
         if (!Number.isFinite(circleX) || !Number.isFinite(circleY) || !Number.isFinite(radius)) {
-            throw new Error("NPC movement lab polygon-circle hit test requires finite circle data");
+            throw new Error("Wizard of Flatland polygon-circle hit test requires finite circle data");
         }
         if (pointInPolygon(circleX, circleY, polygon)) return true;
         for (let i = 0; i < polygon.length; i++) {
@@ -1487,7 +1487,7 @@
             const a = polygon[i];
             const b = polygon[j];
             if (!Number.isFinite(a.x) || !Number.isFinite(a.y) || !Number.isFinite(b.x) || !Number.isFinite(b.y)) {
-                throw new Error("NPC movement lab polygon hit test requires finite polygon points");
+                throw new Error("Wizard of Flatland polygon hit test requires finite polygon points");
             }
             const intersects = ((a.y > y) !== (b.y > y)) &&
                 x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x;
@@ -1498,7 +1498,7 @@
 
     function moveTargetWithNpcPush(desiredX, desiredY) {
         if (!Number.isFinite(desiredX) || !Number.isFinite(desiredY)) {
-            throw new Error("NPC movement lab target move requires finite coordinates");
+            throw new Error("Wizard of Flatland target move requires finite coordinates");
         }
         const constrainedMove = constrainMovementToSegmentWalls(
             state.target.x,
@@ -1694,7 +1694,7 @@
             const minDistance = TARGET_RADIUS + agent.radius - TARGET_NPC_PUSH_SLOP * 4;
             const distance = Math.hypot(agent.x - state.target.x, agent.y - state.target.y);
             if (distance < minDistance) {
-                throw new Error(`NPC movement lab target collision unresolved for agent ${agent.id}`);
+                throw new Error(`Wizard of Flatland target collision unresolved for agent ${agent.id}`);
             }
         }
         for (let i = 0; i < state.agents.length; i++) {
@@ -1704,7 +1704,7 @@
                 const minDistance = left.radius + right.radius - TARGET_NPC_PUSH_SLOP * 4;
                 const distance = Math.hypot(right.x - left.x, right.y - left.y);
                 if (distance < minDistance) {
-                    throw new Error(`NPC movement lab NPC collision unresolved for agents ${left.id} and ${right.id}`);
+                    throw new Error(`Wizard of Flatland NPC collision unresolved for agents ${left.id} and ${right.id}`);
                 }
             }
         }
@@ -1715,13 +1715,13 @@
             if (wall.kind === WALL_KIND_SEGMENT) {
                 const distance = pointSegmentDistance(actor.x, actor.y, wall.ax, wall.ay, wall.bx, wall.by);
                 if (distance < radius - TARGET_NPC_PUSH_SLOP * 4) {
-                    throw new Error(`NPC movement lab ${label} segment wall collision unresolved`);
+                    throw new Error(`Wizard of Flatland ${label} segment wall collision unresolved`);
                 }
                 continue;
             }
             const signed = (actor.x - wall.ax) * wall.nx + (actor.y - wall.ay) * wall.ny;
             if (signed < radius - TARGET_NPC_PUSH_SLOP * 4) {
-                throw new Error(`NPC movement lab ${label} wall collision unresolved`);
+                throw new Error(`Wizard of Flatland ${label} wall collision unresolved`);
             }
         }
     }
@@ -1966,7 +1966,7 @@
             target: { x: state.target.x, y: state.target.y },
             stats: state.stats
         };
-        console.groupCollapsed(`NPC movement lab heading glitch: agent ${agent.id}`);
+        console.groupCollapsed(`Wizard of Flatland heading glitch: agent ${agent.id}`);
         console.log(dump);
         console.table(history);
         console.groupEnd();
@@ -2081,7 +2081,7 @@
             const distSq = dx * dx + dy * dy;
             if (!best || distSq < best.distSq) best = { node, distSq };
         }
-        if (!best) throw new Error("NPC movement lab pathfinding requires at least one node");
+        if (!best) throw new Error("Wizard of Flatland pathfinding requires at least one node");
         return best.node;
     }
 
@@ -2094,7 +2094,7 @@
             const distSq = dx * dx + dy * dy;
             if (!best || distSq < best.distSq) best = { node, distSq };
         }
-        if (!best) throw new Error("NPC movement lab pathfinding requires at least one passable node");
+        if (!best) throw new Error("Wizard of Flatland pathfinding requires at least one passable node");
         return best.node;
     }
 
@@ -2102,7 +2102,7 @@
         while (agent.pathCursor < agent.pathNodeKeys.length) {
             const key = agent.pathNodeKeys[agent.pathCursor];
             const node = state.nodeLayer.nodeByKey.get(key);
-            if (!node) throw new Error(`NPC movement lab path contains unknown node ${key}`);
+            if (!node) throw new Error(`Wizard of Flatland path contains unknown node ${key}`);
             const distance = Math.hypot(node.x - agent.x, node.y - agent.y);
             if (distance > PATH_WAYPOINT_REACHED_DISTANCE) return;
             agent.pathCursor += 1;
@@ -2113,7 +2113,7 @@
         if (agent.pathCursor >= agent.pathNodeKeys.length) return null;
         const key = agent.pathNodeKeys[agent.pathCursor];
         const node = state.nodeLayer.nodeByKey.get(key);
-        if (!node) throw new Error(`NPC movement lab path waypoint missing for ${key}`);
+        if (!node) throw new Error(`Wizard of Flatland path waypoint missing for ${key}`);
         return node;
     }
 
@@ -2165,7 +2165,7 @@
             return;
         }
         if (!Array.isArray(message.pathNodeKeys)) {
-            throw new Error("NPC movement lab pathfinding worker returned a malformed path");
+            throw new Error("Wizard of Flatland pathfinding worker returned a malformed path");
         }
         const pathNodeKeys = message.pathNodeKeys.slice();
         if (agent.pathRequestedStartKey && agent.pathRequestedStartKey !== agent.pathRequestedRawStartKey) {
@@ -2254,7 +2254,7 @@
 
     function drawHexGridLayer() {
         const layer = state.hexGridLayer;
-        if (!layer.ctx) throw new Error("NPC movement lab hex grid layer requires a 2D context");
+        if (!layer.ctx) throw new Error("Wizard of Flatland hex grid layer requires a 2D context");
         if (
             layer.dirty ||
             layer.width !== state.view.width ||
@@ -2272,9 +2272,9 @@
 
     function rebuildHexGridLayer() {
         const layer = state.hexGridLayer;
-        if (!layer.ctx) throw new Error("NPC movement lab hex grid layer requires a 2D context");
+        if (!layer.ctx) throw new Error("Wizard of Flatland hex grid layer requires a 2D context");
         if (!(state.view.width > 0 && state.view.height > 0 && state.view.scale > 0)) {
-            throw new Error("NPC movement lab hex grid requires a valid viewport");
+            throw new Error("Wizard of Flatland hex grid requires a valid viewport");
         }
 
         layer.width = state.view.width;
@@ -2452,7 +2452,7 @@
     function getWallGeometryApi() {
         const api = window.WallGeometry;
         if (!api || typeof api.connectionCrossesWallFaces !== "function") {
-            throw new Error("NPC movement lab pathfinding node layer requires WallGeometry.connectionCrossesWallFaces");
+            throw new Error("Wizard of Flatland pathfinding node layer requires WallGeometry.connectionCrossesWallFaces");
         }
         return api;
     }
@@ -2484,7 +2484,7 @@
             maxY = Math.max(maxY, wall.ay, wall.by);
         }
         if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
-            throw new Error("NPC movement lab pathfinding node layer requires finite wall bounds");
+            throw new Error("Wizard of Flatland pathfinding node layer requires finite wall bounds");
         }
         return { minX, minY, maxX, maxY };
     }
@@ -2559,7 +2559,7 @@
 
     function isPathfindingNodeTerrainPassable(node) {
         if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) {
-            throw new Error("NPC movement lab pathfinding passability requires a finite node");
+            throw new Error("Wizard of Flatland pathfinding passability requires a finite node");
         }
         for (const wall of state.walls) {
             const kind = wall.kind === WALL_KIND_SEGMENT ? WALL_KIND_SEGMENT : WALL_KIND_BOUNDARY;
@@ -2571,7 +2571,7 @@
             const nx = Number(wall.nx);
             const ny = Number(wall.ny);
             if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
-                throw new Error("NPC movement lab pathfinding passability requires finite wall normals");
+                throw new Error("Wizard of Flatland pathfinding passability requires finite wall normals");
             }
             const signed = (node.x - wall.ax) * nx + (node.y - wall.ay) * ny;
             if (signed < TARGET_RADIUS) return false;
@@ -2581,10 +2581,10 @@
 
     function addDirectionalBlock(node, direction, blocker) {
         if (!node || !Number.isInteger(direction) || direction < 0 || direction > 11) {
-            throw new Error("NPC movement lab pathfinding block requires a valid node direction");
+            throw new Error("Wizard of Flatland pathfinding block requires a valid node direction");
         }
         if (!node.neighbors[direction]) {
-            throw new Error("NPC movement lab pathfinding block requires an existing neighbor connection");
+            throw new Error("Wizard of Flatland pathfinding block requires an existing neighbor connection");
         }
         if (!node.blockedNeighbors.has(direction)) node.blockedNeighbors.set(direction, new Set());
         node.blockedNeighbors.get(direction).add(blocker);
@@ -2592,7 +2592,7 @@
 
     function drawPathfindingNodeLayer() {
         const layer = state.nodeLayer;
-        if (!layer.ctx) throw new Error("NPC movement lab pathfinding node layer requires a 2D context");
+        if (!layer.ctx) throw new Error("Wizard of Flatland pathfinding node layer requires a 2D context");
         if (
             layer.dirty ||
             layer.width !== state.view.width ||
@@ -2612,9 +2612,9 @@
 
     function rebuildPathfindingNodeRenderLayer() {
         const layer = state.nodeLayer;
-        if (!layer.ctx) throw new Error("NPC movement lab pathfinding node layer requires a 2D context");
+        if (!layer.ctx) throw new Error("Wizard of Flatland pathfinding node layer requires a 2D context");
         if (!(state.view.width > 0 && state.view.height > 0 && state.view.scale > 0)) {
-            throw new Error("NPC movement lab pathfinding node layer requires a valid viewport");
+            throw new Error("Wizard of Flatland pathfinding node layer requires a valid viewport");
         }
 
         layer.width = state.view.width;
@@ -2765,7 +2765,7 @@
     }
 
     function drawProjectedTargetCursor(targetX, targetY, heading) {
-        if (!Number.isFinite(heading)) throw new Error("NPC movement lab projected cursor requires a finite heading");
+        if (!Number.isFinite(heading)) throw new Error("Wizard of Flatland projected cursor requires a finite heading");
         const trace = getCurrentProjectedCursorTrace();
         const projectedWorld = trace.point;
         const cursorHeading = getCurrentProjectedCursorHeading();
@@ -2798,9 +2798,9 @@
 
     function getCurrentProjectedCursorHeading() {
         const cursor = state.projectedCursor;
-        if (!cursor || typeof cursor !== "object") throw new Error("NPC movement lab projected cursor state is missing");
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
         if (!Number.isFinite(state.target.heading) || !Number.isFinite(cursor.angleOffset)) {
-            throw new Error("NPC movement lab projected cursor heading requires finite angles");
+            throw new Error("Wizard of Flatland projected cursor heading requires finite angles");
         }
         return normalizeAngle(state.target.heading + getProjectedCursorCurveHeadingDelta(cursor.distance, cursor.angleOffset));
     }
@@ -2811,7 +2811,7 @@
 
     function getCurrentProjectedCursorTrace() {
         const cursor = state.projectedCursor;
-        if (!cursor || typeof cursor !== "object") throw new Error("NPC movement lab projected cursor state is missing");
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
         return getWallClampedProjectedCursorCurveTrace(
             state.target.x,
             state.target.y,
@@ -2823,7 +2823,7 @@
 
     function getProjectedCursorTraceDistance(trace) {
         if (!trace || !Array.isArray(trace.points) || trace.points.length < 2) {
-            throw new Error("NPC movement lab projected cursor trace requires at least two points");
+            throw new Error("Wizard of Flatland projected cursor trace requires at least two points");
         }
         let distance = 0;
         for (let i = 1; i < trace.points.length; i++) {
@@ -2837,7 +2837,7 @@
                 !Number.isFinite(current.x) ||
                 !Number.isFinite(current.y)
             ) {
-                throw new Error("NPC movement lab projected cursor trace contains invalid points");
+                throw new Error("Wizard of Flatland projected cursor trace contains invalid points");
             }
             distance += Math.hypot(current.x - previous.x, current.y - previous.y);
         }
@@ -2845,7 +2845,7 @@
     }
 
     function drawProjectedCursorGuide(points) {
-        if (!Array.isArray(points) || points.length < 2) throw new Error("NPC movement lab projected cursor guide requires curve points");
+        if (!Array.isArray(points) || points.length < 2) throw new Error("Wizard of Flatland projected cursor guide requires curve points");
         ctx.save();
         ctx.strokeStyle = "rgba(68,170,255,0.72)";
         ctx.lineWidth = 4;
@@ -2884,7 +2884,7 @@
 
     function getProjectedCursorCurvePoints(targetX, targetY, heading, angleOffset, distance) {
         if (!Number.isFinite(targetX) || !Number.isFinite(targetY) || !Number.isFinite(heading) || !Number.isFinite(angleOffset) || !Number.isFinite(distance)) {
-            throw new Error("NPC movement lab projected cursor curve requires finite inputs");
+            throw new Error("Wizard of Flatland projected cursor curve requires finite inputs");
         }
         const bendRatio = getProjectedCursorBendRatio(angleOffset);
         const headingDelta = getProjectedCursorCurveHeadingDelta(distance, angleOffset);
@@ -2916,13 +2916,13 @@
     }
 
     function getProjectedCursorBendRatio(angleOffset) {
-        if (!Number.isFinite(angleOffset)) throw new Error("NPC movement lab projected cursor bend requires a finite angle");
+        if (!Number.isFinite(angleOffset)) throw new Error("Wizard of Flatland projected cursor bend requires a finite angle");
         return Math.max(-1, Math.min(1, angleOffset / TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET));
     }
 
     function getProjectedCursorTurnRadius(distance, bendRatio) {
         if (!Number.isFinite(distance) || !Number.isFinite(bendRatio)) {
-            throw new Error("NPC movement lab projected cursor turn radius requires finite values");
+            throw new Error("Wizard of Flatland projected cursor turn radius requires finite values");
         }
         const normalizedBend = Math.min(1, Math.max(0, Math.abs(bendRatio)));
         if (normalizedBend <= 0.000001) return Infinity;
@@ -3021,7 +3021,7 @@
         ctx.save();
         for (const explosion of state.fireballExplosions) {
             if (!Number.isFinite(explosion.x) || !Number.isFinite(explosion.y) || !Number.isFinite(explosion.radius) || !Number.isFinite(explosion.age)) {
-                throw new Error("NPC movement lab fireball explosion render requires finite explosion data");
+                throw new Error("Wizard of Flatland fireball explosion render requires finite explosion data");
             }
             const center = worldToScreen(explosion.x, explosion.y);
             const t = Math.max(0, Math.min(1, explosion.age / FIREBALL_EXPLOSION_VISUAL_SECONDS));
@@ -3204,7 +3204,7 @@
             nearestWallClearances: wallClearances,
             pathNodes
         };
-        console.groupCollapsed(`NPC movement lab agent ${agent.id} pathfinding`);
+        console.groupCollapsed(`Wizard of Flatland agent ${agent.id} pathfinding`);
         console.log(dump);
         console.table(pathNodes);
         console.groupEnd();
@@ -3227,7 +3227,7 @@
                 if (!best || distSq < best.distSq) best = { ...node, distSq };
             }
         }
-        if (!best) throw new Error("NPC movement lab wall tool could not resolve nearest hex node");
+        if (!best) throw new Error("Wizard of Flatland wall tool could not resolve nearest hex node");
         return best;
     }
 
