@@ -60,18 +60,14 @@
     const TARGET_PROJECTED_CURSOR_IDLE_MAX_TURN_ACCEL_MULTIPLIER = 4;
     const TARGET_PROJECTED_CURSOR_IDLE_TURN_RATE_MULTIPLIER = 2 / 3;
     const TARGET_PROJECTED_CURSOR_MAX_SPEED_BONUS = 0.5;
-    const TARGET_PROJECTED_CURSOR_DISTANCE_SPEED = TARGET_PROJECTED_CURSOR_DISTANCE;
+    const TARGET_PROJECTED_CURSOR_DISTANCE_SPEED = TARGET_PROJECTED_CURSOR_DISTANCE * 2;
     const TARGET_PROJECTED_CURSOR_RETURN_DISTANCE_SPEED = Math.max(
         TARGET_PROJECTED_CURSOR_MAX_DISTANCE - TARGET_PROJECTED_CURSOR_DISTANCE,
         TARGET_PROJECTED_CURSOR_DISTANCE - TARGET_PROJECTED_CURSOR_MIN_DISTANCE
     ) / TARGET_CURSOR_DISTANCE_RETURN_SECONDS;
-    const FIREBALL_SPEED = 13;
-    const FIREBALL_MAX_AGE_SECONDS = 1.8;
     const FIREBALL_HITBOX_LENGTH = 1.1;
     const FIREBALL_HITBOX_WIDTH = 0.62;
     const FIREBALL_DAMAGE_RADIUS = FIREBALL_HITBOX_WIDTH * 0.5;
-    const FIREBALL_EXPLOSION_DAMAGE_RADIUS = FIREBALL_DAMAGE_RADIUS * 3;
-    const FIREBALL_DAMAGE = 10;
     const FIREBALL_EXPLOSION_VISUAL_SECONDS = 0.16;
     const ENEMY_MAX_HEALTH = 20;
     const WIZARD_MAX_HEALTH = 100;
@@ -79,8 +75,21 @@
     const WIZARD_MAX_EXP = 100;
     const WIZARD_HEALTH_REGEN_PER_SECOND = WIZARD_MAX_HEALTH * 0.005;
     const WIZARD_MAGIC_REGEN_PER_SECOND = 7;
-    const WIZARD_FIREBALL_MAGIC_COST = 10;
     const ENEMY_HIT_DAMAGE = 10;
+    const SPELL_LEVEL_DATA_URL = "/wizard-of-flatland/spell-levels.json";
+    const SPELL_LEVEL_MIN = 0;
+    const SPELL_LEVEL_MAX = 7;
+    const SPELL_LEVEL_STAT_LABELS = [
+        ["manaCost", "Mana cost"],
+        ["costPerSecond", "Cost per second"],
+        ["power", "Power"],
+        ["damage", "Damage"],
+        ["range", "Range"],
+        ["radius", "Explosion radius"],
+        ["castDelay", "Cooldown"],
+        ["projectileSpeed", "Projectile speed"],
+        ["duration", "Duration"]
+    ];
     const SPEED_SCALE_MIN = 0.05;
     const SPEED_SCALE_MAX = 0.8;
     const SPEED_SCALE_DEFAULT = 0.2;
@@ -134,10 +143,19 @@
     const MAZE_COIN_ATTRACT_DISTANCE = 2;
     const MAZE_COIN_COLLECT_DISTANCE = TARGET_RADIUS + MAZE_COIN_RADIUS + 0.08;
     const MAZE_COIN_RUSH_SPEED = 11;
-    const ENEMY_COIN_DROP_CHANCE = 1 / 3;
+    const ENEMY_COIN_DROP_CHANCE = 1 / 2;
     const MAZE_COIN_SECTION_EDGE_EPSILON = 0.02;
     const MAZE_COIN_PLACEMENT_ATTEMPTS_PER_COIN = 160;
     const MAZE_COIN_WALL_ENDPOINT_MARGIN = 0.25;
+    const TALISMAN_STORAGE_KEY = "wizardOfFlatland.checkpoint.v1";
+    const TALISMAN_STORAGE_KEY_PREFIX = `${TALISMAN_STORAGE_KEY}:`;
+    const TALISMAN_SAVE_INDEX_KEY = "wizardOfFlatland.checkpoint.index.v1";
+    const TALISMAN_ROOM_INTERVAL = 50;
+    const TALISMAN_RADIUS = TARGET_RADIUS * 4.6;
+    const TALISMAN_TOUCH_DISTANCE = TARGET_RADIUS + TALISMAN_RADIUS * 0.75;
+    const TALISMAN_ACTIVATION_FLASH_SECONDS = 0.42;
+    const TALISMAN_BLOCKED_FLASH_SECONDS = 0.25;
+    const TALISMAN_INITIAL_WIZARD_DISTANCE = 4;
     const MAZE_SECTION_DIRECTIONS = [
         { q: 1, r: 0 },
         { q: 0, r: 1 },
@@ -173,6 +191,14 @@
     const WIZARD_POSITION_STORAGE_KEY = "wizardOfFlatland.savedWizardPosition.v1";
     const WIZARD_FILL_COLOR = "#008000";
     const WIZARD_OUTLINE_COLOR = "#44ff44";
+    const WIZARD_HAT_TOP_DOWN_BRIM_WIDTH = 1.34;
+    const WIZARD_HAT_TOP_DOWN_BRIM_HEIGHT = 2.25;
+    const WIZARD_HAT_TOP_DOWN_BRIM_DROP = 0.12;
+    const WIZARD_HAT_TOP_DOWN_CONE_HEIGHT = 0.8112;
+    const FLOOR_CENTER_COLOR = "#777777";
+    const FLOOR_EDGE_COLOR = "#904444";
+    const FLOOR_OUTER_COLOR = "#990000";
+    const FLOOR_GRADIENT_SECTION_DISTANCE = 7;
     const VIEW_ZOOM_MIN = 0.45;
     const VIEW_ZOOM_MAX = 3.2;
     const VIEW_ZOOM_WHEEL_STEP = 0.0015;
@@ -195,7 +221,30 @@
     const expBar = document.getElementById("expBar");
     const expCounter = document.getElementById("expCounter");
     const expLevelUpButton = document.getElementById("expLevelUpButton");
+    const levelUpAnnouncement = document.getElementById("levelUpAnnouncement");
+    const spellLevelPanel = document.getElementById("spellLevelPanel");
+    const spellLevelHeader = document.getElementById("spellLevelHeader");
+    const spellLevelCloseButton = document.getElementById("spellLevelCloseButton");
+    const spellLevelList = document.getElementById("spellLevelList");
+    const spellLevelDetails = document.getElementById("spellLevelDetails");
+    const startupMenu = document.getElementById("startupMenu");
+    const startupModeView = document.getElementById("startupModeView");
+    const startupNewButton = document.getElementById("startupNewButton");
+    const startupLoadButton = document.getElementById("startupLoadButton");
+    const startupNewForm = document.getElementById("startupNewForm");
+    const startupLoadForm = document.getElementById("startupLoadForm");
+    const startupNewNameInput = document.getElementById("startupNewName");
+    const startupLoadList = document.getElementById("startupLoadList");
+    const startupLoadEmpty = document.getElementById("startupLoadEmpty");
+    const startupLoadSubmitButton = document.getElementById("startupLoadSubmitButton");
+    const startupNewValidation = document.getElementById("startupNewValidation");
+    const startupLoadValidation = document.getElementById("startupLoadValidation");
+    const startupNewBackButton = document.getElementById("startupNewBackButton");
+    const startupLoadBackButton = document.getElementById("startupLoadBackButton");
     let speedScaleControlValue = speedScaleInput ? Number(speedScaleInput.value) : 0.5;
+    let spellLevelDefinitions = null;
+    let spellLevelFetchPromise = null;
+    let selectedSpellLevelId = "fireball";
 
     const labels = {
         agentCount: document.getElementById("agentCountValue"),
@@ -220,6 +269,11 @@
 
     const state = {
         running: true,
+        gameStarted: false,
+        startupMenuOpen: true,
+        playerName: "",
+        mazeSeed: DEFAULT_MAZE_SEED,
+        startupSelectedLoadName: "",
         requestId: 1,
         waitingForWorker: false,
         pendingSolverDt: 0,
@@ -233,8 +287,12 @@
         fireballExplosions: [],
         coins: [],
         collectedCoinKeys: new Set(),
+        collectedCoinSectionKeysByCoinKey: new Map(),
         droppedCoinsByKey: new Map(),
         nextDroppedCoinId: 1,
+        talismans: [],
+        activatedTalismanSectionKeys: new Set(),
+        visitedMazeSectionKeys: new Set(),
         walls: createEmptyWallBuffer(),
         manualWalls: createEmptyWallBuffer(),
         generatedMazeWalls: createEmptyWallBuffer(),
@@ -257,6 +315,12 @@
             exp: 0,
             maxExp: WIZARD_MAX_EXP
         },
+        selectedSpell: "fireball",
+        spellLevels: {
+            fireball: 1
+        },
+        fireballCooldownRemaining: 0,
+        levelPoints: 0,
         targetTravelVector: { x: 0, y: 0 },
         lastSentTarget: { x: 0, y: 0 },
         targetFlashTime: 0,
@@ -264,6 +328,12 @@
         projectedCursor: {
             angleOffset: 0,
             distance: TARGET_PROJECTED_CURSOR_DISTANCE
+        },
+        projectedCursorMouseMode: {
+            active: false,
+            clientX: NaN,
+            clientY: NaN,
+            bendDirection: 0
         },
         projectedCursorBendHold: {
             direction: 0,
@@ -367,6 +437,28 @@
         }
     }
 
+    function validateWizardLevelPoints() {
+        if (!Number.isInteger(state.levelPoints) || state.levelPoints < 0) {
+            throw new Error("Wizard of Flatland levelPoints must be a non-negative integer");
+        }
+    }
+
+    function clampSpellLevel(level) {
+        const n = Number(level);
+        if (!Number.isFinite(n)) return SPELL_LEVEL_MIN;
+        return Math.max(SPELL_LEVEL_MIN, Math.min(SPELL_LEVEL_MAX, Math.round(n)));
+    }
+
+    function normalizeWizardSpellLevels() {
+        if (!state.spellLevels || typeof state.spellLevels !== "object" || Array.isArray(state.spellLevels)) {
+            throw new Error("Wizard of Flatland spellLevels must be an object");
+        }
+        Object.keys(state.spellLevels).forEach((spellId) => {
+            state.spellLevels[spellId] = clampSpellLevel(state.spellLevels[spellId]);
+        });
+        return state.spellLevels;
+    }
+
     function resetWizardVitals() {
         state.wizardVitals = {
             health: WIZARD_MAX_HEALTH,
@@ -376,16 +468,19 @@
             exp: 0,
             maxExp: WIZARD_MAX_EXP
         };
+        state.levelPoints = 0;
         updateStatusBars();
     }
 
     function updateStatusBars() {
         validateWizardVitals();
+        validateWizardLevelPoints();
         if (!healthBar) throw new Error("Wizard of Flatland health bar is missing");
         if (!magicBar) throw new Error("Wizard of Flatland magic bar is missing");
         if (!expBar) throw new Error("Wizard of Flatland exp bar is missing");
         if (!expCounter) throw new Error("Wizard of Flatland exp counter is missing");
         if (!expLevelUpButton) throw new Error("Wizard of Flatland exp level-up button is missing");
+        if (!levelUpAnnouncement) throw new Error("Wizard of Flatland level-up announcement is missing");
         const healthRatio = Math.max(0, Math.min(1, state.wizardVitals.health / state.wizardVitals.maxHealth));
         const magicRatio = Math.max(0, Math.min(1, state.wizardVitals.magic / state.wizardVitals.maxMagic));
         const expRatio = Math.max(0, Math.min(1, state.wizardVitals.exp / state.wizardVitals.maxExp));
@@ -393,7 +488,331 @@
         magicBar.style.width = `${magicRatio * 100}%`;
         expBar.style.width = `${expRatio * 100}%`;
         expCounter.textContent = `${Math.floor(state.wizardVitals.exp)}/${state.wizardVitals.maxExp}`;
-        expLevelUpButton.classList.toggle("hidden", state.wizardVitals.exp < state.wizardVitals.maxExp);
+        expLevelUpButton.classList.toggle("hidden", state.levelPoints <= 0);
+        refreshSpellLevelPanel();
+    }
+
+    function playLevelUpAnnouncement() {
+        if (!levelUpAnnouncement) throw new Error("Wizard of Flatland level-up announcement is missing");
+        levelUpAnnouncement.classList.remove("active");
+        void levelUpAnnouncement.offsetWidth;
+        levelUpAnnouncement.classList.add("active");
+    }
+
+    function normalizeSpellLevelDefinitions(payload) {
+        if (!payload || typeof payload !== "object" || !Array.isArray(payload.spells)) {
+            throw new Error("Wizard of Flatland spell level data must contain a spells array");
+        }
+        const seen = new Set();
+        return payload.spells.map((spell, index) => {
+            if (!spell || typeof spell !== "object") {
+                throw new Error(`Wizard of Flatland spell level data entry ${index} is not an object`);
+            }
+            const id = typeof spell.id === "string" ? spell.id.trim().toLowerCase() : "";
+            if (!id) throw new Error(`Wizard of Flatland spell level data entry ${index} is missing id`);
+            if (seen.has(id)) throw new Error(`Wizard of Flatland duplicate spell level id: ${id}`);
+            seen.add(id);
+            if (!Array.isArray(spell.levels) || spell.levels.length !== SPELL_LEVEL_MAX) {
+                throw new Error(`Wizard of Flatland spell level data for ${id} must contain exactly ${SPELL_LEVEL_MAX} levels`);
+            }
+            const levels = spell.levels.map((levelEntry, levelIndex) => {
+                if (!levelEntry || typeof levelEntry !== "object") {
+                    throw new Error(`Wizard of Flatland spell level ${id}.${levelIndex + 1} is not an object`);
+                }
+                const level = clampSpellLevel(levelEntry.level);
+                if (level !== levelIndex + 1) {
+                    throw new Error(`Wizard of Flatland spell level ${id}.${levelIndex + 1} has mismatched level ${levelEntry.level}`);
+                }
+                if (typeof levelEntry.headline !== "string" || !levelEntry.headline.trim()) {
+                    throw new Error(`Wizard of Flatland spell level ${id}.${level} is missing headline`);
+                }
+                return { ...levelEntry, level };
+            });
+            return {
+                ...spell,
+                id,
+                displayName: (typeof spell.displayName === "string" && spell.displayName.trim()) ? spell.displayName.trim() : id,
+                icon: (typeof spell.icon === "string" && spell.icon.trim()) ? spell.icon.trim() : "",
+                levels
+            };
+        });
+    }
+
+    function fetchSpellLevelDefinitions() {
+        if (spellLevelDefinitions) return Promise.resolve(spellLevelDefinitions);
+        if (spellLevelFetchPromise) return spellLevelFetchPromise;
+        if (typeof fetch !== "function") {
+            throw new Error("Wizard of Flatland spell level interface requires fetch");
+        }
+        spellLevelFetchPromise = fetch(SPELL_LEVEL_DATA_URL)
+            .then((response) => {
+                if (!response || !response.ok) {
+                    const status = response ? `${response.status} ${response.statusText || ""}`.trim() : "no response";
+                    throw new Error(`Wizard of Flatland failed to load spell level data: ${status}`);
+                }
+                return response.json();
+            })
+            .then((payload) => {
+                spellLevelDefinitions = normalizeSpellLevelDefinitions(payload);
+                return spellLevelDefinitions;
+            })
+            .catch((error) => {
+                spellLevelFetchPromise = null;
+                console.error("[wizard of flatland spell levels]", error);
+                throw error;
+            });
+        return spellLevelFetchPromise;
+    }
+
+    function getWizardSpellLevel(spellId) {
+        if (typeof spellId !== "string") return 0;
+        const id = spellId.trim().toLowerCase();
+        if (!id) return 0;
+        const spellLevels = normalizeWizardSpellLevels();
+        return Object.prototype.hasOwnProperty.call(spellLevels, id)
+            ? clampSpellLevel(spellLevels[id])
+            : 0;
+    }
+
+    function setWizardSpellLevel(spellId, level) {
+        if (typeof spellId !== "string") return 0;
+        const id = spellId.trim().toLowerCase();
+        if (!id) return 0;
+        const nextLevel = clampSpellLevel(level);
+        normalizeWizardSpellLevels()[id] = nextLevel;
+        renderSpellLevelPanel();
+        return nextLevel;
+    }
+
+    function levelUpWizardSpell(spellId) {
+        validateWizardLevelPoints();
+        const currentLevel = getWizardSpellLevel(spellId);
+        if (currentLevel >= SPELL_LEVEL_MAX) return currentLevel;
+        if (state.levelPoints <= 0) {
+            renderSpellLevelPanel();
+            return currentLevel;
+        }
+        state.levelPoints -= 1;
+        const nextLevel = setWizardSpellLevel(spellId, currentLevel + 1);
+        updateStatusBars();
+        return nextLevel;
+    }
+
+    function getLoadedSpellLevelDefinition(spellId) {
+        if (typeof spellId !== "string" || spellId.trim().length === 0) {
+            throw new Error("Wizard of Flatland spell level lookup requires a spell id");
+        }
+        if (!Array.isArray(spellLevelDefinitions)) {
+            throw new Error("Wizard of Flatland spell level data must be loaded before applying spell stats");
+        }
+        const id = spellId.trim().toLowerCase();
+        const definition = spellLevelDefinitions.find((spell) => spell.id === id);
+        if (!definition) throw new Error(`Wizard of Flatland missing spell level definition for ${id}`);
+        return definition;
+    }
+
+    function requirePositiveSpellLevelNumber(spellId, level, levelData, key) {
+        if (!levelData || typeof levelData !== "object") {
+            throw new Error(`Wizard of Flatland ${spellId} level ${level} spell stats are missing`);
+        }
+        const value = Number(levelData[key]);
+        if (!(value > 0)) {
+            throw new Error(`Wizard of Flatland ${spellId} level ${level} requires positive ${key}`);
+        }
+        return value;
+    }
+
+    function getActiveSpellLevelData(spellId) {
+        const definition = getLoadedSpellLevelDefinition(spellId);
+        const level = getWizardSpellLevel(definition.id);
+        if (level < 1) throw new Error(`Wizard of Flatland cannot cast unlearned spell ${definition.id}`);
+        const levelData = definition.levels[level - 1];
+        if (!levelData) throw new Error(`Wizard of Flatland missing ${definition.id} level ${level} data`);
+        return { definition, level, levelData };
+    }
+
+    function getActiveFireballStats() {
+        const { level, levelData } = getActiveSpellLevelData("fireball");
+        const manaCost = requirePositiveSpellLevelNumber("fireball", level, levelData, "manaCost");
+        const damage = requirePositiveSpellLevelNumber("fireball", level, levelData, "damage");
+        const explosionRadius = requirePositiveSpellLevelNumber("fireball", level, levelData, "radius");
+        const cooldown = requirePositiveSpellLevelNumber("fireball", level, levelData, "castDelay");
+        const projectileSpeed = requirePositiveSpellLevelNumber("fireball", level, levelData, "projectileSpeed");
+        const range = requirePositiveSpellLevelNumber("fireball", level, levelData, "range");
+        return {
+            level,
+            manaCost,
+            damage,
+            explosionRadius,
+            cooldown,
+            projectileSpeed,
+            maxAge: range / projectileSpeed
+        };
+    }
+
+    function getSelectedSpellLevelDefinition() {
+        if (!Array.isArray(spellLevelDefinitions) || spellLevelDefinitions.length === 0) return null;
+        const selected = spellLevelDefinitions.find((spell) => spell.id === selectedSpellLevelId);
+        return selected || spellLevelDefinitions[0];
+    }
+
+    function appendSpellLevelStats(container, levelData) {
+        const stats = SPELL_LEVEL_STAT_LABELS.filter(([key]) => {
+            if (!Object.prototype.hasOwnProperty.call(levelData, key)) return false;
+            const value = levelData[key];
+            if (value === null || typeof value === "undefined") return false;
+            return typeof value !== "string" || value.trim().length > 0;
+        });
+        if (stats.length === 0) return;
+        const statsElement = document.createElement("div");
+        statsElement.className = "spellLevelStats";
+        for (const [key, label] of stats) {
+            const stat = document.createElement("div");
+            stat.className = "spellLevelStat";
+            stat.textContent = `${label}: ${levelData[key]}`;
+            statsElement.append(stat);
+        }
+        container.append(statsElement);
+    }
+
+    function appendSpellLevelInfo(container, label, levelData) {
+        const labelElement = document.createElement("div");
+        labelElement.className = label.startsWith("next") ? "spellLevelNextText" : "spellLevelCurrentText";
+        labelElement.textContent = label;
+        container.append(labelElement);
+        if (!levelData) return;
+        const headline = document.createElement("div");
+        headline.className = "spellLevelHeadline";
+        headline.textContent = levelData.headline;
+        container.append(headline);
+        if (typeof levelData.subtitle === "string" && levelData.subtitle.length > 0) {
+            const subtitle = document.createElement("div");
+            subtitle.className = "spellLevelSubtitle";
+            subtitle.textContent = levelData.subtitle;
+            container.append(subtitle);
+        }
+        appendSpellLevelStats(container, levelData);
+    }
+
+    function renderSpellLevelLoading(message) {
+        if (!spellLevelHeader || !spellLevelList || !spellLevelDetails) {
+            throw new Error("Wizard of Flatland spell level panel DOM is missing");
+        }
+        validateWizardLevelPoints();
+        spellLevelHeader.textContent = `level points ${state.levelPoints}`;
+        spellLevelList.replaceChildren();
+        const loading = document.createElement("div");
+        loading.className = "spellLevelMastered";
+        loading.textContent = message;
+        spellLevelDetails.style.display = "flex";
+        spellLevelDetails.replaceChildren(loading);
+    }
+
+    function renderSpellLevelPanel() {
+        if (!spellLevelPanel || !spellLevelHeader || !spellLevelList || !spellLevelDetails) {
+            throw new Error("Wizard of Flatland spell level panel DOM is missing");
+        }
+        validateWizardLevelPoints();
+        normalizeWizardSpellLevels();
+        spellLevelHeader.textContent = `level points ${state.levelPoints}`;
+        if (!Array.isArray(spellLevelDefinitions)) {
+            renderSpellLevelLoading("Loading spell levels...");
+            return;
+        }
+        if (spellLevelDefinitions.length === 0) {
+            throw new Error("Wizard of Flatland spell level data contains no spells");
+        }
+        if (!spellLevelDefinitions.some((spell) => spell.id === selectedSpellLevelId)) {
+            selectedSpellLevelId = spellLevelDefinitions[0].id;
+        }
+        spellLevelList.replaceChildren();
+        for (const spell of spellLevelDefinitions) {
+            const level = getWizardSpellLevel(spell.id);
+            const item = document.createElement("button");
+            item.type = "button";
+            item.className = "spellLevelListItem";
+            item.classList.toggle("selected", spell.id === selectedSpellLevelId);
+            item.dataset.spellLevelId = spell.id;
+            item.addEventListener("click", () => {
+                selectedSpellLevelId = spell.id;
+                renderSpellLevelPanel();
+            });
+            const icon = document.createElement("div");
+            icon.className = "spellLevelListIcon";
+            icon.style.backgroundImage = `url("${spell.icon}")`;
+            const text = document.createElement("div");
+            text.className = "spellLevelListText";
+            const name = document.createElement("div");
+            name.className = "spellLevelListName";
+            name.textContent = spell.displayName;
+            const levelText = document.createElement("div");
+            levelText.className = "spellLevelListLevel";
+            levelText.textContent = `Level ${level}`;
+            text.append(name, levelText);
+            item.append(icon, text);
+            spellLevelList.append(item);
+        }
+
+        const selected = getSelectedSpellLevelDefinition();
+        if (!selected) throw new Error("Wizard of Flatland selected spell level definition is missing");
+        const currentLevel = getWizardSpellLevel(selected.id);
+        const currentData = currentLevel > 0 ? selected.levels[currentLevel - 1] : null;
+        const nextData = currentLevel < SPELL_LEVEL_MAX ? selected.levels[currentLevel] : null;
+        const current = document.createElement("div");
+        current.className = "spellLevelSection";
+        appendSpellLevelInfo(current, `current level: ${currentLevel}`, currentData);
+        const divider = document.createElement("div");
+        divider.className = "spellLevelDivider";
+        if (currentLevel < SPELL_LEVEL_MAX) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "spellLevelUpButton";
+            button.disabled = state.levelPoints <= 0;
+            button.textContent = "level up";
+            button.addEventListener("click", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                levelUpWizardSpell(selected.id);
+            });
+            divider.append(button);
+        }
+        const next = document.createElement("div");
+        next.className = "spellLevelSection";
+        if (currentLevel >= SPELL_LEVEL_MAX) {
+            const mastered = document.createElement("div");
+            mastered.className = "spellLevelMastered";
+            mastered.textContent = "You have mastered this spell.";
+            next.append(mastered);
+        } else {
+            appendSpellLevelInfo(next, `next level: ${currentLevel + 1}`, nextData);
+        }
+        spellLevelDetails.style.display = "";
+        spellLevelDetails.replaceChildren(current, divider, next);
+    }
+
+    function refreshSpellLevelPanel() {
+        if (!spellLevelPanel || spellLevelPanel.classList.contains("hidden")) return;
+        renderSpellLevelPanel();
+    }
+
+    function showSpellLevelPanel() {
+        if (!spellLevelPanel) throw new Error("Wizard of Flatland spell level panel is missing");
+        selectedSpellLevelId = typeof state.selectedSpell === "string" && state.selectedSpell.length > 0
+            ? state.selectedSpell
+            : selectedSpellLevelId;
+        spellLevelPanel.classList.remove("hidden");
+        renderSpellLevelLoading("Loading spell levels...");
+        fetchSpellLevelDefinitions()
+            .then(() => renderSpellLevelPanel())
+            .catch((error) => {
+                renderSpellLevelLoading("Unable to load spell level data.");
+                console.error("[wizard of flatland spell levels] unable to open panel", error);
+            });
+    }
+
+    function hideSpellLevelPanel() {
+        if (!spellLevelPanel) throw new Error("Wizard of Flatland spell level panel is missing");
+        spellLevelPanel.classList.add("hidden");
     }
 
     function regenerateWizardVitals(dt) {
@@ -411,8 +830,12 @@
         validateWizardVitals();
         const previousHealth = state.wizardVitals.health;
         state.wizardVitals.health = Math.max(0, previousHealth - damage);
+        const appliedDamage = previousHealth - state.wizardVitals.health;
         updateStatusBars();
-        return previousHealth - state.wizardVitals.health;
+        if (previousHealth > 0 && state.wizardVitals.health <= 0) {
+            respawnWizardAfterDeath();
+        }
+        return appliedDamage;
     }
 
     function spendWizardMagic(amount) {
@@ -433,7 +856,17 @@
             throw new Error("Wizard of Flatland exp gain requires a positive finite amount");
         }
         validateWizardVitals();
-        state.wizardVitals.exp = Math.min(state.wizardVitals.maxExp, state.wizardVitals.exp + exp);
+        validateWizardLevelPoints();
+        const nextExp = state.wizardVitals.exp + exp;
+        const gainedLevelPoints = Math.floor(nextExp / state.wizardVitals.maxExp);
+        if (gainedLevelPoints > 0) {
+            state.wizardVitals.exp = nextExp % state.wizardVitals.maxExp;
+            state.levelPoints += gainedLevelPoints;
+            updateStatusBars();
+            playLevelUpAnnouncement();
+            return;
+        }
+        state.wizardVitals.exp = nextExp;
         updateStatusBars();
     }
 
@@ -726,7 +1159,7 @@
     }
 
     function getMazeSeed() {
-        const seed = String(mazeSeedInput ? mazeSeedInput.value : DEFAULT_MAZE_SEED).trim();
+        const seed = String(mazeSeedInput ? mazeSeedInput.value : state.mazeSeed).trim();
         return seed.length > 0 ? seed : DEFAULT_MAZE_SEED;
     }
 
@@ -749,6 +1182,222 @@
 
     function isProceduralMazeScenario() {
         return getScenarioValue() === "proceduralMaze";
+    }
+
+    function normalizeStartupPlayerName(name) {
+        return String(name || "").trim();
+    }
+
+    function validateStartupPlayerName(name, context) {
+        const normalized = normalizeStartupPlayerName(name);
+        if (normalized.length === 0) {
+            throw new Error(`Wizard of Flatland ${context} requires a player name`);
+        }
+        return normalized;
+    }
+
+    function getWizardCheckpointStorageKeyForPlayer(name) {
+        const playerName = validateStartupPlayerName(name, "checkpoint slot");
+        return `${TALISMAN_STORAGE_KEY_PREFIX}${encodeURIComponent(playerName)}`;
+    }
+
+    function getActiveWizardCheckpointStorageKey() {
+        return getWizardCheckpointStorageKeyForPlayer(validateStartupPlayerName(state.playerName, "active checkpoint"));
+    }
+
+    function parseWizardCheckpointSaveIndex(text) {
+        if (text === null) return [];
+        let parsed = null;
+        try {
+            parsed = JSON.parse(text);
+        } catch (error) {
+            throw new Error(`Wizard of Flatland checkpoint index is invalid JSON: ${error.message}`);
+        }
+        if (!Array.isArray(parsed)) {
+            throw new Error("Wizard of Flatland checkpoint index must be an array");
+        }
+        return parsed.map((name) => validateStartupPlayerName(name, "checkpoint index entry"));
+    }
+
+    function getWizardCheckpointSaveNames() {
+        const storage = getWizardCheckpointStorage();
+        const names = parseWizardCheckpointSaveIndex(storage.getItem(TALISMAN_SAVE_INDEX_KEY));
+        return names.filter((name) => storage.getItem(getWizardCheckpointStorageKeyForPlayer(name)) !== null)
+            .sort((a, b) => a.localeCompare(b));
+    }
+
+    function getWizardCheckpointSaveEntries() {
+        const storage = getWizardCheckpointStorage();
+        return getWizardCheckpointSaveNames().map((name) => {
+            const savedCheckpoint = storage.getItem(getWizardCheckpointStorageKeyForPlayer(name));
+            const snapshot = parseWizardCheckpointSnapshot(savedCheckpoint);
+            if (typeof snapshot.playerName === "string" && snapshot.playerName !== name) {
+                throw new Error(`Wizard of Flatland checkpoint index entry "${name}" points to save for "${snapshot.playerName}"`);
+            }
+            return {
+                name,
+                savedAt: typeof snapshot.savedAt === "string" ? snapshot.savedAt : "",
+                seed: snapshot.maze && typeof snapshot.maze.seed === "string" ? snapshot.maze.seed : ""
+            };
+        }).sort((a, b) => {
+            if (a.savedAt && b.savedAt && a.savedAt !== b.savedAt) return b.savedAt.localeCompare(a.savedAt);
+            return a.name.localeCompare(b.name);
+        });
+    }
+
+    function rememberWizardCheckpointSaveName(name) {
+        const playerName = validateStartupPlayerName(name, "checkpoint index update");
+        const storage = getWizardCheckpointStorage();
+        const names = getWizardCheckpointSaveNames();
+        if (!names.includes(playerName)) names.push(playerName);
+        storage.setItem(TALISMAN_SAVE_INDEX_KEY, JSON.stringify(names.sort((a, b) => a.localeCompare(b))));
+    }
+
+    function forgetWizardCheckpointSaveName(name) {
+        const playerName = validateStartupPlayerName(name, "checkpoint index update");
+        const storage = getWizardCheckpointStorage();
+        const names = getWizardCheckpointSaveNames().filter((entry) => entry !== playerName);
+        storage.setItem(TALISMAN_SAVE_INDEX_KEY, JSON.stringify(names));
+    }
+
+    function setStartupValidation(element, message) {
+        if (!element) return;
+        element.textContent = String(message || "");
+        element.classList.toggle("hidden", !message);
+    }
+
+    function setStartupView(view) {
+        if (!startupModeView || !startupNewForm || !startupLoadForm) {
+            throw new Error("Wizard of Flatland startup menu is missing required views");
+        }
+        startupModeView.classList.toggle("hidden", view !== "mode");
+        startupNewForm.classList.toggle("hidden", view !== "new");
+        startupLoadForm.classList.toggle("hidden", view !== "load");
+        setStartupValidation(startupNewValidation, "");
+        setStartupValidation(startupLoadValidation, "");
+        if (view === "new" && startupNewNameInput) startupNewNameInput.focus();
+        if (view === "load") refreshStartupSaveNameOptions();
+    }
+
+    function refreshStartupSaveNameOptions() {
+        if (!startupLoadList || !startupLoadEmpty || !startupLoadSubmitButton) {
+            throw new Error("Wizard of Flatland load menu is missing required elements");
+        }
+        startupLoadList.replaceChildren();
+        const entries = getWizardCheckpointSaveEntries();
+        const selectedNameIsValid = entries.some((entry) => entry.name === state.startupSelectedLoadName);
+        if (!selectedNameIsValid) state.startupSelectedLoadName = entries.length > 0 ? entries[0].name : "";
+        for (const entry of entries) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "startupLoadSaveButton";
+            button.setAttribute("role", "option");
+            button.setAttribute("aria-selected", entry.name === state.startupSelectedLoadName ? "true" : "false");
+            button.classList.toggle("selected", entry.name === state.startupSelectedLoadName);
+            button.dataset.saveName = entry.name;
+
+            const nameElement = document.createElement("div");
+            nameElement.className = "startupLoadSaveName";
+            nameElement.textContent = entry.name;
+            const metaElement = document.createElement("div");
+            metaElement.className = "startupLoadSaveMeta";
+            metaElement.textContent = formatStartupSaveMeta(entry);
+            button.append(nameElement, metaElement);
+            button.addEventListener("click", () => {
+                state.startupSelectedLoadName = entry.name;
+                setStartupValidation(startupLoadValidation, "");
+                refreshStartupSaveNameOptions();
+            });
+            startupLoadList.append(button);
+        }
+        startupLoadEmpty.classList.toggle("hidden", entries.length > 0);
+        startupLoadSubmitButton.disabled = entries.length === 0;
+    }
+
+    function formatStartupSaveMeta(entry) {
+        const parts = [];
+        if (entry.savedAt) parts.push(new Date(entry.savedAt).toLocaleString());
+        if (entry.seed) parts.push(`seed ${entry.seed}`);
+        return parts.length > 0 ? parts.join(" | ") : "talisman checkpoint";
+    }
+
+    function closeStartupMenu() {
+        if (!startupMenu) {
+            throw new Error("Wizard of Flatland startup menu is missing");
+        }
+        const shouldStartLoop = !state.gameStarted;
+        startupMenu.classList.add("hidden");
+        state.startupMenuOpen = false;
+        state.gameStarted = true;
+        state.lastTime = performance.now();
+        if (shouldStartLoop) requestAnimationFrame(tick);
+    }
+
+    function startNewWizardGame(playerName) {
+        const normalizedName = validateStartupPlayerName(playerName, "new game");
+        state.playerName = normalizedName;
+        state.mazeSeed = normalizedName;
+        if (mazeSeedInput) mazeSeedInput.value = normalizedName;
+        const storage = getWizardCheckpointStorage();
+        storage.removeItem(getWizardCheckpointStorageKeyForPlayer(normalizedName));
+        forgetWizardCheckpointSaveName(normalizedName);
+        updateControlLabels();
+        createScenario();
+        updateStats();
+        closeStartupMenu();
+        console.log("Wizard of Flatland new game started", { playerName: normalizedName, seed: getMazeSeed() });
+    }
+
+    function loadWizardGame(playerName) {
+        const normalizedName = validateStartupPlayerName(playerName, "load game");
+        const storage = getWizardCheckpointStorage();
+        const saveKey = getWizardCheckpointStorageKeyForPlayer(normalizedName);
+        const savedCheckpoint = storage.getItem(saveKey);
+        if (savedCheckpoint === null) {
+            throw new Error(`No talisman checkpoint save exists for "${normalizedName}"`);
+        }
+        state.playerName = normalizedName;
+        const snapshot = parseWizardCheckpointSnapshot(savedCheckpoint);
+        if (typeof snapshot.playerName === "string" && snapshot.playerName !== normalizedName) {
+            throw new Error(`Saved checkpoint belongs to "${snapshot.playerName}", not "${normalizedName}"`);
+        }
+        applyWizardCheckpointSnapshot(snapshot);
+        rememberWizardCheckpointSaveName(normalizedName);
+        updateStats();
+        closeStartupMenu();
+        console.log("Wizard of Flatland game loaded", { playerName: normalizedName, checkpoint: snapshot });
+    }
+
+    function setupStartupMenu() {
+        if (!startupMenu) {
+            throw new Error("Wizard of Flatland startup menu is missing");
+        }
+        refreshStartupSaveNameOptions();
+        setStartupView("mode");
+        if (startupNewButton) startupNewButton.addEventListener("click", () => setStartupView("new"));
+        if (startupLoadButton) startupLoadButton.addEventListener("click", () => {
+            refreshStartupSaveNameOptions();
+            setStartupView("load");
+        });
+        if (startupNewBackButton) startupNewBackButton.addEventListener("click", () => setStartupView("mode"));
+        if (startupLoadBackButton) startupLoadBackButton.addEventListener("click", () => setStartupView("mode"));
+        if (startupNewNameInput) startupNewNameInput.addEventListener("input", () => setStartupValidation(startupNewValidation, ""));
+        if (startupNewForm) startupNewForm.addEventListener("submit", (event) => {
+            event.preventDefault();
+            try {
+                startNewWizardGame(startupNewNameInput ? startupNewNameInput.value : "");
+            } catch (error) {
+                setStartupValidation(startupNewValidation, error && error.message ? error.message : String(error));
+            }
+        });
+        if (startupLoadForm) startupLoadForm.addEventListener("submit", (event) => {
+            event.preventDefault();
+            try {
+                loadWizardGame(state.startupSelectedLoadName);
+            } catch (error) {
+                setStartupValidation(startupLoadValidation, error && error.message ? error.message : String(error));
+            }
+        });
     }
 
     function hashString(value) {
@@ -780,6 +1429,12 @@
 
     function mazeSectionKey(q, r) {
         return `${q},${r}`;
+    }
+
+    function isMazeInitialSafeSectionKey(sectionKey) {
+        validateMazeRoomEnemyBudgetSectionKey(sectionKey);
+        const coord = parseMazeSectionKey(sectionKey);
+        return getMazeSectionRing(coord.q, coord.r) <= 1;
     }
 
     function parseMazeSectionKey(key) {
@@ -818,7 +1473,26 @@
     }
 
     function getMazeStartPoint() {
-        return mazeSectionCenter(0, 0, getMazeOptions());
+        const talismanCenter = mazeSectionCenter(0, 0, getMazeOptions());
+        return {
+            x: talismanCenter.x,
+            y: talismanCenter.y + TALISMAN_INITIAL_WIZARD_DISTANCE
+        };
+    }
+
+    function rememberVisitedMazeSections(sectionKeys) {
+        if (!(state.visitedMazeSectionKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland visited section tracking is missing");
+        }
+        if (!sectionKeys || typeof sectionKeys[Symbol.iterator] !== "function") {
+            throw new Error("Wizard of Flatland visited section update requires iterable section keys");
+        }
+        for (const sectionKey of sectionKeys) {
+            if (typeof sectionKey !== "string" || sectionKey.length === 0) {
+                throw new Error("Wizard of Flatland visited section update received invalid section key");
+            }
+            state.visitedMazeSectionKeys.add(sectionKey);
+        }
     }
 
     function getRequiredMazeSectionKeys(options) {
@@ -1091,9 +1765,11 @@
             state.generatedMazeLoading = false;
             state.generatedMazeActiveRequestId = 0;
             state.generatedMazeInstalledChunkKeys = new Set(state.generatedMazeChunkKeys);
+            rememberVisitedMazeSections(state.generatedMazeInstalledChunkKeys);
             state.worldVersion += 1;
         });
         profiler.span("populate maze coins", () => populateGeneratedMazeCoins(getMazeOptions()));
+        profiler.span("populate maze talismans", () => populateGeneratedMazeTalismans(getMazeOptions()));
         profiler.span("populate maze rooms", () => populateGeneratedMazeRooms(getMazeOptions()));
         profiler.span("install pathfinding node layer", () => {
             installPathfindingNodeLayerFromWorker(message.nodeLayer);
@@ -1279,6 +1955,7 @@
     function resetGeneratedMazeCoinPopulation() {
         state.coins = [];
         state.collectedCoinKeys = new Set();
+        state.collectedCoinSectionKeysByCoinKey = new Map();
         state.droppedCoinsByKey = new Map();
         state.nextDroppedCoinId = 1;
     }
@@ -1286,6 +1963,7 @@
     function populateGeneratedMazeCoins(options) {
         if (!isProceduralMazeScenario()) {
             state.coins = getVisibleDroppedMazeCoins(options);
+            validateVisibleMazeCoinKeysAreUnique("maze coin population", state.coins);
             return;
         }
         if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
@@ -1320,6 +1998,7 @@
                 isPointInAnyInstalledMazeSection(coin.homeX, coin.homeY, options);
         });
         state.coins = visiblePlacedCoins.concat(visibleDroppedCoins, retainedEdgeCoins);
+        validateVisibleMazeCoinKeysAreUnique("maze coin population", state.coins);
         recordMazeCoinPopulationDiagnostic(diagnosticBefore, options, {
             placedCoins,
             visiblePlacedCoins,
@@ -1367,6 +2046,37 @@
             throw new Error(`Wizard of Flatland dropped coin ${coin.key} section key does not match its world position`);
         }
         return state.generatedMazeInstalledChunkKeys.has(sectionKey) && state.generatedMazeChunkKeys.has(sectionKey);
+    }
+
+    function addVisibleMazeCoin(coin, context) {
+        validateCoin(coin);
+        if (!Array.isArray(state.coins)) {
+            throw new Error(`Wizard of Flatland ${context} requires a visible coin list`);
+        }
+        if (state.collectedCoinKeys instanceof Set && state.collectedCoinKeys.has(coin.key)) {
+            throw new Error(`Wizard of Flatland ${context} tried to show collected coin ${coin.key}`);
+        }
+        for (const visibleCoin of state.coins) {
+            validateCoin(visibleCoin);
+            if (visibleCoin.key === coin.key) {
+                throw new Error(`Wizard of Flatland ${context} duplicated visible coin ${coin.key}`);
+            }
+        }
+        state.coins.push(coin);
+    }
+
+    function validateVisibleMazeCoinKeysAreUnique(context, coins = state.coins) {
+        if (!Array.isArray(coins)) {
+            throw new Error(`Wizard of Flatland ${context} requires a visible coin list`);
+        }
+        const seen = new Set();
+        for (const coin of coins) {
+            validateCoin(coin);
+            if (seen.has(coin.key)) {
+                throw new Error(`Wizard of Flatland ${context} duplicated visible coin ${coin.key}`);
+            }
+            seen.add(coin.key);
+        }
     }
 
     function isMazeCoinDiagnosticsEnabled() {
@@ -1581,6 +2291,79 @@
         return `${options.seed}|${options.chunkSize}|${options.roomScale.toFixed(3)}|${options.twistiness.toFixed(3)}|${sectionKey}|${coinIndex}`;
     }
 
+    function populateGeneratedMazeTalismans(options) {
+        if (!isProceduralMazeScenario()) {
+            state.talismans = [];
+            return;
+        }
+        if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland talisman population requires installed section tracking");
+        }
+        if (!(state.activatedTalismanSectionKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland talisman population requires activated talisman tracking");
+        }
+        const talismans = [];
+        const keys = Array.from(state.generatedMazeInstalledChunkKeys).sort();
+        for (const sectionKey of keys) {
+            const talisman = createMazeTalismanForSection(sectionKey, options);
+            if (talisman) talismans.push(talisman);
+        }
+        state.talismans = talismans;
+    }
+
+    function createMazeTalismanForSection(sectionKey, options) {
+        validateMazeRoomEnemyBudgetSectionKey(sectionKey);
+        const coord = parseMazeSectionKey(sectionKey);
+        const roomIndex = getMazeSectionSpiralIndex(coord.q, coord.r);
+        if (roomIndex !== 0 && roomIndex % TALISMAN_ROOM_INTERVAL !== 0) return null;
+        const center = mazeSectionCenter(coord.q, coord.r, options);
+        return {
+            key: `talisman|${options.seed}|${options.chunkSize}|${options.roomScale.toFixed(3)}|${options.twistiness.toFixed(3)}|${sectionKey}`,
+            sectionKey,
+            q: coord.q,
+            r: coord.r,
+            roomIndex,
+            x: center.x,
+            y: center.y,
+            radius: TALISMAN_RADIUS,
+            activated: state.activatedTalismanSectionKeys.has(sectionKey),
+            flashSeconds: 0,
+            blockedFlashSeconds: 0,
+            touching: false
+        };
+    }
+
+    function getMazeSectionSpiralIndex(q, r) {
+        if (!Number.isInteger(q) || !Number.isInteger(r)) {
+            throw new Error("Wizard of Flatland room index requires integer section coordinates");
+        }
+        const ring = getMazeSectionRing(q, r);
+        if (ring === 0) return 0;
+        const ringCoords = [];
+        for (let rq = -ring; rq <= ring; rq++) {
+            for (let rr = -ring; rr <= ring; rr++) {
+                if (getMazeSectionRing(rq, rr) !== ring) continue;
+                const x = Math.sqrt(3) * (rq + rr * 0.5);
+                const y = 1.5 * rr;
+                ringCoords.push({ q: rq, r: rr, angle: Math.atan2(y, x) });
+            }
+        }
+        ringCoords.sort((a, b) => a.angle - b.angle || a.q - b.q || a.r - b.r);
+        const ringStartIndex = 1 + 3 * (ring - 1) * ring;
+        for (let i = 0; i < ringCoords.length; i++) {
+            const coord = ringCoords[i];
+            if (coord.q === q && coord.r === r) return ringStartIndex + i;
+        }
+        throw new Error(`Wizard of Flatland room index traversal missed section ${q},${r}`);
+    }
+
+    function getMazeSectionRing(q, r) {
+        if (!Number.isInteger(q) || !Number.isInteger(r)) {
+            throw new Error("Wizard of Flatland section ring requires integer coordinates");
+        }
+        return Math.max(Math.abs(q), Math.abs(r), Math.abs(-q - r));
+    }
+
     function getMazeSectionPolygonForCoord(coord, options) {
         if (!coord || !Number.isFinite(coord.q) || !Number.isFinite(coord.r)) {
             throw new Error("Wizard of Flatland section polygon requires a section coordinate");
@@ -1734,6 +2517,12 @@
         state.generatedMazeInitialEnemySpawnBudgetsBySectionKey = new Map();
     }
 
+    function resetGeneratedMazeTalismanState() {
+        state.talismans = [];
+        state.activatedTalismanSectionKeys = new Set();
+        state.visitedMazeSectionKeys = new Set();
+    }
+
     function freezeAgentsInMazeSection(sectionKey, options) {
         for (const agent of state.agents) {
             if (getActorMazeSectionKey(agent, options) !== sectionKey) continue;
@@ -1823,11 +2612,16 @@
         state.agents = [];
         state.fireballs = [];
         state.fireballExplosions = [];
+        state.fireballCooldownRemaining = 0;
         resetWizardVitals();
         state.coins = [];
         state.collectedCoinKeys = new Set();
+        state.collectedCoinSectionKeysByCoinKey = new Map();
         state.droppedCoinsByKey = new Map();
         state.nextDroppedCoinId = 1;
+        state.talismans = [];
+        state.activatedTalismanSectionKeys = new Set();
+        state.visitedMazeSectionKeys = new Set();
         state.walls = createEmptyWallBuffer();
         state.manualWalls = createEmptyWallBuffer();
         state.generatedMazeWalls = createEmptyWallBuffer();
@@ -1854,7 +2648,6 @@
             const start = getMazeStartPoint();
             state.target = { x: start.x, y: start.y, heading: -Math.PI / 2 };
             refreshGeneratedMazeIfNeeded(true);
-            spawnCluster(count, state.target.x + 5.5, state.target.y + 1.5, 7.5, 7.5);
         } else {
             state.target = { x: 0, y: 0, heading: -Math.PI / 2 };
             addRoomWalls(-8, -6, 8, 6);
@@ -1874,6 +2667,423 @@
             throw new Error("Wizard of Flatland position save requires window.localStorage");
         }
         return window.localStorage;
+    }
+
+    function getWizardCheckpointStorage() {
+        if (typeof window === "undefined" || !window.localStorage) {
+            throw new Error("Wizard of Flatland checkpoint save requires window.localStorage");
+        }
+        return window.localStorage;
+    }
+
+    function respawnWizardAfterDeath() {
+        const storage = getWizardCheckpointStorage();
+        const savedCheckpoint = storage.getItem(getActiveWizardCheckpointStorageKey());
+        if (savedCheckpoint === null) {
+            console.log("Wizard of Flatland death: no checkpoint found; reloading scenario from scratch");
+            createScenario();
+            return { source: "fresh-scenario" };
+        }
+        const snapshot = parseWizardCheckpointSnapshot(savedCheckpoint);
+        const applied = applyWizardCheckpointSnapshot(snapshot);
+        console.log("Wizard of Flatland death: respawned from checkpoint", applied);
+        return { source: "checkpoint", checkpoint: applied };
+    }
+
+    function getWizardCheckpointSnapshot() {
+        if (!isProceduralMazeScenario()) {
+            throw new Error("Wizard of Flatland checkpoints require the procedural maze scenario");
+        }
+        validateWizardPositionTarget(state.target, "current wizard checkpoint position");
+        validateWizardVitals();
+        validateWizardLevelPoints();
+        normalizeWizardSpellLevels();
+        if (!(state.visitedMazeSectionKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland checkpoint save requires visited section tracking");
+        }
+        if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland checkpoint save requires active section tracking");
+        }
+        const activeSectionKeys = new Set(state.generatedMazeInstalledChunkKeys);
+        const visitedSectionKeys = new Set(state.visitedMazeSectionKeys);
+        const spawnBudgetsBySectionKey = snapshotVisitedMazeSpawnBudgets(visitedSectionKeys);
+        const enemies = [];
+        for (const agent of state.agents) {
+            const sectionKey = getActorMazeSectionKey(agent);
+            const homeSectionKey = getAgentHomeSectionKey(agent);
+            if (activeSectionKeys.has(sectionKey)) {
+                enemies.push(createAgentCheckpointSnapshot(agent, sectionKey, homeSectionKey));
+                continue;
+            }
+            if (!visitedSectionKeys.has(homeSectionKey)) {
+                throw new Error(`Wizard of Flatland checkpoint enemy ${agent.id} has unvisited home section ${homeSectionKey}`);
+            }
+            spawnBudgetsBySectionKey.set(homeSectionKey, (spawnBudgetsBySectionKey.get(homeSectionKey) || 0) + 1);
+        }
+        return {
+            version: 1,
+            savedAt: new Date().toISOString(),
+            playerName: validateStartupPlayerName(state.playerName, "checkpoint save"),
+            scenario: getScenarioValue(),
+            maze: getMazeOptions(),
+            activeSectionKeys: Array.from(activeSectionKeys).sort(),
+            visitedSectionKeys: Array.from(visitedSectionKeys).sort(),
+            collectedCoins: getVisitedCollectedCoinSnapshots(visitedSectionKeys),
+            nextDroppedCoinId: getNextAvailableDroppedCoinId(),
+            enemies,
+            spawnBudgets: Array.from(spawnBudgetsBySectionKey.entries())
+                .sort((a, b) => a[0].localeCompare(b[0]))
+                .map(([sectionKey, budget]) => ({ sectionKey, budget })),
+            wizard: {
+                x: state.target.x,
+                y: state.target.y,
+                heading: state.target.heading
+            },
+            selectedSpell: state.selectedSpell,
+            spellLevels: { ...state.spellLevels },
+            levelPoints: state.levelPoints,
+            vitals: {
+                health: state.wizardVitals.health,
+                maxHealth: state.wizardVitals.maxHealth,
+                magic: state.wizardVitals.magic,
+                maxMagic: state.wizardVitals.maxMagic,
+                exp: state.wizardVitals.exp,
+                maxExp: state.wizardVitals.maxExp
+            },
+            activatedTalismanSectionKeys: Array.from(state.activatedTalismanSectionKeys).sort()
+        };
+    }
+
+    function snapshotVisitedMazeSpawnBudgets(visitedSectionKeys) {
+        if (!(visitedSectionKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland checkpoint spawn budget snapshot requires visited sections");
+        }
+        if (!(state.generatedMazeInitialEnemySpawnBudgetsBySectionKey instanceof Map)) {
+            throw new Error("Wizard of Flatland checkpoint save requires enemy spawn budget tracking");
+        }
+        const budgets = new Map();
+        const options = getMazeOptions();
+        for (const sectionKey of visitedSectionKeys) {
+            validateMazeRoomEnemyBudgetSectionKey(sectionKey);
+            budgets.set(sectionKey, getMazeRoomInitialEnemySpawnBudget(sectionKey, options));
+        }
+        return budgets;
+    }
+
+    function getVisitedCollectedCoinSnapshots(visitedSectionKeys) {
+        if (!(visitedSectionKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland checkpoint coin snapshot requires visited sections");
+        }
+        if (!(state.collectedCoinKeys instanceof Set) || !(state.collectedCoinSectionKeysByCoinKey instanceof Map)) {
+            throw new Error("Wizard of Flatland checkpoint save requires collected coin tracking");
+        }
+        const coins = [];
+        for (const coinKey of state.collectedCoinKeys) {
+            const sectionKey = state.collectedCoinSectionKeysByCoinKey.get(coinKey) || getMazeCoinSectionKeyFromKey(coinKey);
+            if (!visitedSectionKeys.has(sectionKey)) continue;
+            coins.push({ key: coinKey, sectionKey });
+        }
+        coins.sort((a, b) => a.key.localeCompare(b.key));
+        return coins;
+    }
+
+    function getMazeCoinSectionKeyFromKey(coinKey) {
+        if (typeof coinKey !== "string" || coinKey.length === 0) {
+            throw new Error("Wizard of Flatland checkpoint coin key is missing");
+        }
+        if (coinKey.startsWith("drop|")) {
+            throw new Error(`Wizard of Flatland collected dropped coin ${coinKey} is missing section ownership`);
+        }
+        const parts = coinKey.split("|");
+        if (parts.length < 6) {
+            throw new Error(`Wizard of Flatland collected coin key is malformed: ${coinKey}`);
+        }
+        const sectionKey = parts[4];
+        validateMazeRoomEnemyBudgetSectionKey(sectionKey);
+        return sectionKey;
+    }
+
+    function getDroppedMazeCoinIdFromKey(coinKey, context) {
+        if (typeof coinKey !== "string") {
+            throw new Error(`Wizard of Flatland ${context} dropped coin key must be a string`);
+        }
+        if (!coinKey.startsWith("drop|")) return null;
+        const idText = coinKey.slice("drop|".length);
+        const id = Number(idText);
+        if (!Number.isInteger(id) || id < 1 || String(id) !== idText) {
+            throw new Error(`Wizard of Flatland ${context} dropped coin key is malformed: ${coinKey}`);
+        }
+        return id;
+    }
+
+    function getNextAvailableDroppedCoinId(startId = state.nextDroppedCoinId) {
+        if (!Number.isInteger(startId) || startId < 1) {
+            throw new Error("Wizard of Flatland dropped coin id allocation requires a positive start id");
+        }
+        if (!(state.collectedCoinKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland dropped coin id allocation requires collected coin tracking");
+        }
+        if (!(state.droppedCoinsByKey instanceof Map)) {
+            throw new Error("Wizard of Flatland dropped coin id allocation requires dropped coin tracking");
+        }
+        let nextId = startId;
+        for (const coinKey of state.collectedCoinKeys) {
+            const dropId = getDroppedMazeCoinIdFromKey(coinKey, "collected");
+            if (dropId !== null && dropId >= nextId) nextId = dropId + 1;
+        }
+        for (const coinKey of state.droppedCoinsByKey.keys()) {
+            const dropId = getDroppedMazeCoinIdFromKey(coinKey, "tracked");
+            if (dropId !== null && dropId >= nextId) nextId = dropId + 1;
+        }
+        if (Array.isArray(state.coins)) {
+            for (const coin of state.coins) {
+                validateCoin(coin);
+                const dropId = getDroppedMazeCoinIdFromKey(coin.key, "visible");
+                if (dropId !== null && dropId >= nextId) nextId = dropId + 1;
+            }
+        }
+        return nextId;
+    }
+
+    function getAgentHomeSectionKey(agent) {
+        if (!agent || typeof agent !== "object") {
+            throw new Error("Wizard of Flatland checkpoint enemy home lookup requires an enemy");
+        }
+        if (typeof agent.homeSectionKey === "string" && agent.homeSectionKey.length > 0) return agent.homeSectionKey;
+        if (typeof agent.autoSpawnSectionKey === "string" && agent.autoSpawnSectionKey.length > 0) return agent.autoSpawnSectionKey;
+        return getActorMazeSectionKey(agent);
+    }
+
+    function createAgentCheckpointSnapshot(agent, sectionKey, homeSectionKey) {
+        validateAgentHealth(agent);
+        return {
+            id: agent.id,
+            sectionKey,
+            homeSectionKey,
+            autoSpawnSectionKey: typeof agent.autoSpawnSectionKey === "string" ? agent.autoSpawnSectionKey : "",
+            x: agent.x,
+            y: agent.y,
+            vx: agent.vx,
+            vy: agent.vy,
+            radius: agent.radius,
+            speed: agent.speed,
+            health: agent.health,
+            maxHealth: agent.maxHealth,
+            priority: agent.priority,
+            waitTime: agent.waitTime,
+            phase: agent.phase,
+            phaseTime: agent.phaseTime,
+            homeAngle: agent.homeAngle,
+            cooldown: agent.cooldown,
+            slotAngle: agent.slotAngle,
+            heading: agent.heading,
+            millingDirection: agent.millingDirection,
+            millingWallTurnLock: agent.millingWallTurnLock || 0,
+            solverState: agent.solverState,
+            wallClamps: agent.wallClamps || 0,
+            pathGoalX: Number.isFinite(agent.pathGoalX) ? agent.pathGoalX : agent.x,
+            pathGoalY: Number.isFinite(agent.pathGoalY) ? agent.pathGoalY : agent.y
+        };
+    }
+
+    function parseWizardCheckpointSnapshot(text) {
+        if (typeof text !== "string" || text.length === 0) {
+            throw new Error("Wizard of Flatland saved checkpoint is missing");
+        }
+        let snapshot = null;
+        try {
+            snapshot = JSON.parse(text);
+        } catch (error) {
+            throw new Error(`Wizard of Flatland saved checkpoint is invalid JSON: ${error.message}`);
+        }
+        validateWizardCheckpointSnapshot(snapshot);
+        return snapshot;
+    }
+
+    function validateWizardCheckpointSnapshot(snapshot) {
+        if (!snapshot || typeof snapshot !== "object") {
+            throw new Error("Wizard of Flatland saved checkpoint must be an object");
+        }
+        if (snapshot.version !== 1) {
+            throw new Error(`Wizard of Flatland saved checkpoint version is unsupported: ${snapshot.version}`);
+        }
+        validateWizardPositionTarget(snapshot.wizard, "saved checkpoint wizard position");
+        if (!snapshot.maze || typeof snapshot.maze !== "object") {
+            throw new Error("Wizard of Flatland saved checkpoint requires maze settings");
+        }
+        if (!Array.isArray(snapshot.visitedSectionKeys) || !Array.isArray(snapshot.collectedCoins) || !Array.isArray(snapshot.enemies) || !Array.isArray(snapshot.spawnBudgets)) {
+            throw new Error("Wizard of Flatland saved checkpoint arrays are malformed");
+        }
+        if (!snapshot.vitals || typeof snapshot.vitals !== "object") {
+            throw new Error("Wizard of Flatland saved checkpoint requires vitals");
+        }
+        if (snapshot.levelPoints !== undefined && (!Number.isInteger(snapshot.levelPoints) || snapshot.levelPoints < 0)) {
+            throw new Error("Wizard of Flatland saved checkpoint levelPoints must be a non-negative integer");
+        }
+        if (snapshot.nextDroppedCoinId !== undefined && (!Number.isInteger(snapshot.nextDroppedCoinId) || snapshot.nextDroppedCoinId < 1)) {
+            throw new Error("Wizard of Flatland saved checkpoint nextDroppedCoinId must be a positive integer");
+        }
+    }
+
+    function applyWizardCheckpointSnapshot(snapshot) {
+        validateWizardCheckpointSnapshot(snapshot);
+        applyCheckpointControls(snapshot);
+        state.worldVersion += 1;
+        state.target = {
+            x: snapshot.wizard.x,
+            y: snapshot.wizard.y,
+            heading: normalizeAngle(snapshot.wizard.heading)
+        };
+        state.agents = snapshot.enemies.map(createAgentFromCheckpointSnapshot);
+        state.fireballs = [];
+        state.fireballExplosions = [];
+        state.fireballCooldownRemaining = 0;
+        state.coins = [];
+        state.collectedCoinKeys = new Set();
+        state.collectedCoinSectionKeysByCoinKey = new Map();
+        for (const coin of snapshot.collectedCoins) {
+            if (!coin || typeof coin.key !== "string" || typeof coin.sectionKey !== "string") {
+                throw new Error("Wizard of Flatland saved checkpoint collected coin is malformed");
+            }
+            state.collectedCoinKeys.add(coin.key);
+            state.collectedCoinSectionKeysByCoinKey.set(coin.key, coin.sectionKey);
+        }
+        state.droppedCoinsByKey = new Map();
+        state.nextDroppedCoinId = getNextAvailableDroppedCoinId(snapshot.nextDroppedCoinId || 1);
+        state.talismans = [];
+        state.activatedTalismanSectionKeys = new Set(snapshot.activatedTalismanSectionKeys || []);
+        state.visitedMazeSectionKeys = new Set(snapshot.visitedSectionKeys);
+        state.generatedMazeInitialEnemySpawnBudgetsBySectionKey = new Map(snapshot.spawnBudgets.map((entry) => {
+            if (!entry || typeof entry.sectionKey !== "string" || !Number.isInteger(entry.budget) || entry.budget < 0) {
+                throw new Error("Wizard of Flatland saved checkpoint spawn budget is malformed");
+            }
+            return [entry.sectionKey, entry.budget];
+        }));
+        state.wizardVitals = { ...snapshot.vitals };
+        state.selectedSpell = typeof snapshot.selectedSpell === "string" && snapshot.selectedSpell.length > 0
+            ? snapshot.selectedSpell
+            : "fireball";
+        state.spellLevels = snapshot.spellLevels && typeof snapshot.spellLevels === "object"
+            ? { ...snapshot.spellLevels }
+            : { fireball: 1 };
+        state.levelPoints = snapshot.levelPoints === undefined ? 0 : snapshot.levelPoints;
+        normalizeWizardSpellLevels();
+        validateWizardLevelPoints();
+        updateStatusBars();
+        state.generatedMazeWalls = createEmptyWallBuffer();
+        state.walls = createEmptyWallBuffer();
+        state.generatedMazeChunkKeys = new Set();
+        state.generatedMazeInstalledChunkKeys = new Set();
+        state.generatedMazeSignature = "";
+        state.generatedMazePendingSignature = "";
+        state.generatedMazeLoading = false;
+        state.pendingSolverDt = 0;
+        state.lastSentTarget = { x: state.target.x, y: state.target.y };
+        clearTargetTravelVector();
+        clearAgentPathRequestsForMapRebuild();
+        invalidateMazeLookaheadCache();
+        clearPathfindingNodeLayer();
+        refreshGeneratedMazeIfNeeded(true);
+        return snapshot;
+    }
+
+    function applyCheckpointControls(snapshot) {
+        if (scenarioSelect && snapshot.scenario) scenarioSelect.value = snapshot.scenario;
+        if (typeof snapshot.maze.seed === "string") {
+            state.mazeSeed = snapshot.maze.seed;
+            if (mazeSeedInput) mazeSeedInput.value = snapshot.maze.seed;
+        }
+        if (mazeChunkSizeInput && Number.isFinite(snapshot.maze.chunkSize)) mazeChunkSizeInput.value = String(snapshot.maze.chunkSize);
+        if (mazeRoomScaleInput && Number.isFinite(snapshot.maze.roomScale)) mazeRoomScaleInput.value = String(snapshot.maze.roomScale);
+        if (mazeTwistinessInput && Number.isFinite(snapshot.maze.twistiness)) mazeTwistinessInput.value = String(snapshot.maze.twistiness);
+        updateControlLabels();
+    }
+
+    function createAgentFromCheckpointSnapshot(snapshot) {
+        if (!snapshot || typeof snapshot !== "object") {
+            throw new Error("Wizard of Flatland saved checkpoint enemy is missing");
+        }
+        for (const field of ["id", "x", "y", "radius", "speed", "health", "maxHealth"]) {
+            if (!Number.isFinite(snapshot[field])) {
+                throw new Error(`Wizard of Flatland saved checkpoint enemy requires finite ${field}`);
+            }
+        }
+        const agent = {
+            id: snapshot.id,
+            x: snapshot.x,
+            y: snapshot.y,
+            vx: Number(snapshot.vx) || 0,
+            vy: Number(snapshot.vy) || 0,
+            radius: snapshot.radius,
+            speed: snapshot.speed,
+            health: snapshot.health,
+            maxHealth: snapshot.maxHealth,
+            priority: Number.isFinite(snapshot.priority) ? snapshot.priority : 0,
+            waitTime: Number.isFinite(snapshot.waitTime) ? snapshot.waitTime : 0,
+            phase: Number.isFinite(snapshot.phase) ? snapshot.phase : PHASE_MILLING,
+            phaseTime: Number.isFinite(snapshot.phaseTime) ? snapshot.phaseTime : 0,
+            homeAngle: Number.isFinite(snapshot.homeAngle) ? snapshot.homeAngle : Math.atan2(snapshot.y - state.target.y, snapshot.x - state.target.x),
+            cooldown: Number.isFinite(snapshot.cooldown) ? snapshot.cooldown : 0,
+            slotAngle: Number.isFinite(snapshot.slotAngle) ? snapshot.slotAngle : Math.atan2(snapshot.y - state.target.y, snapshot.x - state.target.x),
+            heading: Number.isFinite(snapshot.heading) ? snapshot.heading : Math.atan2(state.target.y - snapshot.y, state.target.x - snapshot.x),
+            headingHistory: [],
+            millingDirection: snapshot.millingDirection >= 0 ? 1 : -1,
+            millingWallTurnLock: Math.max(0, Number(snapshot.millingWallTurnLock) || 0),
+            solverState: Number.isFinite(snapshot.solverState) ? snapshot.solverState : STATE_MILLING,
+            wallClamps: Math.max(0, Number(snapshot.wallClamps) || 0),
+            pathMode: PATH_MODE_DIRECT,
+            pathRequestPending: false,
+            pathRequestId: 0,
+            pathRequestedAt: 0,
+            pathRequestedWorldVersion: 0,
+            pathRequestedRawStartKey: "",
+            pathRequestedStartKey: "",
+            pathRequestedGoalKey: "",
+            pathNodeKeys: [],
+            pathWaypoints: [],
+            pathCursor: 0,
+            pathGoalX: Number.isFinite(snapshot.pathGoalX) ? snapshot.pathGoalX : snapshot.x,
+            pathGoalY: Number.isFinite(snapshot.pathGoalY) ? snapshot.pathGoalY : snapshot.y,
+            homeSectionKey: snapshot.homeSectionKey
+        };
+        if (typeof snapshot.autoSpawnSectionKey === "string" && snapshot.autoSpawnSectionKey.length > 0) {
+            agent.autoSpawnSectionKey = snapshot.autoSpawnSectionKey;
+        }
+        if (typeof agent.homeSectionKey !== "string" || agent.homeSectionKey.length === 0) {
+            throw new Error(`Wizard of Flatland saved checkpoint enemy ${agent.id} requires a home section`);
+        }
+        validateAgentHealth(agent);
+        return agent;
+    }
+
+    function saveWizardCheckpointToSlot() {
+        const snapshot = getWizardCheckpointSnapshot();
+        getWizardCheckpointStorage().setItem(getActiveWizardCheckpointStorageKey(), JSON.stringify(snapshot));
+        rememberWizardCheckpointSaveName(state.playerName);
+        refreshStartupSaveNameOptions();
+        console.log("Wizard of Flatland checkpoint saved", snapshot);
+        return snapshot;
+    }
+
+    function loadWizardCheckpointFromSlot() {
+        const snapshot = parseWizardCheckpointSnapshot(getWizardCheckpointStorage().getItem(getActiveWizardCheckpointStorageKey()));
+        const applied = applyWizardCheckpointSnapshot(snapshot);
+        console.log("Wizard of Flatland checkpoint loaded", applied);
+        return applied;
+    }
+
+    function showSavedWizardCheckpointFromSlot() {
+        const snapshot = parseWizardCheckpointSnapshot(getWizardCheckpointStorage().getItem(getActiveWizardCheckpointStorageKey()));
+        console.log("Wizard of Flatland saved checkpoint", snapshot);
+        return snapshot;
+    }
+
+    function clearSavedWizardCheckpointFromSlot() {
+        getWizardCheckpointStorage().removeItem(getActiveWizardCheckpointStorageKey());
+        forgetWizardCheckpointSaveName(state.playerName);
+        refreshStartupSaveNameOptions();
+        console.log("Wizard of Flatland saved checkpoint cleared");
+        return true;
     }
 
     function getWizardPositionSnapshot() {
@@ -1985,6 +3195,15 @@
         key: WIZARD_POSITION_STORAGE_KEY
     });
 
+    window.wizardCheckpoint = Object.freeze({
+        save: saveWizardCheckpointToSlot,
+        load: loadWizardCheckpointFromSlot,
+        show: showSavedWizardCheckpointFromSlot,
+        clear: clearSavedWizardCheckpointFromSlot,
+        key: TALISMAN_STORAGE_KEY,
+        keyForPlayer: getWizardCheckpointStorageKeyForPlayer
+    });
+
     function enableCoinDiagnosticsFromConsole() {
         state.debug.coinDiagnosticsEnabled = true;
         state.debug.coinDiagnostics = [];
@@ -2054,7 +3273,7 @@
         const center = mazeSectionCenter(coord.q, coord.r, options);
         const firstId = getNextAgentId();
         for (let i = 0; i < spawnCount; i++) {
-            addAgent(center.x, center.y, firstId + i);
+            addAgent(center.x, center.y, firstId + i, Math.random, { homeSectionKey: sectionKey });
         }
         enforceInitialWallConstraints();
         clearAgentPathRequestsForMapRebuild();
@@ -2095,7 +3314,7 @@
         const firstId = getNextAgentId();
         for (let i = 0; i < count; i++) {
             const point = getMazeRoomEnemySpawnPoint(center, roomRadius, i, count, random);
-            addAgent(point.x, point.y, firstId + i, random, { autoSpawnSectionKey: sectionKey });
+            addAgent(point.x, point.y, firstId + i, random, { autoSpawnSectionKey: sectionKey, homeSectionKey: sectionKey });
         }
     }
 
@@ -2127,6 +3346,7 @@
         if (typeof sectionKey !== "string" || sectionKey.length === 0) {
             throw new Error("Wizard of Flatland enemy count requires a section key");
         }
+        if (isMazeInitialSafeSectionKey(sectionKey)) return 0;
         const random = seededRandom(hashString(`${options.seed}|enemy-count|${sectionKey}`));
         const roll = random();
         if (roll < MAZE_ROOM_EMPTY_ENEMY_CHANCE) return 0;
@@ -2194,7 +3414,6 @@
         } else if (scenario === "crowdedArena") {
             spawnCluster(count, -4.2, 0, 4.4, 10);
         } else if (scenario === "proceduralMaze") {
-            spawnCluster(count, state.target.x + 5.5, state.target.y + 1.5, 7.5, 7.5);
             enforceInitialWallConstraints();
         } else {
             spawnCluster(count, 0, 0.8, 4.8, 5);
@@ -2217,7 +3436,7 @@
         }
     }
 
-    function spawnCluster(count, centerX, centerY, width, height) {
+    function spawnCluster(count, centerX, centerY, width, height, metadata = null) {
         const cols = Math.ceil(Math.sqrt(count * width / height));
         const firstId = getNextAgentId();
         for (let i = 0; i < count; i++) {
@@ -2225,7 +3444,7 @@
             const row = Math.floor(i / cols);
             const x = centerX + (col / Math.max(1, cols - 1) - 0.5) * width + (Math.random() - 0.5) * 0.25;
             const y = centerY + (row / Math.max(1, Math.ceil(count / cols) - 1) - 0.5) * height + (Math.random() - 0.5) * 0.25;
-            addAgent(x, y, firstId + i);
+            addAgent(x, y, firstId + i, Math.random, metadata);
         }
     }
 
@@ -2285,6 +3504,12 @@
                     throw new Error("Wizard of Flatland auto-spawned enemy requires a section key");
                 }
                 agent.autoSpawnSectionKey = metadata.autoSpawnSectionKey;
+            }
+            if (metadata.homeSectionKey !== undefined) {
+                if (typeof metadata.homeSectionKey !== "string" || metadata.homeSectionKey.length === 0) {
+                    throw new Error("Wizard of Flatland enemy home section requires a section key");
+                }
+                agent.homeSectionKey = metadata.homeSectionKey;
             }
         }
         state.agents.push(agent);
@@ -2376,41 +3601,8 @@
         let bend = 0;
         if (state.pressedMovementKeys.ArrowLeft) bend -= 1;
         if (state.pressedMovementKeys.ArrowRight) bend += 1;
-        updateProjectedCursorBendHold(dt, bend);
-        if (bend !== 0) {
-            const signedBend = Math.max(-1, Math.min(1, bend));
-            const currentSign = Math.sign(cursor.angleOffset);
-            const movingTowardStraight = currentSign !== 0 && currentSign !== Math.sign(signedBend);
-            const bendProgress = Math.min(1, Math.abs(cursor.angleOffset) / TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET);
-            const speedMultiplier = movingTowardStraight
-                ? TARGET_PROJECTED_CURSOR_RETURN_ANGLE_SPEED_MULTIPLIER
-                : Math.max(
-                    TARGET_PROJECTED_CURSOR_OUTWARD_ANGLE_SPEED_MIN_MULTIPLIER,
-                    1 - bendProgress
-                );
-            const distanceSpeedMultiplier = TARGET_PROJECTED_CURSOR_DISTANCE / Math.max(TARGET_PROJECTED_CURSOR_MIN_DISTANCE, cursor.distance);
-            const targetIsMoving = isTargetMovementInputActive();
-            cursor.angleOffset = Math.max(
-                -TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET,
-                Math.min(
-                    TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET,
-                    cursor.angleOffset +
-                        signedBend *
-                        TARGET_PROJECTED_CURSOR_ANGLE_SPEED *
-                        speedMultiplier *
-                        distanceSpeedMultiplier *
-                        getProjectedCursorTurnAccelerationMultiplier(
-                            targetIsMoving
-                                ? TARGET_PROJECTED_CURSOR_MOVING_TURN_ACCEL_SECONDS
-                                : TARGET_PROJECTED_CURSOR_IDLE_TURN_ACCEL_SECONDS,
-                            targetIsMoving
-                                ? TARGET_PROJECTED_CURSOR_MOVING_MAX_TURN_ACCEL_MULTIPLIER
-                                : TARGET_PROJECTED_CURSOR_IDLE_MAX_TURN_ACCEL_MULTIPLIER
-                        ) *
-                        (targetIsMoving ? 1 : TARGET_PROJECTED_CURSOR_IDLE_TURN_RATE_MULTIPLIER) *
-                        dt
-                )
-            );
+        if (bend !== 0 || !state.projectedCursorMouseMode.active) {
+            updateProjectedCursorBendInput(dt, bend);
         }
 
         let extend = 0;
@@ -2425,6 +3617,85 @@
                 )
             );
         }
+    }
+
+    function updateProjectedCursorMouseControls(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        const mouseMode = state.projectedCursorMouseMode;
+        if (!mouseMode || typeof mouseMode !== "object") throw new Error("Wizard of Flatland projected cursor mouse mode state is missing");
+        if (!mouseMode.active) return;
+        if (!Number.isFinite(mouseMode.clientX) || !Number.isFinite(mouseMode.clientY)) {
+            throw new Error("Wizard of Flatland mouse cursor mode requires a finite client pointer");
+        }
+        const cursor = state.projectedCursor;
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
+        const mouseWorld = projectedCursorMouseClientToWorld();
+        const projection = getProjectedCursorProjectionForWorldPoint(mouseWorld);
+        const bendDelta = projection.angleOffset - cursor.angleOffset;
+        const bend = Math.abs(bendDelta) > 0.000001 ? Math.sign(bendDelta) : 0;
+        mouseMode.bendDirection = bend;
+
+        updateProjectedCursorBendInput(dt, bend, projection.angleOffset);
+        mouseMode.bendDirection = Math.abs(projection.angleOffset - cursor.angleOffset) > 0.000001
+            ? Math.sign(projection.angleOffset - cursor.angleOffset)
+            : 0;
+        cursor.distance = moveToward(
+            cursor.distance,
+            projection.distance,
+            TARGET_PROJECTED_CURSOR_DISTANCE_SPEED * dt
+        );
+    }
+
+    function updateProjectedCursorBendInput(dt, bend, stopAngleOffset = NaN) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        const cursor = state.projectedCursor;
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
+        if (!Number.isFinite(cursor.angleOffset)) throw new Error("Wizard of Flatland projected cursor bend requires a finite bend");
+        if (!Number.isFinite(cursor.distance)) throw new Error("Wizard of Flatland projected cursor bend requires a finite distance");
+
+        const signedBend = Math.max(-1, Math.min(1, bend));
+        updateProjectedCursorBendHold(dt, signedBend);
+        if (signedBend === 0) return;
+
+        const currentSign = Math.sign(cursor.angleOffset);
+        const movingTowardStraight = currentSign !== 0 && currentSign !== Math.sign(signedBend);
+        const bendProgress = Math.min(1, Math.abs(cursor.angleOffset) / TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET);
+        const speedMultiplier = movingTowardStraight
+            ? TARGET_PROJECTED_CURSOR_RETURN_ANGLE_SPEED_MULTIPLIER
+            : Math.max(
+                TARGET_PROJECTED_CURSOR_OUTWARD_ANGLE_SPEED_MIN_MULTIPLIER,
+                1 - bendProgress
+            );
+        const targetIsMoving = isTargetMovementInputActive();
+        const distanceSpeedMultiplier = TARGET_PROJECTED_CURSOR_DISTANCE / Math.max(TARGET_PROJECTED_CURSOR_MIN_DISTANCE, cursor.distance);
+        const maxDelta = TARGET_PROJECTED_CURSOR_ANGLE_SPEED *
+            speedMultiplier *
+            distanceSpeedMultiplier *
+            getProjectedCursorTurnAccelerationMultiplier(
+                targetIsMoving
+                    ? TARGET_PROJECTED_CURSOR_MOVING_TURN_ACCEL_SECONDS
+                    : TARGET_PROJECTED_CURSOR_IDLE_TURN_ACCEL_SECONDS,
+                targetIsMoving
+                    ? TARGET_PROJECTED_CURSOR_MOVING_MAX_TURN_ACCEL_MULTIPLIER
+                    : TARGET_PROJECTED_CURSOR_IDLE_MAX_TURN_ACCEL_MULTIPLIER
+            ) *
+            (targetIsMoving ? 1 : TARGET_PROJECTED_CURSOR_IDLE_TURN_RATE_MULTIPLIER) *
+            dt;
+        const nextAngleOffset = cursor.angleOffset + signedBend * maxDelta;
+        if (Number.isFinite(stopAngleOffset)) {
+            const stopDelta = stopAngleOffset - cursor.angleOffset;
+            if (Math.sign(stopDelta) === signedBend && Math.abs(nextAngleOffset - cursor.angleOffset) > Math.abs(stopDelta)) {
+                cursor.angleOffset = Math.max(
+                    -TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET,
+                    Math.min(TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET, stopAngleOffset)
+                );
+                return;
+            }
+        }
+        cursor.angleOffset = Math.max(
+            -TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET,
+            Math.min(TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET, nextAngleOffset)
+        );
     }
 
     function updateProjectedCursorBendHold(dt, bend) {
@@ -2446,6 +3717,7 @@
 
     function updateProjectedCursorDistanceReturn(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
+        if (state.projectedCursorMouseMode.active) return;
         if (state.pressedMovementKeys.ArrowUp) return;
         const cursor = state.projectedCursor;
         if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
@@ -2469,6 +3741,7 @@
         const dy = cursorPoint.y - state.target.y;
         const cursorDistance = Math.hypot(dx, dy);
         if (cursorDistance > 0.000001) {
+            const mouseBendInputActive = isProjectedCursorMouseBendInputActive();
             const targetHeading = Math.atan2(dy, dx);
             const delta = shortestAngleDelta(state.target.heading, targetHeading);
             const turnAcceleration = isProjectedCursorBendInputActive()
@@ -2486,7 +3759,9 @@
                 turnAcceleration *
                 dt;
             const appliedTurn = Math.max(-maxTurn, Math.min(maxTurn, delta));
+            const fixedCursorPoint = mouseBendInputActive ? cursorPoint : null;
             state.target.heading = normalizeAngle(state.target.heading + appliedTurn);
+            if (fixedCursorPoint) updateProjectedCursorFromFixedWorldPoint(fixedCursorPoint);
             if (isProjectedCursorBendInputActive()) return;
 
             updateProjectedCursorFromFixedWorldPoint({
@@ -2509,16 +3784,22 @@
         const turnRadius = getProjectedCursorTurnRadius(effectiveDistance, bendRatio);
         const turnRate = TARGET_KEYBOARD_MOVE_SPEED / turnRadius * TARGET_TURN_SPEED_MULTIPLIER;
         if (isProjectedCursorBendInputActive()) {
+            const mouseMode = state.projectedCursorMouseMode;
+            const turnDirection = mouseMode && mouseMode.active && mouseMode.bendDirection !== 0
+                ? Math.sign(mouseMode.bendDirection)
+                : Math.sign(bendRatio);
+            const turnStep = turnDirection *
+                turnRate *
+                getProjectedCursorTurnAccelerationMultiplier(
+                    TARGET_PROJECTED_CURSOR_MOVING_TURN_ACCEL_SECONDS,
+                    TARGET_PROJECTED_CURSOR_MOVING_MAX_TURN_ACCEL_MULTIPLIER
+                ) *
+                dt;
+            const fixedCursorPoint = mouseMode && mouseMode.active ? trace.point : null;
             state.target.heading = normalizeAngle(
-                state.target.heading +
-                    Math.sign(bendRatio) *
-                    turnRate *
-                    getProjectedCursorTurnAccelerationMultiplier(
-                        TARGET_PROJECTED_CURSOR_MOVING_TURN_ACCEL_SECONDS,
-                        TARGET_PROJECTED_CURSOR_MOVING_MAX_TURN_ACCEL_MULTIPLIER
-                    ) *
-                    dt
+                state.target.heading + turnStep
             );
+            if (fixedCursorPoint) updateProjectedCursorFromFixedWorldPoint(fixedCursorPoint);
             return;
         }
 
@@ -2546,7 +3827,14 @@
     }
 
     function isProjectedCursorBendInputActive() {
-        return state.pressedMovementKeys.ArrowLeft || state.pressedMovementKeys.ArrowRight;
+        return state.pressedMovementKeys.ArrowLeft ||
+            state.pressedMovementKeys.ArrowRight ||
+            isProjectedCursorMouseBendInputActive();
+    }
+
+    function isProjectedCursorMouseBendInputActive() {
+        const mouseMode = state.projectedCursorMouseMode;
+        return !!(mouseMode && mouseMode.active && mouseMode.bendDirection !== 0);
     }
 
     function getProjectedCursorTurnAccelerationMultiplier(secondsToMax, maxMultiplier) {
@@ -2574,21 +3862,33 @@
     }
 
     function shootFireball() {
+        if (state.fireballCooldownRemaining > 0) return;
         const cursorPoint = getCurrentProjectedCursorWorldPoint();
         const dx = cursorPoint.x - state.target.x;
         const dy = cursorPoint.y - state.target.y;
         const length = Math.hypot(dx, dy);
         if (!(length > 0.000001)) return;
-        if (!spendWizardMagic(WIZARD_FIREBALL_MAGIC_COST)) return;
+        const fireballStats = getActiveFireballStats();
+        if (!spendWizardMagic(fireballStats.manaCost)) return;
         const dirX = dx / length;
         const dirY = dy / length;
+        state.fireballCooldownRemaining = fireballStats.cooldown;
         state.fireballs.push({
             x: state.target.x + dirX * (TARGET_RADIUS + FIREBALL_HITBOX_LENGTH * 0.35),
             y: state.target.y + dirY * (TARGET_RADIUS + FIREBALL_HITBOX_LENGTH * 0.35),
             dirX,
             dirY,
-            age: 0
+            age: 0,
+            speed: fireballStats.projectileSpeed,
+            maxAge: fireballStats.maxAge,
+            damage: fireballStats.damage,
+            explosionRadius: fireballStats.explosionRadius
         });
+    }
+
+    function updateSpellCooldowns(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        state.fireballCooldownRemaining = Math.max(0, state.fireballCooldownRemaining - dt);
     }
 
     function updateFireballs(dt) {
@@ -2596,10 +3896,13 @@
         const survivors = [];
         for (const fireball of state.fireballs) {
             fireball.age += dt;
+            if (!(fireball.speed > 0) || !(fireball.maxAge > 0) || !(fireball.damage > 0) || !(fireball.explosionRadius > 0)) {
+                throw new Error("Wizard of Flatland fireball update requires resolved positive spell stats");
+            }
             const previousX = fireball.x;
             const previousY = fireball.y;
-            const nextX = fireball.x + fireball.dirX * FIREBALL_SPEED * dt;
-            const nextY = fireball.y + fireball.dirY * FIREBALL_SPEED * dt;
+            const nextX = fireball.x + fireball.dirX * fireball.speed * dt;
+            const nextY = fireball.y + fireball.dirY * fireball.speed * dt;
             const wallHit = findEarliestFireballWallHit(previousX, previousY, nextX, nextY);
             if (wallHit) {
                 fireball.x = wallHit.x;
@@ -2614,7 +3917,7 @@
                 detonateFireball(fireball);
                 continue;
             }
-            if (fireball.age < FIREBALL_MAX_AGE_SECONDS) survivors.push(fireball);
+            if (fireball.age < fireball.maxAge) survivors.push(fireball);
         }
         state.fireballs = survivors;
         updateFireballExplosions(dt);
@@ -2623,6 +3926,7 @@
     function updateCoins(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
         if (!Array.isArray(state.coins) || state.coins.length === 0) return;
+        validateVisibleMazeCoinKeysAreUnique("coin update", state.coins);
         if (!(state.collectedCoinKeys instanceof Set)) {
             throw new Error("Wizard of Flatland coin collection requires collected coin tracking");
         }
@@ -2657,6 +3961,78 @@
         state.coins = survivors;
     }
 
+    function updateTalismans(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        for (const agent of state.agents) {
+            if (!Number.isFinite(agent.talismanBlockedFlashSeconds)) continue;
+            agent.talismanBlockedFlashSeconds = Math.max(0, agent.talismanBlockedFlashSeconds - dt);
+        }
+        if (!Array.isArray(state.talismans) || state.talismans.length === 0) return;
+        for (const talisman of state.talismans) {
+            validateTalisman(talisman);
+            talisman.flashSeconds = Math.max(0, talisman.flashSeconds - dt);
+            talisman.blockedFlashSeconds = Math.max(0, talisman.blockedFlashSeconds - dt);
+            const distance = Math.hypot(state.target.x - talisman.x, state.target.y - talisman.y);
+            const touching = distance <= TALISMAN_TOUCH_DISTANCE;
+            if (!touching) {
+                talisman.touching = false;
+                continue;
+            }
+            if (talisman.touching) continue;
+            talisman.touching = true;
+            tryActivateTalisman(talisman);
+        }
+    }
+
+    function tryActivateTalisman(talisman) {
+        validateTalisman(talisman);
+        if (hasEnemyInMazeSection(talisman.sectionKey)) {
+            flashBlockedTalismanActivation(talisman);
+            return false;
+        }
+        state.wizardVitals.health = state.wizardVitals.maxHealth;
+        state.wizardVitals.magic = state.wizardVitals.maxMagic;
+        updateStatusBars();
+        if (!(state.activatedTalismanSectionKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland talisman activation requires activated talisman tracking");
+        }
+        state.activatedTalismanSectionKeys.add(talisman.sectionKey);
+        talisman.activated = true;
+        talisman.flashSeconds = TALISMAN_ACTIVATION_FLASH_SECONDS;
+        saveWizardCheckpointToSlot();
+        return true;
+    }
+
+    function hasEnemyInMazeSection(sectionKey) {
+        validateMazeRoomEnemyBudgetSectionKey(sectionKey);
+        for (const agent of state.agents) {
+            if (getActorMazeSectionKey(agent) === sectionKey) return true;
+        }
+        return false;
+    }
+
+    function flashBlockedTalismanActivation(talisman) {
+        talisman.blockedFlashSeconds = TALISMAN_BLOCKED_FLASH_SECONDS;
+        for (const agent of state.agents) {
+            if (getActorMazeSectionKey(agent) !== talisman.sectionKey) continue;
+            agent.talismanBlockedFlashSeconds = TALISMAN_BLOCKED_FLASH_SECONDS;
+        }
+    }
+
+    function validateTalisman(talisman) {
+        if (!talisman || typeof talisman !== "object") {
+            throw new Error("Wizard of Flatland talisman is missing");
+        }
+        if (typeof talisman.sectionKey !== "string" || talisman.sectionKey.length === 0) {
+            throw new Error("Wizard of Flatland talisman requires a section key");
+        }
+        for (const field of ["x", "y", "radius"]) {
+            if (!Number.isFinite(talisman[field])) {
+                throw new Error(`Wizard of Flatland talisman requires finite ${field}`);
+            }
+        }
+    }
+
     function isMazeCoinReachableFromTarget(coin) {
         validateCoin(coin);
         validateWallBuffer(state.walls, "coin reachability walls");
@@ -2682,9 +4058,7 @@
         if (!(state.droppedCoinsByKey instanceof Map)) {
             throw new Error("Wizard of Flatland dropped coin creation requires dropped coin tracking");
         }
-        if (!Number.isInteger(state.nextDroppedCoinId) || state.nextDroppedCoinId < 1) {
-            throw new Error("Wizard of Flatland dropped coin creation requires a valid drop id");
-        }
+        state.nextDroppedCoinId = getNextAvailableDroppedCoinId();
         const coord = worldToMazeSectionCoord(x, y, getMazeOptions());
         const coin = {
             key: `drop|${state.nextDroppedCoinId}`,
@@ -2706,9 +4080,12 @@
         if (state.droppedCoinsByKey.has(coin.key)) {
             throw new Error(`Wizard of Flatland dropped coin key was reused: ${coin.key}`);
         }
+        if (state.collectedCoinKeys instanceof Set && state.collectedCoinKeys.has(coin.key)) {
+            throw new Error(`Wizard of Flatland dropped coin key was already collected: ${coin.key}`);
+        }
         state.droppedCoinsByKey.set(coin.key, coin);
         if (!isProceduralMazeScenario() || isDroppedCoinInInstalledMazeSection(coin, getMazeOptions())) {
-            state.coins.push(coin);
+            addVisibleMazeCoin(coin, "enemy coin drop");
         }
         return coin;
     }
@@ -2722,6 +4099,10 @@
             throw new Error(`Wizard of Flatland visible coin ${coin.key} was already collected`);
         }
         state.collectedCoinKeys.add(coin.key);
+        if (!(state.collectedCoinSectionKeysByCoinKey instanceof Map)) {
+            throw new Error("Wizard of Flatland coin collection requires collected coin section tracking");
+        }
+        state.collectedCoinSectionKeysByCoinKey.set(coin.key, coin.sectionKey);
         if (state.droppedCoinsByKey instanceof Map) state.droppedCoinsByKey.delete(coin.key);
         gainWizardExp(1);
     }
@@ -2785,11 +4166,14 @@
         if (!fireball || !Number.isFinite(fireball.x) || !Number.isFinite(fireball.y)) {
             throw new Error("Wizard of Flatland fireball explosion requires a finite fireball");
         }
-        damageAgentsIntersectingCircle(fireball.x, fireball.y, FIREBALL_EXPLOSION_DAMAGE_RADIUS, FIREBALL_DAMAGE);
+        if (!(fireball.damage > 0) || !(fireball.explosionRadius > 0)) {
+            throw new Error("Wizard of Flatland fireball explosion requires resolved positive spell stats");
+        }
+        damageAgentsIntersectingCircle(fireball.x, fireball.y, fireball.explosionRadius, fireball.damage);
         state.fireballExplosions.push({
             x: fireball.x,
             y: fireball.y,
-            radius: FIREBALL_EXPLOSION_DAMAGE_RADIUS,
+            radius: fireball.explosionRadius,
             age: 0
         });
     }
@@ -4035,19 +5419,61 @@
 
     function draw() {
         resizeCanvas();
-        ctx.fillStyle = "#777777";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        drawFloor();
         drawPathfindingNodeLayer();
         drawWalls();
         drawSectionBoundaries();
         drawWallLabels();
         drawWallBuildPreview();
         drawCoins();
+        drawTalismans();
         drawTarget();
         drawAgentPaths();
         drawFireballs();
         drawFireballExplosions();
         drawAgents();
+    }
+
+    function drawFloor() {
+        if (!(state.view.width > 0 && state.view.height > 0 && state.view.scale > 0)) {
+            throw new Error("Wizard of Flatland floor gradient requires a valid viewport");
+        }
+        const options = getMazeOptions();
+        const viewport = getCurrentMazeViewportRect();
+        if (!viewport) throw new Error("Wizard of Flatland floor gradient requires a current viewport");
+        const outerWorldRadius = Math.sqrt(3) * getMazeSectionRadius(options) * FLOOR_GRADIENT_SECTION_DISTANCE;
+        if (!(outerWorldRadius > 0)) {
+            throw new Error("Wizard of Flatland floor gradient requires a positive radius");
+        }
+        ctx.fillStyle = FLOOR_OUTER_COLOR;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        if (getMinDistanceFromOriginToRect(viewport) >= outerWorldRadius) {
+            return;
+        }
+        const center = worldToScreen(0, 0);
+        const outerRadius = outerWorldRadius * state.view.scale;
+        if (!(outerRadius > 0)) {
+            throw new Error("Wizard of Flatland floor gradient requires a positive radius");
+        }
+        const gradient = ctx.createRadialGradient(center.x, center.y, 0, center.x, center.y, outerRadius);
+        gradient.addColorStop(0, FLOOR_CENTER_COLOR);
+        gradient.addColorStop(1, FLOOR_EDGE_COLOR);
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(center.x, center.y, outerRadius, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.restore();
+    }
+
+    function getMinDistanceFromOriginToRect(rect) {
+        if (!rect || !Number.isFinite(rect.minX) || !Number.isFinite(rect.minY) || !Number.isFinite(rect.maxX) || !Number.isFinite(rect.maxY)) {
+            throw new Error("Wizard of Flatland floor gradient requires a finite viewport rectangle");
+        }
+        const dx = rect.minX > 0 ? rect.minX : rect.maxX < 0 ? -rect.maxX : 0;
+        const dy = rect.minY > 0 ? rect.minY : rect.maxY < 0 ? -rect.maxY : 0;
+        return Math.hypot(dx, dy);
     }
 
     function drawHexGridLayer() {
@@ -4780,14 +6206,14 @@
 
     function drawTargetHat(x, y, radius) {
         const hatRadius = radius * 3 * 0.7;
-        const brimY = y - hatRadius * 0.55;
-        const brimWidth = hatRadius * 1.15;
-        const brimHeight = hatRadius * 0.36;
-        const bandWidth = brimWidth * 0.82;
+        const brimY = y - hatRadius * (0.55 - WIZARD_HAT_TOP_DOWN_BRIM_DROP);
+        const brimWidth = hatRadius * 1.15 * WIZARD_HAT_TOP_DOWN_BRIM_WIDTH;
+        const brimHeight = hatRadius * 0.36 * WIZARD_HAT_TOP_DOWN_BRIM_HEIGHT;
+        const bandWidth = brimWidth * 0.78;
         const bandHeight = brimHeight * 0.54;
-        const pointBaseY = brimY - brimHeight * 0.1;
-        const pointHeight = hatRadius * 0.95;
-        const pointWidth = hatRadius * 0.62;
+        const pointBaseY = brimY - brimHeight * 0.12;
+        const pointHeight = hatRadius * 0.95 * WIZARD_HAT_TOP_DOWN_CONE_HEIGHT;
+        const pointWidth = hatRadius * 0.78;
 
         ctx.save();
         ctx.fillStyle = "#000099";
@@ -4873,18 +6299,25 @@
     }
 
     function updateProjectedCursorFromFixedWorldPoint(point) {
+        const projection = getProjectedCursorProjectionForWorldPoint(point);
+        const cursor = state.projectedCursor;
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
+        cursor.angleOffset = projection.angleOffset;
+        cursor.distance = projection.distance;
+    }
+
+    function getProjectedCursorProjectionForWorldPoint(point) {
         if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
             throw new Error("Wizard of Flatland fixed cursor point requires finite coordinates");
         }
-        const cursor = state.projectedCursor;
-        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
         const dx = point.x - state.target.x;
         const dy = point.y - state.target.y;
         const chord = Math.hypot(dx, dy);
         if (!(chord > 0.000001)) {
-            cursor.angleOffset = 0;
-            cursor.distance = TARGET_PROJECTED_CURSOR_MIN_DISTANCE;
-            return;
+            return {
+                angleOffset: 0,
+                distance: TARGET_PROJECTED_CURSOR_MIN_DISTANCE
+            };
         }
 
         const forwardX = Math.cos(state.target.heading);
@@ -4893,13 +6326,15 @@
         const localSide = dx * -forwardY + dy * forwardX;
         const rawHeadingDelta = 2 * Math.atan2(localSide, localForward);
         const bendRatio = Math.max(-1, Math.min(1, rawHeadingDelta));
-        cursor.angleOffset = bendRatio * TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET;
+        const angleOffset = bendRatio * TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET;
         if (Math.abs(bendRatio) <= 0.000001) {
-            cursor.distance = Math.max(
-                TARGET_PROJECTED_CURSOR_MIN_DISTANCE,
-                Math.min(TARGET_PROJECTED_CURSOR_MAX_DISTANCE, chord)
-            );
-            return;
+            return {
+                angleOffset,
+                distance: Math.max(
+                    TARGET_PROJECTED_CURSOR_MIN_DISTANCE,
+                    Math.min(TARGET_PROJECTED_CURSOR_MAX_DISTANCE, chord)
+                )
+            };
         }
 
         const halfDelta = Math.abs(bendRatio) * 0.5;
@@ -4908,10 +6343,13 @@
             throw new Error("Wizard of Flatland fixed cursor projection produced an invalid arc");
         }
         const arcDistance = (chord / denominator) * Math.abs(bendRatio);
-        cursor.distance = Math.max(
-            TARGET_PROJECTED_CURSOR_MIN_DISTANCE,
-            Math.min(TARGET_PROJECTED_CURSOR_MAX_DISTANCE, arcDistance)
-        );
+        return {
+            angleOffset,
+            distance: Math.max(
+                TARGET_PROJECTED_CURSOR_MIN_DISTANCE,
+                Math.min(TARGET_PROJECTED_CURSOR_MAX_DISTANCE, arcDistance)
+            )
+        };
     }
 
     function getProjectedCursorTraceDistance(trace) {
@@ -5152,6 +6590,120 @@
         ctx.restore();
     }
 
+    function drawTalismans() {
+        if (!Array.isArray(state.talismans) || state.talismans.length === 0) return;
+        ctx.save();
+        for (const talisman of state.talismans) {
+            validateTalisman(talisman);
+            const point = worldToScreen(talisman.x, talisman.y);
+            const radius = Math.max(8, talisman.radius * state.view.scale);
+            const blocked = talisman.blockedFlashSeconds > 0;
+            const activated = talisman.activated || state.activatedTalismanSectionKeys.has(talisman.sectionKey);
+            const activationPulse = Math.max(0, Math.min(1, talisman.flashSeconds / TALISMAN_ACTIVATION_FLASH_SECONDS));
+            const glowAlpha = blocked ? 0.58 : activated ? 0.38 + activationPulse * 0.32 : 0.1;
+            const glowColor = blocked ? `rgba(255,31,31,${glowAlpha})` : `rgba(255,255,255,${glowAlpha})`;
+            const pyramidFill = blocked ? "#8f0909" : activated ? "#f7f7f7" : "#050505";
+            const rearFaceFill = blocked ? "#650606" : activated ? "#e4e4e4" : "#020202";
+            const sideFaceFill = blocked ? "#760707" : activated ? "#eeeeee" : "#090909";
+            const edgeColor = blocked ? "#ff2525" : activated ? "#9b9b9b" : "#ffffff";
+            const capColor = blocked ? "#ff4a4a" : activated ? "#d9a323" : "#111111";
+            const capRearColor = blocked ? "#c42121" : activated ? "#a97914" : "#070707";
+            const capSideColor = blocked ? "#dd3030" : activated ? "#c68c1a" : "#171717";
+
+            ctx.fillStyle = glowColor;
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, radius * (activated ? 1.95 : 1.55), 0, Math.PI * 2);
+            ctx.fill();
+
+            const projection = createTalismanPyramidProjection(point.x, point.y, radius);
+            drawTalismanFaceFill([projection.apex, projection.base[2], projection.base[3]], rearFaceFill);
+            drawTalismanFaceFill([projection.apex, projection.base[3], projection.base[0]], sideFaceFill);
+            drawTalismanFaceFill([projection.apex, projection.base[0], projection.base[1]], pyramidFill);
+            drawTalismanFaceFill([projection.apex, projection.base[1], projection.base[2]], sideFaceFill);
+            drawTalismanFaceFill(
+                projection.capBase,
+                blocked ? "rgba(255,74,74,0.22)" : activated ? "rgba(155,155,155,0.22)" : "rgba(255,255,255,0.12)"
+            );
+            drawTalismanFaceFill([projection.apex, projection.capBase[2], projection.capBase[3]], capRearColor);
+            drawTalismanFaceFill([projection.apex, projection.capBase[3], projection.capBase[0]], capSideColor);
+            drawTalismanFaceFill([projection.apex, projection.capBase[0], projection.capBase[1]], capColor);
+            drawTalismanFaceFill([projection.apex, projection.capBase[1], projection.capBase[2]], capSideColor);
+            drawTalismanVisibleEdges(projection, edgeColor, radius, activated, blocked);
+        }
+        ctx.restore();
+    }
+
+    function createTalismanPyramidProjection(x, y, radius) {
+        const rotation = Math.PI / 4;
+        const tiltScale = 0.78;
+        const baseRadius = radius * 0.86;
+        const baseWidthScale = 1.22;
+        const baseYOffset = radius * 0.2;
+        const apex = { x, y: y - radius * 0.58 };
+        const base = [];
+        for (let i = 0; i < 4; i++) {
+            const angle = rotation + Math.PI / 4 + i * Math.PI / 2;
+            base.push({
+                x: x + Math.cos(angle) * baseRadius * baseWidthScale,
+                y: y + baseYOffset + Math.sin(angle) * baseRadius * tiltScale
+            });
+        }
+        const capBase = base.map((corner) => ({
+            x: apex.x + (corner.x - apex.x) / 3,
+            y: apex.y + (corner.y - apex.y) / 3
+        }));
+        return { apex, base, capBase };
+    }
+
+    function drawTalismanFaceFill(points, fillStyle) {
+        if (!Array.isArray(points) || points.length < 3) {
+            throw new Error("Wizard of Flatland talisman face requires at least three points");
+        }
+        ctx.fillStyle = fillStyle;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    function drawTalismanVisibleEdges(projection, strokeStyle, radius, activated, blocked) {
+        if (!projection || !projection.apex || !Array.isArray(projection.base) || !Array.isArray(projection.capBase)) {
+            throw new Error("Wizard of Flatland talisman edge drawing requires a projection");
+        }
+        ctx.strokeStyle = strokeStyle;
+        ctx.lineWidth = Math.max(0.75, radius * 0.0275);
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        const inactive = !activated && !blocked;
+        if (activated) {
+            strokeTalismanPolyline([projection.capBase[1], projection.base[1]]);
+            strokeTalismanPolyline([projection.capBase[3], projection.base[3]]);
+            strokeTalismanPolyline([projection.capBase[0], projection.base[0]]);
+        } else {
+            strokeTalismanPolyline([projection.apex, projection.base[1]]);
+            if (inactive) strokeTalismanPolyline([projection.apex, projection.base[2]]);
+            strokeTalismanPolyline([projection.apex, projection.base[3]]);
+            strokeTalismanPolyline([projection.apex, projection.base[0]]);
+        }
+        if (inactive) {
+            strokeTalismanPolyline([projection.base[0], projection.base[1]]);
+            strokeTalismanPolyline([projection.base[3], projection.base[0]]);
+        }
+        strokeTalismanPolyline([projection.capBase[0], projection.capBase[1]]);
+        strokeTalismanPolyline([projection.capBase[3], projection.capBase[0]]);
+    }
+
+    function strokeTalismanPolyline(points) {
+        if (!Array.isArray(points) || points.length < 2) {
+            throw new Error("Wizard of Flatland talisman edge stroke requires at least two points");
+        }
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+        ctx.stroke();
+    }
+
     function drawFireballExplosions() {
         ctx.save();
         for (const explosion of state.fireballExplosions) {
@@ -5207,6 +6759,7 @@
     }
 
     function getAgentStateColor(agent) {
+        if (agent.talismanBlockedFlashSeconds > 0) return "#ff1f1f";
         if (agent.wallClamps > 0 || agent.solverState === STATE_BLOCKED) return "#ff6b6b";
         if (agent.solverState === STATE_MILLING) return "#6fa8d8";
         if (agent.solverState === STATE_ATTACKING) return "#58d27b";
@@ -5262,6 +6815,56 @@
         const screenX = (event.clientX - rect.left) * state.view.dpr;
         const screenY = (event.clientY - rect.top) * state.view.dpr;
         return screenToWorld(screenX, screenY);
+    }
+
+    function projectedCursorMouseClientToWorld() {
+        const mouseMode = state.projectedCursorMouseMode;
+        if (!mouseMode || typeof mouseMode !== "object") throw new Error("Wizard of Flatland projected cursor mouse mode state is missing");
+        if (!Number.isFinite(mouseMode.clientX) || !Number.isFinite(mouseMode.clientY)) {
+            throw new Error("Wizard of Flatland mouse cursor mode requires a finite client pointer");
+        }
+        resizeCanvas();
+        const rect = canvas.getBoundingClientRect();
+        const screenX = (mouseMode.clientX - rect.left) * state.view.dpr;
+        const screenY = (mouseMode.clientY - rect.top) * state.view.dpr;
+        return screenToWorld(screenX, screenY);
+    }
+
+    function setProjectedCursorMouseClientPoint(event) {
+        if (!event || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+            throw new Error("Wizard of Flatland mouse cursor mode requires finite client coordinates");
+        }
+        const mouseMode = state.projectedCursorMouseMode;
+        if (!mouseMode || typeof mouseMode !== "object") throw new Error("Wizard of Flatland projected cursor mouse mode state is missing");
+        mouseMode.clientX = event.clientX;
+        mouseMode.clientY = event.clientY;
+    }
+
+    function activateProjectedCursorMouseMode(event) {
+        if (state.wallTool.active) return false;
+        const mouseMode = state.projectedCursorMouseMode;
+        if (!mouseMode || typeof mouseMode !== "object") throw new Error("Wizard of Flatland projected cursor mouse mode state is missing");
+        setProjectedCursorMouseClientPoint(event);
+        mouseMode.active = true;
+        event.preventDefault();
+        return true;
+    }
+
+    function updateProjectedCursorMouseModePointer(event) {
+        const mouseMode = state.projectedCursorMouseMode;
+        if (!mouseMode || typeof mouseMode !== "object") throw new Error("Wizard of Flatland projected cursor mouse mode state is missing");
+        if (!mouseMode.active) return false;
+        setProjectedCursorMouseClientPoint(event);
+        return true;
+    }
+
+    function deactivateProjectedCursorMouseMode() {
+        const mouseMode = state.projectedCursorMouseMode;
+        if (!mouseMode || typeof mouseMode !== "object") throw new Error("Wizard of Flatland projected cursor mouse mode state is missing");
+        mouseMode.active = false;
+        mouseMode.clientX = NaN;
+        mouseMode.clientY = NaN;
+        mouseMode.bendDirection = 0;
     }
 
     function inspectAgentAtPointer(event) {
@@ -5616,14 +7219,17 @@
         state.lastTime = now;
         state.targetFlashTime = Math.max(0, state.targetFlashTime - dt);
         framePart("projected cursor input", () => updateProjectedCursorKeyboardControls(dt));
+        framePart("projected cursor mouse input", () => updateProjectedCursorMouseControls(dt));
         framePart("idle target facing", () => updateIdleTargetFacingAndCursor(dt));
         framePart("projected cursor distance return", () => updateProjectedCursorDistanceReturn(dt));
         framePart("target heading", () => updateTargetHeadingFromProjectedCursor(dt));
         framePart("target movement", () => updateTargetKeyboardMovement(dt));
         framePart("refresh maze sections", () => refreshGeneratedMazeIfNeeded(false));
         framePart("refresh path bounds", () => refreshMazePathBoundsIfNeeded());
+        framePart("spell cooldowns", () => updateSpellCooldowns(dt));
         framePart("fireballs", () => updateFireballs(dt));
         framePart("coins", () => updateCoins(dt));
+        framePart("talismans", () => updateTalismans(dt));
         framePart("wizard vitals", () => regenerateWizardVitals(dt));
         if (state.running) framePart("request solver step", () => requestStep(dt));
         framePart("draw", () => draw());
@@ -5645,6 +7251,13 @@
     if (stepButton) stepButton.addEventListener("click", () => requestStep(1 / 60));
     if (resetButton) resetButton.addEventListener("click", createScenario);
     if (scenarioSelect) scenarioSelect.addEventListener("change", createScenario);
+    if (expLevelUpButton) expLevelUpButton.addEventListener("click", showSpellLevelPanel);
+    if (spellLevelCloseButton) spellLevelCloseButton.addEventListener("click", hideSpellLevelPanel);
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && spellLevelPanel && !spellLevelPanel.classList.contains("hidden")) {
+            hideSpellLevelPanel();
+        }
+    });
     for (const input of [agentCountInput, separationInput, speedScaleInput]) {
         if (!input) continue;
         input.addEventListener("input", () => {
@@ -5655,11 +7268,13 @@
     for (const input of [mazeSeedInput, mazeChunkSizeInput, mazeRoomScaleInput, mazeTwistinessInput]) {
         if (!input) continue;
         input.addEventListener("input", () => {
+            if (input === mazeSeedInput) state.mazeSeed = getMazeSeed();
             updateControlLabels();
             if (!isProceduralMazeScenario()) return;
             state.generatedMazeSignature = "";
             resetGeneratedMazeEnemyPopulation();
             resetGeneratedMazeCoinPopulation();
+            resetGeneratedMazeTalismanState();
             invalidateMazeLookaheadCache();
             refreshGeneratedMazeIfNeeded(true);
         });
@@ -5670,12 +7285,16 @@
     });
     canvas.addEventListener("pointermove", (event) => {
         updateWallBuildDrag(event);
+        updateProjectedCursorMouseModePointer(event);
     });
     canvas.addEventListener("pointerup", (event) => {
         finishWallBuildDrag(event);
     });
     canvas.addEventListener("pointercancel", (event) => {
         if (state.wallTool.pointerId === event.pointerId) cancelWallBuildDrag();
+    });
+    canvas.addEventListener("dblclick", (event) => {
+        activateProjectedCursorMouseMode(event);
     });
     canvas.addEventListener("wheel", (event) => {
         handleZoomWheel(event);
@@ -5699,6 +7318,7 @@
         return null;
     }
     window.addEventListener("keydown", (event) => {
+        if (state.startupMenuOpen) return;
         if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key && event.key.toLowerCase() === "f") {
             event.preventDefault();
             if (!event.repeat) toggleDebugFpsCounter();
@@ -5735,10 +7355,12 @@
         const movementKey = getTargetKeyboardControlKey(event);
         if (!movementKey) return;
         event.preventDefault();
+        if (TARGET_CURSOR_KEYS.has(movementKey)) deactivateProjectedCursorMouseMode();
         state.fastMovementHeld = event.shiftKey;
         state.pressedMovementKeys[movementKey] = true;
     });
     window.addEventListener("keyup", (event) => {
+        if (state.startupMenuOpen) return;
         if (event.code === "Space" || event.key === " ") {
             event.preventDefault();
             state.spaceHeld = false;
@@ -5772,9 +7394,11 @@
     });
     window.addEventListener("resize", resizeCanvas);
 
+    fetchSpellLevelDefinitions().catch((error) => {
+        console.error("[wizard of flatland spell levels] startup load failed", error);
+    });
     setSpeedScaleValue(SPEED_SCALE_DEFAULT);
     updateControlLabels();
-    createScenario();
-    updateStats();
-    requestAnimationFrame(tick);
+    setupStartupMenu();
+    resizeCanvas();
 })();

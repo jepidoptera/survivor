@@ -48,6 +48,7 @@ function loadMazeWorkerExports() {
             WALL_LABEL_SQUARE_SIDE_PARALLEL,
             WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL,
             WALL_LABEL_HALLWAY_SIDE_HALF,
+            WALL_LABEL_HALLWAY_SIDE_FULL,
             getMazeSquarePocketIncorporateChance,
             MAZE_DOOR_WIDTH,
             getMazeOutsideDoorOpening,
@@ -508,6 +509,41 @@ test("Wizard of Flatland opens one wall at three-hallway junctions", () => {
 
     assert.equal(neighborSegments.length, 1);
     assert.equal(neighborSegments[0].labelCode, api.WALL_LABEL_HALLWAY_SIDE_HALF);
+});
+
+test("Wizard of Flatland opens one wall at four-section hallway loops", () => {
+    const api = loadMazeWorkerExports();
+    const options = {
+        seed: "four-loop-0",
+        chunkSize: 44,
+        roomScale: 0.56,
+        twistiness: 0.62,
+        squarePocketIncorporateChance: 1
+    };
+    const room = api.buildMazeRoom(-2, -1, options);
+    const side = 5;
+
+    assert.equal(api.getMazeSharedHallConnection(-2, -1, 5, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(-2, -1, 0, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(-1, -2, 0, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(-1, -1, 5, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(-1, -2, 1, options, false).open, false);
+    const omissions = api.getMazeThreeHallwayJunctionWallOmissions(room, side, options);
+    assert.equal(omissions.left, false);
+    assert.equal(omissions.right, true);
+
+    const walls = api.createWallBufferBuilder();
+    api.appendMazeHalfHallwayToNeighbor(
+        walls,
+        room,
+        side,
+        api.getMazeSharedHallConnection(-2, -1, side, options, true),
+        options
+    );
+    const segments = wallSegments(api.finishWallBuffer(walls));
+
+    assert.equal(segments.length, 1);
+    assert.equal(segments[0].labelCode, api.WALL_LABEL_HALLWAY_SIDE_HALF);
 });
 
 test("Wizard of Flatland three-hallway omission clips against corner pocket back walls", () => {
@@ -1411,6 +1447,83 @@ test("Wizard of Flatland hallway connects to incorporated square pocket instead 
             "hallway should meet the pocket back wall at a right angle"
         );
     }
+});
+
+test("Wizard of Flatland square-pocket hallways honor three-hallway junction openings", () => {
+    const api = loadMazeWorkerExports();
+    const options = {
+        seed: "tri-pocket-5",
+        chunkSize: 44,
+        roomScale: 0.56,
+        twistiness: 0.62,
+        squarePocketIncorporateChance: 1
+    };
+    const room = api.buildMazeRoom(2, 0, options);
+    const side = 5;
+    const connection = api.getMazeSharedHallConnection(2, 0, side, options, true);
+    const target = api.getMazeSquarePocketHallwayTarget(room, side, options);
+    const omissions = api.getMazeThreeHallwayJunctionWallOmissions(room, side, options);
+
+    assert.ok(target, "test fixture should route the hallway into an incorporated square pocket");
+    assert.equal(omissions.left, false);
+    assert.equal(omissions.right, true);
+
+    const walls = api.createWallBufferBuilder();
+    api.appendMazeHalfHallwayToSquarePocket(walls, room, side, connection, target.pocket, options);
+    const segments = wallSegments(api.finishWallBuffer(walls));
+
+    assert.equal(segments.length, 1);
+    assert.equal(segments[0].labelCode, api.WALL_LABEL_HALLWAY_SIDE_FULL);
+    const span = api.getMazeSquarePocketOrthogonalHallwaySpan(room, side, connection, target.pocket);
+    assert.ok(
+        pointSegmentDistance(span.startGap.left.x, span.startGap.left.y, segments[0].ax, segments[0].ay, segments[0].bx, segments[0].by) < 0.00001,
+        "left hallway side should remain anchored at the room opening"
+    );
+    assert.ok(
+        pointSegmentDistance(span.startGap.right.x, span.startGap.right.y, segments[0].ax, segments[0].ay, segments[0].bx, segments[0].by) > 0.5,
+        "right hallway side should be omitted at the three-hallway junction"
+    );
+});
+
+test("Wizard of Flatland square-pocket hallways honor four-section loop openings", () => {
+    const api = loadMazeWorkerExports();
+    const options = {
+        seed: "four-loop-2",
+        chunkSize: 44,
+        roomScale: 0.56,
+        twistiness: 0.62,
+        squarePocketIncorporateChance: 1
+    };
+    const room = api.buildMazeRoom(1, -3, options);
+    const side = 0;
+    const connection = api.getMazeSharedHallConnection(1, -3, side, options, true);
+    const target = api.getMazeSquarePocketHallwayTarget(room, side, options);
+    const omissions = api.getMazeThreeHallwayJunctionWallOmissions(room, side, options);
+
+    assert.equal(api.getMazeSharedHallConnection(1, -3, 0, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(1, -3, 1, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(2, -3, 1, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(1, -2, 0, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(2, -3, 2, options, false).open, false);
+    assert.ok(target, "test fixture should route the four-section loop hallway into an incorporated square pocket");
+    assert.equal(omissions.left, false);
+    assert.equal(omissions.right, true);
+
+    const walls = api.createWallBufferBuilder();
+    api.appendMazeHalfHallwayToSquarePocket(walls, room, side, connection, target.pocket, options);
+    const segments = wallSegments(api.finishWallBuffer(walls));
+
+    assert.equal(segments.length, 1);
+    assert.equal(segments[0].labelCode, api.WALL_LABEL_HALLWAY_SIDE_FULL);
+    const span = api.getMazeSquarePocketOrthogonalHallwaySpan(room, side, connection, target.pocket);
+    assert.ok(
+        pointSegmentDistance(span.startGap.left.x, span.startGap.left.y, segments[0].ax, segments[0].ay, segments[0].bx, segments[0].by) < 0.00001,
+        "left square-pocket hallway side should remain anchored at the room opening"
+    );
+    assert.ok(
+        pointSegmentDistance(span.startGap.right.x, span.startGap.right.y, segments[0].ax, segments[0].ay, segments[0].bx, segments[0].by) > 0.5,
+        "right square-pocket hallway side should be omitted at the four-section loop"
+    );
 });
 
 function getWallGapEndpointsForTest(api, a, b, gapT, gapWidth) {

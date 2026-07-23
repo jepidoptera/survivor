@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Wizard of Flatland</title>
-    <link rel="stylesheet" href="/wizard-of-flatland/styles.css?v=wizard-of-flatland-35">
+    <link rel="stylesheet" href="/wizard-of-flatland/styles.css?v=wizard-of-flatland-38">
 </head>
 <body>
     <main class="app-shell">
@@ -33,12 +33,49 @@
                 </div>
             </div>
         </div>
+        <div id="levelUpAnnouncement" class="levelUpAnnouncement" aria-hidden="true">level up!</div>
+        <div id="startupMenu" class="startupMenu" role="dialog" aria-modal="true" aria-labelledby="startupMenuTitle">
+            <section class="startupPanel">
+                <h1 id="startupMenuTitle">Wizard of Flatland</h1>
+                <div id="startupModeView" class="startupView">
+                    <div class="startupButtonRow">
+                        <button id="startupNewButton" class="startupModeButton" type="button">New Game</button>
+                        <button id="startupLoadButton" class="startupModeButton" type="button">Load Game</button>
+                    </div>
+                </div>
+                <form id="startupNewForm" class="startupView hidden">
+                    <label class="startupFieldLabel" for="startupNewName">Name</label>
+                    <input id="startupNewName" class="startupTextInput" type="text" maxlength="40" autocomplete="off" spellcheck="false">
+                    <div id="startupNewValidation" class="startupValidation hidden"></div>
+                    <div class="startupFormButtons">
+                        <button id="startupNewBackButton" type="button">Back</button>
+                        <button class="startupPrimaryButton" type="submit">Start</button>
+                    </div>
+                </form>
+                <form id="startupLoadForm" class="startupView hidden">
+                    <div class="startupFieldLabel">Saved Games</div>
+                    <div id="startupLoadList" class="startupLoadList" role="listbox" aria-label="Saved games"></div>
+                    <p id="startupLoadEmpty" class="startupLoadEmpty hidden">No talisman checkpoint saves found.</p>
+                    <div id="startupLoadValidation" class="startupValidation hidden"></div>
+                    <div class="startupFormButtons">
+                        <button id="startupLoadBackButton" type="button">Back</button>
+                        <button id="startupLoadSubmitButton" class="startupPrimaryButton" type="submit">Load</button>
+                    </div>
+                </form>
+            </section>
+        </div>
+        <div id="spellLevelPanel" class="hidden" role="dialog" aria-label="Spell levels">
+            <div id="spellLevelHeader">level points 0</div>
+            <button id="spellLevelCloseButton" class="spellLevelCloseButton" type="button" aria-label="Close spell levels">x</button>
+            <div id="spellLevelList"></div>
+            <div id="spellLevelDetails"></div>
+        </div>
         <section class="workbench" aria-label="NPC movement solver workbench">
             <canvas id="solverCanvas"></canvas>
         </section>
     </main>
     <script src="/wizard-of-flatland/wallGeometry.js?v=wizard-of-flatland-1"></script>
     <script src="/wizard-of-flatland/debug.js?v=wizard-of-flatland-3"></script>
-    <script src="/wizard-of-flatland/main.js?v=wizard-of-flatland-116"></script>
+    <script src="/wizard-of-flatland/main.js?v=wizard-of-flatland-123"></script>
 </body>
 </html>

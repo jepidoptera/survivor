@@ -274,7 +274,7 @@ function appendMazeSectionWalls(walls, q, r, options) {
         if (isMazeHallwaySuppressedByIncomingSquarePocket(room, side, options)) continue;
         const squarePocketHallway = getMazeSquarePocketHallwayTarget(room, side, options);
         if (squarePocketHallway) {
-            appendMazeHalfHallwayToSquarePocket(walls, room, side, connection, squarePocketHallway.pocket);
+            appendMazeHalfHallwayToSquarePocket(walls, room, side, connection, squarePocketHallway.pocket, options);
             continue;
         }
         appendMazeHalfHallwayToNeighbor(walls, room, side, connection, options);
@@ -1865,6 +1865,11 @@ function isMazeRoomSideDefaultHex(room, side, options) {
 }
 
 function shouldOpenMazeThreeHallwayJunctionAtCorner(room, cornerIndex, omittedSide, options) {
+    return shouldOpenMazeThreeSectionHallwayLoopAtCorner(room, cornerIndex, omittedSide, options)
+        || shouldOpenMazeFourSectionHallwayLoopAtCorner(room, cornerIndex, omittedSide, options);
+}
+
+function shouldOpenMazeThreeSectionHallwayLoopAtCorner(room, cornerIndex, omittedSide, options) {
     const sideBefore = (cornerIndex + 5) % 6;
     const sideAfter = cornerIndex;
     if (omittedSide !== sideBefore) return false;
@@ -1882,6 +1887,22 @@ function shouldOpenMazeThreeHallwayJunctionAtCorner(room, cornerIndex, omittedSi
         mazeSectionKey(room.q + afterDir.q, room.r + afterDir.r)
     ].sort();
     return room.key === keys[0];
+}
+
+function shouldOpenMazeFourSectionHallwayLoopAtCorner(room, cornerIndex, omittedSide, options) {
+    const sideBefore = (cornerIndex + 5) % 6;
+    const sideAfter = cornerIndex;
+    if (omittedSide !== sideBefore) return false;
+    if (!isMazeSharedHallOpen(room.q, room.r, sideBefore, options)) return false;
+    if (!isMazeSharedHallOpen(room.q, room.r, sideAfter, options)) return false;
+    const beforeDir = MAZE_SECTION_DIRECTIONS[sideBefore];
+    const afterDir = MAZE_SECTION_DIRECTIONS[sideAfter];
+    if (!beforeDir || !afterDir) throw new Error("Wizard of Flatland maze four-section hallway loop requires valid adjacent sides");
+    if (!isMazeSharedHallOpen(room.q + beforeDir.q, room.r + beforeDir.r, sideAfter, options)) return false;
+    if (!isMazeSharedHallOpen(room.q + afterDir.q, room.r + afterDir.r, sideBefore, options)) return false;
+
+    const diagonalKey = mazeSectionKey(room.q + beforeDir.q + afterDir.q, room.r + beforeDir.r + afterDir.r);
+    return room.key === [room.key, diagonalKey].sort()[0];
 }
 
 function getMazeDirectionSide(q, r) {
@@ -1940,10 +1961,20 @@ function appendHalfHallwaySideWall(walls, start, end, sectionCorners) {
     appendSegmentWall(walls, start.x, start.y, clippedEnd.x, clippedEnd.y, WALL_LABEL_HALLWAY_SIDE_HALF);
 }
 
-function appendMazeHalfHallwayToSquarePocket(walls, room, side, connection, pocket) {
+function appendMazeHalfHallwayToSquarePocket(walls, room, side, connection, pocket, options = null) {
     const span = getMazeSquarePocketOrthogonalHallwaySpan(room, side, connection, pocket);
-    appendFullHallwaySideWall(walls, span.startGap.left, span.leftPoint, room.sectionCorners);
-    appendFullHallwaySideWall(walls, span.startGap.right, span.rightPoint, room.sectionCorners);
+    const omissions = options
+        ? getMazeThreeHallwayJunctionWallOmissions(room, side, options)
+        : { left: false, right: false };
+    if (!omissions.left) appendFullHallwaySideWall(walls, span.startGap.left, span.leftPoint, room.sectionCorners);
+    appendFullHallwaySideWallWithJunctionOmission(
+        walls,
+        span.startGap.right,
+        span.rightPoint,
+        room,
+        side,
+        omissions.right
+    );
 }
 
 function appendFullHallwaySideWall(walls, start, end, sectionCorners) {
@@ -1955,6 +1986,24 @@ function appendFullHallwaySideWall(walls, start, end, sectionCorners) {
     );
     if (Math.hypot(clippedEnd.x - start.x, clippedEnd.y - start.y) <= 0.5) return;
     appendSegmentWall(walls, start.x, start.y, clippedEnd.x, clippedEnd.y, WALL_LABEL_HALLWAY_SIDE_FULL);
+}
+
+function appendFullHallwaySideWallWithJunctionOmission(walls, start, end, room, side, omitForJunction) {
+    if (!omitForJunction) {
+        appendFullHallwaySideWall(walls, start, end, room.sectionCorners);
+        return;
+    }
+    const clippedEnd = shortenSegmentEndToPolygon(
+        start,
+        end,
+        room.sectionCorners,
+        "Wizard of Flatland maze omitted square-pocket hallway wall"
+    );
+    const cornerIndex = (side + 1) % 6;
+    const clipPoint = getMazeHallwayWallCornerPocketClipPoint(room, cornerIndex, side, start, clippedEnd);
+    if (!clipPoint) return;
+    if (Math.hypot(clipPoint.x - start.x, clipPoint.y - start.y) <= 0.5) return;
+    appendSegmentWall(walls, start.x, start.y, clipPoint.x, clipPoint.y, WALL_LABEL_HALLWAY_SIDE_FULL);
 }
 
 function getWallGapEndpointsForConnection(a, b, connection) {
