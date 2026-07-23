@@ -59,7 +59,7 @@ function loadPyramidRoomExports() {
         extractFunction(mazePopulationSource, "validateMazeRoomEnemyBudgetSectionKey", "mazePopulation.js"),
         extractFunction(mazePopulationSource, "getMazeRoomMaxEnemyCount", "mazePopulation.js"),
         extractFunction(mazePopulationSource, "getMazeRoomEnemyCount", "mazePopulation.js"),
-        extractFunction(source, "createMazeCoinsForSection"),
+        extractFunction(mazePopulationSource, "createMazeCoinsForSection", "mazePopulation.js"),
         "globalThis.__testExports = { PYRAMID_FIRST_ROOM_DISTANCE, PYRAMID_ROOM_DISTANCE_STEP, getMazePyramidRoomDistance, isMazePyramidRoomSectionKey, getMazeRoomEnemyCount, createMazeCoinsForSection };"
     ];
     const context = { Math, Number, String };
