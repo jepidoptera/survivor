@@ -65,6 +65,8 @@
         TARGET_PROJECTED_CURSOR_MAX_DISTANCE - TARGET_PROJECTED_CURSOR_DISTANCE,
         TARGET_PROJECTED_CURSOR_DISTANCE - TARGET_PROJECTED_CURSOR_MIN_DISTANCE
     ) / TARGET_CURSOR_DISTANCE_RETURN_SECONDS;
+    const SPELL_COOLDOWN_RING_RADIUS = 13;
+    const SPELL_COOLDOWN_RING_CIRCUMFERENCE = 2 * Math.PI * SPELL_COOLDOWN_RING_RADIUS;
     const FIREBALL_EXPLOSION_VISUAL_SECONDS = 0.16;
     const FIREBALL_ANIMATION_TEXTURE_PATH = "/wizard-of-flatland/hi-fi-fireball.png";
     const FIREBALL_ANIMATION_FRAME_COLUMNS = 5;
@@ -237,6 +239,9 @@
     const expBar = document.getElementById("expBar");
     const expCounter = document.getElementById("expCounter");
     const expLevelUpButton = document.getElementById("expLevelUpButton");
+    const fireballCooldownRing = document.getElementById("fireballCooldownRing");
+    const fireballCooldownRingOutline = document.getElementById("fireballCooldownRingOutline");
+    const fireballCooldownRingArc = document.getElementById("fireballCooldownRingArc");
     const levelUpAnnouncement = document.getElementById("levelUpAnnouncement");
     const spellLevelPanel = document.getElementById("spellLevelPanel");
     const spellLevelHeader = document.getElementById("spellLevelHeader");
@@ -257,7 +262,6 @@
     const startupLoadValidation = document.getElementById("startupLoadValidation");
     const startupNewBackButton = document.getElementById("startupNewBackButton");
     const startupLoadBackButton = document.getElementById("startupLoadBackButton");
-    let speedScaleControlValue = speedScaleInput ? Number(speedScaleInput.value) : 0.5;
     let spellLevelDefinitions = null;
     let spellLevelFetchPromise = null;
     let selectedSpellLevelId = "fireball";
@@ -289,6 +293,27 @@
         profilerSummary: document.getElementById("profilerSummary"),
         profilerRows: document.getElementById("profilerRows")
     };
+    const wallBufferApi = getWizardFlatlandWallBufferApi();
+    const createEmptyWallBuffer = wallBufferApi.createEmptyWallBuffer;
+    const getWallCount = wallBufferApi.getWallCount;
+    const validateWallBuffer = wallBufferApi.validateWallBuffer;
+    const appendWallSegment = wallBufferApi.appendWallSegment;
+    const concatWallBuffers = wallBufferApi.concatWallBuffers;
+    const cloneWallBuffer = wallBufferApi.cloneWallBuffer;
+    const mathApi = getWizardFlatlandMathApi();
+    const hashString = mathApi.hashString;
+    const seededRandom = mathApi.seededRandom;
+    const getHexCornersWorld = mathApi.getHexCornersWorld;
+    const isEvenGridColumn = mathApi.isEvenGridColumn;
+    const moveToward = mathApi.moveToward;
+    const normalizeAngle = mathApi.normalizeAngle;
+    const shortestAngleDelta = mathApi.shortestAngleDelta;
+    const squareDistance = mathApi.squareDistance;
+    const rotatePoint = mathApi.rotatePoint;
+    const segmentIntersectionParameters = mathApi.segmentIntersectionParameters;
+    const pointProjectionParameter = mathApi.pointProjectionParameter;
+    const pointSegmentDistance = mathApi.pointSegmentDistance;
+    const segmentRepulsionNormal = mathApi.segmentRepulsionNormal;
 
     const state = {
         running: true,
@@ -344,6 +369,7 @@
             fireball: 1
         },
         fireballCooldownRemaining: 0,
+        fireballCooldownDuration: 0,
         levelPoints: 0,
         targetTravelVector: { x: 0, y: 0 },
         lastSentTarget: { x: 0, y: 0 },
@@ -417,6 +443,46 @@
     };
     state.hexGridLayer.ctx = state.hexGridLayer.canvas.getContext("2d");
     state.nodeLayer.ctx = state.nodeLayer.canvas.getContext("2d");
+    const controlSystem = getWizardFlatlandControlsApi().createControlSystem({
+        state,
+        labels,
+        elements: {
+            agentCountInput,
+            separationInput,
+            speedScaleInput,
+            scenarioSelect,
+            mazeSeedInput,
+            mazeChunkSizeInput,
+            mazeRoomScaleInput,
+            mazeTwistinessInput
+        },
+        constants: {
+            SPEED_SCALE_MIN,
+            SPEED_SCALE_MAX,
+            DEFAULT_AGENT_COUNT,
+            DEFAULT_SEPARATION_STRENGTH,
+            DEFAULT_SCENARIO,
+            MAZE_CHUNK_MIN_SIZE,
+            MAZE_CHUNK_MAX_SIZE,
+            DEFAULT_MAZE_CHUNK_SIZE,
+            DEFAULT_MAZE_SEED,
+            DEFAULT_MAZE_ROOM_SCALE,
+            DEFAULT_MAZE_TWISTINESS
+        },
+        setLabelText
+    });
+    const updateControlLabels = controlSystem.updateControlLabels;
+    const getSpeedScale = controlSystem.getSpeedScale;
+    const setSpeedScaleValue = controlSystem.setSpeedScaleValue;
+    const getAgentCount = controlSystem.getAgentCount;
+    const getSeparationStrength = controlSystem.getSeparationStrength;
+    const getScenarioValue = controlSystem.getScenarioValue;
+    const getMazeChunkSize = controlSystem.getMazeChunkSize;
+    const getMazeSeed = controlSystem.getMazeSeed;
+    const getMazeRoomScale = controlSystem.getMazeRoomScale;
+    const getMazeTwistiness = controlSystem.getMazeTwistiness;
+    const getMazeOptions = controlSystem.getMazeOptions;
+    const isProceduralMazeScenario = controlSystem.isProceduralMazeScenario;
     const profiler = createWizardOfFlatlandProfiler();
     attachWizardOfFlatlandDebugGlobals(state, profiler);
 
@@ -441,6 +507,53 @@
 
     function setLabelText(label, text) {
         if (label) label.textContent = text;
+    }
+
+    function getWizardFlatlandWallBufferApi() {
+        const api = window.WizardFlatlandWallBuffer;
+        if (
+            !api ||
+            typeof api.createEmptyWallBuffer !== "function" ||
+            typeof api.getWallCount !== "function" ||
+            typeof api.validateWallBuffer !== "function" ||
+            typeof api.appendWallSegment !== "function" ||
+            typeof api.concatWallBuffers !== "function" ||
+            typeof api.cloneWallBuffer !== "function"
+        ) {
+            throw new Error("Wizard of Flatland requires /wizard-of-flatland/wallBuffer.js");
+        }
+        return api;
+    }
+
+    function getWizardFlatlandMathApi() {
+        const api = window.WizardFlatlandMath;
+        if (
+            !api ||
+            typeof api.hashString !== "function" ||
+            typeof api.seededRandom !== "function" ||
+            typeof api.getHexCornersWorld !== "function" ||
+            typeof api.isEvenGridColumn !== "function" ||
+            typeof api.moveToward !== "function" ||
+            typeof api.normalizeAngle !== "function" ||
+            typeof api.shortestAngleDelta !== "function" ||
+            typeof api.squareDistance !== "function" ||
+            typeof api.rotatePoint !== "function" ||
+            typeof api.segmentIntersectionParameters !== "function" ||
+            typeof api.pointProjectionParameter !== "function" ||
+            typeof api.pointSegmentDistance !== "function" ||
+            typeof api.segmentRepulsionNormal !== "function"
+        ) {
+            throw new Error("Wizard of Flatland requires /wizard-of-flatland/flatlandMath.js");
+        }
+        return api;
+    }
+
+    function getWizardFlatlandControlsApi() {
+        const api = window.WizardFlatlandControls;
+        if (!api || typeof api.createControlSystem !== "function") {
+            throw new Error("Wizard of Flatland requires /wizard-of-flatland/controls.js");
+        }
+        return api;
     }
 
     function validateWizardVitals() {
@@ -514,6 +627,45 @@
         expBar.style.width = `${expRatio * 100}%`;
         expCounter.textContent = `${Math.floor(state.wizardVitals.exp)}/${state.wizardVitals.maxExp}`;
         expLevelUpButton.classList.toggle("hidden", state.levelPoints <= 0);
+        updateSpellCooldownHud();
+    }
+
+    function validateSpellCooldownHud() {
+        if (!fireballCooldownRing || !fireballCooldownRingOutline || !fireballCooldownRingArc) {
+            throw new Error("Wizard of Flatland fireball cooldown ring DOM is missing");
+        }
+    }
+
+    function setSpellCooldownRingProgress(ratio) {
+        const progress = Number(ratio);
+        if (!Number.isFinite(progress) || progress < 0 || progress > 1) {
+            throw new Error("Wizard of Flatland fireball cooldown ring requires a normalized progress");
+        }
+        const dashOffset = SPELL_COOLDOWN_RING_CIRCUMFERENCE * (1 - progress);
+        for (const circle of [fireballCooldownRingOutline, fireballCooldownRingArc]) {
+            circle.style.strokeDasharray = `${SPELL_COOLDOWN_RING_CIRCUMFERENCE}`;
+            circle.style.strokeDashoffset = `${dashOffset}`;
+        }
+    }
+
+    function updateSpellCooldownHud() {
+        validateSpellCooldownHud();
+        if (!Number.isFinite(state.fireballCooldownRemaining)) {
+            throw new Error("Wizard of Flatland fireball cooldown HUD requires finite remaining time");
+        }
+        if (state.fireballCooldownRemaining <= 0) {
+            state.fireballCooldownRemaining = 0;
+            state.fireballCooldownDuration = 0;
+            setSpellCooldownRingProgress(0);
+            fireballCooldownRing.classList.add("hidden");
+            return;
+        }
+        if (!(state.fireballCooldownDuration > 0)) {
+            throw new Error("Wizard of Flatland fireball cooldown HUD requires a positive duration while cooling down");
+        }
+        const ratio = Math.max(0, Math.min(1, state.fireballCooldownRemaining / state.fireballCooldownDuration));
+        setSpellCooldownRingProgress(ratio);
+        fireballCooldownRing.classList.remove("hidden");
     }
 
     function playLevelUpAnnouncement() {
@@ -897,12 +1049,6 @@
         updateStatusBars();
     }
 
-    function getControlNumber(input, fallback) {
-        if (!input) return fallback;
-        const value = Number(input.value);
-        return Number.isFinite(value) ? value : fallback;
-    }
-
     function getWizardOfFlatlandDebugApi() {
         if (typeof window === "undefined" || !window.WizardOfFlatlandDebug) {
             throw new Error("Wizard of Flatland requires /wizard-of-flatland/debug.js");
@@ -1145,72 +1291,6 @@
         return api;
     }
 
-    function updateControlLabels() {
-        setLabelText(labels.agentCount, String(getAgentCount()));
-        setLabelText(labels.separationStrength, getSeparationStrength().toFixed(1));
-        setLabelText(labels.speedScale, getSpeedScale().toFixed(2));
-        setLabelText(labels.mazeChunkSize, String(getMazeChunkSize()));
-        setLabelText(labels.mazeRoomScale, getMazeRoomScale().toFixed(2));
-        setLabelText(labels.mazeTwistiness, getMazeTwistiness().toFixed(2));
-    }
-
-    function getSpeedScale() {
-        const t = Math.max(0, Math.min(1, getControlNumber(speedScaleInput, speedScaleControlValue)));
-        return SPEED_SCALE_MIN * Math.pow(SPEED_SCALE_MAX / SPEED_SCALE_MIN, t);
-    }
-
-    function setSpeedScaleValue(value) {
-        const scale = Math.max(SPEED_SCALE_MIN, Math.min(SPEED_SCALE_MAX, Number(value)));
-        const t = Math.log(scale / SPEED_SCALE_MIN) / Math.log(SPEED_SCALE_MAX / SPEED_SCALE_MIN);
-        speedScaleControlValue = Math.max(0, Math.min(1, t));
-        if (speedScaleInput) speedScaleInput.value = String(speedScaleControlValue);
-    }
-
-    function getAgentCount() {
-        return Math.max(0, Math.round(getControlNumber(agentCountInput, DEFAULT_AGENT_COUNT)));
-    }
-
-    function getSeparationStrength() {
-        return getControlNumber(separationInput, DEFAULT_SEPARATION_STRENGTH);
-    }
-
-    function getScenarioValue() {
-        return scenarioSelect ? scenarioSelect.value : DEFAULT_SCENARIO;
-    }
-
-    function getMazeChunkSize() {
-        return Math.max(
-            MAZE_CHUNK_MIN_SIZE,
-            Math.min(MAZE_CHUNK_MAX_SIZE, Math.round(getControlNumber(mazeChunkSizeInput, DEFAULT_MAZE_CHUNK_SIZE)))
-        );
-    }
-
-    function getMazeSeed() {
-        const seed = String(mazeSeedInput ? mazeSeedInput.value : state.mazeSeed).trim();
-        return seed.length > 0 ? seed : DEFAULT_MAZE_SEED;
-    }
-
-    function getMazeRoomScale() {
-        return Math.max(0, Math.min(1, getControlNumber(mazeRoomScaleInput, DEFAULT_MAZE_ROOM_SCALE)));
-    }
-
-    function getMazeTwistiness() {
-        return Math.max(0, Math.min(1, getControlNumber(mazeTwistinessInput, DEFAULT_MAZE_TWISTINESS)));
-    }
-
-    function getMazeOptions() {
-        return {
-            seed: getMazeSeed(),
-            chunkSize: getMazeChunkSize(),
-            roomScale: getMazeRoomScale(),
-            twistiness: getMazeTwistiness()
-        };
-    }
-
-    function isProceduralMazeScenario() {
-        return getScenarioValue() === "proceduralMaze";
-    }
-
     function normalizeStartupPlayerName(name) {
         return String(name || "").trim();
     }
@@ -1425,24 +1505,6 @@
                 setStartupValidation(startupLoadValidation, error && error.message ? error.message : String(error));
             }
         });
-    }
-
-    function hashString(value) {
-        const text = String(value || "");
-        let hash = 2166136261;
-        for (let i = 0; i < text.length; i++) {
-            hash ^= text.charCodeAt(i);
-            hash = Math.imul(hash, 16777619);
-        }
-        return hash >>> 0;
-    }
-
-    function seededRandom(seed) {
-        let stateValue = seed >>> 0;
-        return function nextRandom() {
-            stateValue = (Math.imul(stateValue, 1664525) + 1013904223) >>> 0;
-            return stateValue / 4294967296;
-        };
     }
 
     function isUsableWallSegment(ax, ay, bx, by) {
@@ -1922,72 +1984,6 @@
             indexByKey.set(key, pathIndex);
         }
         return indexByKey;
-    }
-
-    function createEmptyWallBuffer() {
-        return new Float32Array(0);
-    }
-
-    function getWallCount(walls) {
-        validateWallBuffer(walls, "walls");
-        return walls.length / WALL_STRIDE;
-    }
-
-    function validateWallBuffer(walls, label) {
-        if (!(walls instanceof Float32Array)) throw new Error(`Wizard of Flatland ${label} must be a wall buffer`);
-        if (walls.length % WALL_STRIDE !== 0) throw new Error(`Wizard of Flatland ${label} has an invalid wall stride`);
-    }
-
-    function appendWallSegment(walls, ax, ay, bx, by, labelCode, sideCode = -1) {
-        validateWallSegment(ax, ay, bx, by);
-        validateWallLabelCode(labelCode, sideCode);
-        const next = new Float32Array(walls.length + WALL_STRIDE);
-        next.set(walls);
-        writeWallSegment(next, walls.length, ax, ay, bx, by, labelCode, sideCode);
-        return next;
-    }
-
-    function concatWallBuffers(left, right) {
-        validateWallBuffer(left, "left wall buffer");
-        validateWallBuffer(right, "right wall buffer");
-        const out = new Float32Array(left.length + right.length);
-        out.set(left);
-        out.set(right, left.length);
-        return out;
-    }
-
-    function cloneWallBuffer(walls, label = "wall buffer") {
-        validateWallBuffer(walls, label);
-        return walls.slice();
-    }
-
-    function writeWallSegment(walls, base, ax, ay, bx, by, labelCode, sideCode) {
-        walls[base + WALL_X1] = ax;
-        walls[base + WALL_Y1] = ay;
-        walls[base + WALL_X2] = bx;
-        walls[base + WALL_Y2] = by;
-        walls[base + WALL_LABEL_CODE] = labelCode;
-        walls[base + WALL_LABEL_SIDE] = sideCode;
-        walls[base + 6] = 0;
-        walls[base + 7] = 0;
-    }
-
-    function validateWallLabelCode(labelCode, sideCode) {
-        if (!Number.isInteger(labelCode) || labelCode <= 0) {
-            throw new Error("Wizard of Flatland wall segment requires a label code");
-        }
-        if (!Number.isInteger(sideCode)) {
-            throw new Error("Wizard of Flatland wall segment requires a side code");
-        }
-    }
-
-    function validateWallSegment(ax, ay, bx, by) {
-        if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) {
-            throw new Error("Wizard of Flatland wall segment requires finite coordinates");
-        }
-        if (Math.hypot(bx - ax, by - ay) <= 0.001) {
-            throw new Error("Wizard of Flatland wall segment requires separated endpoints");
-        }
     }
 
     function removeFurthestGeneratedMazeSection(options, protectedKeys) {
@@ -2606,18 +2602,6 @@
         return true;
     }
 
-    function getHexCornersWorld(cx, cy, radius) {
-        const corners = [];
-        for (let i = 0; i < 6; i++) {
-            const angle = (-30 + i * 60) * Math.PI / 180;
-            corners.push({
-                x: cx + Math.cos(angle) * radius,
-                y: cy + Math.sin(angle) * radius
-            });
-        }
-        return corners;
-    }
-
     function addSegmentWall(ax, ay, bx, by) {
         if (!isUsableWallSegment(ax, ay, bx, by)) return false;
         if (isProceduralMazeScenario()) {
@@ -2644,6 +2628,7 @@
         state.fireballs = [];
         state.fireballExplosions = [];
         state.fireballCooldownRemaining = 0;
+        state.fireballCooldownDuration = 0;
         resetWizardVitals();
         state.coins = [];
         state.collectedCoinKeys = new Set();
@@ -2973,6 +2958,7 @@
         state.fireballs = [];
         state.fireballExplosions = [];
         state.fireballCooldownRemaining = 0;
+        state.fireballCooldownDuration = 0;
         state.coins = [];
         state.collectedCoinKeys = new Set();
         state.collectedCoinSectionKeysByCoinKey = new Map();
@@ -3963,17 +3949,6 @@
         return 1 + ramp * (multiplier - 1);
     }
 
-    function moveToward(value, target, maxDelta) {
-        const current = Number(value);
-        const goal = Number(target);
-        const delta = Number(maxDelta);
-        if (!Number.isFinite(current) || !Number.isFinite(goal) || !Number.isFinite(delta)) {
-            throw new Error("Wizard of Flatland moveToward requires finite values");
-        }
-        if (Math.abs(goal - current) <= delta) return goal;
-        return current + Math.sign(goal - current) * delta;
-    }
-
     function shootFireball() {
         if (state.fireballCooldownRemaining > 0) return;
         const cursorPoint = getCurrentProjectedCursorWorldPoint();
@@ -3986,6 +3961,8 @@
         const dirX = dx / length;
         const dirY = dy / length;
         state.fireballCooldownRemaining = fireballStats.cooldown;
+        state.fireballCooldownDuration = fireballStats.cooldown;
+        updateSpellCooldownHud();
         state.fireballs.push({
             x: state.target.x + dirX * (TARGET_RADIUS + fireballStats.projectileRadius),
             y: state.target.y + dirY * (TARGET_RADIUS + fireballStats.projectileRadius),
@@ -4004,6 +3981,7 @@
     function updateSpellCooldowns(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
         state.fireballCooldownRemaining = Math.max(0, state.fireballCooldownRemaining - dt);
+        updateSpellCooldownHud();
     }
 
     function updateFireballs(dt) {
@@ -4897,17 +4875,6 @@
             returned <= HEADING_GLITCH_RETURN_THRESHOLD;
     }
 
-    function normalizeAngle(angle) {
-        let out = angle;
-        while (out <= -Math.PI) out += Math.PI * 2;
-        while (out > Math.PI) out -= Math.PI * 2;
-        return out;
-    }
-
-    function shortestAngleDelta(from, to) {
-        return normalizeAngle(to - from);
-    }
-
     function logAgentHeadingGlitch(agent) {
         const history = agent.headingHistory.map((entry) => ({
             frame: entry.frame,
@@ -5221,12 +5188,6 @@
             throw new Error("Wizard of Flatland path node grid lookup requires integer coordinates");
         }
         return getPathfindingNodeIndexForKey(pathfindingNodeKey(xindex, yindex));
-    }
-
-    function squareDistance(ax, ay, bx, by) {
-        const dx = bx - ax;
-        const dy = by - ay;
-        return dx * dx + dy * dy;
     }
 
     function advanceAgentPathCursor(agent) {
@@ -5801,10 +5762,6 @@
 
         gridCtx.restore();
         layer.dirty = false;
-    }
-
-    function isEvenGridColumn(col) {
-        return Math.abs(col % 2) === 0;
     }
 
     function rebuildPathfindingNodeLayer() {
@@ -6519,8 +6476,6 @@
             (_, i) => rotatePoint(Math.cos((i * 72 + 18) * Math.PI / 180) * cursorSize * 0.5, Math.sin((i * 72 + 18) * Math.PI / 180) * cursorSize * 0.5, cursorHeading)
         );
 
-        ctx.strokeStyle = "#44aaff";
-        ctx.lineWidth = 2;
         ctx.lineJoin = "round";
         ctx.lineCap = "round";
         ctx.beginPath();
@@ -6529,7 +6484,14 @@
             ctx.lineTo(projected.x + fivepoints[i].x, projected.y + fivepoints[i].y);
             ctx.lineTo(projected.x + tenpoints[i * 2 + 1].x, projected.y + tenpoints[i * 2 + 1].y);
         }
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 6;
         ctx.stroke();
+        ctx.strokeStyle = "#44aaff";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(projected.x - 1.5, projected.y - 1.5, 3, 3);
         ctx.fillStyle = "#44aaff";
         ctx.fillRect(projected.x - 0.5, projected.y - 0.5, 1, 1);
     }
@@ -6736,15 +6698,6 @@
         const turnRadius = getProjectedCursorTurnRadius(distance, bendRatio);
         if (!Number.isFinite(turnRadius)) return 0;
         return Math.sign(bendRatio) * Math.max(0, distance) / turnRadius;
-    }
-
-    function rotatePoint(x, y, angle) {
-        const cos = Math.cos(angle);
-        const sin = Math.sin(angle);
-        return {
-            x: x * cos - y * sin,
-            y: x * sin + y * cos
-        };
     }
 
     function drawCombatRing() {
@@ -7452,51 +7405,6 @@
             if (!best || candidate.distance < best.distance) best = candidate;
         }
         return best;
-    }
-
-    function segmentIntersectionParameters(ax, ay, bx, by, cx, cy, dx, dy) {
-        const rx = bx - ax;
-        const ry = by - ay;
-        const sx = dx - cx;
-        const sy = dy - cy;
-        const denominator = rx * sy - ry * sx;
-        if (Math.abs(denominator) <= 0.000001) return null;
-        const qpx = cx - ax;
-        const qpy = cy - ay;
-        const t = (qpx * sy - qpy * sx) / denominator;
-        const u = (qpx * ry - qpy * rx) / denominator;
-        if (t < 0 || t > 1 || u < 0 || u > 1) return null;
-        return { t, u };
-    }
-
-    function pointProjectionParameter(px, py, ax, ay, bx, by) {
-        const dx = bx - ax;
-        const dy = by - ay;
-        const lengthSq = dx * dx + dy * dy;
-        if (lengthSq <= 0.000001) return 0;
-        return ((px - ax) * dx + (py - ay) * dy) / lengthSq;
-    }
-
-    function pointSegmentDistance(px, py, ax, ay, bx, by) {
-        const t = Math.max(0, Math.min(1, pointProjectionParameter(px, py, ax, ay, bx, by)));
-        const closestX = ax + (bx - ax) * t;
-        const closestY = ay + (by - ay) * t;
-        return Math.hypot(px - closestX, py - closestY);
-    }
-
-    function segmentRepulsionNormal(px, py, ax, ay, bx, by) {
-        const t = Math.max(0, Math.min(1, pointProjectionParameter(px, py, ax, ay, bx, by)));
-        const closestX = ax + (bx - ax) * t;
-        const closestY = ay + (by - ay) * t;
-        let nx = px - closestX;
-        let ny = py - closestY;
-        const length = Math.hypot(nx, ny);
-        if (length > 0.000001) return { x: nx / length, y: ny / length };
-        const wallDx = bx - ax;
-        const wallDy = by - ay;
-        const wallLength = Math.hypot(wallDx, wallDy);
-        if (wallLength <= 0.000001) return { x: 1, y: 0 };
-        return { x: -wallDy / wallLength, y: wallDx / wallLength };
     }
 
     function tick(now) {

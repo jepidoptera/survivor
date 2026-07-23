@@ -5,10 +5,11 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const MAIN_PATH = path.join(__dirname, "../public/wizard-of-flatland/main.js");
+const MATH_PATH = path.join(__dirname, "../public/wizard-of-flatland/flatlandMath.js");
 
-function extractFunction(source, name) {
+function extractFunction(source, name, sourceLabel = "main.js") {
     const start = source.indexOf(`function ${name}(`);
-    assert.notEqual(start, -1, `${name} exists in main.js`);
+    assert.notEqual(start, -1, `${name} exists in ${sourceLabel}`);
     const bodyStart = source.indexOf("{", start);
     let depth = 0;
     for (let i = bodyStart; i < source.length; i++) {
@@ -27,6 +28,7 @@ function extractConst(source, name) {
 
 function loadEnemyBudgetExports() {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const mathSource = fs.readFileSync(MATH_PATH, "utf8");
     const pieces = [
         extractConst(source, "MAZE_ROOM_EMPTY_ENEMY_CHANCE"),
         extractConst(source, "MAZE_ROOM_MAX_ENEMY_CHANCE"),
@@ -38,8 +40,8 @@ function loadEnemyBudgetExports() {
         extractConst(source, "PYRAMID_FIRST_ROOM_DISTANCE"),
         extractConst(source, "PYRAMID_ROOM_DISTANCE_STEP"),
         "const MAZE_SECTION_DIRECTIONS = [{ q: 1, r: 0 }, { q: 0, r: 1 }, { q: -1, r: 1 }, { q: -1, r: 0 }, { q: 0, r: -1 }, { q: 1, r: -1 }];",
-        extractFunction(source, "hashString"),
-        extractFunction(source, "seededRandom"),
+        extractFunction(mathSource, "hashString", "flatlandMath.js"),
+        extractFunction(mathSource, "seededRandom", "flatlandMath.js"),
         extractFunction(source, "validateMazeRoomEnemyBudgetSectionKey"),
         extractFunction(source, "parseMazeSectionKey"),
         extractFunction(source, "isMazePyramidRoomSectionKey"),

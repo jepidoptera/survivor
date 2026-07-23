@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Wizard of Flatland</title>
-    <link rel="stylesheet" href="/wizard-of-flatland/styles.css?v=wizard-of-flatland-38">
+    <link rel="stylesheet" href="/wizard-of-flatland/styles.css?v=wizard-of-flatland-39">
 </head>
 <body>
     <main class="app-shell">
@@ -18,8 +18,12 @@
                 </div>
             </div>
             <div class="statusBar">
-                <div class="statusIcon" aria-hidden="true">
+                <div id="fireballStatusIcon" class="statusIcon spellStatusIcon" aria-hidden="true">
                     <img src="/assets/images/thumbnails/fireball.png" alt="">
+                    <svg id="fireballCooldownRing" class="spellCooldownRing hidden" viewBox="0 0 32 32" focusable="false" aria-hidden="true">
+                        <circle id="fireballCooldownRingOutline" class="spellCooldownRingOutline" cx="16" cy="16" r="13"></circle>
+                        <circle id="fireballCooldownRingArc" class="spellCooldownRingArc" cx="16" cy="16" r="13"></circle>
+                    </svg>
                 </div>
                 <div class="statusBar-background">
                     <div id="magicBar" class="statusBar-fill"></div>
@@ -75,7 +79,10 @@
         </section>
     </main>
     <script src="/wizard-of-flatland/wallGeometry.js?v=wizard-of-flatland-1"></script>
+    <script src="/wizard-of-flatland/wallBuffer.js?v=wizard-of-flatland-1"></script>
+    <script src="/wizard-of-flatland/flatlandMath.js?v=wizard-of-flatland-1"></script>
+    <script src="/wizard-of-flatland/controls.js?v=wizard-of-flatland-1"></script>
     <script src="/wizard-of-flatland/debug.js?v=wizard-of-flatland-3"></script>
-    <script src="/wizard-of-flatland/main.js?v=wizard-of-flatland-125"></script>
+    <script src="/wizard-of-flatland/main.js?v=wizard-of-flatland-126"></script>
 </body>
 </html>
