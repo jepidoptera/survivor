@@ -356,6 +356,31 @@
     const worldToMazeSectionCoord = mazeSectionSystem.worldToMazeSectionCoord;
     const getMazeSectionRing = mazeSectionSystem.getMazeSectionRing;
     const getMazeSectionPolygonForCoord = mazeSectionSystem.getMazeSectionPolygonForCoord;
+    const mazePopulationSystem = getWizardFlatlandMazePopulationApi().createMazePopulationSystem({
+        constants: {
+            MAZE_ROOM_EMPTY_ENEMY_CHANCE,
+            MAZE_ROOM_MAX_ENEMY_CHANCE,
+            MAZE_ROOM_BASE_ENEMY_CAP,
+            MAZE_ROOM_BASE_ENEMY_CAP_RING,
+            MAZE_ROOM_ENEMY_DISTRIBUTION_POWER,
+            ENEMY_SCALE_RING_INTERVAL,
+            ENEMY_SCALE_INCREMENT
+        },
+        math: {
+            hashString,
+            seededRandom
+        },
+        mazeSections: {
+            isMazePyramidRoomSectionKey,
+            isMazeInitialSafeSectionKey,
+            parseMazeSectionKey,
+            getMazeSectionRing
+        }
+    });
+    const validateMazeRoomEnemyBudgetSectionKey = mazePopulationSystem.validateMazeRoomEnemyBudgetSectionKey;
+    const getMazeRoomEnemyCount = mazePopulationSystem.getMazeRoomEnemyCount;
+    const getMazeRoomMaxEnemyCount = mazePopulationSystem.getMazeRoomMaxEnemyCount;
+    const getEnemyScaleForMazeSectionKey = mazePopulationSystem.getEnemyScaleForMazeSectionKey;
     const state = {
         running: true,
         gameStarted: false,
@@ -682,6 +707,14 @@
         const api = window.WizardFlatlandMazeSections;
         if (!api || typeof api.createMazeSectionSystem !== "function") {
             throw new Error("Wizard of Flatland requires /wizard-of-flatland/mazeSections.js");
+        }
+        return api;
+    }
+
+    function getWizardFlatlandMazePopulationApi() {
+        const api = window.WizardFlatlandMazePopulation;
+        if (!api || typeof api.createMazePopulationSystem !== "function") {
+            throw new Error("Wizard of Flatland requires /wizard-of-flatland/mazePopulation.js");
         }
         return api;
     }
@@ -2841,44 +2874,6 @@
         return state.generatedMazeInitialEnemySpawnBudgetsBySectionKey.get(sectionKey);
     }
 
-    function validateMazeRoomEnemyBudgetSectionKey(sectionKey) {
-        if (typeof sectionKey !== "string" || sectionKey.length === 0) {
-            throw new Error("Wizard of Flatland enemy spawn budget requires a section key");
-        }
-    }
-
-    function getMazeRoomEnemyCount(sectionKey, options) {
-        if (typeof sectionKey !== "string" || sectionKey.length === 0) {
-            throw new Error("Wizard of Flatland enemy count requires a section key");
-        }
-        if (isMazePyramidRoomSectionKey(sectionKey)) return 0;
-        if (isMazeInitialSafeSectionKey(sectionKey)) return 0;
-        const maxEnemies = getMazeRoomMaxEnemyCount(sectionKey);
-        const random = seededRandom(hashString(`${options.seed}|enemy-count|${sectionKey}`));
-        const roll = random();
-        if (roll < MAZE_ROOM_EMPTY_ENEMY_CHANCE) return 0;
-        if (roll >= 1 - MAZE_ROOM_MAX_ENEMY_CHANCE) return maxEnemies;
-        const nonEmptySpan = 1 - MAZE_ROOM_MAX_ENEMY_CHANCE - MAZE_ROOM_EMPTY_ENEMY_CHANCE;
-        if (!(nonEmptySpan > 0)) throw new Error("Wizard of Flatland enemy distribution has no middle span");
-        const middleMaxEnemies = maxEnemies - 1;
-        if (middleMaxEnemies <= 0) return 1;
-        const t = (roll - MAZE_ROOM_EMPTY_ENEMY_CHANCE) / nonEmptySpan;
-        return Math.max(
-            1,
-            Math.min(
-                middleMaxEnemies,
-                Math.ceil(Math.pow(t, MAZE_ROOM_ENEMY_DISTRIBUTION_POWER) * middleMaxEnemies)
-            )
-        );
-    }
-
-    function getMazeRoomMaxEnemyCount(sectionKey) {
-        validateMazeRoomEnemyBudgetSectionKey(sectionKey);
-        const coord = parseMazeSectionKey(sectionKey);
-        const ring = getMazeSectionRing(coord.q, coord.r);
-        return Math.max(1, MAZE_ROOM_BASE_ENEMY_CAP + ring - MAZE_ROOM_BASE_ENEMY_CAP_RING);
-    }
-
     function getMazeRoomSpawnRadius(options) {
         return Math.max(2, getMazeSectionRadius(options) * MAZE_ROOM_ENEMY_SAFE_RADIUS_SCALE);
     }
@@ -3042,13 +3037,6 @@
             return getEnemyScaleForMazeSectionKey(metadata.autoSpawnSectionKey);
         }
         return 1;
-    }
-
-    function getEnemyScaleForMazeSectionKey(sectionKey) {
-        validateMazeRoomEnemyBudgetSectionKey(sectionKey);
-        const coord = parseMazeSectionKey(sectionKey);
-        const ring = getMazeSectionRing(coord.q, coord.r);
-        return 1 + Math.floor(ring / ENEMY_SCALE_RING_INTERVAL) * ENEMY_SCALE_INCREMENT;
     }
 
     function getAgentHitDamage(agent) {

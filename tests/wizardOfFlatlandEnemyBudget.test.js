@@ -7,6 +7,7 @@ const vm = require("node:vm");
 const MAIN_PATH = path.join(__dirname, "../public/wizard-of-flatland/main.js");
 const MATH_PATH = path.join(__dirname, "../public/wizard-of-flatland/flatlandMath.js");
 const MAZE_SECTIONS_PATH = path.join(__dirname, "../public/wizard-of-flatland/mazeSections.js");
+const MAZE_POPULATION_PATH = path.join(__dirname, "../public/wizard-of-flatland/mazePopulation.js");
 
 function extractFunction(source, name, sourceLabel = "main.js") {
     const start = source.indexOf(`function ${name}(`);
@@ -31,6 +32,7 @@ function loadEnemyBudgetExports() {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
     const mathSource = fs.readFileSync(MATH_PATH, "utf8");
     const mazeSectionsSource = fs.readFileSync(MAZE_SECTIONS_PATH, "utf8");
+    const mazePopulationSource = fs.readFileSync(MAZE_POPULATION_PATH, "utf8");
     const pieces = [
         extractConst(source, "MAZE_ROOM_EMPTY_ENEMY_CHANCE"),
         extractConst(source, "MAZE_ROOM_MAX_ENEMY_CHANCE"),
@@ -42,10 +44,8 @@ function loadEnemyBudgetExports() {
         extractConst(source, "PYRAMID_FIRST_ROOM_DISTANCE"),
         extractConst(source, "PYRAMID_ROOM_DISTANCE_STEP"),
         "const MAZE_SECTION_DIRECTIONS = [{ q: 1, r: 0 }, { q: 0, r: 1 }, { q: -1, r: 1 }, { q: -1, r: 0 }, { q: 0, r: -1 }, { q: 1, r: -1 }];",
-        "const constants = { MAZE_SECTION_DIRECTIONS, PYRAMID_FIRST_ROOM_DISTANCE, PYRAMID_ROOM_DISTANCE_STEP };",
         extractFunction(mathSource, "hashString", "flatlandMath.js"),
         extractFunction(mathSource, "seededRandom", "flatlandMath.js"),
-        extractFunction(source, "validateMazeRoomEnemyBudgetSectionKey"),
         extractFunction(mazeSectionsSource, "validateMazeSectionKey", "mazeSections.js"),
         extractFunction(mazeSectionsSource, "parseMazeSectionKey", "mazeSections.js"),
         extractFunction(mazeSectionsSource, "isMazePyramidRoomSectionKey", "mazeSections.js"),
@@ -53,9 +53,13 @@ function loadEnemyBudgetExports() {
         extractFunction(mazeSectionsSource, "getMazePyramidRoomDistance", "mazeSections.js"),
         extractFunction(mazeSectionsSource, "isMazeInitialSafeSectionKey", "mazeSections.js"),
         extractFunction(mazeSectionsSource, "getMazeSectionRing", "mazeSections.js"),
-        extractFunction(source, "getMazeRoomMaxEnemyCount"),
-        extractFunction(source, "getEnemyScaleForMazeSectionKey"),
-        extractFunction(source, "getMazeRoomEnemyCount"),
+        "const constants = { MAZE_SECTION_DIRECTIONS, PYRAMID_FIRST_ROOM_DISTANCE, PYRAMID_ROOM_DISTANCE_STEP, MAZE_ROOM_EMPTY_ENEMY_CHANCE, MAZE_ROOM_MAX_ENEMY_CHANCE, MAZE_ROOM_BASE_ENEMY_CAP, MAZE_ROOM_BASE_ENEMY_CAP_RING, MAZE_ROOM_ENEMY_DISTRIBUTION_POWER, ENEMY_SCALE_RING_INTERVAL, ENEMY_SCALE_INCREMENT };",
+        "const math = { hashString, seededRandom };",
+        "const mazeSections = { isMazePyramidRoomSectionKey, isMazeInitialSafeSectionKey, parseMazeSectionKey, getMazeSectionRing };",
+        extractFunction(mazePopulationSource, "validateMazeRoomEnemyBudgetSectionKey", "mazePopulation.js"),
+        extractFunction(mazePopulationSource, "getMazeRoomMaxEnemyCount", "mazePopulation.js"),
+        extractFunction(mazePopulationSource, "getEnemyScaleForMazeSectionKey", "mazePopulation.js"),
+        extractFunction(mazePopulationSource, "getMazeRoomEnemyCount", "mazePopulation.js"),
         "globalThis.__testExports = { getMazeRoomEnemyCount, getMazeRoomMaxEnemyCount, getEnemyScaleForMazeSectionKey };"
     ];
     const context = { Math, Number, String };
