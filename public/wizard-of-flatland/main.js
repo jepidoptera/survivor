@@ -665,7 +665,21 @@
     });
 
     const pathfindingWorker = new Worker("/wizard-of-flatland/pathfindingWorker.js?v=wizard-of-flatland-1");
-    pathfindingWorker.addEventListener("message", handlePathfindingWorkerMessage);
+    const pathfindingClientSystem = getWizardFlatlandPathfindingClientApi().createPathfindingClientSystem({
+        state,
+        worker: pathfindingWorker,
+        callbacks: {
+            getPathfindingNodeKey,
+            getPathfindingNodeX,
+            getPathfindingNodeY,
+            isValidPathfindingNodeIndex,
+            getPathfindingNodeIndexForKey,
+            advanceAgentPathCursor,
+            getAgentPathWaypoint
+        }
+    });
+    const requestAgentPath = pathfindingClientSystem.requestAgentPath;
+    pathfindingWorker.addEventListener("message", pathfindingClientSystem.handlePathfindingWorkerMessage);
     pathfindingWorker.addEventListener("error", (event) => {
         setLabelText(labels.workerStatus, event.message || "pathfinding failed");
     });
@@ -771,6 +785,14 @@
         const api = window.WizardFlatlandMazeStreaming;
         if (!api || typeof api.createMazeStreamingSystem !== "function") {
             throw new Error("Wizard of Flatland requires /wizard-of-flatland/mazeStreaming.js");
+        }
+        return api;
+    }
+
+    function getWizardFlatlandPathfindingClientApi() {
+        const api = window.WizardFlatlandPathfindingClient;
+        if (!api || typeof api.createPathfindingClientSystem !== "function") {
+            throw new Error("Wizard of Flatland requires /wizard-of-flatland/pathfindingClient.js");
         }
         return api;
     }
@@ -4524,105 +4546,6 @@
             throw new Error("Wizard of Flatland path node lookup requires a node key index");
         }
         return state.nodeLayer.indexByKey.has(pathKey) ? state.nodeLayer.indexByKey.get(pathKey) : null;
-    }
-
-    function appendAgentPathWaypoint(pathNodeKeys, pathWaypoints, pathIndex, prepend = false) {
-        if (!Array.isArray(pathNodeKeys) || !Array.isArray(pathWaypoints)) {
-            throw new Error("Wizard of Flatland path waypoint append requires path arrays");
-        }
-        if (!isValidPathfindingNodeIndex(pathIndex)) {
-            throw new Error(`Wizard of Flatland path waypoint append received invalid node index ${pathIndex}`);
-        }
-        const waypoint = {
-            key: getPathfindingNodeKey(pathIndex),
-            x: getPathfindingNodeX(pathIndex),
-            y: getPathfindingNodeY(pathIndex)
-        };
-        if (prepend) {
-            pathNodeKeys.unshift(waypoint.key);
-            pathWaypoints.unshift(waypoint);
-            return;
-        }
-        pathNodeKeys.push(waypoint.key);
-        pathWaypoints.push(waypoint);
-    }
-
-    function requestAgentPath(agent, rawStartNodeIndex, startNodeIndex, goalNodeIndex, now) {
-        const requestId = state.pathfindingRequestId++;
-        const rawStartNodeKey = getPathfindingNodeKey(rawStartNodeIndex);
-        const startNodeKey = getPathfindingNodeKey(startNodeIndex);
-        const goalNodeKey = getPathfindingNodeKey(goalNodeIndex);
-        agent.pathRequestPending = true;
-        agent.pathRequestId = requestId;
-        agent.pathRequestedAt = now;
-        agent.pathRequestedWorldVersion = state.pathfindingSnapshotVersion;
-        agent.pathRequestedRawStartKey = rawStartNodeKey;
-        agent.pathRequestedStartKey = startNodeKey;
-        agent.pathRequestedGoalKey = goalNodeKey;
-        pathfindingWorker.postMessage({
-            type: "request_path",
-            requestId,
-            mapVersion: state.pathfindingSnapshotVersion,
-            actor: {
-                size: 1,
-                damage: 1,
-                canBreakDoors: false,
-                canBreakTreesLargerThanSelf: false
-            },
-            startNodeIndex,
-            destinationNodeIndex: goalNodeIndex,
-            options: {
-                allowBlockedDestination: false,
-                maxPathLength: null,
-                wallAvoidance: 0.4,
-                includeBlockedPlan: false
-            }
-        });
-    }
-
-    function handlePathfindingWorkerMessage(event) {
-        const message = event && event.data ? event.data : null;
-        if (!message || typeof message.type !== "string") return;
-        if (message.type === "ready") return;
-        if (message.type !== "path_result") return;
-        const agent = state.agents.find((candidate) => candidate.pathRequestId === message.requestId);
-        if (!agent) return;
-        agent.pathRequestPending = false;
-        if (Number(message.mapVersion) !== Number(state.pathfindingSnapshotVersion)) return;
-        if (!message.ok) {
-            agent.pathNodeKeys = [];
-            agent.pathWaypoints = [];
-            agent.pathCursor = 0;
-            agent.pathGoalX = agent.x;
-            agent.pathGoalY = agent.y;
-            return;
-        }
-        if (!(message.pathNodeIndices instanceof Int32Array) && !Array.isArray(message.pathNodeIndices)) {
-            throw new Error("Wizard of Flatland pathfinding worker returned a malformed path");
-        }
-        const pathNodeKeys = [];
-        const pathWaypoints = [];
-        for (const pathIndex of message.pathNodeIndices) {
-            if (!isValidPathfindingNodeIndex(pathIndex)) {
-                throw new Error(`Wizard of Flatland pathfinding worker returned unknown node index ${pathIndex}`);
-            }
-            appendAgentPathWaypoint(pathNodeKeys, pathWaypoints, pathIndex);
-        }
-        if (agent.pathRequestedStartKey !== agent.pathRequestedRawStartKey) {
-            const requestedStartIndex = getPathfindingNodeIndexForKey(agent.pathRequestedStartKey);
-            if (Number.isInteger(requestedStartIndex) && pathNodeKeys[0] !== agent.pathRequestedStartKey) {
-                appendAgentPathWaypoint(pathNodeKeys, pathWaypoints, requestedStartIndex, true);
-            }
-        }
-        agent.pathNodeKeys = pathNodeKeys;
-        agent.pathWaypoints = pathWaypoints;
-        agent.pathCursor = 0;
-        advanceAgentPathCursor(agent);
-        const waypoint = getAgentPathWaypoint(agent);
-        if (waypoint) {
-            agent.pathGoalX = waypoint.x;
-            agent.pathGoalY = waypoint.y;
-        }
     }
 
     function resizeCanvas() {
