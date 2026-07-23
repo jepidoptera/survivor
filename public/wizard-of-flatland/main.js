@@ -300,6 +300,29 @@
     const appendWallSegment = wallBufferApi.appendWallSegment;
     const concatWallBuffers = wallBufferApi.concatWallBuffers;
     const cloneWallBuffer = wallBufferApi.cloneWallBuffer;
+    const wallLabelSystem = getWizardFlatlandWallLabelsApi().createWallLabelSystem({
+        validateWallBuffer,
+        constants: {
+            WALL_STRIDE,
+            WALL_LABEL_CODE,
+            WALL_LABEL_SIDE,
+            WALL_LABEL_MANUAL_TOOL,
+            WALL_LABEL_ARENA_BOUNDARY,
+            WALL_LABEL_ROOM_BOUNDARY,
+            WALL_LABEL_ROOM_HALL_GAP,
+            WALL_LABEL_ROOM_OUTSIDE_DOOR_GAP,
+            WALL_LABEL_ROOM_POCKET_OVERRIDE,
+            WALL_LABEL_ROOM_POCKET_OVERRIDE_HALL_GAP,
+            WALL_LABEL_ROOM_POCKET_CONNECTOR,
+            WALL_LABEL_SQUARE_SIDE_PARALLEL,
+            WALL_LABEL_SQUARE_SIDE_PERPENDICULAR,
+            WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL,
+            WALL_LABEL_HALLWAY_SIDE_HALF,
+            WALL_LABEL_HALLWAY_SIDE_FULL
+        }
+    });
+    const validateWallLabelBuffer = wallLabelSystem.validateWallLabelBuffer;
+    const getWallDebugLabel = wallLabelSystem.getWallDebugLabel;
     const mathApi = getWizardFlatlandMathApi();
     const hashString = mathApi.hashString;
     const seededRandom = mathApi.seededRandom;
@@ -483,7 +506,7 @@
     const getMazeTwistiness = controlSystem.getMazeTwistiness;
     const getMazeOptions = controlSystem.getMazeOptions;
     const isProceduralMazeScenario = controlSystem.isProceduralMazeScenario;
-    const profiler = createWizardOfFlatlandProfiler();
+    const profiler = getWizardFlatlandProfilerApi().createWizardOfFlatlandProfiler({ state, labels });
     attachWizardOfFlatlandDebugGlobals(state, profiler);
 
     const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-85");
@@ -548,10 +571,26 @@
         return api;
     }
 
+    function getWizardFlatlandWallLabelsApi() {
+        const api = window.WizardFlatlandWallLabels;
+        if (!api || typeof api.createWallLabelSystem !== "function") {
+            throw new Error("Wizard of Flatland requires /wizard-of-flatland/wallLabels.js");
+        }
+        return api;
+    }
+
     function getWizardFlatlandControlsApi() {
         const api = window.WizardFlatlandControls;
         if (!api || typeof api.createControlSystem !== "function") {
             throw new Error("Wizard of Flatland requires /wizard-of-flatland/controls.js");
+        }
+        return api;
+    }
+
+    function getWizardFlatlandProfilerApi() {
+        const api = window.WizardFlatlandProfiler;
+        if (!api || typeof api.createWizardOfFlatlandProfiler !== "function") {
+            throw new Error("Wizard of Flatland requires /wizard-of-flatland/profiler.js");
         }
         return api;
     }
@@ -1070,225 +1109,6 @@
             throw new Error("Wizard of Flatland debug.js requires attachDebugGlobals");
         }
         return api.attachDebugGlobals(stateRef, profilerRef);
-    }
-
-    function createWizardOfFlatlandProfiler() {
-        const maxLoads = 12;
-        const maxRows = 12;
-        const loadRecords = [];
-        const longTasks = [];
-        const frameHitches = [];
-        const pathingRecords = [];
-        let currentLoad = null;
-        let lastCompletedLoad = null;
-        let pendingFrameAfterLoad = null;
-
-        const api = {
-            enabled: true,
-            consoleLogging: false,
-            loadRecords,
-            longTasks,
-            frameHitches,
-            pathingRecords,
-            beginLoad,
-            mark,
-            span,
-            completeLoad,
-            noteFrame,
-            notePathing,
-            noteFirstFrameAfterLoad,
-            getCurrentLoad: () => currentLoad,
-            getLastCompletedLoad: () => lastCompletedLoad,
-            printLastLoad: () => {
-                if (lastCompletedLoad) printLoadRecord(lastCompletedLoad);
-            }
-        };
-
-        if (typeof PerformanceObserver === "function") {
-            try {
-                const observer = new PerformanceObserver((list) => {
-                    for (const entry of list.getEntries()) {
-                        const record = {
-                            name: entry.name || "longtask",
-                            start: entry.startTime,
-                            duration: entry.duration
-                        };
-                        longTasks.push(record);
-                        while (longTasks.length > 40) longTasks.shift();
-                        if (currentLoad && record.start >= currentLoad.start && record.start <= performance.now()) {
-                            currentLoad.longTasks.push(record);
-                        }
-                    }
-                });
-                observer.observe({ type: "longtask", buffered: true });
-                api.longTaskObserver = observer;
-            } catch (_error) {
-                api.longTaskObserver = null;
-            }
-        }
-
-        function beginLoad(meta) {
-            if (!api.enabled) return null;
-            const now = performance.now();
-            currentLoad = {
-                requestId: Number(meta && meta.requestId) || 0,
-                signature: String(meta && meta.signature || ""),
-                keys: Array.isArray(meta && meta.keys) ? meta.keys.slice() : [],
-                start: now,
-                marks: [{ label: "request", at: now, duration: 0 }],
-                spans: [],
-                longTasks: [],
-                firstFrame: null,
-                completed: false,
-                totalMs: 0,
-                mainThreadMs: 0,
-                counts: {}
-            };
-            updateProfilerPanel();
-            return currentLoad;
-        }
-
-        function mark(label, extra) {
-            if (!api.enabled || !currentLoad) return;
-            currentLoad.marks.push({
-                label,
-                at: performance.now(),
-                duration: 0,
-                extra: extra || null
-            });
-        }
-
-        function span(label, fn) {
-            if (!api.enabled || !currentLoad) return fn();
-            const started = performance.now();
-            try {
-                return fn();
-            } finally {
-                const duration = performance.now() - started;
-                currentLoad.spans.push({ label, duration, at: started });
-            }
-        }
-
-        function completeLoad(counts) {
-            if (!api.enabled || !currentLoad) return;
-            currentLoad.completed = true;
-            currentLoad.totalMs = performance.now() - currentLoad.start;
-            currentLoad.counts = counts || {};
-            currentLoad.spans.sort((a, b) => b.duration - a.duration);
-            currentLoad.mainThreadMs = currentLoad.spans.reduce((total, entry) => total + entry.duration, 0);
-            loadRecords.push(currentLoad);
-            while (loadRecords.length > maxLoads) loadRecords.shift();
-            lastCompletedLoad = currentLoad;
-            pendingFrameAfterLoad = currentLoad;
-            currentLoad = null;
-            updateProfilerPanel();
-            if (api.consoleLogging) printLoadRecord(lastCompletedLoad);
-        }
-
-        function noteFrame(duration, parts) {
-            if (!api.enabled || duration < 24) return;
-            const record = {
-                duration,
-                at: performance.now(),
-                parts: parts || null,
-                pathing: state.debug && state.debug.lastPathingMetrics ? state.debug.lastPathingMetrics : null
-            };
-            frameHitches.push(record);
-            while (frameHitches.length > 40) frameHitches.shift();
-        }
-
-        function notePathing(metrics) {
-            if (!api.enabled || !metrics) return;
-            pathingRecords.push(metrics);
-            while (pathingRecords.length > 80) pathingRecords.shift();
-        }
-
-        function noteFirstFrameAfterLoad(duration, parts) {
-            if (!api.enabled || !pendingFrameAfterLoad) return;
-            pendingFrameAfterLoad.firstFrame = { duration, parts: parts || null };
-            if (api.consoleLogging && typeof console !== "undefined") {
-                console.groupCollapsed(`Wizard of Flatland first frame after section load: ${duration.toFixed(2)} ms`);
-                console.table((parts || []).map((entry) => ({
-                    span: entry.label,
-                    ms: Number(entry.duration.toFixed(3))
-                })));
-                console.groupEnd();
-            }
-            pendingFrameAfterLoad = null;
-            updateProfilerPanel();
-        }
-
-        function updateProfilerPanel() {
-            if (!labels.profilerSummary || !labels.profilerRows) return;
-            const record = currentLoad || lastCompletedLoad;
-            if (!record) {
-                labels.profilerSummary.textContent = "waiting for section load";
-                labels.profilerRows.textContent = "";
-                return;
-            }
-            const counts = record.counts || {};
-            const status = record.completed ? "last" : "loading";
-            const firstFrameText = record.firstFrame
-                ? `, first frame ${record.firstFrame.duration.toFixed(2)} ms`
-                : "";
-            const mainThreadMs = record.completed
-                ? record.mainThreadMs
-                : record.spans.reduce((total, entry) => total + entry.duration, 0);
-            labels.profilerSummary.textContent = `${status} request ${record.requestId}: ${mainThreadMs.toFixed(2)} ms main thread, ${record.totalMs.toFixed(2)} ms elapsed${firstFrameText} (${counts.sections || record.keys.length || 0} sections, ${counts.walls || 0} walls, ${counts.nodes || 0} nodes)`;
-            const rows = record.spans.map((spanRecord) => ({
-                label: spanRecord.label,
-                duration: spanRecord.duration
-            }));
-            if (record.firstFrame && Array.isArray(record.firstFrame.parts)) {
-                rows.push({
-                    label: "first frame total",
-                    duration: record.firstFrame.duration
-                });
-                for (const part of record.firstFrame.parts.slice(0, 5)) {
-                    rows.push({
-                        label: `first frame: ${part.label}`,
-                        duration: part.duration
-                    });
-                }
-            }
-            rows.sort((a, b) => b.duration - a.duration);
-            labels.profilerRows.replaceChildren(...rows.slice(0, maxRows).map((spanRecord) => {
-                const row = document.createElement("div");
-                row.className = "profiler-row";
-                const name = document.createElement("strong");
-                name.textContent = spanRecord.label;
-                const value = document.createElement("span");
-                value.textContent = `${spanRecord.duration.toFixed(2)} ms`;
-                row.append(name, value);
-                return row;
-            }));
-        }
-
-        function printLoadRecord(record) {
-            if (!record || typeof console === "undefined") return;
-            const rows = record.spans.map((entry) => ({
-                span: entry.label,
-                ms: Number(entry.duration.toFixed(3))
-            }));
-            console.groupCollapsed(
-                `Wizard of Flatland section load ${record.requestId}: ${record.mainThreadMs.toFixed(2)} ms main thread`
-            );
-            console.log({
-                requestId: record.requestId,
-                mainThreadMs: record.mainThreadMs,
-                elapsedMs: record.totalMs,
-                sections: record.counts.sections || record.keys.length || 0,
-                wallSegments: record.counts.walls || 0,
-                nodes: record.counts.nodes || 0,
-                blockedEdges: record.counts.blockedEdges || 0,
-                firstFrame: record.firstFrame,
-                longTasks: record.longTasks
-            });
-            console.table(rows);
-            console.groupEnd();
-        }
-
-        return api;
     }
 
     function normalizeStartupPlayerName(name) {
@@ -6283,55 +6103,6 @@
         const maxX = Math.max(a.x, b.x);
         const maxY = Math.max(a.y, b.y);
         return maxX >= -padding && minX <= state.view.width + padding && maxY >= -padding && minY <= state.view.height + padding;
-    }
-
-    function validateWallLabelBuffer(walls, label) {
-        validateWallBuffer(walls, label);
-        for (let i = 0; i < walls.length; i += WALL_STRIDE) {
-            getWallDebugLabel(walls[i + WALL_LABEL_CODE], walls[i + WALL_LABEL_SIDE]);
-        }
-    }
-
-    function getWallDebugLabel(labelCode, sideCode) {
-        const code = Number(labelCode);
-        const side = Number(sideCode);
-        if (!Number.isInteger(code) || code <= 0) {
-            throw new Error(`Wizard of Flatland wall label is missing for code ${labelCode}`);
-        }
-        if (!Number.isInteger(side)) {
-            throw new Error(`Wizard of Flatland wall label side is invalid for code ${code}`);
-        }
-        const sideText = side >= 0 ? ` s${side}` : "";
-        switch (code) {
-            case WALL_LABEL_MANUAL_TOOL:
-                return "manual tool | user drawn";
-            case WALL_LABEL_ARENA_BOUNDARY:
-                return `arena boundary${sideText} | unmodified`;
-            case WALL_LABEL_ROOM_BOUNDARY:
-                return `room boundary${sideText} | unmodified`;
-            case WALL_LABEL_ROOM_HALL_GAP:
-                return `room boundary${sideText} | hallway gap split`;
-            case WALL_LABEL_ROOM_OUTSIDE_DOOR_GAP:
-                return `room boundary${sideText} | outside-door gap split`;
-            case WALL_LABEL_ROOM_POCKET_OVERRIDE:
-                return `room boundary${sideText} | corner pocket reshaped`;
-            case WALL_LABEL_ROOM_POCKET_OVERRIDE_HALL_GAP:
-                return `room boundary${sideText} | corner pocket reshaped + hall gap`;
-            case WALL_LABEL_ROOM_POCKET_CONNECTOR:
-                return "corner pocket front wall | neighbor incorporated";
-            case WALL_LABEL_SQUARE_SIDE_PARALLEL:
-                return `corner pocket back wall${sideText}`;
-            case WALL_LABEL_SQUARE_SIDE_PERPENDICULAR:
-                return "corner pocket front wall";
-            case WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL:
-                return "corner pocket front wall | section boundary";
-            case WALL_LABEL_HALLWAY_SIDE_HALF:
-                return "hallway side | half-length";
-            case WALL_LABEL_HALLWAY_SIDE_FULL:
-                return "hallway side | corner pocket extended";
-            default:
-                throw new Error(`Wizard of Flatland wall label code is unknown: ${code}`);
-        }
     }
 
     function drawWallBuildPreview() {
