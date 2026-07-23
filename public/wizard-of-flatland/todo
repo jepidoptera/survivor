@@ -1,0 +1,89 @@
+building spells.
+  level 1: destroy a wall. takes 7 seconds.
+  level 2: build a wall. costs 2 coins and ten seconds. destroying a wall takes 6 seconds
+  level 3: build a wall in 5 seconds. destroy a wall in 5 seconds.
+  level 4: build a trap. costs 5 coins and 4 seconds. destroying a wall takes 4 seconds
+  level 5: build a turret for 20 coins in ten seconds. destroying a wall takes 3 seconds. traps cost 4 coins and take 2 seconds.
+  level 6: build everything in half the time. traps cost 3 coins. destroying a wall takes 1.5 seconds.
+  level 7: build a pyramid for 100 coins. destroying a wall takes 0.5 seconds and grants 1 coin.
+
+stealth spells. costs 5 magic per second
+  level 1: enemies don't try to attack you until they have line of sight, and then there's an upper limit to how far they'll pathfind.
+  level 2: they have to have line of sight for one full second before they notice you. reduced pathfinding limit.
+  level 3: as long as you're touching a wall and go slow, your visibility range is reduced to 5 meters.
+  level 4: visibility range is 5 meters walking, 7 meters running and 3 if you're touching a wall.
+  level 5: visibility range is 1 meter as long as you don't run fast, increasing to 5 if you do.
+  level 6: visibility range 0 meters at any speed as long as you don't touch an enemy.
+  level 7: visibility range 0 meters and you can walk through enemies (and walls).
+
+teleport spells.
+  level 1: burst of speed - 1.5x for 2 seconds
+  level 2: faster burst of speed
+  level 3: teleport home
+  level 4: drop a waypoint anywhere and teleport there.
+  level 5: teleport anywhere you can see, as long as you have line of sight.
+  level 6: teleport through walls.
+  level 7: teleport anywhere in the world.
+
+perception spells.
+  level 1: passive: see around corners
+  level 2: see everything within a 3 meter radius of your cursor. range: 10. 20 magic per second.
+  level 3: sight radius around cursor increased to 5 and cursor range increased to 15. 15 magic per second.
+  level 4: passive: see enemies through walls, plus see hidden enemies when spell is active.
+  level 5: sight radius 7, range 20, 10 magic per second. reveal a path to anywhere you can see.
+  level 6: sight radius 10, range 50, 5 magic per second.
+  level 7: full map revealed. everything visible, always, unlimited range, no magic cost.
+
+shield: can cast on yourself for protection or project elsewhere to act as a temporary barrier or to trap an enemy. tap space once to cast on yourself or hold space and drag the cursor somewhere else to cast it there.
+  level 1: cost 50 magic, absorbs 50 damage. loses 10 power per second.
+  level 2: cost 45, power 70.
+  level 3: cost 40, power 100
+  level 4: cost 35, power 140
+  level 5: cost 30, power 200
+  level 6: cost 25, power 300
+  level 7: cost 25, power 500
+
+healing.
+  level 1: heals 5 hp per second. costs 10 magic per second.
+  level 2: heals 8 hp, costs 9.5 magic
+  level 3: heals 13 hp, costs 9 magic
+  level 4: heals 22 hp, costs 8 magic
+  level 5: heals 37 hp, costs 7 magic
+  level 6: heals 60 hp, costs 6 magic
+  level 7: wolverine mode. heals 100 hp, costs 5 magic
+
+fireball.
+  level 1: 11 damage, 10 magic, 1 meter explosion radius, 1 second cooldown
+  level 2: 16 damage, 9.5 magic, 1.1 meter explosion, 0.9 second cooldown
+  level 3: 24 damage, 9 magic, 1.25 meter explosion, 0.8 second cooldown
+  level 4: 35 damage, 8.5 magic, 1.4 meter explosion, 0.7 second cooldown
+  level 5: 50 damage, 8 magic, 1.8 meter explosion, 0.6 second cooldown
+  level 6: 72 damage, 7.5 magic, 2.3 meter explosion, 0.5 second cooldown
+  level 7: 100 damage, 7 magic, 3 meter explosion, 0.4 second cooldown
+
+spikes.
+  level 1: 20 damage, 15 magic, 14 range, 0.7 second cooldown
+  level 2: 30 damage, 14 magic, 15 range, 0.6 second cooldown
+  level 3: 55 damage, 13 magic, 16 range, 0.5 second cooldown
+  level 4: 80 damage, 12 magic, 17 range, 0.4 second cooldown
+  level 5: 110 damage, 11 magic, 18 range, 0.3 second cooldown
+  level 6: 150 damage, 10 magic, 19 range, 0.2 second cooldown
+  level 7: 200 damage, 10 magic, 20 range, 0.1 second cooldown
+
+freeze.
+  level 1: 5 damage per second, 20 magic per second, 3 range, -20 degrees/second 
+  level 2: 7 damage per second, 19 magic per second, 3.5 range, -20 degrees/second 
+  level 3: 10 damage per second, 18 magic per second, 4 range, -20 degrees/second 
+  level 4: 15 damage per second, 16 magic per second, 4.5 range, -20 degrees/second 
+  level 5: 23 damage per second, 14 magic per second, 5 range, -20 degrees/second 
+  level 6: 34 damage per second, 12 magic per second, 6 range, -20 degrees/second 
+  level 7: 50 damage per second, 10 magic per second, 7 range, -20 degrees/second 
+
+the seven levels.
+  level 1: white, isosceles
+  level 2: red, equilaterals with tails and projectiles.
+  level 3: blue, lines. if you have spikes you have to bounce them off a wall and hit these from the side, or freeze them and then run around, because they're very hard to hit from the front. their sides are their weak points.
+  level 4: rectangles - cannons. slow moving, slow turning, very powerful. also "big dog" isosceles.
+  level 5: hexagons. tanky and explosive.
+  level 6: horned rectangles. faster than cannons and with a powerful melee attack. also "swarm" isosceles
+  level 7: the final ring. no talismans here: you have to fight through it in one go. wherever you first reach the end of the ring, that's where the final boss appears.
