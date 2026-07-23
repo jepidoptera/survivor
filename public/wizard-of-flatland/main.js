@@ -671,11 +671,34 @@
     });
 
     const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-28");
-    mazeWorker.addEventListener("message", handleMazeWorkerMessage);
-    mazeWorker.addEventListener("error", (event) => {
-        state.generatedMazeLoading = false;
-        setLabelText(labels.workerStatus, event.message || "maze worker failed");
+    const mazeStreamingSystem = getWizardFlatlandMazeStreamingApi().createMazeStreamingSystem({
+        state,
+        worker: mazeWorker,
+        constants: {
+            MAZE_SECTION_CACHE_LIMIT,
+            MAZE_WORKER_STATUS_PREFIX,
+            TARGET_RADIUS,
+            WALL_STRIDE
+        },
+        wallBuffer: {
+            cloneWallBuffer
+        },
+        profiler,
+        callbacks: {
+            isProceduralMazeScenario,
+            getMazeOptions,
+            getRequiredMazeSectionKeys,
+            removeFurthestGeneratedMazeSection,
+            getPathfindingLayerBounds,
+            setWorkerStatus: (text) => setLabelText(labels.workerStatus, text),
+            installGeneratedMazeWorkerResult
+        }
     });
+    const getMazeSignature = mazeStreamingSystem.getMazeSignature;
+    const refreshGeneratedMazeIfNeeded = mazeStreamingSystem.refreshGeneratedMazeIfNeeded;
+    const requestGeneratedMazeRefresh = mazeStreamingSystem.requestGeneratedMazeRefresh;
+    mazeWorker.addEventListener("message", mazeStreamingSystem.handleMazeWorkerMessage);
+    mazeWorker.addEventListener("error", mazeStreamingSystem.handleMazeWorkerError);
 
     function setLabelText(label, text) {
         if (label) label.textContent = text;
@@ -740,6 +763,14 @@
         const api = window.WizardFlatlandMazePopulation;
         if (!api || typeof api.createMazePopulationSystem !== "function") {
             throw new Error("Wizard of Flatland requires /wizard-of-flatland/mazePopulation.js");
+        }
+        return api;
+    }
+
+    function getWizardFlatlandMazeStreamingApi() {
+        const api = window.WizardFlatlandMazeStreaming;
+        if (!api || typeof api.createMazeStreamingSystem !== "function") {
+            throw new Error("Wizard of Flatland requires /wizard-of-flatland/mazeStreaming.js");
         }
         return api;
     }
@@ -1276,93 +1307,6 @@
             }
         }
         return false;
-    }
-
-    function getMazeSignature(options, keys) {
-        return [
-            options.seed,
-            options.chunkSize,
-            options.roomScale.toFixed(3),
-            options.twistiness.toFixed(3),
-            keys.join(";")
-        ].join("|");
-    }
-
-    function refreshGeneratedMazeIfNeeded(force = false) {
-        if (!isProceduralMazeScenario()) return false;
-        const options = getMazeOptions();
-        const requiredKeys = getRequiredMazeSectionKeys(options);
-        const requiredSet = new Set(requiredKeys);
-        let changed = force;
-
-        if (!(state.generatedMazeChunkKeys instanceof Set)) {
-            state.generatedMazeChunkKeys = new Set();
-            changed = true;
-        }
-        for (const key of requiredKeys) {
-            if (state.generatedMazeChunkKeys.has(key)) continue;
-            state.generatedMazeChunkKeys.add(key);
-            changed = true;
-        }
-        while (state.generatedMazeChunkKeys.size > MAZE_SECTION_CACHE_LIMIT) {
-            const removed = removeFurthestGeneratedMazeSection(options, requiredSet);
-            if (!removed) break;
-            changed = true;
-        }
-
-        const keys = Array.from(state.generatedMazeChunkKeys).sort();
-        const signature = getMazeSignature(options, keys);
-        if (!changed && signature === state.generatedMazeSignature) return false;
-        if (!changed && signature === state.generatedMazePendingSignature) return false;
-
-        requestGeneratedMazeRefresh(options, keys, signature);
-        return true;
-    }
-
-    function requestGeneratedMazeRefresh(options, keys, signature) {
-        if (!mazeWorker || typeof mazeWorker.postMessage !== "function") {
-            throw new Error("Wizard of Flatland procedural maze requires a section worker");
-        }
-        const bounds = getPathfindingLayerBounds();
-        const manualWalls = cloneWallBuffer(state.manualWalls, "manual walls");
-        const requestId = state.generatedMazeRequestId++;
-        state.generatedMazeActiveRequestId = requestId;
-        state.generatedMazePendingSignature = signature;
-        state.generatedMazeLoading = true;
-        profiler.beginLoad({ requestId, signature, keys });
-        setLabelText(labels.workerStatus, `${MAZE_WORKER_STATUS_PREFIX} loading`);
-        profiler.span("post maze worker request", () => {
-            mazeWorker.postMessage({
-                type: "build_maze_sections",
-                requestId,
-                signature,
-                options,
-                keys,
-                manualWalls,
-                bounds,
-                targetRadius: TARGET_RADIUS
-            }, [manualWalls.buffer]);
-        });
-    }
-
-    function handleMazeWorkerMessage(event) {
-        const message = event && event.data ? event.data : null;
-        if (!message || typeof message.type !== "string") return;
-        if (message.type === "ready") return;
-        if (message.type === "error") {
-            if (Number(message.requestId) !== Number(state.generatedMazeActiveRequestId)) return;
-            state.generatedMazeLoading = false;
-            setLabelText(labels.workerStatus, message.message || "maze error");
-            return;
-        }
-        if (message.type !== "maze_sections_result") return;
-        if (Number(message.requestId) !== Number(state.generatedMazeActiveRequestId)) return;
-        if (message.signature !== state.generatedMazePendingSignature) return;
-        profiler.mark("maze worker result received", {
-            generatedWallSegments: message.generatedWalls instanceof Float32Array ? message.generatedWalls.length / WALL_STRIDE : 0,
-            nodeCount: message.nodeLayer && message.nodeLayer.nodes instanceof Float32Array ? message.nodeLayer.nodes.length / 4 : 0
-        });
-        installGeneratedMazeWorkerResult(message);
     }
 
     function installGeneratedMazeWorkerResult(message) {
