@@ -21,17 +21,18 @@ test("Wizard of Flatland fireball levels match the design table", () => {
             level: level.level,
             damage: level.damage,
             manaCost: level.manaCost,
-            radius: level.radius,
+            explosionRadius: level.explosionRadius,
+            projectileRadius: level.projectileRadius,
             castDelay: level.castDelay
         })),
         [
-            { level: 1, damage: 11, manaCost: 10, radius: 1, castDelay: 1 },
-            { level: 2, damage: 16, manaCost: 9.5, radius: 1.1, castDelay: 0.9 },
-            { level: 3, damage: 24, manaCost: 9, radius: 1.25, castDelay: 0.8 },
-            { level: 4, damage: 35, manaCost: 8.5, radius: 1.4, castDelay: 0.7 },
-            { level: 5, damage: 50, manaCost: 8, radius: 1.8, castDelay: 0.6 },
-            { level: 6, damage: 72, manaCost: 7.5, radius: 2.3, castDelay: 0.5 },
-            { level: 7, damage: 100, manaCost: 7, radius: 3, castDelay: 0.4 }
+            { level: 1, damage: 9, manaCost: 10, explosionRadius: 1, projectileRadius: 0.4, castDelay: 1 },
+            { level: 2, damage: 12, manaCost: 9.5, explosionRadius: 1.1, projectileRadius: 0.5, castDelay: 0.9 },
+            { level: 3, damage: 16, manaCost: 9, explosionRadius: 1.25, projectileRadius: 0.62, castDelay: 0.8 },
+            { level: 4, damage: 21, manaCost: 8.5, explosionRadius: 1.4, projectileRadius: 0.75, castDelay: 0.7 },
+            { level: 5, damage: 50, manaCost: 8, explosionRadius: 1.8, projectileRadius: 0.9, castDelay: 0.6 },
+            { level: 6, damage: 72, manaCost: 7.5, explosionRadius: 2.3, projectileRadius: 1.1, castDelay: 0.5 },
+            { level: 7, damage: 100, manaCost: 7, explosionRadius: 3, projectileRadius: 1.37, castDelay: 0.4 }
         ]
     );
 });
@@ -42,6 +43,8 @@ test("Wizard of Flatland fireball gameplay resolves level stats", () => {
     assert.match(source, /spendWizardMagic\(fireballStats\.manaCost\)/);
     assert.match(source, /state\.fireballCooldownRemaining = fireballStats\.cooldown/);
     assert.match(source, /fireball\.dirX \* fireball\.speed \* dt/);
+    assert.match(source, /fireballStats\.projectileRadius/);
+    assert.match(source, /findEarliestFireballWallHit\(previousX, previousY, nextX, nextY, fireball\.projectileRadius\)/);
     assert.match(source, /damageAgentsIntersectingCircle\(fireball\.x, fireball\.y, fireball\.explosionRadius, fireball\.damage\)/);
 });
 
@@ -52,6 +55,8 @@ test("Wizard of Flatland fireballs use the copied main-game animation sheet", ()
     assert.match(source, /const FIREBALL_ANIMATION_FRAME_COLUMNS = 5/);
     assert.match(source, /const FIREBALL_ANIMATION_FRAME_ROWS = 2/);
     assert.match(source, /function drawAnimatedFireball\(fireball\)/);
+    assert.match(source, /const animationRadius = fireball\.impactActive \? fireball\.explosionRadius : fireball\.projectileRadius/);
+    assert.match(source, /const drawSize = animationRadius \* 2 \* state\.view\.scale/);
     assert.match(source, /ctx\.drawImage\(/);
 });
 

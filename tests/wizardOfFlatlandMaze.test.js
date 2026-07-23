@@ -37,6 +37,8 @@ function loadMazeWorkerExports() {
             MAZE_SQUARE_ROOM_HALLWAY_SNAP_DISTANCE,
             MAZE_SQUARE_ROOM_POCKET_INCORPORATE_CHANCE,
             MAZE_FULL_WALL_HALLWAY_CHANCE,
+            PYRAMID_FIRST_ROOM_DISTANCE,
+            PYRAMID_ROOM_DISTANCE_STEP,
             MAZE_OUTSIDE_DOOR_WIDE_WIDTH,
             MAZE_OUTSIDE_DOOR_WIDE_CHANCE,
             MAZE_OUTSIDE_DOOR_FULL_WALL_CHANCE,
@@ -53,6 +55,8 @@ function loadMazeWorkerExports() {
             MAZE_DOOR_WIDTH,
             getMazeOutsideDoorOpening,
             buildMazeRoom,
+            isMazePyramidRoomSectionCoord,
+            getMazePyramidRoomDistance,
             buildMazeSquarePocketMutation,
             getMazeSquarePocketExtendedWallEnd,
             getMazeSquarePocketTrimmedWallEnd,
@@ -77,6 +81,7 @@ function loadMazeWorkerExports() {
             getMazeSquarePocketWallColinearity,
             canMazeSquarePocketConnectToSide,
             isMazeRoomSideSquaredOff,
+            isMazeSharedHallOpen,
             getMazeHalfHallwayBoundarySegments,
             getMazeSquarePocketOrthogonalHallwaySpan,
             getMazeThreeHallwayJunctionWallOmissions,
@@ -326,6 +331,44 @@ test("Wizard of Flatland room doors are 3 meters wide without perpendicular post
     assert.equal(postLikeSegments.length, 0);
     const gap = Math.hypot(sideSegments[1].ax - sideSegments[0].bx, sideSegments[1].ay - sideSegments[0].by);
     assert.ok(Math.abs(gap - 3) < 0.00001);
+});
+
+test("Wizard of Flatland pyramid rooms open every adjacent hall", () => {
+    const api = loadMazeWorkerExports();
+    const options = {
+        seed: "pyramid-room-halls",
+        chunkSize: 44,
+        roomScale: 0.56,
+        twistiness: 0.62
+    };
+    const pyramid = { q: 8, r: 0 };
+    const directions = [
+        { q: 1, r: 0 },
+        { q: 0, r: 1 },
+        { q: -1, r: 1 },
+        { q: -1, r: 0 },
+        { q: 0, r: -1 },
+        { q: 1, r: -1 }
+    ];
+
+    assert.equal(api.PYRAMID_FIRST_ROOM_DISTANCE, 8);
+    assert.equal(api.PYRAMID_ROOM_DISTANCE_STEP, 7);
+    assert.equal(api.getMazePyramidRoomDistance(pyramid.q, pyramid.r), 8);
+    assert.equal(api.getMazePyramidRoomDistance(15, 0), 15);
+    assert.equal(api.getMazePyramidRoomDistance(22, 0), 22);
+    assert.equal(api.isMazePyramidRoomSectionCoord(pyramid.q, pyramid.r), true);
+    assert.equal(api.isMazePyramidRoomSectionCoord(14, 0), false);
+    assert.equal(api.isMazePyramidRoomSectionCoord(8, 1), false);
+
+    for (let side = 0; side < directions.length; side++) {
+        const dir = directions[side];
+        const neighborQ = pyramid.q + dir.q;
+        const neighborR = pyramid.r + dir.r;
+        const neighborSide = (side + 3) % 6;
+        assert.equal(api.isMazeSharedHallOpen(pyramid.q, pyramid.r, side, options), true);
+        assert.equal(api.isMazeSharedHallOpen(neighborQ, neighborR, neighborSide, options), true);
+        assert.equal(api.getMazeSharedHallConnection(neighborQ, neighborR, neighborSide, options, true).open, true);
+    }
 });
 
 test("Wizard of Flatland outside doors use normal, wide, and full-wall variants", () => {

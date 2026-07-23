@@ -48,6 +48,8 @@ const MAZE_SQUARE_ROOM_SIDE_GAP_WIDTH = 4;
 const MAZE_SQUARE_ROOM_WALL_END_SHORTEN = 2;
 const MAZE_SQUARE_ROOM_HALLWAY_SNAP_DISTANCE = 3;
 const MAZE_SQUARE_ROOM_POCKET_INCORPORATE_CHANCE = 0.4;
+const PYRAMID_FIRST_ROOM_DISTANCE = 8;
+const PYRAMID_ROOM_DISTANCE_STEP = 7;
 const MAZE_SECTION_DIRECTIONS = [
     { q: 1, r: 0 },
     { q: 0, r: 1 },
@@ -247,6 +249,26 @@ function parseMazeSectionKey(key) {
     const r = Number(parts[1]);
     if (!Number.isFinite(q) || !Number.isFinite(r)) throw new Error(`Wizard of Flatland maze section key is invalid: ${key}`);
     return { q, r };
+}
+
+function isMazePyramidRoomSectionCoord(q, r) {
+    return getMazePyramidRoomDistance(q, r) !== null;
+}
+
+function getMazePyramidRoomDistance(q, r) {
+    if (!Number.isInteger(q) || !Number.isInteger(r)) {
+        throw new Error("Wizard of Flatland pyramid room check requires integer section coordinates");
+    }
+    if (q === 0 && r === 0) return 0;
+    for (const dir of MAZE_SECTION_DIRECTIONS) {
+        if (!dir) throw new Error("Wizard of Flatland pyramid direction is invalid");
+        const distance = dir.q !== 0 ? q / dir.q : r / dir.r;
+        if (!Number.isInteger(distance) || distance < PYRAMID_FIRST_ROOM_DISTANCE) continue;
+        if (q !== dir.q * distance || r !== dir.r * distance) continue;
+        if ((distance - PYRAMID_FIRST_ROOM_DISTANCE) % PYRAMID_ROOM_DISTANCE_STEP !== 0) continue;
+        return distance;
+    }
+    return null;
 }
 
 function mazeSectionCenter(q, r, options) {
@@ -931,6 +953,7 @@ function canMazeSharedHallwayUseFullWall(q, r, side, options) {
 function isMazeSharedHallOpen(q, r, side, options) {
     const dir = MAZE_SECTION_DIRECTIONS[side];
     if (!dir) throw new Error("Wizard of Flatland maze hallway side is invalid");
+    if (isMazePyramidRoomSectionCoord(q, r) || isMazePyramidRoomSectionCoord(q + dir.q, r + dir.r)) return true;
     const thisKey = mazeSectionKey(q, r);
     const neighborKey = mazeSectionKey(q + dir.q, r + dir.r);
     const ordered = thisKey < neighborKey ? `${thisKey}|${neighborKey}` : `${neighborKey}|${thisKey}`;

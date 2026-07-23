@@ -65,15 +65,11 @@
         TARGET_PROJECTED_CURSOR_MAX_DISTANCE - TARGET_PROJECTED_CURSOR_DISTANCE,
         TARGET_PROJECTED_CURSOR_DISTANCE - TARGET_PROJECTED_CURSOR_MIN_DISTANCE
     ) / TARGET_CURSOR_DISTANCE_RETURN_SECONDS;
-    const FIREBALL_HITBOX_LENGTH = 1.1;
-    const FIREBALL_HITBOX_WIDTH = 0.62;
-    const FIREBALL_DAMAGE_RADIUS = FIREBALL_HITBOX_WIDTH * 0.5;
     const FIREBALL_EXPLOSION_VISUAL_SECONDS = 0.16;
     const FIREBALL_ANIMATION_TEXTURE_PATH = "/wizard-of-flatland/hi-fi-fireball.png";
     const FIREBALL_ANIMATION_FRAME_COLUMNS = 5;
     const FIREBALL_ANIMATION_FRAME_ROWS = 2;
     const FIREBALL_ANIMATION_FRAME_COUNT = FIREBALL_ANIMATION_FRAME_COLUMNS * FIREBALL_ANIMATION_FRAME_ROWS;
-    const FIREBALL_ANIMATION_WORLD_SIZE = FIREBALL_HITBOX_LENGTH * 2.25;
     const FIREBALL_IMPACT_ANIMATION_SPEED_MULTIPLIER = 10;
     const ENEMY_MAX_HEALTH = 20;
     const WIZARD_MAX_HEALTH = 100;
@@ -82,6 +78,8 @@
     const WIZARD_HEALTH_REGEN_PER_SECOND = WIZARD_MAX_HEALTH * 0.005;
     const WIZARD_MAGIC_REGEN_PER_SECOND = 7;
     const ENEMY_HIT_DAMAGE = 10;
+    const ENEMY_SCALE_RING_INTERVAL = 7;
+    const ENEMY_SCALE_INCREMENT = 0.1;
     const SPELL_LEVEL_DATA_URL = "/wizard-of-flatland/spell-levels.json";
     const SPELL_LEVEL_MIN = 0;
     const SPELL_LEVEL_MAX = 7;
@@ -91,7 +89,8 @@
         ["power", "Power"],
         ["damage", "Damage"],
         ["range", "Range"],
-        ["radius", "Explosion radius"],
+        ["explosionRadius", "Explosion radius"],
+        ["projectileRadius", "Projectile radius"],
         ["castDelay", "Cooldown"],
         ["projectileSpeed", "Projectile speed"],
         ["duration", "Duration"]
@@ -137,7 +136,8 @@
     const MAZE_LOOKAHEAD_REFRESH_INTERVAL_MS = 1000;
     const MAZE_ROOM_EMPTY_ENEMY_CHANCE = 0;
     const MAZE_ROOM_MAX_ENEMY_CHANCE = 1 / 100;
-    const MAZE_ROOM_MAX_ENEMIES = 10;
+    const MAZE_ROOM_BASE_ENEMY_CAP = 2;
+    const MAZE_ROOM_BASE_ENEMY_CAP_RING = 2;
     const MAZE_ROOM_ENEMY_DISTRIBUTION_POWER = 3.25;
     const MAZE_ROOM_ENEMY_SAFE_RADIUS_SCALE = 0.56;
     const MAZE_COIN_AVERAGE_COUNT = 10;
@@ -156,7 +156,8 @@
     const TALISMAN_STORAGE_KEY = "wizardOfFlatland.checkpoint.v1";
     const TALISMAN_STORAGE_KEY_PREFIX = `${TALISMAN_STORAGE_KEY}:`;
     const TALISMAN_SAVE_INDEX_KEY = "wizardOfFlatland.checkpoint.index.v1";
-    const TALISMAN_ROOM_INTERVAL = 50;
+    const PYRAMID_FIRST_ROOM_DISTANCE = 8;
+    const PYRAMID_ROOM_DISTANCE_STEP = 7;
     const TALISMAN_RADIUS = TARGET_RADIUS * 4.6;
     const TALISMAN_TOUCH_DISTANCE = TARGET_RADIUS + TALISMAN_RADIUS * 0.75;
     const TALISMAN_ACTIVATION_FLASH_SECONDS = 0.42;
@@ -201,10 +202,19 @@
     const WIZARD_HAT_TOP_DOWN_BRIM_HEIGHT = 2.25;
     const WIZARD_HAT_TOP_DOWN_BRIM_DROP = 0.12;
     const WIZARD_HAT_TOP_DOWN_CONE_HEIGHT = 0.8112;
-    const FLOOR_CENTER_COLOR = "#777777";
-    const FLOOR_EDGE_COLOR = "#904444";
-    const FLOOR_OUTER_COLOR = "#990000";
+    const FLOOR_CENTER_COLOR = "#535353";
+    const FLOOR_EDGE_COLOR = "#653030";
+    const FLOOR_MID_OUTER_COLOR = "#3c7753";
+    const FLOOR_FAR_OUTER_COLOR = "#775fb3";
+    const FLOOR_OUTER_COLOR = "#9b7700";
     const FLOOR_GRADIENT_SECTION_DISTANCE = 7;
+    const FLOOR_GRADIENT_MID_OUTER_SECTION_DISTANCE = FLOOR_GRADIENT_SECTION_DISTANCE * 2;
+    const FLOOR_GRADIENT_FAR_OUTER_SECTION_DISTANCE = FLOOR_GRADIENT_SECTION_DISTANCE * 3;
+    const FLOOR_GRADIENT_OUTER_SECTION_DISTANCE = FLOOR_GRADIENT_SECTION_DISTANCE * 4;
+    const FLOOR_HOME_BASE_LIGHT_SECTION_DISTANCE = 7;
+    const FLOOR_HOME_BASE_LIGHT_BRIGHTNESS = 0.4;
+    const MAZE_RING_BOUNDARY_INTERVAL = 7;
+    const MAZE_RING_BOUNDARY_COLOR = "rgba(255,255,255,0.52)";
     const VIEW_ZOOM_MIN = 0.45;
     const VIEW_ZOOM_MAX = 3.2;
     const VIEW_ZOOM_WHEEL_STEP = 0.0015;
@@ -305,6 +315,7 @@
         nextDroppedCoinId: 1,
         talismans: [],
         activatedTalismanSectionKeys: new Set(),
+        homeBaseTalismanSectionKey: "",
         visitedMazeSectionKeys: new Set(),
         walls: createEmptyWallBuffer(),
         manualWalls: createEmptyWallBuffer(),
@@ -409,7 +420,7 @@
     const profiler = createWizardOfFlatlandProfiler();
     attachWizardOfFlatlandDebugGlobals(state, profiler);
 
-    const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-84");
+    const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-85");
     worker.addEventListener("message", handleWorkerMessage);
     worker.addEventListener("error", (event) => {
         setLabelText(labels.workerStatus, event.message || "failed");
@@ -421,7 +432,7 @@
         setLabelText(labels.workerStatus, event.message || "pathfinding failed");
     });
 
-    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-26");
+    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-28");
     mazeWorker.addEventListener("message", handleMazeWorkerMessage);
     mazeWorker.addEventListener("error", (event) => {
         state.generatedMazeLoading = false;
@@ -483,6 +494,7 @@
         };
         state.levelPoints = 0;
         updateStatusBars();
+        refreshSpellLevelPanel();
     }
 
     function updateStatusBars() {
@@ -502,7 +514,6 @@
         expBar.style.width = `${expRatio * 100}%`;
         expCounter.textContent = `${Math.floor(state.wizardVitals.exp)}/${state.wizardVitals.maxExp}`;
         expLevelUpButton.classList.toggle("hidden", state.levelPoints <= 0);
-        refreshSpellLevelPanel();
     }
 
     function playLevelUpAnnouncement() {
@@ -648,7 +659,8 @@
         const { level, levelData } = getActiveSpellLevelData("fireball");
         const manaCost = requirePositiveSpellLevelNumber("fireball", level, levelData, "manaCost");
         const damage = requirePositiveSpellLevelNumber("fireball", level, levelData, "damage");
-        const explosionRadius = requirePositiveSpellLevelNumber("fireball", level, levelData, "radius");
+        const explosionRadius = requirePositiveSpellLevelNumber("fireball", level, levelData, "explosionRadius");
+        const projectileRadius = requirePositiveSpellLevelNumber("fireball", level, levelData, "projectileRadius");
         const cooldown = requirePositiveSpellLevelNumber("fireball", level, levelData, "castDelay");
         const projectileSpeed = requirePositiveSpellLevelNumber("fireball", level, levelData, "projectileSpeed");
         const range = requirePositiveSpellLevelNumber("fireball", level, levelData, "range");
@@ -657,6 +669,7 @@
             manaCost,
             damage,
             explosionRadius,
+            projectileRadius,
             cooldown,
             projectileSpeed,
             maxAge: range / projectileSpeed
@@ -876,6 +889,7 @@
             state.wizardVitals.exp = nextExp % state.wizardVitals.maxExp;
             state.levelPoints += gainedLevelPoints;
             updateStatusBars();
+            refreshSpellLevelPanel();
             playLevelUpAnnouncement();
             return;
         }
@@ -1448,6 +1462,32 @@
         validateMazeRoomEnemyBudgetSectionKey(sectionKey);
         const coord = parseMazeSectionKey(sectionKey);
         return getMazeSectionRing(coord.q, coord.r) <= 1;
+    }
+
+    function isMazePyramidRoomSectionKey(sectionKey) {
+        validateMazeRoomEnemyBudgetSectionKey(sectionKey);
+        const coord = parseMazeSectionKey(sectionKey);
+        return isMazePyramidRoomSectionCoord(coord.q, coord.r);
+    }
+
+    function isMazePyramidRoomSectionCoord(q, r) {
+        return getMazePyramidRoomDistance(q, r) !== null;
+    }
+
+    function getMazePyramidRoomDistance(q, r) {
+        if (!Number.isInteger(q) || !Number.isInteger(r)) {
+            throw new Error("Wizard of Flatland pyramid room check requires integer section coordinates");
+        }
+        if (q === 0 && r === 0) return 0;
+        for (const dir of MAZE_SECTION_DIRECTIONS) {
+            if (!dir) throw new Error("Wizard of Flatland pyramid direction is invalid");
+            const distance = dir.q !== 0 ? q / dir.q : r / dir.r;
+            if (!Number.isInteger(distance) || distance < PYRAMID_FIRST_ROOM_DISTANCE) continue;
+            if (q !== dir.q * distance || r !== dir.r * distance) continue;
+            if ((distance - PYRAMID_FIRST_ROOM_DISTANCE) % PYRAMID_ROOM_DISTANCE_STEP !== 0) continue;
+            return distance;
+        }
+        return null;
     }
 
     function parseMazeSectionKey(key) {
@@ -2261,6 +2301,7 @@
     }
 
     function createMazeCoinsForSection(sectionKey, options, existingCoins) {
+        if (isMazePyramidRoomSectionKey(sectionKey)) return [];
         const coord = parseMazeSectionKey(sectionKey);
         const count = getMazeCoinCount(sectionKey, options);
         const sectionPolygon = getMazeSectionPolygonForCoord(coord, options);
@@ -2327,47 +2368,23 @@
     function createMazeTalismanForSection(sectionKey, options) {
         validateMazeRoomEnemyBudgetSectionKey(sectionKey);
         const coord = parseMazeSectionKey(sectionKey);
-        const roomIndex = getMazeSectionSpiralIndex(coord.q, coord.r);
-        if (roomIndex !== 0 && roomIndex % TALISMAN_ROOM_INTERVAL !== 0) return null;
+        const pyramidDistance = getMazePyramidRoomDistance(coord.q, coord.r);
+        if (pyramidDistance === null) return null;
         const center = mazeSectionCenter(coord.q, coord.r, options);
         return {
             key: `talisman|${options.seed}|${options.chunkSize}|${options.roomScale.toFixed(3)}|${options.twistiness.toFixed(3)}|${sectionKey}`,
             sectionKey,
             q: coord.q,
             r: coord.r,
-            roomIndex,
+            pyramidDistance,
             x: center.x,
             y: center.y,
             radius: TALISMAN_RADIUS,
-            activated: state.activatedTalismanSectionKeys.has(sectionKey),
+            activated: sectionKey === getHomeBaseTalismanSectionKey(),
             flashSeconds: 0,
             blockedFlashSeconds: 0,
             touching: false
         };
-    }
-
-    function getMazeSectionSpiralIndex(q, r) {
-        if (!Number.isInteger(q) || !Number.isInteger(r)) {
-            throw new Error("Wizard of Flatland room index requires integer section coordinates");
-        }
-        const ring = getMazeSectionRing(q, r);
-        if (ring === 0) return 0;
-        const ringCoords = [];
-        for (let rq = -ring; rq <= ring; rq++) {
-            for (let rr = -ring; rr <= ring; rr++) {
-                if (getMazeSectionRing(rq, rr) !== ring) continue;
-                const x = Math.sqrt(3) * (rq + rr * 0.5);
-                const y = 1.5 * rr;
-                ringCoords.push({ q: rq, r: rr, angle: Math.atan2(y, x) });
-            }
-        }
-        ringCoords.sort((a, b) => a.angle - b.angle || a.q - b.q || a.r - b.r);
-        const ringStartIndex = 1 + 3 * (ring - 1) * ring;
-        for (let i = 0; i < ringCoords.length; i++) {
-            const coord = ringCoords[i];
-            if (coord.q === q && coord.r === r) return ringStartIndex + i;
-        }
-        throw new Error(`Wizard of Flatland room index traversal missed section ${q},${r}`);
     }
 
     function getMazeSectionRing(q, r) {
@@ -2533,6 +2550,7 @@
     function resetGeneratedMazeTalismanState() {
         state.talismans = [];
         state.activatedTalismanSectionKeys = new Set();
+        state.homeBaseTalismanSectionKey = "";
         state.visitedMazeSectionKeys = new Set();
     }
 
@@ -2634,6 +2652,7 @@
         state.nextDroppedCoinId = 1;
         state.talismans = [];
         state.activatedTalismanSectionKeys = new Set();
+        state.homeBaseTalismanSectionKey = "";
         state.visitedMazeSectionKeys = new Set();
         state.walls = createEmptyWallBuffer();
         state.manualWalls = createEmptyWallBuffer();
@@ -2763,7 +2782,8 @@
                 exp: state.wizardVitals.exp,
                 maxExp: state.wizardVitals.maxExp
             },
-            activatedTalismanSectionKeys: Array.from(state.activatedTalismanSectionKeys).sort()
+            activatedTalismanSectionKeys: Array.from(state.activatedTalismanSectionKeys).sort(),
+            homeBaseTalismanSectionKey: getHomeBaseTalismanSectionKey()
         };
     }
 
@@ -2878,7 +2898,6 @@
             y: agent.y,
             vx: agent.vx,
             vy: agent.vy,
-            radius: agent.radius,
             speed: agent.speed,
             health: agent.health,
             maxHealth: agent.maxHealth,
@@ -2936,6 +2955,9 @@
         if (snapshot.nextDroppedCoinId !== undefined && (!Number.isInteger(snapshot.nextDroppedCoinId) || snapshot.nextDroppedCoinId < 1)) {
             throw new Error("Wizard of Flatland saved checkpoint nextDroppedCoinId must be a positive integer");
         }
+        if (snapshot.homeBaseTalismanSectionKey !== undefined && typeof snapshot.homeBaseTalismanSectionKey !== "string") {
+            throw new Error("Wizard of Flatland saved checkpoint home base talisman key must be a string");
+        }
     }
 
     function applyWizardCheckpointSnapshot(snapshot) {
@@ -2965,6 +2987,7 @@
         state.nextDroppedCoinId = getNextAvailableDroppedCoinId(snapshot.nextDroppedCoinId || 1);
         state.talismans = [];
         state.activatedTalismanSectionKeys = new Set(snapshot.activatedTalismanSectionKeys || []);
+        state.homeBaseTalismanSectionKey = getHomeBaseTalismanSectionKeyFromCheckpointSnapshot(snapshot);
         state.visitedMazeSectionKeys = new Set(snapshot.visitedSectionKeys);
         state.generatedMazeInitialEnemySpawnBudgetsBySectionKey = new Map(snapshot.spawnBudgets.map((entry) => {
             if (!entry || typeof entry.sectionKey !== "string" || !Number.isInteger(entry.budget) || entry.budget < 0) {
@@ -2983,6 +3006,7 @@
         normalizeWizardSpellLevels();
         validateWizardLevelPoints();
         updateStatusBars();
+        refreshSpellLevelPanel();
         state.generatedMazeWalls = createEmptyWallBuffer();
         state.walls = createEmptyWallBuffer();
         state.generatedMazeChunkKeys = new Set();
@@ -3016,21 +3040,24 @@
         if (!snapshot || typeof snapshot !== "object") {
             throw new Error("Wizard of Flatland saved checkpoint enemy is missing");
         }
-        for (const field of ["id", "x", "y", "radius", "speed", "health", "maxHealth"]) {
+        for (const field of ["id", "x", "y", "speed", "health"]) {
             if (!Number.isFinite(snapshot[field])) {
                 throw new Error(`Wizard of Flatland saved checkpoint enemy requires finite ${field}`);
             }
         }
+        const enemyScale = getEnemyScaleForCheckpointSnapshot(snapshot);
+        const maxHealth = ENEMY_MAX_HEALTH * enemyScale;
         const agent = {
             id: snapshot.id,
             x: snapshot.x,
             y: snapshot.y,
             vx: Number(snapshot.vx) || 0,
             vy: Number(snapshot.vy) || 0,
-            radius: snapshot.radius,
+            radius: AGENT_RADIUS * enemyScale,
             speed: snapshot.speed,
-            health: snapshot.health,
-            maxHealth: snapshot.maxHealth,
+            health: getScaledCheckpointEnemyHealth(snapshot, maxHealth),
+            maxHealth,
+            hitDamage: ENEMY_HIT_DAMAGE * enemyScale,
             priority: Number.isFinite(snapshot.priority) ? snapshot.priority : 0,
             waitTime: Number.isFinite(snapshot.waitTime) ? snapshot.waitTime : 0,
             phase: Number.isFinite(snapshot.phase) ? snapshot.phase : PHASE_MILLING,
@@ -3067,6 +3094,41 @@
         }
         validateAgentHealth(agent);
         return agent;
+    }
+
+    function getScaledCheckpointEnemyHealth(snapshot, maxHealth) {
+        if (!(maxHealth > 0)) throw new Error("Wizard of Flatland saved checkpoint enemy requires positive derived max health");
+        const previousMaxHealth = Number(snapshot.maxHealth);
+        const health = Number(snapshot.health);
+        if (!Number.isFinite(health)) {
+            throw new Error("Wizard of Flatland saved checkpoint enemy requires finite health");
+        }
+        if (!(previousMaxHealth > 0)) return Math.min(maxHealth, health);
+        return Math.max(0, Math.min(maxHealth, health / previousMaxHealth * maxHealth));
+    }
+
+    function getEnemyScaleForCheckpointSnapshot(snapshot) {
+        if (snapshot && typeof snapshot.homeSectionKey === "string" && snapshot.homeSectionKey.length > 0) {
+            return getEnemyScaleForMazeSectionKey(snapshot.homeSectionKey);
+        }
+        if (snapshot && typeof snapshot.autoSpawnSectionKey === "string" && snapshot.autoSpawnSectionKey.length > 0) {
+            return getEnemyScaleForMazeSectionKey(snapshot.autoSpawnSectionKey);
+        }
+        return 1;
+    }
+
+    function getHomeBaseTalismanSectionKeyFromCheckpointSnapshot(snapshot) {
+        if (!snapshot || typeof snapshot !== "object") {
+            throw new Error("Wizard of Flatland saved checkpoint home base lookup requires a checkpoint");
+        }
+        if (typeof snapshot.homeBaseTalismanSectionKey === "string" && snapshot.homeBaseTalismanSectionKey.length > 0) {
+            validateMazeRoomEnemyBudgetSectionKey(snapshot.homeBaseTalismanSectionKey);
+            return snapshot.homeBaseTalismanSectionKey;
+        }
+        const options = getMazeOptions();
+        const coord = worldToMazeSectionCoord(snapshot.wizard.x, snapshot.wizard.y, options);
+        const sectionKey = mazeSectionKey(coord.q, coord.r);
+        return state.activatedTalismanSectionKeys.has(sectionKey) ? sectionKey : "";
     }
 
     function saveWizardCheckpointToSlot() {
@@ -3359,21 +3421,32 @@
         if (typeof sectionKey !== "string" || sectionKey.length === 0) {
             throw new Error("Wizard of Flatland enemy count requires a section key");
         }
+        if (isMazePyramidRoomSectionKey(sectionKey)) return 0;
         if (isMazeInitialSafeSectionKey(sectionKey)) return 0;
+        const maxEnemies = getMazeRoomMaxEnemyCount(sectionKey);
         const random = seededRandom(hashString(`${options.seed}|enemy-count|${sectionKey}`));
         const roll = random();
         if (roll < MAZE_ROOM_EMPTY_ENEMY_CHANCE) return 0;
-        if (roll >= 1 - MAZE_ROOM_MAX_ENEMY_CHANCE) return MAZE_ROOM_MAX_ENEMIES;
+        if (roll >= 1 - MAZE_ROOM_MAX_ENEMY_CHANCE) return maxEnemies;
         const nonEmptySpan = 1 - MAZE_ROOM_MAX_ENEMY_CHANCE - MAZE_ROOM_EMPTY_ENEMY_CHANCE;
         if (!(nonEmptySpan > 0)) throw new Error("Wizard of Flatland enemy distribution has no middle span");
+        const middleMaxEnemies = maxEnemies - 1;
+        if (middleMaxEnemies <= 0) return 1;
         const t = (roll - MAZE_ROOM_EMPTY_ENEMY_CHANCE) / nonEmptySpan;
         return Math.max(
             1,
             Math.min(
-                MAZE_ROOM_MAX_ENEMIES - 1,
-                Math.ceil(Math.pow(t, MAZE_ROOM_ENEMY_DISTRIBUTION_POWER) * (MAZE_ROOM_MAX_ENEMIES - 1))
+                middleMaxEnemies,
+                Math.ceil(Math.pow(t, MAZE_ROOM_ENEMY_DISTRIBUTION_POWER) * middleMaxEnemies)
             )
         );
+    }
+
+    function getMazeRoomMaxEnemyCount(sectionKey) {
+        validateMazeRoomEnemyBudgetSectionKey(sectionKey);
+        const coord = parseMazeSectionKey(sectionKey);
+        const ring = getMazeSectionRing(coord.q, coord.r);
+        return Math.max(1, MAZE_ROOM_BASE_ENEMY_CAP + ring - MAZE_ROOM_BASE_ENEMY_CAP_RING);
     }
 
     function getMazeRoomSpawnRadius(options) {
@@ -3474,16 +3547,18 @@
         if (typeof random !== "function") {
             throw new Error("Wizard of Flatland agent creation requires a random source");
         }
+        const enemyScale = getEnemyScaleForAgentMetadata(metadata);
         const agent = {
             id,
             x,
             y,
             vx: 0,
             vy: 0,
-            radius: AGENT_RADIUS,
+            radius: AGENT_RADIUS * enemyScale,
             speed: 5.7 + random() * 0.9,
-            health: ENEMY_MAX_HEALTH,
-            maxHealth: ENEMY_MAX_HEALTH,
+            health: ENEMY_MAX_HEALTH * enemyScale,
+            maxHealth: ENEMY_MAX_HEALTH * enemyScale,
+            hitDamage: ENEMY_HIT_DAMAGE * enemyScale,
             priority: random(),
             waitTime: random() * 1.5,
             phase: PHASE_MILLING,
@@ -3526,6 +3601,31 @@
             }
         }
         state.agents.push(agent);
+    }
+
+    function getEnemyScaleForAgentMetadata(metadata) {
+        if (!metadata || typeof metadata !== "object") return 1;
+        if (typeof metadata.homeSectionKey === "string" && metadata.homeSectionKey.length > 0) {
+            return getEnemyScaleForMazeSectionKey(metadata.homeSectionKey);
+        }
+        if (typeof metadata.autoSpawnSectionKey === "string" && metadata.autoSpawnSectionKey.length > 0) {
+            return getEnemyScaleForMazeSectionKey(metadata.autoSpawnSectionKey);
+        }
+        return 1;
+    }
+
+    function getEnemyScaleForMazeSectionKey(sectionKey) {
+        validateMazeRoomEnemyBudgetSectionKey(sectionKey);
+        const coord = parseMazeSectionKey(sectionKey);
+        const ring = getMazeSectionRing(coord.q, coord.r);
+        return 1 + Math.floor(ring / ENEMY_SCALE_RING_INTERVAL) * ENEMY_SCALE_INCREMENT;
+    }
+
+    function getAgentHitDamage(agent) {
+        const damage = Number(agent && agent.hitDamage);
+        if (Number.isFinite(damage) && damage > 0) return damage;
+        const scale = getEnemyScaleForAgentMetadata(agent);
+        return ENEMY_HIT_DAMAGE * scale;
     }
 
     function enforceInitialWallConstraints() {
@@ -3887,8 +3987,8 @@
         const dirY = dy / length;
         state.fireballCooldownRemaining = fireballStats.cooldown;
         state.fireballs.push({
-            x: state.target.x + dirX * (TARGET_RADIUS + FIREBALL_HITBOX_LENGTH * 0.35),
-            y: state.target.y + dirY * (TARGET_RADIUS + FIREBALL_HITBOX_LENGTH * 0.35),
+            x: state.target.x + dirX * (TARGET_RADIUS + fireballStats.projectileRadius),
+            y: state.target.y + dirY * (TARGET_RADIUS + fireballStats.projectileRadius),
             dirX,
             dirY,
             age: 0,
@@ -3896,7 +3996,8 @@
             speed: fireballStats.projectileSpeed,
             maxAge: fireballStats.maxAge,
             damage: fireballStats.damage,
-            explosionRadius: fireballStats.explosionRadius
+            explosionRadius: fireballStats.explosionRadius,
+            projectileRadius: fireballStats.projectileRadius
         });
     }
 
@@ -3909,7 +4010,13 @@
         if (!Number.isFinite(dt) || dt <= 0) return;
         const survivors = [];
         for (const fireball of state.fireballs) {
-            if (!(fireball.speed > 0) || !(fireball.maxAge > 0) || !(fireball.damage > 0) || !(fireball.explosionRadius > 0)) {
+            if (
+                !(fireball.speed > 0) ||
+                !(fireball.maxAge > 0) ||
+                !(fireball.damage > 0) ||
+                !(fireball.explosionRadius > 0) ||
+                !(fireball.projectileRadius > 0)
+            ) {
                 throw new Error("Wizard of Flatland fireball update requires resolved positive spell stats");
             }
             if (fireball.impactActive) {
@@ -3921,7 +4028,7 @@
             const previousY = fireball.y;
             const nextX = fireball.x + fireball.dirX * fireball.speed * dt;
             const nextY = fireball.y + fireball.dirY * fireball.speed * dt;
-            const wallHit = findEarliestFireballWallHit(previousX, previousY, nextX, nextY);
+            const wallHit = findEarliestFireballWallHit(previousX, previousY, nextX, nextY, fireball.projectileRadius);
             if (wallHit) {
                 fireball.x = wallHit.x;
                 fireball.y = wallHit.y;
@@ -3932,8 +4039,7 @@
             }
             fireball.x = nextX;
             fireball.y = nextY;
-            const hitbox = getFireballHitboxPolygon(fireball);
-            if (findAgentIntersectingPolygon(hitbox)) {
+            if (findAgentIntersectingFireball(fireball)) {
                 detonateFireball(fireball);
                 fireball.age += dt * FIREBALL_IMPACT_ANIMATION_SPEED_MULTIPLIER;
                 if (fireball.age < fireball.maxAge) survivors.push(fireball);
@@ -4020,10 +4126,20 @@
             throw new Error("Wizard of Flatland talisman activation requires activated talisman tracking");
         }
         state.activatedTalismanSectionKeys.add(talisman.sectionKey);
+        state.homeBaseTalismanSectionKey = talisman.sectionKey;
         talisman.activated = true;
         talisman.flashSeconds = TALISMAN_ACTIVATION_FLASH_SECONDS;
         saveWizardCheckpointToSlot();
         return true;
+    }
+
+    function getHomeBaseTalismanSectionKey() {
+        if (typeof state.homeBaseTalismanSectionKey !== "string") {
+            throw new Error("Wizard of Flatland home base talisman state must be a string");
+        }
+        if (state.homeBaseTalismanSectionKey.length === 0) return "";
+        validateMazeRoomEnemyBudgetSectionKey(state.homeBaseTalismanSectionKey);
+        return state.homeBaseTalismanSectionKey;
     }
 
     function hasEnemyInMazeSection(sectionKey) {
@@ -4151,10 +4267,17 @@
         }
     }
 
-    function findEarliestFireballWallHit(fromX, fromY, toX, toY) {
-        if (!Number.isFinite(fromX) || !Number.isFinite(fromY) || !Number.isFinite(toX) || !Number.isFinite(toY)) {
+    function findEarliestFireballWallHit(fromX, fromY, toX, toY, projectileRadius) {
+        if (
+            !Number.isFinite(fromX) ||
+            !Number.isFinite(fromY) ||
+            !Number.isFinite(toX) ||
+            !Number.isFinite(toY) ||
+            !Number.isFinite(projectileRadius)
+        ) {
             throw new Error("Wizard of Flatland fireball wall hit test requires finite movement");
         }
+        if (!(projectileRadius > 0)) throw new Error("Wizard of Flatland fireball wall hit test requires a positive projectile radius");
         let best = null;
         for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
             const hit = sweptCircleSegmentHit(
@@ -4166,7 +4289,7 @@
                 state.walls[i + WALL_Y1],
                 state.walls[i + WALL_X2],
                 state.walls[i + WALL_Y2],
-                FIREBALL_DAMAGE_RADIUS + WALL_WORLD_HALF_THICKNESS
+                projectileRadius + WALL_WORLD_HALF_THICKNESS
             );
             if (!hit || (best && hit.t >= best.t)) continue;
             best = {
@@ -4178,11 +4301,20 @@
         return best;
     }
 
-    function findAgentIntersectingPolygon(polygon) {
-        if (!Array.isArray(polygon) || polygon.length < 3) {
-            throw new Error("Wizard of Flatland fireball hit test requires a polygon");
+    function findAgentIntersectingFireball(fireball) {
+        if (
+            !fireball ||
+            !Number.isFinite(fireball.x) ||
+            !Number.isFinite(fireball.y) ||
+            !Number.isFinite(fireball.projectileRadius)
+        ) {
+            throw new Error("Wizard of Flatland fireball hit test requires finite fireball data");
         }
-        return state.agents.find((agent) => polygonIntersectsCircle(polygon, agent.x, agent.y, agent.radius)) || null;
+        if (!(fireball.projectileRadius > 0)) throw new Error("Wizard of Flatland fireball hit test requires a positive projectile radius");
+        return state.agents.find((agent) => {
+            const distance = Math.hypot(agent.x - fireball.x, agent.y - fireball.y);
+            return distance <= fireball.projectileRadius + agent.radius;
+        }) || null;
     }
 
     function detonateFireball(fireball) {
@@ -4243,34 +4375,6 @@
         if (agent.health < 0 || agent.health > agent.maxHealth) {
             throw new Error(`Wizard of Flatland enemy ${agent.id} health is outside its maximum`);
         }
-    }
-
-    function getFireballHitboxPolygon(fireball) {
-        if (!fireball || !Number.isFinite(fireball.x) || !Number.isFinite(fireball.y) || !Number.isFinite(fireball.dirX) || !Number.isFinite(fireball.dirY)) {
-            throw new Error("Wizard of Flatland fireball hitbox requires a finite fireball");
-        }
-        const halfLength = FIREBALL_HITBOX_LENGTH * 0.5;
-        const halfWidth = FIREBALL_HITBOX_WIDTH * 0.5;
-        const sideX = -fireball.dirY;
-        const sideY = fireball.dirX;
-        return [
-            {
-                x: fireball.x + fireball.dirX * halfLength,
-                y: fireball.y + fireball.dirY * halfLength
-            },
-            {
-                x: fireball.x + sideX * halfWidth,
-                y: fireball.y + sideY * halfWidth
-            },
-            {
-                x: fireball.x - fireball.dirX * halfLength,
-                y: fireball.y - fireball.dirY * halfLength
-            },
-            {
-                x: fireball.x - sideX * halfWidth,
-                y: fireball.y - sideY * halfWidth
-            }
-        ];
     }
 
     function polygonIntersectsCircle(polygon, circleX, circleY, radius) {
@@ -4693,7 +4797,7 @@
         resolveTargetNpcContacts(false);
         state.stats = message.stats || null;
         if ((state.stats.hits || 0) > 0) {
-            damageWizard(state.stats.hits * ENEMY_HIT_DAMAGE);
+            damageWizard(getEnemyHitDamageFromSolverStats(state.stats));
             state.targetFlashTime = 0.18;
         }
         setLabelText(labels.workerStatus, "ready");
@@ -4725,6 +4829,27 @@
                 : Math.max(0, agent.waitTime - 0.12);
             recordAgentHeadingForGlitchDetection(agent);
         }
+    }
+
+    function getEnemyHitDamageFromSolverStats(stats) {
+        if (!stats || !Number.isInteger(stats.hits) || stats.hits < 0) {
+            throw new Error("Wizard of Flatland enemy hit damage requires solver hit stats");
+        }
+        if (stats.hits === 0) return 0;
+        if (!Array.isArray(stats.hitAgentIds)) {
+            throw new Error("Wizard of Flatland enemy hit damage requires hit agent ids");
+        }
+        if (stats.hitAgentIds.length !== stats.hits) {
+            throw new Error("Wizard of Flatland enemy hit damage count does not match hit ids");
+        }
+        const agentsById = new Map(state.agents.map((agent) => [agent.id, agent]));
+        let damage = 0;
+        for (const id of stats.hitAgentIds) {
+            const agent = agentsById.get(id);
+            if (!agent) throw new Error(`Wizard of Flatland enemy hit damage missing agent ${id}`);
+            damage += getAgentHitDamage(agent);
+        }
+        return damage;
     }
 
     function recordAgentHeadingForGlitchDetection(agent) {
@@ -5445,6 +5570,7 @@
     function draw() {
         resizeCanvas();
         drawFloor();
+        drawMazeRingBoundaries();
         drawPathfindingNodeLayer();
         drawWalls();
         drawSectionBoundaries();
@@ -5466,13 +5592,18 @@
         const options = getMazeOptions();
         const viewport = getCurrentMazeViewportRect();
         if (!viewport) throw new Error("Wizard of Flatland floor gradient requires a current viewport");
-        const outerWorldRadius = Math.sqrt(3) * getMazeSectionRadius(options) * FLOOR_GRADIENT_SECTION_DISTANCE;
+        const sectionWorldStep = Math.sqrt(3) * getMazeSectionRadius(options);
+        const edgeWorldRadius = sectionWorldStep * FLOOR_GRADIENT_SECTION_DISTANCE;
+        const midOuterWorldRadius = sectionWorldStep * FLOOR_GRADIENT_MID_OUTER_SECTION_DISTANCE;
+        const farOuterWorldRadius = sectionWorldStep * FLOOR_GRADIENT_FAR_OUTER_SECTION_DISTANCE;
+        const outerWorldRadius = sectionWorldStep * FLOOR_GRADIENT_OUTER_SECTION_DISTANCE;
         if (!(outerWorldRadius > 0)) {
             throw new Error("Wizard of Flatland floor gradient requires a positive radius");
         }
         ctx.fillStyle = FLOOR_OUTER_COLOR;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         if (getMinDistanceFromOriginToRect(viewport) >= outerWorldRadius) {
+            drawHomeBaseFloorLight(options, viewport, sectionWorldStep);
             return;
         }
         const center = worldToScreen(0, 0);
@@ -5482,13 +5613,45 @@
         }
         const gradient = ctx.createRadialGradient(center.x, center.y, 0, center.x, center.y, outerRadius);
         gradient.addColorStop(0, FLOOR_CENTER_COLOR);
-        gradient.addColorStop(1, FLOOR_EDGE_COLOR);
+        gradient.addColorStop(edgeWorldRadius / outerWorldRadius, FLOOR_EDGE_COLOR);
+        gradient.addColorStop(midOuterWorldRadius / outerWorldRadius, FLOOR_MID_OUTER_COLOR);
+        gradient.addColorStop(farOuterWorldRadius / outerWorldRadius, FLOOR_FAR_OUTER_COLOR);
+        gradient.addColorStop(1, FLOOR_OUTER_COLOR);
         ctx.save();
         ctx.beginPath();
         ctx.arc(center.x, center.y, outerRadius, 0, Math.PI * 2);
         ctx.clip();
         ctx.fillStyle = gradient;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.restore();
+        drawHomeBaseFloorLight(options, viewport, sectionWorldStep);
+    }
+
+    function drawHomeBaseFloorLight(options, viewport, sectionWorldStep) {
+        const sectionKey = getHomeBaseTalismanSectionKey();
+        if (sectionKey.length === 0) return;
+        if (!viewport) throw new Error("Wizard of Flatland home base floor light requires a current viewport");
+        if (!(sectionWorldStep > 0)) throw new Error("Wizard of Flatland home base floor light requires a positive section step");
+        const coord = parseMazeSectionKey(sectionKey);
+        if (getMazePyramidRoomDistance(coord.q, coord.r) === null) {
+            throw new Error(`Wizard of Flatland home base floor light requires a pyramid section, got ${sectionKey}`);
+        }
+        const lightRadiusWorld = sectionWorldStep * FLOOR_HOME_BASE_LIGHT_SECTION_DISTANCE;
+        if (!(lightRadiusWorld > 0)) throw new Error("Wizard of Flatland home base floor light requires a positive radius");
+        const centerWorld = mazeSectionCenter(coord.q, coord.r, options);
+        if (getMinDistanceFromPointToRect(centerWorld.x, centerWorld.y, viewport) >= lightRadiusWorld) return;
+        const center = worldToScreen(centerWorld.x, centerWorld.y);
+        const lightRadius = lightRadiusWorld * state.view.scale;
+        if (!(lightRadius > 0)) throw new Error("Wizard of Flatland home base floor light requires a positive screen radius");
+        const gradient = ctx.createRadialGradient(center.x, center.y, 0, center.x, center.y, lightRadius);
+        gradient.addColorStop(0, `rgba(255,255,255,${FLOOR_HOME_BASE_LIGHT_BRIGHTNESS})`);
+        gradient.addColorStop(1, "rgba(255,255,255,0)");
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(center.x, center.y, lightRadius, 0, Math.PI * 2);
+        ctx.fill();
         ctx.restore();
     }
 
@@ -5499,6 +5662,72 @@
         const dx = rect.minX > 0 ? rect.minX : rect.maxX < 0 ? -rect.maxX : 0;
         const dy = rect.minY > 0 ? rect.minY : rect.maxY < 0 ? -rect.maxY : 0;
         return Math.hypot(dx, dy);
+    }
+
+    function getMaxDistanceFromOriginToRect(rect) {
+        if (!rect || !Number.isFinite(rect.minX) || !Number.isFinite(rect.minY) || !Number.isFinite(rect.maxX) || !Number.isFinite(rect.maxY)) {
+            throw new Error("Wizard of Flatland ring boundary drawing requires a finite viewport rectangle");
+        }
+        return Math.max(
+            Math.hypot(rect.minX, rect.minY),
+            Math.hypot(rect.maxX, rect.minY),
+            Math.hypot(rect.maxX, rect.maxY),
+            Math.hypot(rect.minX, rect.maxY)
+        );
+    }
+
+    function getMinDistanceFromPointToRect(x, y, rect) {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error("Wizard of Flatland point-rectangle distance requires a finite point");
+        }
+        if (!rect || !Number.isFinite(rect.minX) || !Number.isFinite(rect.minY) || !Number.isFinite(rect.maxX) || !Number.isFinite(rect.maxY)) {
+            throw new Error("Wizard of Flatland point-rectangle distance requires a finite rectangle");
+        }
+        const dx = x < rect.minX ? rect.minX - x : x > rect.maxX ? x - rect.maxX : 0;
+        const dy = y < rect.minY ? rect.minY - y : y > rect.maxY ? y - rect.maxY : 0;
+        return Math.hypot(dx, dy);
+    }
+
+    function drawMazeRingBoundaries() {
+        if (!isProceduralMazeScenario()) return;
+        const options = getMazeOptions();
+        const viewport = getCurrentMazeViewportRect();
+        if (!viewport) throw new Error("Wizard of Flatland ring boundary drawing requires a current viewport");
+        const radius = getMazeSectionRadius(options);
+        if (!(radius > 0)) throw new Error("Wizard of Flatland ring boundary drawing requires a positive section radius");
+        const sectionWorldStep = Math.sqrt(3) * radius;
+        const minDistance = getMinDistanceFromOriginToRect(viewport);
+        const maxDistance = getMaxDistanceFromOriginToRect(viewport);
+        const firstRing = Math.max(
+            MAZE_RING_BOUNDARY_INTERVAL,
+            Math.ceil(minDistance / sectionWorldStep / MAZE_RING_BOUNDARY_INTERVAL) * MAZE_RING_BOUNDARY_INTERVAL
+        );
+        const lastRing = Math.floor(maxDistance / sectionWorldStep / MAZE_RING_BOUNDARY_INTERVAL) * MAZE_RING_BOUNDARY_INTERVAL;
+        if (lastRing < firstRing) return;
+
+        ctx.save();
+        ctx.strokeStyle = MAZE_RING_BOUNDARY_COLOR;
+        ctx.lineWidth = Math.max(1, state.view.scale * 0.026);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.setLineDash([Math.max(2.5, state.view.scale * 0.14), Math.max(3.5, state.view.scale * 0.18)]);
+        const center = worldToScreen(0, 0);
+        for (let ring = firstRing; ring <= lastRing; ring += MAZE_RING_BOUNDARY_INTERVAL) {
+            drawMazeRingBoundaryCircle(center, sectionWorldStep * ring);
+        }
+        ctx.setLineDash([]);
+        ctx.restore();
+    }
+
+    function drawMazeRingBoundaryCircle(center, worldRadius) {
+        if (!center || !Number.isFinite(center.x) || !Number.isFinite(center.y) || !(worldRadius > 0)) {
+            throw new Error("Wizard of Flatland ring boundary circle requires finite render data");
+        }
+        const screenRadius = worldRadius * state.view.scale;
+        if (!(screenRadius > 0)) throw new Error("Wizard of Flatland ring boundary circle requires a positive screen radius");
+        ctx.beginPath();
+        ctx.arc(center.x, center.y, screenRadius, 0, Math.PI * 2);
+        ctx.stroke();
     }
 
     function drawHexGridLayer() {
@@ -6032,6 +6261,13 @@
             throw new Error("Wizard of Flatland section boundary debug requires finite screen points");
         }
         return maxX >= -padding && minX <= state.view.width + padding && maxY >= -padding && minY <= state.view.height + padding;
+    }
+
+    function lineSegmentMayBeVisible(a, b) {
+        if (!a || !b || !Number.isFinite(a.x) || !Number.isFinite(a.y) || !Number.isFinite(b.x) || !Number.isFinite(b.y)) {
+            throw new Error("Wizard of Flatland line visibility requires finite screen points");
+        }
+        return polygonMayBeVisible([a, b]);
     }
 
     function drawWallLabels() {
@@ -6581,9 +6817,17 @@
     }
 
     function drawAnimatedFireball(fireball) {
-        if (!fireball || !Number.isFinite(fireball.x) || !Number.isFinite(fireball.y)) {
+        if (
+            !fireball ||
+            !Number.isFinite(fireball.x) ||
+            !Number.isFinite(fireball.y) ||
+            !Number.isFinite(fireball.projectileRadius) ||
+            !Number.isFinite(fireball.explosionRadius)
+        ) {
             throw new Error("Wizard of Flatland fireball animation requires finite fireball position");
         }
+        if (!(fireball.projectileRadius > 0)) throw new Error("Wizard of Flatland fireball animation requires a positive projectile radius");
+        if (!(fireball.explosionRadius > 0)) throw new Error("Wizard of Flatland fireball animation requires a positive explosion radius");
         const image = requireFireballAnimationImage();
         const frameWidth = image.naturalWidth / FIREBALL_ANIMATION_FRAME_COLUMNS;
         const frameHeight = image.naturalHeight / FIREBALL_ANIMATION_FRAME_ROWS;
@@ -6594,7 +6838,8 @@
         const frameColumn = frameIndex % FIREBALL_ANIMATION_FRAME_COLUMNS;
         const frameRow = Math.floor(frameIndex / FIREBALL_ANIMATION_FRAME_COLUMNS);
         const center = worldToScreen(fireball.x, fireball.y);
-        const drawSize = FIREBALL_ANIMATION_WORLD_SIZE * state.view.scale;
+        const animationRadius = fireball.impactActive ? fireball.explosionRadius : fireball.projectileRadius;
+        const drawSize = animationRadius * 2 * state.view.scale;
         if (!(drawSize > 0)) throw new Error("Wizard of Flatland fireball animation requires positive draw size");
         ctx.drawImage(
             image,
@@ -6645,12 +6890,13 @@
     function drawTalismans() {
         if (!Array.isArray(state.talismans) || state.talismans.length === 0) return;
         ctx.save();
+        const homeBaseTalismanSectionKey = getHomeBaseTalismanSectionKey();
         for (const talisman of state.talismans) {
             validateTalisman(talisman);
             const point = worldToScreen(talisman.x, talisman.y);
             const radius = Math.max(8, talisman.radius * state.view.scale);
             const blocked = talisman.blockedFlashSeconds > 0;
-            const activated = talisman.activated || state.activatedTalismanSectionKeys.has(talisman.sectionKey);
+            const activated = talisman.sectionKey === homeBaseTalismanSectionKey;
             const activationPulse = Math.max(0, Math.min(1, talisman.flashSeconds / TALISMAN_ACTIVATION_FLASH_SECONDS));
             const glowAlpha = blocked ? 0.58 : activated ? 0.38 + activationPulse * 0.32 : 0.1;
             const glowColor = blocked ? `rgba(255,31,31,${glowAlpha})` : `rgba(255,255,255,${glowAlpha})`;

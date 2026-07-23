@@ -147,6 +147,7 @@ function solveStep(message) {
     let retreating = 0;
     let blocked = 0;
     let hits = 0;
+    const hitAgentIds = [];
     let crowdThrottleCount = 0;
     let crowdThrottlePressure = 0;
 
@@ -612,6 +613,7 @@ function solveStep(message) {
                 const resetCooldown = getAttackRecoveryCooldown(id);
                 nextCooldown = isDesignatedAttacker ? -(resetCooldown + 1) : resetCooldown;
                 hits += 1;
+                hitAgentIds.push(id);
             }
         } else if (!followingWorkerPath && (state === STATE_HOLDING || state === STATE_SEEKING || state === STATE_RECOVERING || state === STATE_VACATING)) {
             const outsideRing = clampOutsideTargetRing(x, y, candidateX, candidateY, targetX, targetY, ringRadius);
@@ -681,6 +683,7 @@ function solveStep(message) {
             retreating,
             attacking,
             hits,
+            hitAgentIds,
             blocked,
             contactPushes: contactStats.pushes,
             contactPasses: contactStats.passes,
