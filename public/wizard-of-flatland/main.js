@@ -479,6 +479,29 @@
     const getSpellLevelDefinitions = spellDataSystem.getSpellLevelDefinitions;
     const getWizardSpellLevel = spellDataSystem.getWizardSpellLevel;
     const getActiveFireballStats = spellDataSystem.getActiveFireballStats;
+    const wizardVitalsSystem = getWizardFlatlandVitalsApi().createWizardVitalsSystem({
+        state,
+        constants: {
+            WIZARD_MAX_HEALTH,
+            WIZARD_MAX_MAGIC,
+            WIZARD_MAX_EXP,
+            WIZARD_HEALTH_REGEN_PER_SECOND,
+            WIZARD_MAGIC_REGEN_PER_SECOND
+        },
+        callbacks: {
+            updateStatusBars,
+            refreshSpellLevelPanel,
+            playLevelUpAnnouncement,
+            respawnWizardAfterDeath
+        }
+    });
+    const validateWizardVitals = wizardVitalsSystem.validateWizardVitals;
+    const validateWizardLevelPoints = wizardVitalsSystem.validateWizardLevelPoints;
+    const resetWizardVitals = wizardVitalsSystem.resetWizardVitals;
+    const regenerateWizardVitals = wizardVitalsSystem.regenerateWizardVitals;
+    const damageWizard = wizardVitalsSystem.damageWizard;
+    const spendWizardMagic = wizardVitalsSystem.spendWizardMagic;
+    const gainWizardExp = wizardVitalsSystem.gainWizardExp;
     const controlSystem = getWizardFlatlandControlsApi().createControlSystem({
         state,
         labels,
@@ -608,50 +631,20 @@
         return api;
     }
 
+    function getWizardFlatlandVitalsApi() {
+        const api = window.WizardFlatlandVitals;
+        if (!api || typeof api.createWizardVitalsSystem !== "function") {
+            throw new Error("Wizard of Flatland requires /wizard-of-flatland/wizardVitals.js");
+        }
+        return api;
+    }
+
     function getWizardFlatlandProfilerApi() {
         const api = window.WizardFlatlandProfiler;
         if (!api || typeof api.createWizardOfFlatlandProfiler !== "function") {
             throw new Error("Wizard of Flatland requires /wizard-of-flatland/profiler.js");
         }
         return api;
-    }
-
-    function validateWizardVitals() {
-        const vitals = state.wizardVitals;
-        if (!vitals || typeof vitals !== "object") {
-            throw new Error("Wizard of Flatland vitals are missing");
-        }
-        for (const field of ["health", "maxHealth", "magic", "maxMagic", "exp", "maxExp"]) {
-            if (!Number.isFinite(vitals[field])) {
-                throw new Error(`Wizard of Flatland vitals require finite ${field}`);
-            }
-        }
-        if (vitals.maxHealth <= 0 || vitals.maxMagic <= 0 || vitals.maxExp <= 0) {
-            throw new Error("Wizard of Flatland vitals require positive maximums");
-        }
-        if (vitals.exp < 0 || vitals.exp > vitals.maxExp) {
-            throw new Error("Wizard of Flatland exp must stay within its maximum");
-        }
-    }
-
-    function validateWizardLevelPoints() {
-        if (!Number.isInteger(state.levelPoints) || state.levelPoints < 0) {
-            throw new Error("Wizard of Flatland levelPoints must be a non-negative integer");
-        }
-    }
-
-    function resetWizardVitals() {
-        state.wizardVitals = {
-            health: WIZARD_MAX_HEALTH,
-            maxHealth: WIZARD_MAX_HEALTH,
-            magic: WIZARD_MAX_MAGIC,
-            maxMagic: WIZARD_MAX_MAGIC,
-            exp: 0,
-            maxExp: WIZARD_MAX_EXP
-        };
-        state.levelPoints = 0;
-        updateStatusBars();
-        refreshSpellLevelPanel();
     }
 
     function updateStatusBars() {
@@ -916,62 +909,6 @@
     function hideSpellLevelPanel() {
         if (!spellLevelPanel) throw new Error("Wizard of Flatland spell level panel is missing");
         spellLevelPanel.classList.add("hidden");
-    }
-
-    function regenerateWizardVitals(dt) {
-        if (!Number.isFinite(dt) || dt <= 0) return;
-        validateWizardVitals();
-        const vitals = state.wizardVitals;
-        vitals.health = Math.min(vitals.maxHealth, vitals.health + WIZARD_HEALTH_REGEN_PER_SECOND * dt);
-        vitals.magic = Math.min(vitals.maxMagic, vitals.magic + WIZARD_MAGIC_REGEN_PER_SECOND * dt);
-        updateStatusBars();
-    }
-
-    function damageWizard(amount) {
-        const damage = Number(amount);
-        if (!Number.isFinite(damage) || damage <= 0) return 0;
-        validateWizardVitals();
-        const previousHealth = state.wizardVitals.health;
-        state.wizardVitals.health = Math.max(0, previousHealth - damage);
-        const appliedDamage = previousHealth - state.wizardVitals.health;
-        updateStatusBars();
-        if (previousHealth > 0 && state.wizardVitals.health <= 0) {
-            respawnWizardAfterDeath();
-        }
-        return appliedDamage;
-    }
-
-    function spendWizardMagic(amount) {
-        const cost = Number(amount);
-        if (!Number.isFinite(cost) || cost <= 0) {
-            throw new Error("Wizard of Flatland magic spend requires a positive finite cost");
-        }
-        validateWizardVitals();
-        if (state.wizardVitals.magic < cost) return false;
-        state.wizardVitals.magic -= cost;
-        updateStatusBars();
-        return true;
-    }
-
-    function gainWizardExp(amount) {
-        const exp = Number(amount);
-        if (!Number.isFinite(exp) || exp <= 0) {
-            throw new Error("Wizard of Flatland exp gain requires a positive finite amount");
-        }
-        validateWizardVitals();
-        validateWizardLevelPoints();
-        const nextExp = state.wizardVitals.exp + exp;
-        const gainedLevelPoints = Math.floor(nextExp / state.wizardVitals.maxExp);
-        if (gainedLevelPoints > 0) {
-            state.wizardVitals.exp = nextExp % state.wizardVitals.maxExp;
-            state.levelPoints += gainedLevelPoints;
-            updateStatusBars();
-            refreshSpellLevelPanel();
-            playLevelUpAnnouncement();
-            return;
-        }
-        state.wizardVitals.exp = nextExp;
-        updateStatusBars();
     }
 
     function getWizardOfFlatlandDebugApi() {
