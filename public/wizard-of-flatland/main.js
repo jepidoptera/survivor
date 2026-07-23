@@ -265,6 +265,8 @@
     let spellLevelDefinitions = null;
     let spellLevelFetchPromise = null;
     let selectedSpellLevelId = "fireball";
+    let spellCooldownHudVisible = null;
+    let spellCooldownHudProgress = NaN;
     const fireballAnimationImage = new Image();
     let fireballAnimationLoadError = null;
     fireballAnimationImage.addEventListener("error", () => {
@@ -666,7 +668,6 @@
         expBar.style.width = `${expRatio * 100}%`;
         expCounter.textContent = `${Math.floor(state.wizardVitals.exp)}/${state.wizardVitals.maxExp}`;
         expLevelUpButton.classList.toggle("hidden", state.levelPoints <= 0);
-        updateSpellCooldownHud();
     }
 
     function validateSpellCooldownHud() {
@@ -695,16 +696,25 @@
         if (state.fireballCooldownRemaining <= 0) {
             state.fireballCooldownRemaining = 0;
             state.fireballCooldownDuration = 0;
+            if (spellCooldownHudVisible === false && spellCooldownHudProgress === 0) return;
             setSpellCooldownRingProgress(0);
             fireballCooldownRing.classList.add("hidden");
+            spellCooldownHudVisible = false;
+            spellCooldownHudProgress = 0;
             return;
         }
         if (!(state.fireballCooldownDuration > 0)) {
             throw new Error("Wizard of Flatland fireball cooldown HUD requires a positive duration while cooling down");
         }
         const ratio = Math.max(0, Math.min(1, state.fireballCooldownRemaining / state.fireballCooldownDuration));
-        setSpellCooldownRingProgress(ratio);
-        fireballCooldownRing.classList.remove("hidden");
+        if (spellCooldownHudVisible !== true) {
+            fireballCooldownRing.classList.remove("hidden");
+        }
+        if (spellCooldownHudVisible !== true || Math.abs(ratio - spellCooldownHudProgress) > 0.0001) {
+            setSpellCooldownRingProgress(ratio);
+        }
+        spellCooldownHudVisible = true;
+        spellCooldownHudProgress = ratio;
     }
 
     function playLevelUpAnnouncement() {
@@ -3800,6 +3810,7 @@
 
     function updateSpellCooldowns(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
+        if (state.fireballCooldownRemaining <= 0 && state.fireballCooldownDuration <= 0 && spellCooldownHudVisible === false) return;
         state.fireballCooldownRemaining = Math.max(0, state.fireballCooldownRemaining - dt);
         updateSpellCooldownHud();
     }
