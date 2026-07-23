@@ -5,6 +5,7 @@ const test = require("node:test");
 
 const SPELL_LEVELS_PATH = path.join(__dirname, "../public/wizard-of-flatland/spell-levels.json");
 const MAIN_PATH = path.join(__dirname, "../public/wizard-of-flatland/main.js");
+const FIREBALL_TEXTURE_PATH = path.join(__dirname, "../public/wizard-of-flatland/hi-fi-fireball.png");
 
 function getFireballLevels() {
     const data = JSON.parse(fs.readFileSync(SPELL_LEVELS_PATH, "utf8"));
@@ -42,4 +43,24 @@ test("Wizard of Flatland fireball gameplay resolves level stats", () => {
     assert.match(source, /state\.fireballCooldownRemaining = fireballStats\.cooldown/);
     assert.match(source, /fireball\.dirX \* fireball\.speed \* dt/);
     assert.match(source, /damageAgentsIntersectingCircle\(fireball\.x, fireball\.y, fireball\.explosionRadius, fireball\.damage\)/);
+});
+
+test("Wizard of Flatland fireballs use the copied main-game animation sheet", () => {
+    assert.ok(fs.existsSync(FIREBALL_TEXTURE_PATH), "copied fireball spritesheet exists");
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(source, /const FIREBALL_ANIMATION_TEXTURE_PATH = "\/wizard-of-flatland\/hi-fi-fireball\.png"/);
+    assert.match(source, /const FIREBALL_ANIMATION_FRAME_COLUMNS = 5/);
+    assert.match(source, /const FIREBALL_ANIMATION_FRAME_ROWS = 2/);
+    assert.match(source, /function drawAnimatedFireball\(fireball\)/);
+    assert.match(source, /ctx\.drawImage\(/);
+});
+
+test("Wizard of Flatland fireball impact finishes remaining animation at 10x", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(source, /const FIREBALL_IMPACT_ANIMATION_SPEED_MULTIPLIER = 10/);
+    assert.match(source, /impactActive: false/);
+    assert.match(source, /if \(fireball\.impactActive\) \{/);
+    assert.match(source, /fireball\.age \+= dt \* FIREBALL_IMPACT_ANIMATION_SPEED_MULTIPLIER/);
+    assert.match(source, /if \(fireball\.impactActive\) return/);
+    assert.match(source, /fireball\.impactActive = true/);
 });

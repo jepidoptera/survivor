@@ -69,6 +69,12 @@
     const FIREBALL_HITBOX_WIDTH = 0.62;
     const FIREBALL_DAMAGE_RADIUS = FIREBALL_HITBOX_WIDTH * 0.5;
     const FIREBALL_EXPLOSION_VISUAL_SECONDS = 0.16;
+    const FIREBALL_ANIMATION_TEXTURE_PATH = "/wizard-of-flatland/hi-fi-fireball.png";
+    const FIREBALL_ANIMATION_FRAME_COLUMNS = 5;
+    const FIREBALL_ANIMATION_FRAME_ROWS = 2;
+    const FIREBALL_ANIMATION_FRAME_COUNT = FIREBALL_ANIMATION_FRAME_COLUMNS * FIREBALL_ANIMATION_FRAME_ROWS;
+    const FIREBALL_ANIMATION_WORLD_SIZE = FIREBALL_HITBOX_LENGTH * 2.25;
+    const FIREBALL_IMPACT_ANIMATION_SPEED_MULTIPLIER = 10;
     const ENEMY_MAX_HEALTH = 20;
     const WIZARD_MAX_HEALTH = 100;
     const WIZARD_MAX_MAGIC = 100;
@@ -245,6 +251,13 @@
     let spellLevelDefinitions = null;
     let spellLevelFetchPromise = null;
     let selectedSpellLevelId = "fireball";
+    const fireballAnimationImage = new Image();
+    let fireballAnimationLoadError = null;
+    fireballAnimationImage.addEventListener("error", () => {
+        fireballAnimationLoadError = new Error(`Wizard of Flatland failed to load fireball animation texture: ${FIREBALL_ANIMATION_TEXTURE_PATH}`);
+        console.error(fireballAnimationLoadError);
+    });
+    fireballAnimationImage.src = FIREBALL_ANIMATION_TEXTURE_PATH;
 
     const labels = {
         agentCount: document.getElementById("agentCountValue"),
@@ -3879,6 +3892,7 @@
             dirX,
             dirY,
             age: 0,
+            impactActive: false,
             speed: fireballStats.projectileSpeed,
             maxAge: fireballStats.maxAge,
             damage: fireballStats.damage,
@@ -3895,9 +3909,13 @@
         if (!Number.isFinite(dt) || dt <= 0) return;
         const survivors = [];
         for (const fireball of state.fireballs) {
-            fireball.age += dt;
             if (!(fireball.speed > 0) || !(fireball.maxAge > 0) || !(fireball.damage > 0) || !(fireball.explosionRadius > 0)) {
                 throw new Error("Wizard of Flatland fireball update requires resolved positive spell stats");
+            }
+            if (fireball.impactActive) {
+                fireball.age += dt * FIREBALL_IMPACT_ANIMATION_SPEED_MULTIPLIER;
+                if (fireball.age < fireball.maxAge) survivors.push(fireball);
+                continue;
             }
             const previousX = fireball.x;
             const previousY = fireball.y;
@@ -3908,6 +3926,8 @@
                 fireball.x = wallHit.x;
                 fireball.y = wallHit.y;
                 detonateFireball(fireball);
+                fireball.age += dt * FIREBALL_IMPACT_ANIMATION_SPEED_MULTIPLIER;
+                if (fireball.age < fireball.maxAge) survivors.push(fireball);
                 continue;
             }
             fireball.x = nextX;
@@ -3915,8 +3935,11 @@
             const hitbox = getFireballHitboxPolygon(fireball);
             if (findAgentIntersectingPolygon(hitbox)) {
                 detonateFireball(fireball);
+                fireball.age += dt * FIREBALL_IMPACT_ANIMATION_SPEED_MULTIPLIER;
+                if (fireball.age < fireball.maxAge) survivors.push(fireball);
                 continue;
             }
+            fireball.age += dt;
             if (fireball.age < fireball.maxAge) survivors.push(fireball);
         }
         state.fireballs = survivors;
@@ -4169,6 +4192,8 @@
         if (!(fireball.damage > 0) || !(fireball.explosionRadius > 0)) {
             throw new Error("Wizard of Flatland fireball explosion requires resolved positive spell stats");
         }
+        if (fireball.impactActive) return;
+        fireball.impactActive = true;
         damageAgentsIntersectingCircle(fireball.x, fireball.y, fireball.explosionRadius, fireball.damage);
         state.fireballExplosions.push({
             x: fireball.x,
@@ -6534,27 +6559,54 @@
     function drawFireballs() {
         ctx.save();
         for (const fireball of state.fireballs) {
-            const polygon = getFireballHitboxPolygon(fireball);
-            ctx.fillStyle = "rgba(255,115,36,0.62)";
-            ctx.strokeStyle = "#ffd166";
-            ctx.lineWidth = Math.max(1.5, state.view.scale * 0.045);
-            ctx.beginPath();
-            for (let i = 0; i < polygon.length; i++) {
-                const point = worldToScreen(polygon[i].x, polygon[i].y);
-                if (i === 0) ctx.moveTo(point.x, point.y);
-                else ctx.lineTo(point.x, point.y);
-            }
-            ctx.closePath();
-            ctx.fill();
-            ctx.stroke();
-
-            const center = worldToScreen(fireball.x, fireball.y);
-            ctx.fillStyle = "rgba(255,230,122,0.85)";
-            ctx.beginPath();
-            ctx.arc(center.x, center.y, Math.max(3, state.view.scale * 0.12), 0, Math.PI * 2);
-            ctx.fill();
+            drawAnimatedFireball(fireball);
         }
         ctx.restore();
+    }
+
+    function getFireballAnimationFrameIndex(fireball) {
+        if (!fireball || !Number.isFinite(fireball.age) || !(fireball.maxAge > 0)) {
+            throw new Error("Wizard of Flatland fireball animation requires finite age and max age");
+        }
+        const progress = Math.max(0, Math.min(1, fireball.age / fireball.maxAge));
+        return Math.max(0, Math.min(FIREBALL_ANIMATION_FRAME_COUNT - 1, Math.floor(progress * FIREBALL_ANIMATION_FRAME_COUNT)));
+    }
+
+    function requireFireballAnimationImage() {
+        if (fireballAnimationLoadError) throw fireballAnimationLoadError;
+        if (!fireballAnimationImage.complete || !(fireballAnimationImage.naturalWidth > 0) || !(fireballAnimationImage.naturalHeight > 0)) {
+            throw new Error(`Wizard of Flatland missing fireball animation texture: ${FIREBALL_ANIMATION_TEXTURE_PATH}`);
+        }
+        return fireballAnimationImage;
+    }
+
+    function drawAnimatedFireball(fireball) {
+        if (!fireball || !Number.isFinite(fireball.x) || !Number.isFinite(fireball.y)) {
+            throw new Error("Wizard of Flatland fireball animation requires finite fireball position");
+        }
+        const image = requireFireballAnimationImage();
+        const frameWidth = image.naturalWidth / FIREBALL_ANIMATION_FRAME_COLUMNS;
+        const frameHeight = image.naturalHeight / FIREBALL_ANIMATION_FRAME_ROWS;
+        if (!(frameWidth > 0) || !(frameHeight > 0)) {
+            throw new Error("Wizard of Flatland fireball animation texture has invalid frame dimensions");
+        }
+        const frameIndex = getFireballAnimationFrameIndex(fireball);
+        const frameColumn = frameIndex % FIREBALL_ANIMATION_FRAME_COLUMNS;
+        const frameRow = Math.floor(frameIndex / FIREBALL_ANIMATION_FRAME_COLUMNS);
+        const center = worldToScreen(fireball.x, fireball.y);
+        const drawSize = FIREBALL_ANIMATION_WORLD_SIZE * state.view.scale;
+        if (!(drawSize > 0)) throw new Error("Wizard of Flatland fireball animation requires positive draw size");
+        ctx.drawImage(
+            image,
+            frameColumn * frameWidth,
+            frameRow * frameHeight,
+            frameWidth,
+            frameHeight,
+            center.x - drawSize * 0.5,
+            center.y - drawSize * 0.5,
+            drawSize,
+            drawSize
+        );
     }
 
     function drawCoins() {
