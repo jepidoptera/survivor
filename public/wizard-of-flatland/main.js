@@ -262,7 +262,6 @@
     const startupLoadValidation = document.getElementById("startupLoadValidation");
     const startupNewBackButton = document.getElementById("startupNewBackButton");
     const startupLoadBackButton = document.getElementById("startupLoadBackButton");
-    let selectedSpellLevelId = "fireball";
     let spellCooldownHudVisible = null;
     let spellCooldownHudProgress = NaN;
     const fireballAnimationImage = new Image();
@@ -479,6 +478,14 @@
     const getSpellLevelDefinitions = spellDataSystem.getSpellLevelDefinitions;
     const getWizardSpellLevel = spellDataSystem.getWizardSpellLevel;
     const getActiveFireballStats = spellDataSystem.getActiveFireballStats;
+    let spellLevelPanelSystem = null;
+    const refreshSpellLevelPanel = () => spellLevelPanelSystem.refreshSpellLevelPanel();
+    const playLevelUpAnnouncement = () => {
+        if (!levelUpAnnouncement) throw new Error("Wizard of Flatland level-up announcement is missing");
+        levelUpAnnouncement.classList.remove("active");
+        void levelUpAnnouncement.offsetWidth;
+        levelUpAnnouncement.classList.add("active");
+    };
     const wizardVitalsSystem = getWizardFlatlandVitalsApi().createWizardVitalsSystem({
         state,
         constants: {
@@ -502,6 +509,42 @@
     const damageWizard = wizardVitalsSystem.damageWizard;
     const spendWizardMagic = wizardVitalsSystem.spendWizardMagic;
     const gainWizardExp = wizardVitalsSystem.gainWizardExp;
+    const levelUpWizardSpell = (spellId) => {
+        validateWizardLevelPoints();
+        const currentLevel = getWizardSpellLevel(spellId);
+        if (currentLevel >= SPELL_LEVEL_MAX) return currentLevel;
+        if (state.levelPoints <= 0) {
+            spellLevelPanelSystem.renderSpellLevelPanel();
+            return currentLevel;
+        }
+        state.levelPoints -= 1;
+        const nextLevel = setWizardSpellLevel(spellId, currentLevel + 1);
+        updateStatusBars();
+        return nextLevel;
+    };
+    spellLevelPanelSystem = getWizardFlatlandSpellLevelPanelApi().createSpellLevelPanelSystem({
+        state,
+        elements: {
+            spellLevelPanel,
+            spellLevelHeader,
+            spellLevelList,
+            spellLevelDetails
+        },
+        constants: {
+            SPELL_LEVEL_MAX,
+            SPELL_LEVEL_STAT_LABELS
+        },
+        api: {
+            fetchSpellLevelDefinitions,
+            getSpellLevelDefinitions,
+            getWizardSpellLevel,
+            normalizeWizardSpellLevels,
+            validateWizardLevelPoints,
+            levelUpWizardSpell
+        }
+    });
+    const showSpellLevelPanel = spellLevelPanelSystem.showSpellLevelPanel;
+    const hideSpellLevelPanel = spellLevelPanelSystem.hideSpellLevelPanel;
     const controlSystem = getWizardFlatlandControlsApi().createControlSystem({
         state,
         labels,
@@ -631,6 +674,14 @@
         return api;
     }
 
+    function getWizardFlatlandSpellLevelPanelApi() {
+        const api = window.WizardFlatlandSpellLevelPanel;
+        if (!api || typeof api.createSpellLevelPanelSystem !== "function") {
+            throw new Error("Wizard of Flatland requires /wizard-of-flatland/spellLevelPanel.js");
+        }
+        return api;
+    }
+
     function getWizardFlatlandVitalsApi() {
         const api = window.WizardFlatlandVitals;
         if (!api || typeof api.createWizardVitalsSystem !== "function") {
@@ -713,202 +764,14 @@
         spellCooldownHudProgress = ratio;
     }
 
-    function playLevelUpAnnouncement() {
-        if (!levelUpAnnouncement) throw new Error("Wizard of Flatland level-up announcement is missing");
-        levelUpAnnouncement.classList.remove("active");
-        void levelUpAnnouncement.offsetWidth;
-        levelUpAnnouncement.classList.add("active");
-    }
-
     function setWizardSpellLevel(spellId, level) {
         if (typeof spellId !== "string") return 0;
         const id = spellId.trim().toLowerCase();
         if (!id) return 0;
         const nextLevel = clampSpellLevel(level);
         normalizeWizardSpellLevels()[id] = nextLevel;
-        renderSpellLevelPanel();
+        spellLevelPanelSystem.renderSpellLevelPanel();
         return nextLevel;
-    }
-
-    function levelUpWizardSpell(spellId) {
-        validateWizardLevelPoints();
-        const currentLevel = getWizardSpellLevel(spellId);
-        if (currentLevel >= SPELL_LEVEL_MAX) return currentLevel;
-        if (state.levelPoints <= 0) {
-            renderSpellLevelPanel();
-            return currentLevel;
-        }
-        state.levelPoints -= 1;
-        const nextLevel = setWizardSpellLevel(spellId, currentLevel + 1);
-        updateStatusBars();
-        return nextLevel;
-    }
-
-    function getSelectedSpellLevelDefinition() {
-        const definitions = getSpellLevelDefinitions();
-        if (!Array.isArray(definitions) || definitions.length === 0) return null;
-        const selected = definitions.find((spell) => spell.id === selectedSpellLevelId);
-        return selected || definitions[0];
-    }
-
-    function appendSpellLevelStats(container, levelData) {
-        const stats = SPELL_LEVEL_STAT_LABELS.filter(([key]) => {
-            if (!Object.prototype.hasOwnProperty.call(levelData, key)) return false;
-            const value = levelData[key];
-            if (value === null || typeof value === "undefined") return false;
-            return typeof value !== "string" || value.trim().length > 0;
-        });
-        if (stats.length === 0) return;
-        const statsElement = document.createElement("div");
-        statsElement.className = "spellLevelStats";
-        for (const [key, label] of stats) {
-            const stat = document.createElement("div");
-            stat.className = "spellLevelStat";
-            stat.textContent = `${label}: ${levelData[key]}`;
-            statsElement.append(stat);
-        }
-        container.append(statsElement);
-    }
-
-    function appendSpellLevelInfo(container, label, levelData) {
-        const labelElement = document.createElement("div");
-        labelElement.className = label.startsWith("next") ? "spellLevelNextText" : "spellLevelCurrentText";
-        labelElement.textContent = label;
-        container.append(labelElement);
-        if (!levelData) return;
-        const headline = document.createElement("div");
-        headline.className = "spellLevelHeadline";
-        headline.textContent = levelData.headline;
-        container.append(headline);
-        if (typeof levelData.subtitle === "string" && levelData.subtitle.length > 0) {
-            const subtitle = document.createElement("div");
-            subtitle.className = "spellLevelSubtitle";
-            subtitle.textContent = levelData.subtitle;
-            container.append(subtitle);
-        }
-        appendSpellLevelStats(container, levelData);
-    }
-
-    function renderSpellLevelLoading(message) {
-        if (!spellLevelHeader || !spellLevelList || !spellLevelDetails) {
-            throw new Error("Wizard of Flatland spell level panel DOM is missing");
-        }
-        validateWizardLevelPoints();
-        spellLevelHeader.textContent = `level points ${state.levelPoints}`;
-        spellLevelList.replaceChildren();
-        const loading = document.createElement("div");
-        loading.className = "spellLevelMastered";
-        loading.textContent = message;
-        spellLevelDetails.style.display = "flex";
-        spellLevelDetails.replaceChildren(loading);
-    }
-
-    function renderSpellLevelPanel() {
-        if (!spellLevelPanel || !spellLevelHeader || !spellLevelList || !spellLevelDetails) {
-            throw new Error("Wizard of Flatland spell level panel DOM is missing");
-        }
-        validateWizardLevelPoints();
-        normalizeWizardSpellLevels();
-        spellLevelHeader.textContent = `level points ${state.levelPoints}`;
-        const definitions = getSpellLevelDefinitions();
-        if (!Array.isArray(definitions)) {
-            renderSpellLevelLoading("Loading spell levels...");
-            return;
-        }
-        if (definitions.length === 0) {
-            throw new Error("Wizard of Flatland spell level data contains no spells");
-        }
-        if (!definitions.some((spell) => spell.id === selectedSpellLevelId)) {
-            selectedSpellLevelId = definitions[0].id;
-        }
-        spellLevelList.replaceChildren();
-        for (const spell of definitions) {
-            const level = getWizardSpellLevel(spell.id);
-            const item = document.createElement("button");
-            item.type = "button";
-            item.className = "spellLevelListItem";
-            item.classList.toggle("selected", spell.id === selectedSpellLevelId);
-            item.dataset.spellLevelId = spell.id;
-            item.addEventListener("click", () => {
-                selectedSpellLevelId = spell.id;
-                renderSpellLevelPanel();
-            });
-            const icon = document.createElement("div");
-            icon.className = "spellLevelListIcon";
-            icon.style.backgroundImage = `url("${spell.icon}")`;
-            const text = document.createElement("div");
-            text.className = "spellLevelListText";
-            const name = document.createElement("div");
-            name.className = "spellLevelListName";
-            name.textContent = spell.displayName;
-            const levelText = document.createElement("div");
-            levelText.className = "spellLevelListLevel";
-            levelText.textContent = `Level ${level}`;
-            text.append(name, levelText);
-            item.append(icon, text);
-            spellLevelList.append(item);
-        }
-
-        const selected = getSelectedSpellLevelDefinition();
-        if (!selected) throw new Error("Wizard of Flatland selected spell level definition is missing");
-        const currentLevel = getWizardSpellLevel(selected.id);
-        const currentData = currentLevel > 0 ? selected.levels[currentLevel - 1] : null;
-        const nextData = currentLevel < SPELL_LEVEL_MAX ? selected.levels[currentLevel] : null;
-        const current = document.createElement("div");
-        current.className = "spellLevelSection";
-        appendSpellLevelInfo(current, `current level: ${currentLevel}`, currentData);
-        const divider = document.createElement("div");
-        divider.className = "spellLevelDivider";
-        if (currentLevel < SPELL_LEVEL_MAX) {
-            const button = document.createElement("button");
-            button.type = "button";
-            button.className = "spellLevelUpButton";
-            button.disabled = state.levelPoints <= 0;
-            button.textContent = "level up";
-            button.addEventListener("click", (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                levelUpWizardSpell(selected.id);
-            });
-            divider.append(button);
-        }
-        const next = document.createElement("div");
-        next.className = "spellLevelSection";
-        if (currentLevel >= SPELL_LEVEL_MAX) {
-            const mastered = document.createElement("div");
-            mastered.className = "spellLevelMastered";
-            mastered.textContent = "You have mastered this spell.";
-            next.append(mastered);
-        } else {
-            appendSpellLevelInfo(next, `next level: ${currentLevel + 1}`, nextData);
-        }
-        spellLevelDetails.style.display = "";
-        spellLevelDetails.replaceChildren(current, divider, next);
-    }
-
-    function refreshSpellLevelPanel() {
-        if (!spellLevelPanel || spellLevelPanel.classList.contains("hidden")) return;
-        renderSpellLevelPanel();
-    }
-
-    function showSpellLevelPanel() {
-        if (!spellLevelPanel) throw new Error("Wizard of Flatland spell level panel is missing");
-        selectedSpellLevelId = typeof state.selectedSpell === "string" && state.selectedSpell.length > 0
-            ? state.selectedSpell
-            : selectedSpellLevelId;
-        spellLevelPanel.classList.remove("hidden");
-        renderSpellLevelLoading("Loading spell levels...");
-        fetchSpellLevelDefinitions()
-            .then(() => renderSpellLevelPanel())
-            .catch((error) => {
-                renderSpellLevelLoading("Unable to load spell level data.");
-                console.error("[wizard of flatland spell levels] unable to open panel", error);
-            });
-    }
-
-    function hideSpellLevelPanel() {
-        if (!spellLevelPanel) throw new Error("Wizard of Flatland spell level panel is missing");
-        spellLevelPanel.classList.add("hidden");
     }
 
     function getWizardOfFlatlandDebugApi() {
