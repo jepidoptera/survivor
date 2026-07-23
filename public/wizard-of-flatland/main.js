@@ -336,6 +336,26 @@
     const pointProjectionParameter = mathApi.pointProjectionParameter;
     const pointSegmentDistance = mathApi.pointSegmentDistance;
     const segmentRepulsionNormal = mathApi.segmentRepulsionNormal;
+    const mazeSectionSystem = getWizardFlatlandMazeSectionsApi().createMazeSectionSystem({
+        constants: {
+            MAZE_SECTION_DIRECTIONS,
+            PYRAMID_FIRST_ROOM_DISTANCE,
+            PYRAMID_ROOM_DISTANCE_STEP
+        },
+        math: {
+            getHexCornersWorld
+        }
+    });
+    const getMazeSectionRadius = mazeSectionSystem.getMazeSectionRadius;
+    const mazeSectionKey = mazeSectionSystem.mazeSectionKey;
+    const isMazeInitialSafeSectionKey = mazeSectionSystem.isMazeInitialSafeSectionKey;
+    const isMazePyramidRoomSectionKey = mazeSectionSystem.isMazePyramidRoomSectionKey;
+    const getMazePyramidRoomDistance = mazeSectionSystem.getMazePyramidRoomDistance;
+    const parseMazeSectionKey = mazeSectionSystem.parseMazeSectionKey;
+    const mazeSectionCenter = mazeSectionSystem.mazeSectionCenter;
+    const worldToMazeSectionCoord = mazeSectionSystem.worldToMazeSectionCoord;
+    const getMazeSectionRing = mazeSectionSystem.getMazeSectionRing;
+    const getMazeSectionPolygonForCoord = mazeSectionSystem.getMazeSectionPolygonForCoord;
     const state = {
         running: true,
         gameStarted: false,
@@ -654,6 +674,14 @@
         const api = window.WizardFlatlandWallLabels;
         if (!api || typeof api.createWallLabelSystem !== "function") {
             throw new Error("Wizard of Flatland requires /wizard-of-flatland/wallLabels.js");
+        }
+        return api;
+    }
+
+    function getWizardFlatlandMazeSectionsApi() {
+        const api = window.WizardFlatlandMazeSections;
+        if (!api || typeof api.createMazeSectionSystem !== "function") {
+            throw new Error("Wizard of Flatland requires /wizard-of-flatland/mazeSections.js");
         }
         return api;
     }
@@ -1016,81 +1044,6 @@
     function isUsableWallSegment(ax, ay, bx, by) {
         if (Math.hypot(bx - ax, by - ay) <= 0.001) return null;
         return true;
-    }
-
-    function getMazeSectionRadius(options) {
-        return Math.max(8, Number(options.chunkSize) * 0.5);
-    }
-
-    function mazeSectionKey(q, r) {
-        return `${q},${r}`;
-    }
-
-    function isMazeInitialSafeSectionKey(sectionKey) {
-        validateMazeRoomEnemyBudgetSectionKey(sectionKey);
-        const coord = parseMazeSectionKey(sectionKey);
-        return getMazeSectionRing(coord.q, coord.r) <= 1;
-    }
-
-    function isMazePyramidRoomSectionKey(sectionKey) {
-        validateMazeRoomEnemyBudgetSectionKey(sectionKey);
-        const coord = parseMazeSectionKey(sectionKey);
-        return isMazePyramidRoomSectionCoord(coord.q, coord.r);
-    }
-
-    function isMazePyramidRoomSectionCoord(q, r) {
-        return getMazePyramidRoomDistance(q, r) !== null;
-    }
-
-    function getMazePyramidRoomDistance(q, r) {
-        if (!Number.isInteger(q) || !Number.isInteger(r)) {
-            throw new Error("Wizard of Flatland pyramid room check requires integer section coordinates");
-        }
-        if (q === 0 && r === 0) return 0;
-        for (const dir of MAZE_SECTION_DIRECTIONS) {
-            if (!dir) throw new Error("Wizard of Flatland pyramid direction is invalid");
-            const distance = dir.q !== 0 ? q / dir.q : r / dir.r;
-            if (!Number.isInteger(distance) || distance < PYRAMID_FIRST_ROOM_DISTANCE) continue;
-            if (q !== dir.q * distance || r !== dir.r * distance) continue;
-            if ((distance - PYRAMID_FIRST_ROOM_DISTANCE) % PYRAMID_ROOM_DISTANCE_STEP !== 0) continue;
-            return distance;
-        }
-        return null;
-    }
-
-    function parseMazeSectionKey(key) {
-        const parts = String(key).split(",");
-        return {
-            q: Number(parts[0]),
-            r: Number(parts[1])
-        };
-    }
-
-    function mazeSectionCenter(q, r, options) {
-        const radius = getMazeSectionRadius(options);
-        return {
-            x: Math.sqrt(3) * radius * (q + r * 0.5),
-            y: 1.5 * radius * r
-        };
-    }
-
-    function worldToMazeSectionCoord(x, y, options) {
-        const radius = getMazeSectionRadius(options);
-        const qFloat = (Math.sqrt(3) / 3 * x - y / 3) / radius;
-        const rFloat = (2 / 3 * y) / radius;
-        return roundAxial(qFloat, rFloat);
-    }
-
-    function roundAxial(qFloat, rFloat) {
-        let q = Math.round(qFloat);
-        let r = Math.round(rFloat);
-        let s = Math.round(-qFloat - rFloat);
-        const qDiff = Math.abs(q - qFloat);
-        const rDiff = Math.abs(r - rFloat);
-        const sDiff = Math.abs(s + qFloat + rFloat);
-        if (qDiff > rDiff && qDiff > sDiff) q = -r - s;
-        else if (rDiff > sDiff) r = -q - s;
-        return { q, r };
     }
 
     function getMazeStartPoint() {
@@ -1887,21 +1840,6 @@
             blockedFlashSeconds: 0,
             touching: false
         };
-    }
-
-    function getMazeSectionRing(q, r) {
-        if (!Number.isInteger(q) || !Number.isInteger(r)) {
-            throw new Error("Wizard of Flatland section ring requires integer coordinates");
-        }
-        return Math.max(Math.abs(q), Math.abs(r), Math.abs(-q - r));
-    }
-
-    function getMazeSectionPolygonForCoord(coord, options) {
-        if (!coord || !Number.isFinite(coord.q) || !Number.isFinite(coord.r)) {
-            throw new Error("Wizard of Flatland section polygon requires a section coordinate");
-        }
-        const center = mazeSectionCenter(coord.q, coord.r, options);
-        return getHexCornersWorld(center.x, center.y, getMazeSectionRadius(options));
     }
 
     function getMazeCoinEligibleWallsForSection(sectionKey, sectionPolygon) {
