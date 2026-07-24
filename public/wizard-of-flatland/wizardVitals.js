@@ -51,7 +51,9 @@
             validateWizardVitals();
             const vitals = state.wizardVitals;
             vitals.health = Math.min(vitals.maxHealth, vitals.health + constants.WIZARD_HEALTH_REGEN_PER_SECOND * dt);
-            vitals.magic = Math.min(vitals.maxMagic, vitals.magic + constants.WIZARD_MAGIC_REGEN_PER_SECOND * dt);
+            if (callRequiredCallback("canRechargeMagic")) {
+                vitals.magic = Math.min(vitals.maxMagic, vitals.magic + constants.WIZARD_MAGIC_REGEN_PER_SECOND * dt);
+            }
             callRequiredCallback("updateStatusBars");
         }
 

@@ -432,8 +432,8 @@
             fireball: 1,
             spikes: 1
         },
-        fireballCooldownRemaining: 0,
-        fireballCooldownDuration: 0,
+        spellCooldownRemaining: 0,
+        spellCooldownDuration: 0,
         levelPoints: 0,
         targetTravelVector: { x: 0, y: 0 },
         lastSentTarget: { x: 0, y: 0 },
@@ -583,6 +583,12 @@
         void levelUpAnnouncement.offsetWidth;
         levelUpAnnouncement.classList.add("active");
     };
+    const canRechargeMagic = () => {
+        if (!Number.isFinite(state.spellCooldownRemaining)) {
+            throw new Error("Wizard of Flatland magic recharge requires finite spell cooldown");
+        }
+        return state.spellCooldownRemaining <= 0;
+    };
     const wizardVitalsSystem = getWizardFlatlandVitalsApi().createWizardVitalsSystem({
         state,
         constants: {
@@ -596,6 +602,7 @@
             updateStatusBars,
             refreshSpellLevelPanel,
             playLevelUpAnnouncement,
+            canRechargeMagic,
             respawnWizardAfterDeath
         }
     });
@@ -885,14 +892,14 @@
 
     function validateSpellCooldownHud() {
         if (!fireballCooldownRing || !fireballCooldownRingOutline || !fireballCooldownRingArc) {
-            throw new Error("Wizard of Flatland fireball cooldown ring DOM is missing");
+            throw new Error("Wizard of Flatland spell cooldown ring DOM is missing");
         }
     }
 
     function setSpellCooldownRingProgress(ratio) {
         const progress = Number(ratio);
         if (!Number.isFinite(progress) || progress < 0 || progress > 1) {
-            throw new Error("Wizard of Flatland fireball cooldown ring requires a normalized progress");
+            throw new Error("Wizard of Flatland spell cooldown ring requires a normalized progress");
         }
         const dashOffset = SPELL_COOLDOWN_RING_CIRCUMFERENCE * (1 - progress);
         for (const circle of [fireballCooldownRingOutline, fireballCooldownRingArc]) {
@@ -903,12 +910,12 @@
 
     function updateSpellCooldownHud() {
         validateSpellCooldownHud();
-        if (!Number.isFinite(state.fireballCooldownRemaining)) {
-            throw new Error("Wizard of Flatland fireball cooldown HUD requires finite remaining time");
+        if (!Number.isFinite(state.spellCooldownRemaining)) {
+            throw new Error("Wizard of Flatland spell cooldown HUD requires finite remaining time");
         }
-        if (state.fireballCooldownRemaining <= 0) {
-            state.fireballCooldownRemaining = 0;
-            state.fireballCooldownDuration = 0;
+        if (state.spellCooldownRemaining <= 0) {
+            state.spellCooldownRemaining = 0;
+            state.spellCooldownDuration = 0;
             if (spellCooldownHudVisible === false && spellCooldownHudProgress === 0) return;
             setSpellCooldownRingProgress(0);
             fireballCooldownRing.classList.add("hidden");
@@ -916,10 +923,10 @@
             spellCooldownHudProgress = 0;
             return;
         }
-        if (!(state.fireballCooldownDuration > 0)) {
-            throw new Error("Wizard of Flatland fireball cooldown HUD requires a positive duration while cooling down");
+        if (!(state.spellCooldownDuration > 0)) {
+            throw new Error("Wizard of Flatland spell cooldown HUD requires a positive duration while cooling down");
         }
-        const ratio = Math.max(0, Math.min(1, state.fireballCooldownRemaining / state.fireballCooldownDuration));
+        const ratio = Math.max(0, Math.min(1, state.spellCooldownRemaining / state.spellCooldownDuration));
         if (spellCooldownHudVisible !== true) {
             fireballCooldownRing.classList.remove("hidden");
         }
@@ -1977,8 +1984,8 @@
         state.agents = [];
         state.fireballs = [];
         state.fireballExplosions = [];
-        state.fireballCooldownRemaining = 0;
-        state.fireballCooldownDuration = 0;
+        state.spellCooldownRemaining = 0;
+        state.spellCooldownDuration = 0;
         resetWizardVitals();
         state.coins = [];
         state.collectedCoinKeys = new Set();
@@ -2307,8 +2314,8 @@
         state.agents = snapshot.enemies.map(createAgentFromCheckpointSnapshot);
         state.fireballs = [];
         state.fireballExplosions = [];
-        state.fireballCooldownRemaining = 0;
-        state.fireballCooldownDuration = 0;
+        state.spellCooldownRemaining = 0;
+        state.spellCooldownDuration = 0;
         state.coins = [];
         state.collectedCoinKeys = new Set();
         state.collectedCoinSectionKeysByCoinKey = new Map();
@@ -3269,7 +3276,7 @@
     }
 
     function shootFireball() {
-        if (state.fireballCooldownRemaining > 0) return;
+        if (state.spellCooldownRemaining > 0) return;
         const cursorPoint = getCurrentProjectedCursorWorldPoint();
         const dx = cursorPoint.x - state.target.x;
         const dy = cursorPoint.y - state.target.y;
@@ -3279,8 +3286,8 @@
         if (!spendWizardMagic(fireballStats.manaCost)) return;
         const dirX = dx / length;
         const dirY = dy / length;
-        state.fireballCooldownRemaining = fireballStats.cooldown;
-        state.fireballCooldownDuration = fireballStats.cooldown;
+        state.spellCooldownRemaining = fireballStats.cooldown;
+        state.spellCooldownDuration = fireballStats.cooldown;
         updateSpellCooldownHud();
         state.fireballs.push({
             spellId: "fireball",
@@ -3299,7 +3306,7 @@
     }
 
     function shootSpike() {
-        if (state.fireballCooldownRemaining > 0) return;
+        if (state.spellCooldownRemaining > 0) return;
         const cursorPoint = getCurrentProjectedCursorWorldPoint();
         const dx = cursorPoint.x - state.target.x;
         const dy = cursorPoint.y - state.target.y;
@@ -3309,8 +3316,8 @@
         if (!spendWizardMagic(spikeStats.manaCost)) return;
         const dirX = dx / length;
         const dirY = dy / length;
-        state.fireballCooldownRemaining = spikeStats.cooldown;
-        state.fireballCooldownDuration = spikeStats.cooldown;
+        state.spellCooldownRemaining = spikeStats.cooldown;
+        state.spellCooldownDuration = spikeStats.cooldown;
         updateSpellCooldownHud();
         state.fireballs.push({
             spellId: "spikes",
@@ -3329,8 +3336,8 @@
 
     function updateSpellCooldowns(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
-        if (state.fireballCooldownRemaining <= 0 && state.fireballCooldownDuration <= 0 && spellCooldownHudVisible === false) return;
-        state.fireballCooldownRemaining = Math.max(0, state.fireballCooldownRemaining - dt);
+        if (state.spellCooldownRemaining <= 0 && state.spellCooldownDuration <= 0 && spellCooldownHudVisible === false) return;
+        state.spellCooldownRemaining = Math.max(0, state.spellCooldownRemaining - dt);
         updateSpellCooldownHud();
     }
 

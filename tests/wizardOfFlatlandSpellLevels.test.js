@@ -41,7 +41,7 @@ test("Wizard of Flatland fireball gameplay resolves level stats", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
     assert.match(source, /function getActiveFireballStats\(\)/);
     assert.match(source, /spendWizardMagic\(fireballStats\.manaCost\)/);
-    assert.match(source, /state\.fireballCooldownRemaining = fireballStats\.cooldown/);
+    assert.match(source, /state\.spellCooldownRemaining = fireballStats\.cooldown/);
     assert.match(source, /fireball\.dirX \* fireball\.speed \* dt/);
     assert.match(source, /fireballStats\.projectileRadius/);
     assert.match(source, /findEarliestFireballWallHit\(previousX, previousY, nextX, nextY, fireball\.projectileRadius\)/);
