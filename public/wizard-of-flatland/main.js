@@ -69,11 +69,21 @@
     const SPELL_COOLDOWN_RING_CIRCUMFERENCE = 2 * Math.PI * SPELL_COOLDOWN_RING_RADIUS;
     const FIREBALL_EXPLOSION_VISUAL_SECONDS = 0.16;
     const FIREBALL_ANIMATION_TEXTURE_PATH = "/wizard-of-flatland/hi-fi-fireball.png";
+    const FIREBALL_ICON_PATH = "/assets/images/thumbnails/fireball.png";
+    const SPIKE_ICON_PATH = "/assets/images/magic/spike.png";
     const TROPHY_TEXTURE_PATH = "/wizard-of-flatland/chalice.png";
     const FIREBALL_ANIMATION_FRAME_COLUMNS = 5;
     const FIREBALL_ANIMATION_FRAME_ROWS = 2;
     const FIREBALL_ANIMATION_FRAME_COUNT = FIREBALL_ANIMATION_FRAME_COLUMNS * FIREBALL_ANIMATION_FRAME_ROWS;
     const FIREBALL_IMPACT_ANIMATION_SPEED_MULTIPLIER = 10;
+    const FIREBALL_SELF_DAMAGE_SCALE = 0.5;
+    const FIREBALL_WALL_HIT_RADIUS_SCALE = 0.5;
+    const SPIKE_PROJECTILE_RADIUS = 0.18;
+    const SPIKE_BOUNCE_MAX_SPIN_HZ = 5;
+    const SPIKE_BOUNCE_MAX_DAMAGE_LOSS_RATIO = 0.75;
+    const SPIKE_BOUNCE_MAX_SPEED_LOSS_RATIO = 0.5;
+    const SPIKE_BOUNCE_MAX_SCATTER_RADIANS = 22 * Math.PI / 180;
+    const SPIKE_BOUNCE_WALL_EXIT_EPSILON = 0.003;
     const ENEMY_MAX_HEALTH = 20;
     const WIZARD_MAX_HEALTH = 100;
     const WIZARD_MAX_MAGIC = 100;
@@ -246,6 +256,7 @@
     const fireballCooldownRing = document.getElementById("fireballCooldownRing");
     const fireballCooldownRingOutline = document.getElementById("fireballCooldownRingOutline");
     const fireballCooldownRingArc = document.getElementById("fireballCooldownRingArc");
+    const spellStatusIconImage = document.querySelector("#fireballStatusIcon img");
     const levelUpAnnouncement = document.getElementById("levelUpAnnouncement");
     const spellLevelPanel = document.getElementById("spellLevelPanel");
     const spellLevelHeader = document.getElementById("spellLevelHeader");
@@ -418,7 +429,8 @@
         },
         selectedSpell: "fireball",
         spellLevels: {
-            fireball: 1
+            fireball: 1,
+            spikes: 1
         },
         fireballCooldownRemaining: 0,
         fireballCooldownDuration: 0,
@@ -562,6 +574,7 @@
     const getSpellLevelDefinitions = spellDataSystem.getSpellLevelDefinitions;
     const getWizardSpellLevel = spellDataSystem.getWizardSpellLevel;
     const getActiveFireballStats = spellDataSystem.getActiveFireballStats;
+    const getActiveSpikeStats = spellDataSystem.getActiveSpikeStats;
     let spellLevelPanelSystem = null;
     const refreshSpellLevelPanel = () => spellLevelPanelSystem.refreshSpellLevelPanel();
     const playLevelUpAnnouncement = () => {
@@ -925,6 +938,36 @@
         normalizeWizardSpellLevels()[id] = nextLevel;
         spellLevelPanelSystem.renderSpellLevelPanel();
         return nextLevel;
+    }
+
+    function setSelectedSpell(spellId) {
+        const id = typeof spellId === "string" ? spellId.trim().toLowerCase() : "";
+        if (id !== "fireball" && id !== "spikes") {
+            throw new Error(`Wizard of Flatland cannot select unknown spell: ${spellId}`);
+        }
+        state.selectedSpell = id;
+        updateSelectedSpellHud();
+        refreshSpellLevelPanel();
+    }
+
+    function updateSelectedSpellHud() {
+        if (!spellStatusIconImage) throw new Error("Wizard of Flatland selected spell HUD icon is missing");
+        if (state.selectedSpell === "fireball") {
+            spellStatusIconImage.src = FIREBALL_ICON_PATH;
+            return;
+        }
+        if (state.selectedSpell === "spikes") {
+            spellStatusIconImage.src = SPIKE_ICON_PATH;
+            return;
+        }
+        throw new Error(`Wizard of Flatland selected spell HUD cannot display unknown spell: ${state.selectedSpell}`);
+    }
+
+    function getStartingSpellLevels() {
+        return {
+            fireball: 1,
+            spikes: 1
+        };
     }
 
     function getWizardOfFlatlandDebugApi() {
@@ -2292,9 +2335,11 @@
         state.selectedSpell = typeof snapshot.selectedSpell === "string" && snapshot.selectedSpell.length > 0
             ? snapshot.selectedSpell
             : "fireball";
+        if (state.selectedSpell !== "fireball" && state.selectedSpell !== "spikes") state.selectedSpell = "fireball";
+        updateSelectedSpellHud();
         state.spellLevels = snapshot.spellLevels && typeof snapshot.spellLevels === "object"
-            ? { ...snapshot.spellLevels }
-            : { fireball: 1 };
+            ? { ...getStartingSpellLevels(), ...snapshot.spellLevels }
+            : getStartingSpellLevels();
         state.levelPoints = snapshot.levelPoints === undefined ? 0 : snapshot.levelPoints;
         normalizeWizardSpellLevels();
         validateWizardLevelPoints();
@@ -3211,6 +3256,18 @@
         return 1 + ramp * (multiplier - 1);
     }
 
+    function shootSelectedSpell() {
+        if (state.selectedSpell === "fireball") {
+            shootFireball();
+            return;
+        }
+        if (state.selectedSpell === "spikes") {
+            shootSpike();
+            return;
+        }
+        throw new Error(`Wizard of Flatland cannot cast unknown selected spell: ${state.selectedSpell}`);
+    }
+
     function shootFireball() {
         if (state.fireballCooldownRemaining > 0) return;
         const cursorPoint = getCurrentProjectedCursorWorldPoint();
@@ -3226,6 +3283,7 @@
         state.fireballCooldownDuration = fireballStats.cooldown;
         updateSpellCooldownHud();
         state.fireballs.push({
+            spellId: "fireball",
             x: state.target.x + dirX * (TARGET_RADIUS + fireballStats.projectileRadius),
             y: state.target.y + dirY * (TARGET_RADIUS + fireballStats.projectileRadius),
             dirX,
@@ -3240,6 +3298,35 @@
         });
     }
 
+    function shootSpike() {
+        if (state.fireballCooldownRemaining > 0) return;
+        const cursorPoint = getCurrentProjectedCursorWorldPoint();
+        const dx = cursorPoint.x - state.target.x;
+        const dy = cursorPoint.y - state.target.y;
+        const length = Math.hypot(dx, dy);
+        if (!(length > 0.000001)) return;
+        const spikeStats = getActiveSpikeStats();
+        if (!spendWizardMagic(spikeStats.manaCost)) return;
+        const dirX = dx / length;
+        const dirY = dy / length;
+        state.fireballCooldownRemaining = spikeStats.cooldown;
+        state.fireballCooldownDuration = spikeStats.cooldown;
+        updateSpellCooldownHud();
+        state.fireballs.push({
+            spellId: "spikes",
+            x: state.target.x + dirX * (TARGET_RADIUS + SPIKE_PROJECTILE_RADIUS),
+            y: state.target.y + dirY * (TARGET_RADIUS + SPIKE_PROJECTILE_RADIUS),
+            dirX,
+            dirY,
+            age: 0,
+            impactActive: false,
+            speed: spikeStats.projectileSpeed,
+            maxAge: spikeStats.maxAge,
+            damage: spikeStats.damage,
+            projectileRadius: SPIKE_PROJECTILE_RADIUS
+        });
+    }
+
     function updateSpellCooldowns(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
         if (state.fireballCooldownRemaining <= 0 && state.fireballCooldownDuration <= 0 && spellCooldownHudVisible === false) return;
@@ -3247,20 +3334,20 @@
         updateSpellCooldownHud();
     }
 
+    function updateHeldSpellCasting() {
+        if (!state.spaceHeld) return;
+        shootSelectedSpell();
+    }
+
     function updateFireballs(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
         const survivors = [];
         for (const fireball of state.fireballs) {
-            if (
-                !(fireball.speed > 0) ||
-                !(fireball.maxAge > 0) ||
-                !(fireball.damage > 0) ||
-                !(fireball.explosionRadius > 0) ||
-                !(fireball.projectileRadius > 0)
-            ) {
-                throw new Error("Wizard of Flatland fireball update requires resolved positive spell stats");
-            }
+            validateSpellProjectile(fireball);
             if (fireball.impactActive) {
+                if (fireball.spellId !== "fireball") {
+                    throw new Error(`Wizard of Flatland unexpected impact animation for ${fireball.spellId}`);
+                }
                 fireball.age += dt * FIREBALL_IMPACT_ANIMATION_SPEED_MULTIPLIER;
                 if (fireball.age < fireball.maxAge) survivors.push(fireball);
                 continue;
@@ -3269,8 +3356,14 @@
             const previousY = fireball.y;
             const nextX = fireball.x + fireball.dirX * fireball.speed * dt;
             const nextY = fireball.y + fireball.dirY * fireball.speed * dt;
-            const wallHit = findEarliestFireballWallHit(previousX, previousY, nextX, nextY, fireball.projectileRadius);
+            const wallHit = findEarliestFireballWallHit(previousX, previousY, nextX, nextY, fireball.projectileRadius * FIREBALL_WALL_HIT_RADIUS_SCALE);
             if (wallHit) {
+                if (fireball.spellId === "spikes") {
+                    bounceSpikeProjectile(fireball, wallHit);
+                    fireball.age += dt;
+                    if (fireball.age < fireball.maxAge && fireball.damage > 0.000001) survivors.push(fireball);
+                    continue;
+                }
                 fireball.x = wallHit.x;
                 fireball.y = wallHit.y;
                 detonateFireball(fireball);
@@ -3280,7 +3373,14 @@
             }
             fireball.x = nextX;
             fireball.y = nextY;
-            if (findAgentIntersectingFireball(fireball)) {
+            const hitAgent = findAgentIntersectingFireball(fireball);
+            if (hitAgent) {
+                if (fireball.spellId === "spikes") {
+                    if (damageAgentAndMaybeDropCoin(hitAgent, fireball.damage)) {
+                        state.agents = state.agents.filter((agent) => agent !== hitAgent);
+                    }
+                    continue;
+                }
                 detonateFireball(fireball);
                 fireball.age += dt * FIREBALL_IMPACT_ANIMATION_SPEED_MULTIPLIER;
                 if (fireball.age < fireball.maxAge) survivors.push(fireball);
@@ -3291,6 +3391,85 @@
         }
         state.fireballs = survivors;
         updateFireballExplosions(dt);
+    }
+
+    function bounceSpikeProjectile(spike, wallHit) {
+        if (!spike || spike.spellId !== "spikes") {
+            throw new Error("Wizard of Flatland spike bounce requires a spike projectile");
+        }
+        if (
+            !wallHit ||
+            !Number.isFinite(wallHit.x) ||
+            !Number.isFinite(wallHit.y) ||
+            !Number.isFinite(wallHit.nx) ||
+            !Number.isFinite(wallHit.ny)
+        ) {
+            throw new Error("Wizard of Flatland spike bounce requires finite wall hit data");
+        }
+        const normalLength = Math.hypot(wallHit.nx, wallHit.ny);
+        if (!(normalLength > 0)) throw new Error("Wizard of Flatland spike bounce requires a wall normal");
+        const nx = wallHit.nx / normalLength;
+        const ny = wallHit.ny / normalLength;
+        const incomingLength = Math.hypot(spike.dirX, spike.dirY);
+        if (!(incomingLength > 0)) throw new Error("Wizard of Flatland spike bounce requires a movement direction");
+        const inX = spike.dirX / incomingLength;
+        const inY = spike.dirY / incomingLength;
+        const intoNormal = inX * nx + inY * ny;
+        const outX = inX - 2 * intoNormal * nx;
+        const outY = inY - 2 * intoNormal * ny;
+        const outLength = Math.hypot(outX, outY);
+        if (!(outLength > 0)) throw new Error("Wizard of Flatland spike bounce produced an invalid direction");
+        let reflectedX = outX / outLength;
+        let reflectedY = outY / outLength;
+        const deflectionDot = Math.max(-1, Math.min(1, inX * reflectedX + inY * reflectedY));
+        const deflectionRatio = Math.acos(deflectionDot) / Math.PI;
+        if (!Number.isFinite(deflectionRatio) || deflectionRatio < 0 || deflectionRatio > 1) {
+            throw new Error("Wizard of Flatland spike bounce produced an invalid deflection");
+        }
+        const scatterAngle = SPIKE_BOUNCE_MAX_SCATTER_RADIANS * deflectionRatio * Math.random() * (Math.random() < 0.5 ? -1 : 1);
+        const scatterCos = Math.cos(scatterAngle);
+        const scatterSin = Math.sin(scatterAngle);
+        const scatteredX = reflectedX * scatterCos - reflectedY * scatterSin;
+        const scatteredY = reflectedX * scatterSin + reflectedY * scatterCos;
+        const scatteredLength = Math.hypot(scatteredX, scatteredY);
+        if (!(scatteredLength > 0)) throw new Error("Wizard of Flatland spike bounce scatter produced an invalid direction");
+        reflectedX = scatteredX / scatteredLength;
+        reflectedY = scatteredY / scatteredLength;
+        spike.damage *= 1 - deflectionRatio * SPIKE_BOUNCE_MAX_DAMAGE_LOSS_RATIO;
+        spike.speed *= 1 - deflectionRatio * SPIKE_BOUNCE_MAX_SPEED_LOSS_RATIO;
+        spike.spinHz = SPIKE_BOUNCE_MAX_SPIN_HZ * deflectionRatio * (Math.random() < 0.5 ? -1 : 1);
+        spike.spinStartAge = spike.age;
+        spike.x = wallHit.x + reflectedX * SPIKE_BOUNCE_WALL_EXIT_EPSILON;
+        spike.y = wallHit.y + reflectedY * SPIKE_BOUNCE_WALL_EXIT_EPSILON;
+        spike.dirX = reflectedX;
+        spike.dirY = reflectedY;
+    }
+
+    function validateSpellProjectile(projectile) {
+        if (!projectile || typeof projectile !== "object") {
+            throw new Error("Wizard of Flatland projectile update requires a projectile");
+        }
+        if (projectile.spellId !== "fireball" && projectile.spellId !== "spikes") {
+            throw new Error(`Wizard of Flatland projectile has unknown spell id: ${projectile.spellId}`);
+        }
+        if (
+            !Number.isFinite(projectile.x) ||
+            !Number.isFinite(projectile.y) ||
+            !Number.isFinite(projectile.dirX) ||
+            !Number.isFinite(projectile.dirY) ||
+            !Number.isFinite(projectile.age) ||
+            !(projectile.speed > 0) ||
+            !(projectile.maxAge > 0) ||
+            !(projectile.damage > 0) ||
+            !(projectile.projectileRadius > 0) ||
+            (projectile.spinHz !== undefined && !Number.isFinite(projectile.spinHz)) ||
+            (projectile.spinStartAge !== undefined && !Number.isFinite(projectile.spinStartAge))
+        ) {
+            throw new Error(`Wizard of Flatland ${projectile.spellId} projectile update requires resolved positive spell stats`);
+        }
+        if (projectile.spellId === "fireball" && !(projectile.explosionRadius > 0)) {
+            throw new Error("Wizard of Flatland fireball update requires a positive explosion radius");
+        }
     }
 
     function updateCoins(dt) {
@@ -3555,7 +3734,9 @@
             best = {
                 t: hit.t,
                 x: fromX + (toX - fromX) * hit.t,
-                y: fromY + (toY - fromY) * hit.t
+                y: fromY + (toY - fromY) * hit.t,
+                nx: hit.nx,
+                ny: hit.ny
             };
         }
         return best;
@@ -3587,12 +3768,26 @@
         if (fireball.impactActive) return;
         fireball.impactActive = true;
         damageAgentsIntersectingCircle(fireball.x, fireball.y, fireball.explosionRadius, fireball.damage);
+        damageWizardIntersectingFireballBlast(fireball.x, fireball.y, fireball.explosionRadius, fireball.damage);
         state.fireballExplosions.push({
             x: fireball.x,
             y: fireball.y,
             radius: fireball.explosionRadius,
             age: 0
         });
+    }
+
+    function damageWizardIntersectingFireballBlast(circleX, circleY, radius, damage) {
+        if (!Number.isFinite(circleX) || !Number.isFinite(circleY) || !Number.isFinite(radius)) {
+            throw new Error("Wizard of Flatland fireball self-damage requires a finite damage circle");
+        }
+        if (!(damage > 0)) throw new Error("Wizard of Flatland fireball self-damage requires a positive amount");
+        if (!Number.isFinite(state.target.x) || !Number.isFinite(state.target.y)) {
+            throw new Error("Wizard of Flatland fireball self-damage requires a finite wizard position");
+        }
+        const distance = Math.hypot(state.target.x - circleX, state.target.y - circleY);
+        if (distance > radius + TARGET_RADIUS) return;
+        damageWizard(damage * FIREBALL_SELF_DAMAGE_SCALE);
     }
 
     function updateFireballExplosions(dt) {
@@ -3610,12 +3805,16 @@
         state.agents = state.agents.filter((agent) => {
             const distance = Math.hypot(agent.x - circleX, agent.y - circleY);
             if (distance > radius + agent.radius) return true;
-            if (damageAgent(agent, damage)) {
-                maybeDropCoinForKilledEnemy(agent);
-                return false;
-            }
-            return true;
+            return !damageAgentAndMaybeDropCoin(agent, damage);
         });
+    }
+
+    function damageAgentAndMaybeDropCoin(agent, damage) {
+        if (damageAgent(agent, damage)) {
+            maybeDropCoinForKilledEnemy(agent);
+            return true;
+        }
+        return false;
     }
 
     function damageAgent(agent, damage) {
@@ -5882,7 +6081,13 @@
     function drawFireballs() {
         ctx.save();
         for (const fireball of state.fireballs) {
-            drawAnimatedFireball(fireball);
+            if (fireball.spellId === "fireball") {
+                drawAnimatedFireball(fireball);
+            } else if (fireball.spellId === "spikes") {
+                drawSpikeProjectile(fireball);
+            } else {
+                throw new Error(`Wizard of Flatland cannot draw unknown projectile spell: ${fireball.spellId}`);
+            }
         }
         ctx.restore();
     }
@@ -5914,6 +6119,7 @@
     function drawAnimatedFireball(fireball) {
         if (
             !fireball ||
+            fireball.spellId !== "fireball" ||
             !Number.isFinite(fireball.x) ||
             !Number.isFinite(fireball.y) ||
             !Number.isFinite(fireball.projectileRadius) ||
@@ -5947,6 +6153,53 @@
             drawSize,
             drawSize
         );
+    }
+
+    function drawSpikeProjectile(spike) {
+        if (
+            !spike ||
+            spike.spellId !== "spikes" ||
+            !Number.isFinite(spike.x) ||
+            !Number.isFinite(spike.y) ||
+            !Number.isFinite(spike.dirX) ||
+            !Number.isFinite(spike.dirY) ||
+            !Number.isFinite(spike.projectileRadius) ||
+            (spike.spinHz !== undefined && !Number.isFinite(spike.spinHz)) ||
+            (spike.spinStartAge !== undefined && !Number.isFinite(spike.spinStartAge))
+        ) {
+            throw new Error("Wizard of Flatland spike render requires finite projectile data");
+        }
+        if (!(spike.projectileRadius > 0)) throw new Error("Wizard of Flatland spike render requires a positive projectile radius");
+        const center = worldToScreen(spike.x, spike.y);
+        const forward = Math.max(7, spike.projectileRadius * state.view.scale * 2.25);
+        const side = Math.max(3.5, spike.projectileRadius * state.view.scale * 0.95);
+        const spinAge = Math.max(0, spike.age - (Number(spike.spinStartAge) || 0));
+        const spinAngle = (Number(spike.spinHz) || 0) * spinAge * Math.PI * 2;
+        const angle = Math.atan2(spike.dirY, spike.dirX) + spinAngle;
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        const points = [
+            { x: center.x + cos * forward, y: center.y + sin * forward },
+            { x: center.x - sin * side, y: center.y + cos * side },
+            { x: center.x - cos * forward, y: center.y - sin * forward },
+            { x: center.x + sin * side, y: center.y - cos * side }
+        ];
+        ctx.save();
+        ctx.fillStyle = "#cfd6dc";
+        ctx.strokeStyle = "#f6fbff";
+        ctx.lineWidth = Math.max(1, state.view.scale * 0.025);
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(80,90,100,0.55)";
+        ctx.beginPath();
+        ctx.moveTo(center.x + cos * forward * 0.7, center.y + sin * forward * 0.7);
+        ctx.lineTo(center.x - cos * forward * 0.55, center.y - sin * forward * 0.55);
+        ctx.stroke();
+        ctx.restore();
     }
 
     function drawCoins() {
@@ -6599,6 +6852,7 @@
         framePart("refresh maze sections", () => refreshGeneratedMazeIfNeeded(false));
         framePart("refresh path bounds", () => refreshMazePathBoundsIfNeeded());
         framePart("spell cooldowns", () => updateSpellCooldowns(dt));
+        framePart("held spell casting", () => updateHeldSpellCasting());
         framePart("fireballs", () => updateFireballs(dt));
         framePart("coins", () => updateCoins(dt));
         framePart("talismans", () => updateTalismans(dt));
@@ -6706,9 +6960,19 @@
             loadWizardPositionFromConsoleSlot();
             return;
         }
+        if (!isEditableEventTarget(event.target) && event.code === "KeyF") {
+            event.preventDefault();
+            setSelectedSpell("fireball");
+            return;
+        }
+        if (!isEditableEventTarget(event.target) && event.code === "KeyK") {
+            event.preventDefault();
+            setSelectedSpell("spikes");
+            return;
+        }
         if (event.code === "Space" || event.key === " ") {
             event.preventDefault();
-            if (!state.spaceHeld) shootFireball();
+            if (!state.spaceHeld) shootSelectedSpell();
             state.spaceHeld = true;
             return;
         }

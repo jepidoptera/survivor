@@ -159,6 +159,23 @@
             };
         }
 
+        function getActiveSpikeStats() {
+            const { level, levelData } = getActiveSpellLevelData("spikes");
+            const manaCost = requirePositiveSpellLevelNumber("spikes", level, levelData, "manaCost");
+            const damage = requirePositiveSpellLevelNumber("spikes", level, levelData, "damage");
+            const cooldown = requirePositiveSpellLevelNumber("spikes", level, levelData, "castDelay");
+            const projectileSpeed = requirePositiveSpellLevelNumber("spikes", level, levelData, "projectileSpeed");
+            const range = requirePositiveSpellLevelNumber("spikes", level, levelData, "range");
+            return {
+                level,
+                manaCost,
+                damage,
+                cooldown,
+                projectileSpeed,
+                maxAge: range / projectileSpeed
+            };
+        }
+
         return Object.freeze({
             clampSpellLevel,
             normalizeWizardSpellLevels,
@@ -169,7 +186,8 @@
             getLoadedSpellLevelDefinition,
             requirePositiveSpellLevelNumber,
             getActiveSpellLevelData,
-            getActiveFireballStats
+            getActiveFireballStats,
+            getActiveSpikeStats
         });
     }
 
