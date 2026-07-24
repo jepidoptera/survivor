@@ -3,6 +3,8 @@
 
     function createDebugState() {
         return {
+            showHexGrid: false,
+            showAgentPath: false,
             showPathBlockedEdges: false,
             showWallLabels: false,
             showSectionBoundaries: false,

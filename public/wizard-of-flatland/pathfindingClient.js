@@ -52,6 +52,7 @@
                     allowBlockedDestination: false,
                     maxPathLength: null,
                     wallAvoidance: 0.4,
+                    blockedNeighborAvoidance: 0.12,
                     includeBlockedPlan: false
                 }
             });

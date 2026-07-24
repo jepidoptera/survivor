@@ -74,7 +74,7 @@ const TARGET_NPC_PUSH_SLOP = 0.0005;
 const NPC_NPC_PUSH_SHARE = 0.5;
 const VACATING_CONTACT_PUSH_FORCE = 10;
 const TARGET_NPC_PUSH_MIN_AXIS = 0.0001;
-const NPC_CONTACT_GRID_CELL_SIZE = 0.42 * 2 + TARGET_NPC_PUSH_SLOP * 8;
+const NPC_CONTACT_GRID_PADDING = TARGET_NPC_PUSH_SLOP * 8;
 const NPC_AGENT_CONTACTS_ENABLED = true;
 const NPC_CONTACT_ACTIVE_RADIUS_EXTRA = 2.5;
 const NPC_CONTACT_NEIGHBOR_LIMIT = 8;
@@ -701,10 +701,12 @@ function resolvePackedAgentAgentContacts(agents, next, count, walls, dt, targetX
     let pairChecks = 0;
     let wallClamps = 0;
     let budgetHits = 0;
+    if (count <= 0) return { pushes, passes, pairChecks, wallClamps, budgetHits };
     const activeRadiusSq = activeRadius * activeRadius;
+    const contactCellSize = getPackedAgentContactGridCellSize(agents, count);
     for (let pass = 0; pass < TARGET_NPC_PUSH_ITERATIONS; pass++) {
         let changed = false;
-        const contactGrid = buildPackedAgentContactGrid(next, count);
+        const contactGrid = buildPackedAgentContactGrid(next, count, contactCellSize);
         const checkedPairs = new Set();
         for (let leftIndex = 0; leftIndex < count; leftIndex++) {
             if (pairChecks >= NPC_CONTACT_PAIR_BUDGET) {
@@ -712,7 +714,7 @@ function resolvePackedAgentAgentContacts(agents, next, count, walls, dt, targetX
                 break;
             }
             if (!isPackedAgentInContactActiveRadius(next, leftIndex, targetX, targetY, activeRadiusSq)) continue;
-            const candidates = collectNearestPackedContactCandidates(contactGrid, next, leftIndex, targetX, targetY, activeRadiusSq);
+            const candidates = collectNearestPackedContactCandidates(contactGrid, next, leftIndex, targetX, targetY, activeRadiusSq, contactCellSize);
             for (const candidate of candidates) {
                 if (pairChecks >= NPC_CONTACT_PAIR_BUDGET) {
                     budgetHits += 1;
@@ -737,12 +739,25 @@ function resolvePackedAgentAgentContacts(agents, next, count, walls, dt, targetX
     return { pushes, passes, pairChecks, wallClamps, budgetHits };
 }
 
-function buildPackedAgentContactGrid(next, count) {
+function getPackedAgentContactGridCellSize(agents, count) {
+    let maxRadius = 0;
+    for (let index = 0; index < count; index++) {
+        const radius = agents[index * STRIDE + 3];
+        if (!Number.isFinite(radius) || !(radius > 0)) {
+            throw new Error(`contact grid requires a positive radius for agent ${index}`);
+        }
+        maxRadius = Math.max(maxRadius, radius);
+    }
+    if (!(maxRadius > 0)) throw new Error("contact grid requires at least one positive agent radius");
+    return maxRadius * 2 + NPC_CONTACT_GRID_PADDING;
+}
+
+function buildPackedAgentContactGrid(next, count, contactCellSize) {
     const grid = new Map();
     for (let index = 0; index < count; index++) {
         const outBase = index * OUT_STRIDE;
-        const cellX = Math.floor(next[outBase + 1] / NPC_CONTACT_GRID_CELL_SIZE);
-        const cellY = Math.floor(next[outBase + 2] / NPC_CONTACT_GRID_CELL_SIZE);
+        const cellX = Math.floor(next[outBase + 1] / contactCellSize);
+        const cellY = Math.floor(next[outBase + 2] / contactCellSize);
         const cellKey = getPackedContactCellKey(cellX, cellY);
         let cell = grid.get(cellKey);
         if (!cell) {
@@ -754,12 +769,12 @@ function buildPackedAgentContactGrid(next, count) {
     return grid;
 }
 
-function collectNearestPackedContactCandidates(contactGrid, next, leftIndex, targetX, targetY, activeRadiusSq) {
+function collectNearestPackedContactCandidates(contactGrid, next, leftIndex, targetX, targetY, activeRadiusSq, contactCellSize) {
     const leftOutBase = leftIndex * OUT_STRIDE;
     const leftX = next[leftOutBase + 1];
     const leftY = next[leftOutBase + 2];
-    const cellX = Math.floor(leftX / NPC_CONTACT_GRID_CELL_SIZE);
-    const cellY = Math.floor(leftY / NPC_CONTACT_GRID_CELL_SIZE);
+    const cellX = Math.floor(leftX / contactCellSize);
+    const cellY = Math.floor(leftY / contactCellSize);
     const candidates = [];
     for (let dx = -1; dx <= 1; dx++) {
         for (let dy = -1; dy <= 1; dy++) {

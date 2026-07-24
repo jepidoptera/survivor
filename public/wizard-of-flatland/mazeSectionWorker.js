@@ -31,6 +31,7 @@ const PATH_NODE_CLEARANCE = 3;
 const PATH_NODE_XINDEX = 4;
 const PATH_NODE_YINDEX = 5;
 const PATH_NODE_HAS_UNBLOCKED_NEIGHBOR = 6;
+const PATH_NODE_BLOCKED_NEIGHBOR_COUNT = 7;
 const PATH_EDGE_FROM = 0;
 const PATH_EDGE_TO = 1;
 const MAZE_CHUNK_MIN_SIZE = 28;
@@ -2238,7 +2239,7 @@ function buildPathfindingNodeLayer(walls, bounds, targetRadius) {
         packedNodes[base + PATH_NODE_XINDEX] = node.xindex;
         packedNodes[base + PATH_NODE_YINDEX] = node.yindex;
         packedNodes[base + PATH_NODE_HAS_UNBLOCKED_NEIGHBOR] = hasUnblockedPathfindingNeighbor(node) ? 1 : 0;
-        packedNodes[base + 7] = 0;
+        packedNodes[base + PATH_NODE_BLOCKED_NEIGHBOR_COUNT] = getPathfindingBlockedNeighborCount(node);
     }
 
     return {
@@ -2307,6 +2308,17 @@ function hasUnblockedPathfindingNeighbor(node) {
         return true;
     }
     return false;
+}
+
+function getPathfindingBlockedNeighborCount(node) {
+    if (!node || !Array.isArray(node.neighbors) || !(node.blockedNeighbors instanceof Set)) {
+        throw new Error("Wizard of Flatland maze pathfinding blocked neighbor count requires a node");
+    }
+    let count = 0;
+    for (let dir = 0; dir < node.neighbors.length; dir++) {
+        if (node.neighbors[dir] && node.blockedNeighbors.has(dir)) count += 1;
+    }
+    return count;
 }
 
 function isPathfindingNodeTerrainPassable(node, walls, targetRadius) {

@@ -120,7 +120,7 @@
     const NPC_NPC_PUSH_SHARE = 0.5;
     const VACATING_CONTACT_PUSH_FORCE = 10;
     const TARGET_NPC_PUSH_MIN_AXIS = 0.0001;
-    const NPC_CONTACT_GRID_CELL_SIZE = AGENT_RADIUS * 2 + TARGET_NPC_PUSH_SLOP * 8;
+    const NPC_CONTACT_GRID_PADDING = TARGET_NPC_PUSH_SLOP * 8;
     const HEX_GRID_ROW_STEP = 1;
     const HEX_GRID_COL_STEP = 0.866;
     const HEX_GRID_WIDTH = 1 / HEX_GRID_COL_STEP;
@@ -138,6 +138,7 @@
     const PATH_NODE_XINDEX = 4;
     const PATH_NODE_YINDEX = 5;
     const PATH_NODE_HAS_UNBLOCKED_NEIGHBOR = 6;
+    const PATH_NODE_BLOCKED_NEIGHBOR_COUNT = 7;
     const PATH_EDGE_FROM = 0;
     const PATH_EDGE_TO = 1;
     const PATH_EDGE_DIRECTION = 2;
@@ -193,7 +194,7 @@
     const PATH_REQUEST_INTERVAL_SECONDS = 0.22;
     const PATH_REQUESTS_PER_FRAME = 8;
     const PATH_NODE_FAST_SEARCH_RADIUS = 8;
-    const PATH_WAYPOINT_REACHED_DISTANCE = AGENT_RADIUS + WALL_WORLD_HALF_THICKNESS + 0.12;
+    const PATH_WAYPOINT_REACHED_PADDING = WALL_WORLD_HALF_THICKNESS + 0.12;
     const HEADING_GLITCH_TURN_THRESHOLD = Math.PI / 5;
     const HEADING_GLITCH_RETURN_THRESHOLD = Math.PI / 10;
     const TARGET_CURSOR_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]);
@@ -3936,7 +3937,9 @@
     }
 
     function resolveAgentAgentOverlapsSpatial() {
-        const grid = buildAgentContactGrid();
+        if (state.agents.length <= 0) return { pushes: 0 };
+        const contactCellSize = getAgentContactGridCellSize();
+        const grid = buildAgentContactGrid(contactCellSize);
         let pushes = 0;
         const checkedPairs = new Set();
         for (const [cellKey, cellAgents] of grid) {
@@ -3962,11 +3965,23 @@
         return { pushes };
     }
 
-    function buildAgentContactGrid() {
+    function getAgentContactGridCellSize() {
+        let maxRadius = 0;
+        for (const agent of state.agents) {
+            if (!agent || !Number.isFinite(agent.radius) || !(agent.radius > 0)) {
+                throw new Error("Wizard of Flatland contact grid requires positive enemy radii");
+            }
+            maxRadius = Math.max(maxRadius, agent.radius);
+        }
+        if (!(maxRadius > 0)) throw new Error("Wizard of Flatland contact grid requires at least one enemy radius");
+        return maxRadius * 2 + NPC_CONTACT_GRID_PADDING;
+    }
+
+    function buildAgentContactGrid(contactCellSize) {
         const grid = new Map();
         for (const agent of state.agents) {
-            const cellX = Math.floor(agent.x / NPC_CONTACT_GRID_CELL_SIZE);
-            const cellY = Math.floor(agent.y / NPC_CONTACT_GRID_CELL_SIZE);
+            const cellX = Math.floor(agent.x / contactCellSize);
+            const cellY = Math.floor(agent.y / contactCellSize);
             const cellKey = getAgentContactCellKey(cellX, cellY);
             let cell = grid.get(cellKey);
             if (!cell) {
@@ -4701,13 +4716,21 @@
     }
 
     function advanceAgentPathCursor(agent) {
+        const reachedDistance = getAgentPathWaypointReachedDistance(agent);
         while (agent.pathCursor < agent.pathNodeKeys.length) {
             const waypoint = getAgentPathWaypoint(agent);
             if (!waypoint) return;
             const distance = Math.hypot(waypoint.x - agent.x, waypoint.y - agent.y);
-            if (distance > PATH_WAYPOINT_REACHED_DISTANCE) return;
+            if (distance > reachedDistance) return;
             agent.pathCursor += 1;
         }
+    }
+
+    function getAgentPathWaypointReachedDistance(agent) {
+        if (!agent || !Number.isFinite(agent.radius) || !(agent.radius > 0)) {
+            throw new Error("Wizard of Flatland path waypoint reach requires a positive enemy radius");
+        }
+        return agent.radius + PATH_WAYPOINT_REACHED_PADDING;
     }
 
     function getAgentPathWaypoint(agent) {
@@ -4943,6 +4966,7 @@
         resizeCanvas();
         drawFloor();
         drawMazeRingBoundaries();
+        if (state.debug.showHexGrid) drawHexGridLayer();
         drawPathfindingNodeLayer();
         drawWalls();
         drawSectionBoundaries();
@@ -4951,7 +4975,7 @@
         drawCoins();
         drawTalismans();
         drawTarget();
-        drawAgentPaths();
+        if (state.debug.showAgentPath) drawAgentPaths();
         drawFireballs();
         drawFireballExplosions();
         drawAgents();
@@ -5275,7 +5299,7 @@
             packed[base + PATH_NODE_XINDEX] = node.xindex;
             packed[base + PATH_NODE_YINDEX] = node.yindex;
             packed[base + PATH_NODE_HAS_UNBLOCKED_NEIGHBOR] = hasUnblockedPathfindingObjectNeighbor(node) ? 1 : 0;
-            packed[base + 7] = 0;
+            packed[base + PATH_NODE_BLOCKED_NEIGHBOR_COUNT] = getPathfindingBlockedNeighborCount(node);
         }
         return packed;
     }
@@ -5455,6 +5479,17 @@
             return true;
         }
         return false;
+    }
+
+    function getPathfindingBlockedNeighborCount(node) {
+        if (!node || !Array.isArray(node.neighbors) || !(node.blockedNeighbors instanceof Map)) {
+            throw new Error("Wizard of Flatland pathfinding blocked neighbor count requires a node");
+        }
+        let count = 0;
+        for (let dir = 0; dir < node.neighbors.length; dir++) {
+            if (node.neighbors[dir] && node.blockedNeighbors.has(dir)) count += 1;
+        }
+        return count;
     }
 
     function isPathfindingNodeTerrainPassable(node) {
@@ -6091,17 +6126,28 @@
 
     function drawAgentPaths() {
         ctx.save();
-        ctx.strokeStyle = "rgba(180,140,255,0.5)";
+        ctx.strokeStyle = "rgba(255,255,255,0.82)";
         ctx.lineWidth = Math.max(1, state.view.scale * 0.025);
-        ctx.setLineDash([5, 5]);
+        ctx.setLineDash([1, Math.max(3, state.view.scale * 0.08)]);
+        ctx.lineCap = "round";
         for (const agent of state.agents) {
             if (agent.pathMode !== PATH_MODE_WORKER) continue;
-            if (!Number.isFinite(agent.pathGoalX) || !Number.isFinite(agent.pathGoalY)) continue;
-            const a = worldToScreen(agent.x, agent.y);
-            const b = worldToScreen(agent.pathGoalX, agent.pathGoalY);
+            const waypoints = Array.isArray(agent.pathWaypoints) ? agent.pathWaypoints : [];
+            const start = Math.max(0, Math.min(waypoints.length, Math.floor(agent.pathCursor || 0)));
+            if (waypoints.length - start < 2) continue;
             ctx.beginPath();
-            ctx.moveTo(a.x, a.y);
-            ctx.lineTo(b.x, b.y);
+            for (let i = start; i < waypoints.length; i++) {
+                const waypoint = waypoints[i];
+                if (!waypoint || !Number.isFinite(waypoint.x) || !Number.isFinite(waypoint.y)) {
+                    throw new Error(`Wizard of Flatland agent ${agent.id} path overlay has an invalid waypoint`);
+                }
+                const point = worldToScreen(waypoint.x, waypoint.y);
+                if (i === start) {
+                    ctx.moveTo(point.x, point.y);
+                } else {
+                    ctx.lineTo(point.x, point.y);
+                }
+            }
             ctx.stroke();
         }
         ctx.restore();
