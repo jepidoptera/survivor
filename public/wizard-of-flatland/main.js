@@ -454,8 +454,8 @@
         selectedSpell: "fireball",
         spellLevels: {
             fireball: 1,
-            spikes: 1,
-            healing: 1
+            spikes: 0,
+            healing: 0
         },
         spellCooldownRemaining: 0,
         spellCooldownDuration: 0,
@@ -1003,8 +1003,8 @@
     function getStartingSpellLevels() {
         return {
             fireball: 1,
-            spikes: 1,
-            healing: 1
+            spikes: 0,
+            healing: 0
         };
     }
 
