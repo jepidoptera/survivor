@@ -450,7 +450,8 @@
             active: false,
             clientX: NaN,
             clientY: NaN,
-            bendDirection: 0
+            bendDirection: 0,
+            distanceDirection: 0
         },
         projectedCursorBendHold: {
             direction: 0,
@@ -3047,26 +3048,157 @@
         const mouseMode = state.projectedCursorMouseMode;
         if (!mouseMode || typeof mouseMode !== "object") throw new Error("Wizard of Flatland projected cursor mouse mode state is missing");
         if (!mouseMode.active) return;
-        if (!Number.isFinite(mouseMode.clientX) || !Number.isFinite(mouseMode.clientY)) {
-            throw new Error("Wizard of Flatland mouse cursor mode requires a finite client pointer");
-        }
         const cursor = state.projectedCursor;
         if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
-        const mouseWorld = projectedCursorMouseClientToWorld();
-        const projection = getProjectedCursorProjectionForWorldPoint(mouseWorld);
-        const bendDelta = projection.angleOffset - cursor.angleOffset;
-        const bend = Math.abs(bendDelta) > 0.000001 ? Math.sign(bendDelta) : 0;
-        mouseMode.bendDirection = bend;
 
-        updateProjectedCursorBendInput(dt, bend, projection.angleOffset);
-        mouseMode.bendDirection = Math.abs(projection.angleOffset - cursor.angleOffset) > 0.000001
-            ? Math.sign(projection.angleOffset - cursor.angleOffset)
+        const mouseWorld = projectedCursorMouseClientToWorld();
+        const cursorWorld = getCurrentProjectedCursorWorldPoint();
+        const displayedCursorProjection = getProjectedCursorProjectionForWorldPoint(cursorWorld);
+        cursor.angleOffset = displayedCursorProjection.angleOffset;
+        cursor.distance = displayedCursorProjection.distance;
+        const cursorScreen = worldToScreen(cursorWorld.x, cursorWorld.y);
+        const mouseScreen = worldToScreen(mouseWorld.x, mouseWorld.y);
+        const screenDeltaX = mouseScreen.x - cursorScreen.x;
+        const screenDeltaY = mouseScreen.y - cursorScreen.y;
+        const targetProjection = getProjectedCursorProjectionForWorldPoint(mouseWorld);
+        const targetBendDelta = targetProjection.angleOffset - cursor.angleOffset;
+        const bendDirection = Math.abs(targetBendDelta) > 0.000001
+            ? Math.sign(targetBendDelta)
             : 0;
-        cursor.distance = moveToward(
-            cursor.distance,
-            projection.distance,
-            TARGET_PROJECTED_CURSOR_DISTANCE_SPEED * dt
-        );
+        mouseMode.bendDirection = bendDirection;
+
+        const wizardScreen = worldToScreen(state.target.x, state.target.y);
+        const mouseRadius = Math.hypot(mouseScreen.x - wizardScreen.x, mouseScreen.y - wizardScreen.y);
+        const cursorRadius = Math.hypot(cursorScreen.x - wizardScreen.x, cursorScreen.y - wizardScreen.y);
+        const radiusDelta = mouseRadius - cursorRadius;
+        mouseMode.distanceDirection = Math.abs(radiusDelta) > 0.001
+            ? Math.sign(radiusDelta)
+            : 0;
+
+        if (Math.hypot(screenDeltaX, screenDeltaY) <= 0.001) {
+            cursor.angleOffset = targetProjection.angleOffset;
+            cursor.distance = targetProjection.distance;
+            mouseMode.bendDirection = 0;
+            mouseMode.distanceDirection = 0;
+            updateProjectedCursorBendHold(dt, 0);
+            return;
+        }
+
+        updateProjectedCursorBendHold(dt, bendDirection);
+        const cursorInputMaxAngleDelta = bendDirection !== 0
+            ? getProjectedCursorBendMaxDelta(dt, bendDirection)
+            : 0;
+        const maxDistanceDelta = TARGET_PROJECTED_CURSOR_DISTANCE_SPEED * dt;
+        const startAngleOffset = cursor.angleOffset;
+        const startDistance = cursor.distance;
+
+        function getProjectionAlongMouseLine(progress) {
+            const screenX = cursorScreen.x + screenDeltaX * progress;
+            const screenY = cursorScreen.y + screenDeltaY * progress;
+            const worldPoint = screenToWorld(screenX, screenY);
+            return {
+                projection: getProjectedCursorProjectionForWorldPoint(worldPoint),
+                worldPoint
+            };
+        }
+
+        function projectionFitsStep(candidate) {
+            const headingTurn = bendDirection !== 0
+                ? getProjectedCursorMouseHeadingTurnForCandidate(
+                    candidate.projection,
+                    candidate.worldPoint,
+                    bendDirection,
+                    dt
+                )
+                : 0;
+            const combinedSignedAngleDelta = bendDirection * cursorInputMaxAngleDelta +
+                2 * TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET * headingTurn;
+            const maxAngleDelta = bendDirection !== 0
+                ? Math.max(0, bendDirection * combinedSignedAngleDelta)
+                : 0;
+            return Math.abs(candidate.projection.angleOffset - startAngleOffset) <= maxAngleDelta + 0.000001 &&
+                Math.abs(candidate.projection.distance - startDistance) <= maxDistanceDelta + 0.000001;
+        }
+
+        let progress = 1;
+        let candidate = {
+            projection: targetProjection,
+            worldPoint: mouseWorld
+        };
+        if (!projectionFitsStep(candidate)) {
+            let low = 0;
+            let high = 1;
+            for (let iteration = 0; iteration < 32; iteration++) {
+                const candidateProgress = (low + high) * 0.5;
+                const candidateStep = getProjectionAlongMouseLine(candidateProgress);
+                if (projectionFitsStep(candidateStep)) {
+                    low = candidateProgress;
+                } else {
+                    high = candidateProgress;
+                }
+            }
+            progress = low;
+            candidate = getProjectionAlongMouseLine(progress);
+        }
+
+        cursor.angleOffset = candidate.projection.angleOffset;
+        cursor.distance = candidate.projection.distance;
+
+        const remainingBendDelta = targetProjection.angleOffset - cursor.angleOffset;
+        if (
+            progress >= 1 - 0.000001 ||
+            Math.abs(remainingBendDelta) <= 0.000001 ||
+            (bendDirection !== 0 && Math.sign(remainingBendDelta) !== bendDirection)
+        ) {
+            mouseMode.bendDirection = 0;
+            updateProjectedCursorBendHold(dt, 0);
+        }
+    }
+
+    function getProjectedCursorMouseHeadingTurnForCandidate(projection, worldPoint, bendDirection, dt) {
+        if (!projection || !Number.isFinite(projection.angleOffset) || !Number.isFinite(projection.distance)) {
+            throw new Error("Wizard of Flatland mouse heading prediction requires a finite cursor projection");
+        }
+        if (!worldPoint || !Number.isFinite(worldPoint.x) || !Number.isFinite(worldPoint.y)) {
+            throw new Error("Wizard of Flatland mouse heading prediction requires a finite world point");
+        }
+        if (bendDirection !== -1 && bendDirection !== 1) {
+            throw new Error("Wizard of Flatland mouse heading prediction requires a signed bend direction");
+        }
+        if (!Number.isFinite(dt) || dt <= 0) {
+            throw new Error("Wizard of Flatland mouse heading prediction requires positive finite time");
+        }
+
+        if (!isTargetMovementInputActive()) {
+            const targetHeading = Math.atan2(worldPoint.y - state.target.y, worldPoint.x - state.target.x);
+            const headingDelta = shortestAngleDelta(state.target.heading, targetHeading);
+            const turnAcceleration = getProjectedCursorTurnAccelerationMultiplier(
+                TARGET_PROJECTED_CURSOR_IDLE_TURN_ACCEL_SECONDS,
+                TARGET_PROJECTED_CURSOR_IDLE_MAX_TURN_ACCEL_MULTIPLIER
+            );
+            const distanceSpeedMultiplier = TARGET_PROJECTED_CURSOR_DISTANCE /
+                Math.max(TARGET_PROJECTED_CURSOR_MIN_DISTANCE, projection.distance);
+            const maxTurn = TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET /
+                TARGET_IDLE_FACE_CURSOR_SECONDS *
+                TARGET_TURN_SPEED_MULTIPLIER *
+                TARGET_PROJECTED_CURSOR_IDLE_TURN_RATE_MULTIPLIER *
+                distanceSpeedMultiplier *
+                turnAcceleration *
+                dt;
+            return Math.max(-maxTurn, Math.min(maxTurn, headingDelta));
+        }
+
+        const bendRatio = getProjectedCursorBendRatio(projection.angleOffset);
+        if (bendRatio === 0) return 0;
+        const turnRadius = getProjectedCursorTurnRadius(projection.distance, bendRatio);
+        const turnRate = TARGET_KEYBOARD_MOVE_SPEED / turnRadius * TARGET_TURN_SPEED_MULTIPLIER;
+        return bendDirection *
+            turnRate *
+            getProjectedCursorTurnAccelerationMultiplier(
+                TARGET_PROJECTED_CURSOR_MOVING_TURN_ACCEL_SECONDS,
+                TARGET_PROJECTED_CURSOR_MOVING_MAX_TURN_ACCEL_MULTIPLIER
+            ) *
+            dt;
     }
 
     function updateProjectedCursorBendInput(dt, bend, stopAngleOffset = NaN) {
@@ -3080,30 +3212,7 @@
         updateProjectedCursorBendHold(dt, signedBend);
         if (signedBend === 0) return;
 
-        const currentSign = Math.sign(cursor.angleOffset);
-        const movingTowardStraight = currentSign !== 0 && currentSign !== Math.sign(signedBend);
-        const bendProgress = Math.min(1, Math.abs(cursor.angleOffset) / TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET);
-        const speedMultiplier = movingTowardStraight
-            ? TARGET_PROJECTED_CURSOR_RETURN_ANGLE_SPEED_MULTIPLIER
-            : Math.max(
-                TARGET_PROJECTED_CURSOR_OUTWARD_ANGLE_SPEED_MIN_MULTIPLIER,
-                1 - bendProgress
-            );
-        const targetIsMoving = isTargetMovementInputActive();
-        const distanceSpeedMultiplier = TARGET_PROJECTED_CURSOR_DISTANCE / Math.max(TARGET_PROJECTED_CURSOR_MIN_DISTANCE, cursor.distance);
-        const maxDelta = TARGET_PROJECTED_CURSOR_ANGLE_SPEED *
-            speedMultiplier *
-            distanceSpeedMultiplier *
-            getProjectedCursorTurnAccelerationMultiplier(
-                targetIsMoving
-                    ? TARGET_PROJECTED_CURSOR_MOVING_TURN_ACCEL_SECONDS
-                    : TARGET_PROJECTED_CURSOR_IDLE_TURN_ACCEL_SECONDS,
-                targetIsMoving
-                    ? TARGET_PROJECTED_CURSOR_MOVING_MAX_TURN_ACCEL_MULTIPLIER
-                    : TARGET_PROJECTED_CURSOR_IDLE_MAX_TURN_ACCEL_MULTIPLIER
-            ) *
-            (targetIsMoving ? 1 : TARGET_PROJECTED_CURSOR_IDLE_TURN_RATE_MULTIPLIER) *
-            dt;
+        const maxDelta = getProjectedCursorBendMaxDelta(dt, signedBend);
         const nextAngleOffset = cursor.angleOffset + signedBend * maxDelta;
         if (Number.isFinite(stopAngleOffset)) {
             const stopDelta = stopAngleOffset - cursor.angleOffset;
@@ -3119,6 +3228,40 @@
             -TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET,
             Math.min(TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET, nextAngleOffset)
         );
+    }
+
+    function getProjectedCursorBendMaxDelta(dt, signedBend) {
+        const cursor = state.projectedCursor;
+        if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
+        if (!Number.isFinite(cursor.angleOffset)) throw new Error("Wizard of Flatland projected cursor bend requires a finite bend");
+        if (!Number.isFinite(cursor.distance)) throw new Error("Wizard of Flatland projected cursor bend requires a finite distance");
+        if (!Number.isFinite(dt) || dt <= 0) throw new Error("Wizard of Flatland projected cursor bend step requires positive finite time");
+        if (signedBend !== -1 && signedBend !== 1) throw new Error("Wizard of Flatland projected cursor bend direction must be signed");
+
+        const currentSign = Math.sign(cursor.angleOffset);
+        const movingTowardStraight = currentSign !== 0 && currentSign !== Math.sign(signedBend);
+        const bendProgress = Math.min(1, Math.abs(cursor.angleOffset) / TARGET_PROJECTED_CURSOR_MAX_ANGLE_OFFSET);
+        const speedMultiplier = movingTowardStraight
+            ? TARGET_PROJECTED_CURSOR_RETURN_ANGLE_SPEED_MULTIPLIER
+            : Math.max(
+                TARGET_PROJECTED_CURSOR_OUTWARD_ANGLE_SPEED_MIN_MULTIPLIER,
+                1 - bendProgress
+            );
+        const targetIsMoving = isTargetMovementInputActive();
+        const distanceSpeedMultiplier = TARGET_PROJECTED_CURSOR_DISTANCE / Math.max(TARGET_PROJECTED_CURSOR_DISTANCE, cursor.distance);
+        return TARGET_PROJECTED_CURSOR_ANGLE_SPEED *
+            speedMultiplier *
+            distanceSpeedMultiplier *
+            getProjectedCursorTurnAccelerationMultiplier(
+                targetIsMoving
+                    ? TARGET_PROJECTED_CURSOR_MOVING_TURN_ACCEL_SECONDS
+                    : TARGET_PROJECTED_CURSOR_IDLE_TURN_ACCEL_SECONDS,
+                targetIsMoving
+                    ? TARGET_PROJECTED_CURSOR_MOVING_MAX_TURN_ACCEL_MULTIPLIER
+                    : TARGET_PROJECTED_CURSOR_IDLE_MAX_TURN_ACCEL_MULTIPLIER
+            ) *
+            (targetIsMoving ? 1 : TARGET_PROJECTED_CURSOR_IDLE_TURN_RATE_MULTIPLIER) *
+            dt;
     }
 
     function updateProjectedCursorBendHold(dt, bend) {
@@ -6610,6 +6753,7 @@
         mouseMode.clientX = NaN;
         mouseMode.clientY = NaN;
         mouseMode.bendDirection = 0;
+        mouseMode.distanceDirection = 0;
     }
 
     function inspectAgentAtPointer(event) {
