@@ -225,6 +225,13 @@
     const FLOOR_MID_OUTER_COLOR = "#3c7753";
     const FLOOR_FAR_OUTER_COLOR = "#775fb3";
     const FLOOR_OUTER_COLOR = "#9b7700";
+    const FLOOR_ZONE_COLORS = [
+        FLOOR_CENTER_COLOR,
+        FLOOR_EDGE_COLOR,
+        FLOOR_MID_OUTER_COLOR,
+        FLOOR_FAR_OUTER_COLOR,
+        FLOOR_OUTER_COLOR
+    ];
     const FLOOR_GRADIENT_SECTION_DISTANCE = 7;
     const FLOOR_GRADIENT_MID_OUTER_SECTION_DISTANCE = FLOOR_GRADIENT_SECTION_DISTANCE * 2;
     const FLOOR_GRADIENT_FAR_OUTER_SECTION_DISTANCE = FLOOR_GRADIENT_SECTION_DISTANCE * 3;
@@ -6646,17 +6653,30 @@
             : Math.atan2(state.target.y - agent.y, state.target.x - agent.x);
     }
 
-    function getAgentStateColor(agent) {
-        if (agent.talismanBlockedFlashSeconds > 0) return "#ff1f1f";
-        if (agent.wallClamps > 0 || agent.solverState === STATE_BLOCKED) return "#ff6b6b";
-        if (agent.solverState === STATE_MILLING) return "#6fa8d8";
-        if (agent.solverState === STATE_ATTACKING) return "#58d27b";
-        if (agent.solverState === STATE_SEEKING) return "#b48cff";
-        if (agent.solverState === STATE_RECOVERING) return "#ff9f5a";
-        if (agent.solverState === STATE_VACATING) return "#ff6fb1";
-        if (agent.solverState === STATE_HOLDING) return "#ffd166";
-        if (agent.pathMode === PATH_MODE_WORKER) return "#b48cff";
-        return "#6fa8d8";
+    function getOppositeHexColor(hexColor) {
+        if (typeof hexColor !== "string" || !/^#[0-9a-f]{6}$/i.test(hexColor)) {
+            throw new Error(`Wizard of Flatland opposite color requires a six-digit hex color, got ${hexColor}`);
+        }
+        const color = Number.parseInt(hexColor.slice(1), 16);
+        return `#${(0xffffff ^ color).toString(16).padStart(6, "0")}`;
+    }
+
+    function getAgentHomeZoneColor(agent) {
+        const homeSectionKey = getAgentHomeSectionKey(agent);
+        const homeCoord = parseMazeSectionKey(homeSectionKey);
+        const homeRing = getMazeSectionRing(homeCoord.q, homeCoord.r);
+        if (!Number.isInteger(homeRing) || homeRing < 0) {
+            throw new Error(`Wizard of Flatland enemy ${agent.id} has invalid home ring ${homeRing}`);
+        }
+        const zoneIndex = Math.min(
+            FLOOR_ZONE_COLORS.length - 1,
+            Math.floor(homeRing / MAZE_RING_BOUNDARY_INTERVAL)
+        );
+        return FLOOR_ZONE_COLORS[zoneIndex];
+    }
+
+    function getAgentHomeZoneOppositeColor(agent) {
+        return getOppositeHexColor(getAgentHomeZoneColor(agent));
     }
 
     function drawAgentTriangle(x, y, radius, angle, agent) {
@@ -6671,9 +6691,9 @@
         const rightX = x + Math.cos(angle + Math.PI + baseAngleOffset) * radius;
         const rightY = y + Math.sin(angle + Math.PI + baseAngleOffset) * radius;
 
-        ctx.fillStyle = getAgentStateColor(agent);
-        ctx.strokeStyle = wallClamped ? "#ff6b6b" : "rgba(236,244,248,0.72)";
-        ctx.lineWidth = wallClamped ? 2 : 1;
+        ctx.fillStyle = getAgentHomeZoneOppositeColor(agent);
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = Math.max(1, state.view.scale * 0.026);
         ctx.beginPath();
         ctx.moveTo(tipX, tipY);
         ctx.lineTo(leftX, leftY);
