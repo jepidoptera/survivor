@@ -69,6 +69,7 @@
     const SPELL_COOLDOWN_RING_CIRCUMFERENCE = 2 * Math.PI * SPELL_COOLDOWN_RING_RADIUS;
     const FIREBALL_EXPLOSION_VISUAL_SECONDS = 0.16;
     const FIREBALL_ANIMATION_TEXTURE_PATH = "/wizard-of-flatland/hi-fi-fireball.png";
+    const TROPHY_TEXTURE_PATH = "/wizard-of-flatland/chalice.png";
     const FIREBALL_ANIMATION_FRAME_COLUMNS = 5;
     const FIREBALL_ANIMATION_FRAME_ROWS = 2;
     const FIREBALL_ANIMATION_FRAME_COUNT = FIREBALL_ANIMATION_FRAME_COLUMNS * FIREBALL_ANIMATION_FRAME_ROWS;
@@ -146,10 +147,13 @@
     const MAZE_COIN_MIN_COUNT = 7;
     const MAZE_COIN_MAX_COUNT = 13;
     const MAZE_COIN_RADIUS = 0.16;
+    const MAZE_TROPHY_RADIUS = MAZE_COIN_RADIUS * 2;
+    const MAZE_TROPHY_IMAGE_SCALE = 3.28125;
+    const MAZE_COIN_VALUE = 1;
+    const MAZE_TROPHY_VALUE = 10;
     const MAZE_COIN_OWNING_WALL_DISTANCE = 2;
     const MAZE_COIN_OTHER_WALL_MIN_DISTANCE = 1;
     const MAZE_COIN_ATTRACT_DISTANCE = 2;
-    const MAZE_COIN_COLLECT_DISTANCE = TARGET_RADIUS + MAZE_COIN_RADIUS + 0.08;
     const MAZE_COIN_RUSH_SPEED = 11;
     const ENEMY_COIN_DROP_CHANCE = 1 / 2;
     const MAZE_COIN_SECTION_EDGE_EPSILON = 0.02;
@@ -271,6 +275,13 @@
         console.error(fireballAnimationLoadError);
     });
     fireballAnimationImage.src = FIREBALL_ANIMATION_TEXTURE_PATH;
+    const trophyImage = new Image();
+    let trophyImageLoadError = null;
+    trophyImage.addEventListener("error", () => {
+        trophyImageLoadError = new Error(`Wizard of Flatland failed to load trophy texture: ${TROPHY_TEXTURE_PATH}`);
+        console.error(trophyImageLoadError);
+    });
+    trophyImage.src = TROPHY_TEXTURE_PATH;
 
     const labels = {
         agentCount: document.getElementById("agentCountValue"),
@@ -503,6 +514,9 @@
             MAZE_COIN_MIN_COUNT,
             MAZE_COIN_MAX_COUNT,
             MAZE_COIN_RADIUS,
+            MAZE_TROPHY_RADIUS,
+            MAZE_COIN_VALUE,
+            MAZE_TROPHY_VALUE,
             MAZE_COIN_OWNING_WALL_DISTANCE,
             MAZE_COIN_OTHER_WALL_MIN_DISTANCE,
             MAZE_COIN_SECTION_EDGE_EPSILON,
@@ -1654,6 +1668,8 @@
             key: coin.key,
             sectionKey: coin.sectionKey,
             homeSectionKey: mazeSectionKey(homeCoord.q, homeCoord.r),
+            kind: coin.kind,
+            value: coin.value,
             wallIndex: coin.wallIndex,
             x: roundDiagnosticNumber(coin.x),
             y: roundDiagnosticNumber(coin.y),
@@ -3292,7 +3308,7 @@
             const distance = Math.hypot(dx, dy);
             if (distance <= MAZE_COIN_ATTRACT_DISTANCE) {
                 const reachable = isMazeCoinReachableFromTarget(coin);
-                if (distance <= MAZE_COIN_COLLECT_DISTANCE && reachable) {
+                if (distance <= getMazeCoinCollectDistance(coin) && reachable) {
                     collectMazeCoin(coin);
                     continue;
                 }
@@ -3306,7 +3322,7 @@
                 coin.y += dy / distance * step;
             }
             const nextDistance = Math.hypot(state.target.x - coin.x, state.target.y - coin.y);
-            if (coin.rushing && nextDistance <= MAZE_COIN_COLLECT_DISTANCE) {
+            if (coin.rushing && nextDistance <= getMazeCoinCollectDistance(coin)) {
                 collectMazeCoin(coin);
                 continue;
             }
@@ -3407,6 +3423,11 @@
         return !findEarliestSegmentWallHit(state.target.x, state.target.y, coin.x, coin.y, coin.radius);
     }
 
+    function getMazeCoinCollectDistance(coin) {
+        validateCoin(coin);
+        return TARGET_RADIUS + coin.radius + 0.08;
+    }
+
     function maybeDropCoinForKilledEnemy(agent) {
         if (!agent || !Number.isFinite(agent.x) || !Number.isFinite(agent.y)) {
             throw new Error("Wizard of Flatland enemy coin drop requires a finite enemy");
@@ -3435,6 +3456,8 @@
             homeX: x,
             homeY: y,
             radius: MAZE_COIN_RADIUS,
+            kind: "coin",
+            value: MAZE_COIN_VALUE,
             rushing: false,
             phase: Math.random() * Math.PI * 2,
             source: "enemy-drop"
@@ -3468,7 +3491,7 @@
         }
         state.collectedCoinSectionKeysByCoinKey.set(coin.key, coin.sectionKey);
         if (state.droppedCoinsByKey instanceof Map) state.droppedCoinsByKey.delete(coin.key);
-        gainWizardExp(1);
+        gainWizardExp(coin.value);
     }
 
     function validateCoin(coin) {
@@ -3489,6 +3512,18 @@
             !Number.isFinite(coin.radius)
         ) {
             throw new Error(`Wizard of Flatland coin ${coin.key} requires finite render data`);
+        }
+        if (coin.kind !== "coin" && coin.kind !== "trophy") {
+            throw new Error(`Wizard of Flatland coin ${coin.key} has invalid kind`);
+        }
+        if (!Number.isFinite(coin.value) || coin.value <= 0) {
+            throw new Error(`Wizard of Flatland coin ${coin.key} requires a positive value`);
+        }
+        if (coin.kind === "trophy" && (coin.value !== MAZE_TROPHY_VALUE || coin.radius !== MAZE_TROPHY_RADIUS)) {
+            throw new Error(`Wizard of Flatland trophy ${coin.key} requires value ${MAZE_TROPHY_VALUE}`);
+        }
+        if (coin.kind === "coin" && (coin.value !== MAZE_COIN_VALUE || coin.radius !== MAZE_COIN_RADIUS)) {
+            throw new Error(`Wizard of Flatland coin ${coin.key} requires value ${MAZE_COIN_VALUE}`);
         }
     }
 
@@ -5868,6 +5903,14 @@
         return fireballAnimationImage;
     }
 
+    function requireTrophyImage() {
+        if (trophyImageLoadError) throw trophyImageLoadError;
+        if (!trophyImage.complete || !(trophyImage.naturalWidth > 0) || !(trophyImage.naturalHeight > 0)) {
+            throw new Error(`Wizard of Flatland missing trophy texture: ${TROPHY_TEXTURE_PATH}`);
+        }
+        return trophyImage;
+    }
+
     function drawAnimatedFireball(fireball) {
         if (
             !fireball ||
@@ -5913,6 +5956,10 @@
             validateCoin(coin);
             const point = worldToScreen(coin.x, coin.y);
             const radius = Math.max(3.5, coin.radius * state.view.scale);
+            if (coin.kind === "trophy") {
+                drawTrophyCoin(coin, point, radius);
+                continue;
+            }
             const glowRadius = Math.max(radius * 1.9, state.view.scale * 0.22);
             const shineAngle = (performance.now() * 0.006 + coin.phase) % (Math.PI * 2);
             ctx.fillStyle = coin.rushing ? "rgba(255,238,128,0.24)" : "rgba(255,214,74,0.18)";
@@ -5937,6 +5984,26 @@
             ctx.stroke();
         }
         ctx.restore();
+    }
+
+    function drawTrophyCoin(coin, point, radius) {
+        validateCoin(coin);
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y) || !(radius > 0)) {
+            throw new Error(`Wizard of Flatland trophy ${coin.key} requires finite draw geometry`);
+        }
+        const image = requireTrophyImage();
+        const aspect = image.naturalWidth / image.naturalHeight;
+        if (!(aspect > 0)) throw new Error(`Wizard of Flatland trophy texture has invalid dimensions: ${TROPHY_TEXTURE_PATH}`);
+        const pulse = coin.rushing ? 1.12 : 1;
+        const drawHeight = radius * 2 * MAZE_TROPHY_IMAGE_SCALE * pulse;
+        const drawWidth = drawHeight * aspect;
+        ctx.drawImage(
+            image,
+            point.x - drawWidth * 0.5,
+            point.y - drawHeight * 0.5,
+            drawWidth,
+            drawHeight
+        );
     }
 
     function drawTalismans() {

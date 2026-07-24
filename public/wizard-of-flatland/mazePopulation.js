@@ -185,6 +185,7 @@
                 if (!candidate) continue;
                 const validation = validateMazeCoinCandidate(candidate, wall, sectionPolygon, existingCoins);
                 if (!validation.ok) continue;
+                const trophy = shouldCreateMazeTrophyForCoin(sectionKey, key);
                 return {
                     key,
                     sectionKey,
@@ -195,12 +196,33 @@
                     y: candidate.y,
                     homeX: candidate.x,
                     homeY: candidate.y,
-                    radius: constants.MAZE_COIN_RADIUS,
+                    radius: trophy ? constants.MAZE_TROPHY_RADIUS : constants.MAZE_COIN_RADIUS,
+                    kind: trophy ? "trophy" : "coin",
+                    value: trophy ? constants.MAZE_TROPHY_VALUE : constants.MAZE_COIN_VALUE,
                     rushing: false,
                     phase: random() * Math.PI * 2
                 };
             }
             throw new Error(`Wizard of Flatland coin placement failed for section ${sectionKey} coin ${coinIndex} after ${attempts} attempts`);
+        }
+
+        function shouldCreateMazeTrophyForCoin(sectionKey, coinKey) {
+            const coord = mazeSections.parseMazeSectionKey(sectionKey);
+            const roomDistance = mazeSections.getMazeSectionRing(coord.q, coord.r);
+            const chance = getMazeTrophyChanceForRoomDistance(roomDistance);
+            if (chance <= 0) return false;
+            const random = math.seededRandom(math.hashString(`${coinKey}|trophy`));
+            return random() < chance;
+        }
+
+        function getMazeTrophyChanceForRoomDistance(roomDistance) {
+            if (!Number.isInteger(roomDistance) || roomDistance < 0) {
+                throw new Error("Wizard of Flatland trophy chance requires a non-negative room distance");
+            }
+            if (roomDistance <= 4) return 0;
+            if (roomDistance <= 6) return 0.01;
+            if (roomDistance <= 14) return 0.015;
+            return 0.015 + Math.ceil((roomDistance - 14) / 7) * 0.005;
         }
 
         function createMazeCoinCandidateFromWall(wall, random) {
