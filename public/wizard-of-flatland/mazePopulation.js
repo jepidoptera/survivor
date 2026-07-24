@@ -115,11 +115,19 @@
                 throw new Error("Wizard of Flatland coin count requires a section key");
             }
             const random = math.seededRandom(math.hashString(`${options.seed}|coin-count|${sectionKey}`));
+            const coord = mazeSections.parseMazeSectionKey(sectionKey);
+            const ring = mazeSections.getMazeSectionRing(coord.q, coord.r);
+            const zone = Math.floor(ring / constants.MAZE_RING_BOUNDARY_INTERVAL);
+            const scaledAverage = constants.MAZE_COIN_AVERAGE_COUNT
+                * constants.MAZE_COIN_ZONE_MULTIPLIER ** zone;
             const midpoint = (constants.MAZE_COIN_MIN_COUNT + constants.MAZE_COIN_MAX_COUNT) * 0.5;
             const offset = constants.MAZE_COIN_MIN_COUNT
                 + Math.floor(random() * (constants.MAZE_COIN_MAX_COUNT - constants.MAZE_COIN_MIN_COUNT + 1))
                 - midpoint;
-            return Math.max(1, Math.round(constants.MAZE_COIN_AVERAGE_COUNT + offset));
+            const lowerAverage = Math.floor(scaledAverage);
+            const roundedAverage = lowerAverage
+                + (random() < scaledAverage - lowerAverage ? 1 : 0);
+            return Math.max(1, roundedAverage + offset);
         }
 
         function getMazeCoinKey(options, sectionKey, coinIndex) {

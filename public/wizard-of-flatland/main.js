@@ -158,6 +158,7 @@
     const MAZE_COIN_AVERAGE_COUNT = 10;
     const MAZE_COIN_MIN_COUNT = 7;
     const MAZE_COIN_MAX_COUNT = 13;
+    const MAZE_COIN_ZONE_MULTIPLIER = 1.17;
     const MAZE_COIN_RADIUS = 0.16;
     const MAZE_TROPHY_RADIUS = MAZE_COIN_RADIUS * 2;
     const MAZE_TROPHY_IMAGE_SCALE = 3.28125;
@@ -167,7 +168,21 @@
     const MAZE_COIN_OTHER_WALL_MIN_DISTANCE = 1;
     const MAZE_COIN_ATTRACT_DISTANCE = 2;
     const MAZE_COIN_RUSH_SPEED = 11;
-    const ENEMY_COIN_DROP_CHANCE = 1 / 2;
+    const ENEMY_COIN_BASE_AVERAGE = 0.5;
+    const ENEMY_COIN_ZONE_MULTIPLIER = 1.37;
+    const ENEMY_COIN_DROP_PROBABILITIES_BY_ZONE = [
+        Object.freeze([0.5, 0.5]),
+        Object.freeze([0.5034762222952899, 0.3080475554094202, 0.1884762222952898]),
+        Object.freeze([0.3645822204994026, 0.3323855590011948, 0.3030322204994025]),
+        Object.freeze([0.3180518192639351, 0.2675502542533287, 0.2250675337015369, 0.1893303927811992]),
+        Object.freeze([0.2506503634023054, 0.2222946936727986, 0.1971468549429952, 0.1748439504863917, 0.1550641374955091]),
+        Object.freeze([0.1793318725870614, 0.1740639542332288, 0.168950782291076, 0.1639878110462771, 0.1591706283159952, 0.1544949515263614]),
+        Object.freeze([0.1417821816537188, 0.1366292460130837, 0.1316635888118605, 0.1268784035971233, 0.1222671312898647, 0.1178234511944313, 0.1135412723347122, 0.1094147251052053]),
+        Object.freeze([0.1138869672033338, 0.1086253465605445, 0.1036068147668875, 0.09882014102626696, 0.09425461340958337, 0.08990001488288316, 0.08574660044301737, 0.08178507530964124, 0.07800657412475155, 0.0744026411132133, 0.07096521115987733]),
+        Object.freeze([0.08017273180223554, 0.07872836746837439, 0.07731002430507877, 0.07591723352389847, 0.07454953478191462, 0.07320647602958785, 0.07188761336134772, 0.07059251086887364, 0.06932074049701932, 0.06807188190233256, 0.06684552231412409, 0.06564125639803929, 0.0644586861220877, 0.06329742062508617]),
+        Object.freeze([0.06089734054774924, 0.05989053969497008, 0.05890038403470736, 0.05792659837605998, 0.05696891207779077, 0.05602705897310801, 0.0551007772956905, 0.05418980960693572, 0.05329390272441062, 0.05241280765148548, 0.05154627950813101, 0.05069407746285963, 0.0498559646657919, 0.04903170818282956, 0.04822107893091691, 0.04742385161437241, 0.04663980466227299, 0.04586872016687354, 0.04511038382304441]),
+        Object.freeze([0.04335457055886811, 0.04306026180134361, 0.0427679509333989, 0.04247762439253314, 0.04218926870831332, 0.04190287050174935, 0.04161841648467324, 0.04133589345912258, 0.04105528831672818, 0.0407765880381059, 0.04049977969225253, 0.04022485043594591, 0.03995178751314894, 0.0396805782544178, 0.03941121007631409, 0.03914367048082099, 0.03887794705476338, 0.03861402746923193, 0.03835189947901103, 0.03809155092201066, 0.0378329697187021, 0.03757614387155746, 0.03732106146449306, 0.03706771066231648, 0.03681607971017752])
+    ];
     const MAZE_COIN_SECTION_EDGE_EPSILON = 0.02;
     const MAZE_COIN_PLACEMENT_ATTEMPTS_PER_COIN = 160;
     const MAZE_COIN_WALL_ENDPOINT_MARGIN = 0.25;
@@ -536,6 +551,8 @@
             MAZE_COIN_AVERAGE_COUNT,
             MAZE_COIN_MIN_COUNT,
             MAZE_COIN_MAX_COUNT,
+            MAZE_COIN_ZONE_MULTIPLIER,
+            MAZE_RING_BOUNDARY_INTERVAL,
             MAZE_COIN_RADIUS,
             MAZE_TROPHY_RADIUS,
             MAZE_COIN_VALUE,
@@ -3791,8 +3808,89 @@
         if (!agent || !Number.isFinite(agent.x) || !Number.isFinite(agent.y)) {
             throw new Error("Wizard of Flatland enemy coin drop requires a finite enemy");
         }
-        if (Math.random() >= ENEMY_COIN_DROP_CHANCE) return null;
-        return createDroppedMazeCoin(agent.x, agent.y);
+        const zone = getAgentHomeZone(agent);
+        const coinCount = sampleEnemyCoinDropCount(zone);
+        const coins = [];
+        for (let coinIndex = 0; coinIndex < coinCount; coinIndex++) {
+            coins.push(createDroppedMazeCoin(agent.x, agent.y));
+        }
+        return coins;
+    }
+
+    function getAgentHomeZone(agent) {
+        const homeSectionKey = getAgentHomeSectionKey(agent);
+        const homeCoord = parseMazeSectionKey(homeSectionKey);
+        const homeRing = getMazeSectionRing(homeCoord.q, homeCoord.r);
+        if (!Number.isInteger(homeRing) || homeRing < 0) {
+            throw new Error(`Wizard of Flatland enemy ${agent.id} coin drop has invalid home ring ${homeRing}`);
+        }
+        return Math.floor(homeRing / MAZE_RING_BOUNDARY_INTERVAL);
+    }
+
+    function sampleEnemyCoinDropCount(zone, random = Math.random) {
+        if (!Number.isInteger(zone) || zone < 0) {
+            throw new Error(`Wizard of Flatland enemy coin drop requires a non-negative integer zone, got ${zone}`);
+        }
+        if (typeof random !== "function") {
+            throw new Error("Wizard of Flatland enemy coin drop requires a random source");
+        }
+        const probabilities = getEnemyCoinDropProbabilities(zone);
+        const roll = random();
+        if (!Number.isFinite(roll) || roll < 0 || roll >= 1) {
+            throw new Error(`Wizard of Flatland enemy coin drop random source returned ${roll}`);
+        }
+        let cumulativeProbability = 0;
+        for (let coinCount = 0; coinCount < probabilities.length; coinCount++) {
+            cumulativeProbability += probabilities[coinCount];
+            if (roll < cumulativeProbability || coinCount === probabilities.length - 1) return coinCount;
+        }
+        throw new Error(`Wizard of Flatland enemy coin drop failed to sample zone ${zone}`);
+    }
+
+    function getEnemyCoinDropProbabilities(zone) {
+        while (ENEMY_COIN_DROP_PROBABILITIES_BY_ZONE.length <= zone) {
+            const nextZone = ENEMY_COIN_DROP_PROBABILITIES_BY_ZONE.length;
+            ENEMY_COIN_DROP_PROBABILITIES_BY_ZONE.push(
+                Object.freeze(generateEnemyCoinDropProbabilities(nextZone))
+            );
+        }
+        return ENEMY_COIN_DROP_PROBABILITIES_BY_ZONE[zone];
+    }
+
+    function generateEnemyCoinDropProbabilities(zone) {
+        const average = ENEMY_COIN_BASE_AVERAGE * ENEMY_COIN_ZONE_MULTIPLIER ** zone;
+        const maximum = Math.ceil(average * 2);
+        let ratio = 1;
+        if (average < maximum / 2) {
+            let low = 0;
+            let high = 1;
+            for (let iteration = 0; iteration < 80; iteration++) {
+                ratio = (low + high) / 2;
+                const candidateAverage = getTruncatedGeometricAverage(ratio, maximum);
+                if (candidateAverage < average) low = ratio;
+                else high = ratio;
+            }
+            ratio = (low + high) / 2;
+        }
+        let weightTotal = 0;
+        for (let coinCount = 0; coinCount <= maximum; coinCount++) {
+            weightTotal += ratio ** coinCount;
+        }
+        return Array.from(
+            { length: maximum + 1 },
+            (_, coinCount) => ratio ** coinCount / weightTotal
+        );
+    }
+
+    function getTruncatedGeometricAverage(ratio, maximum) {
+        let weightTotal = 0;
+        let weightedCoinTotal = 0;
+        for (let coinCount = 0; coinCount <= maximum; coinCount++) {
+            const weight = ratio ** coinCount;
+            weightTotal += weight;
+            weightedCoinTotal += coinCount * weight;
+        }
+        return weightedCoinTotal / weightTotal;
     }
 
     function createDroppedMazeCoin(x, y) {
@@ -6662,15 +6760,9 @@
     }
 
     function getAgentHomeZoneColor(agent) {
-        const homeSectionKey = getAgentHomeSectionKey(agent);
-        const homeCoord = parseMazeSectionKey(homeSectionKey);
-        const homeRing = getMazeSectionRing(homeCoord.q, homeCoord.r);
-        if (!Number.isInteger(homeRing) || homeRing < 0) {
-            throw new Error(`Wizard of Flatland enemy ${agent.id} has invalid home ring ${homeRing}`);
-        }
         const zoneIndex = Math.min(
             FLOOR_ZONE_COLORS.length - 1,
-            Math.floor(homeRing / MAZE_RING_BOUNDARY_INTERVAL)
+            getAgentHomeZone(agent)
         );
         return FLOOR_ZONE_COLORS[zoneIndex];
     }
