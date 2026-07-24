@@ -101,6 +101,7 @@
         ["costPerSecond", "Cost per second"],
         ["power", "Power"],
         ["damage", "Damage"],
+        ["healthPerSecond", "Health per second"],
         ["range", "Range"],
         ["explosionRadius", "Explosion radius"],
         ["projectileRadius", "Projectile radius"],
@@ -430,7 +431,8 @@
         selectedSpell: "fireball",
         spellLevels: {
             fireball: 1,
-            spikes: 1
+            spikes: 1,
+            healing: 1
         },
         spellCooldownRemaining: 0,
         spellCooldownDuration: 0,
@@ -575,6 +577,7 @@
     const getWizardSpellLevel = spellDataSystem.getWizardSpellLevel;
     const getActiveFireballStats = spellDataSystem.getActiveFireballStats;
     const getActiveSpikeStats = spellDataSystem.getActiveSpikeStats;
+    const getActiveHealingStats = spellDataSystem.getActiveHealingStats;
     let spellLevelPanelSystem = null;
     const refreshSpellLevelPanel = () => spellLevelPanelSystem.refreshSpellLevelPanel();
     const playLevelUpAnnouncement = () => {
@@ -611,6 +614,7 @@
     const resetWizardVitals = wizardVitalsSystem.resetWizardVitals;
     const regenerateWizardVitals = wizardVitalsSystem.regenerateWizardVitals;
     const damageWizard = wizardVitalsSystem.damageWizard;
+    const healWizard = wizardVitalsSystem.healWizard;
     const spendWizardMagic = wizardVitalsSystem.spendWizardMagic;
     const gainWizardExp = wizardVitalsSystem.gainWizardExp;
     const levelUpWizardSpell = (spellId) => {
@@ -949,7 +953,7 @@
 
     function setSelectedSpell(spellId) {
         const id = typeof spellId === "string" ? spellId.trim().toLowerCase() : "";
-        if (id !== "fireball" && id !== "spikes") {
+        if (!isSelectableSpellId(id)) {
             throw new Error(`Wizard of Flatland cannot select unknown spell: ${spellId}`);
         }
         state.selectedSpell = id;
@@ -973,8 +977,13 @@
     function getStartingSpellLevels() {
         return {
             fireball: 1,
-            spikes: 1
+            spikes: 1,
+            healing: 1
         };
+    }
+
+    function isSelectableSpellId(spellId) {
+        return spellId === "fireball" || spellId === "spikes";
     }
 
     function getWizardOfFlatlandDebugApi() {
@@ -3344,6 +3353,19 @@
     function updateHeldSpellCasting() {
         if (!state.spaceHeld) return;
         shootSelectedSpell();
+    }
+
+    function updatePassiveHealing(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        if (getWizardSpellLevel("healing") < 1) return;
+        if (!Array.isArray(getSpellLevelDefinitions())) return;
+        validateWizardVitals();
+        const missingHealth = state.wizardVitals.maxHealth - state.wizardVitals.health;
+        if (!(missingHealth > 0)) return;
+        const healingStats = getActiveHealingStats();
+        const healingAmount = Math.min(missingHealth, healingStats.healthPerSecond * dt);
+        if (!(healingAmount > 0)) return;
+        healWizard(healingAmount);
     }
 
     function updateFireballs(dt) {
@@ -6864,6 +6886,7 @@
         framePart("coins", () => updateCoins(dt));
         framePart("talismans", () => updateTalismans(dt));
         framePart("wizard vitals", () => regenerateWizardVitals(dt));
+        framePart("passive healing", () => updatePassiveHealing(dt));
         if (state.running) framePart("request solver step", () => requestStep(dt));
         framePart("draw", () => draw());
         const drawPart = frameParts.find((part) => part.label === "draw");

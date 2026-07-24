@@ -176,6 +176,15 @@
             };
         }
 
+        function getActiveHealingStats() {
+            const { level, levelData } = getActiveSpellLevelData("healing");
+            const healthPerSecond = requirePositiveSpellLevelNumber("healing", level, levelData, "healthPerSecond");
+            return {
+                level,
+                healthPerSecond
+            };
+        }
+
         return Object.freeze({
             clampSpellLevel,
             normalizeWizardSpellLevels,
@@ -187,7 +196,8 @@
             requirePositiveSpellLevelNumber,
             getActiveSpellLevelData,
             getActiveFireballStats,
-            getActiveSpikeStats
+            getActiveSpikeStats,
+            getActiveHealingStats
         });
     }
 

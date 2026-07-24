@@ -71,6 +71,17 @@
             return appliedDamage;
         }
 
+        function healWizard(amount) {
+            const healing = Number(amount);
+            if (!Number.isFinite(healing) || healing <= 0) return 0;
+            validateWizardVitals();
+            const previousHealth = state.wizardVitals.health;
+            state.wizardVitals.health = Math.min(state.wizardVitals.maxHealth, previousHealth + healing);
+            const appliedHealing = state.wizardVitals.health - previousHealth;
+            if (appliedHealing > 0) callRequiredCallback("updateStatusBars");
+            return appliedHealing;
+        }
+
         function spendWizardMagic(amount) {
             const cost = Number(amount);
             if (!Number.isFinite(cost) || cost <= 0) {
@@ -121,6 +132,7 @@
             resetWizardVitals,
             regenerateWizardVitals,
             damageWizard,
+            healWizard,
             spendWizardMagic,
             gainWizardExp
         });

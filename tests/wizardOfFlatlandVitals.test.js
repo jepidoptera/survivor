@@ -68,6 +68,16 @@ test("Wizard of Flatland magic recharge resumes when spell cooldown ends", () =>
     assert.equal(state.wizardVitals.magic, 39);
 });
 
+test("Wizard of Flatland healing restores health without exceeding the maximum", () => {
+    const { state, system, getStatusUpdates } = createTestVitalsSystem(() => true);
+
+    const appliedHealing = system.healWizard(75);
+
+    assert.equal(appliedHealing, 50);
+    assert.equal(state.wizardVitals.health, 100);
+    assert.equal(getStatusUpdates(), 1);
+});
+
 test("Wizard of Flatland wires magic recharge to the spell cooldown timer", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
 
