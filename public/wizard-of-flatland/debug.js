@@ -3,11 +3,16 @@
 
     function createDebugState() {
         return {
+            showHexGrid: false,
+            showAgentPath: false,
             showPathBlockedEdges: false,
             showWallLabels: false,
             showSectionBoundaries: false,
+            coinDiagnosticsEnabled: false,
+            coinDiagnostics: [],
             headingGlitchFrame: 0,
             headingGlitchLogged: false,
+            lastPathingMetrics: null,
             showFpsCounter: false,
             fpsCounterElement: null,
             lastFpsCounterUpdateAt: 0

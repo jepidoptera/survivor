@@ -37,6 +37,8 @@ function loadMazeWorkerExports() {
             MAZE_SQUARE_ROOM_HALLWAY_SNAP_DISTANCE,
             MAZE_SQUARE_ROOM_POCKET_INCORPORATE_CHANCE,
             MAZE_FULL_WALL_HALLWAY_CHANCE,
+            PYRAMID_FIRST_ROOM_DISTANCE,
+            PYRAMID_ROOM_DISTANCE_STEP,
             MAZE_OUTSIDE_DOOR_WIDE_WIDTH,
             MAZE_OUTSIDE_DOOR_WIDE_CHANCE,
             MAZE_OUTSIDE_DOOR_FULL_WALL_CHANCE,
@@ -48,10 +50,13 @@ function loadMazeWorkerExports() {
             WALL_LABEL_SQUARE_SIDE_PARALLEL,
             WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL,
             WALL_LABEL_HALLWAY_SIDE_HALF,
+            WALL_LABEL_HALLWAY_SIDE_FULL,
             getMazeSquarePocketIncorporateChance,
             MAZE_DOOR_WIDTH,
             getMazeOutsideDoorOpening,
             buildMazeRoom,
+            isMazePyramidRoomSectionCoord,
+            getMazePyramidRoomDistance,
             buildMazeSquarePocketMutation,
             getMazeSquarePocketExtendedWallEnd,
             getMazeSquarePocketTrimmedWallEnd,
@@ -76,6 +81,7 @@ function loadMazeWorkerExports() {
             getMazeSquarePocketWallColinearity,
             canMazeSquarePocketConnectToSide,
             isMazeRoomSideSquaredOff,
+            isMazeSharedHallOpen,
             getMazeHalfHallwayBoundarySegments,
             getMazeSquarePocketOrthogonalHallwaySpan,
             getMazeThreeHallwayJunctionWallOmissions,
@@ -327,6 +333,44 @@ test("Wizard of Flatland room doors are 3 meters wide without perpendicular post
     assert.ok(Math.abs(gap - 3) < 0.00001);
 });
 
+test("Wizard of Flatland pyramid rooms open every adjacent hall", () => {
+    const api = loadMazeWorkerExports();
+    const options = {
+        seed: "pyramid-room-halls",
+        chunkSize: 44,
+        roomScale: 0.56,
+        twistiness: 0.62
+    };
+    const pyramid = { q: 8, r: 0 };
+    const directions = [
+        { q: 1, r: 0 },
+        { q: 0, r: 1 },
+        { q: -1, r: 1 },
+        { q: -1, r: 0 },
+        { q: 0, r: -1 },
+        { q: 1, r: -1 }
+    ];
+
+    assert.equal(api.PYRAMID_FIRST_ROOM_DISTANCE, 8);
+    assert.equal(api.PYRAMID_ROOM_DISTANCE_STEP, 7);
+    assert.equal(api.getMazePyramidRoomDistance(pyramid.q, pyramid.r), 8);
+    assert.equal(api.getMazePyramidRoomDistance(15, 0), 15);
+    assert.equal(api.getMazePyramidRoomDistance(22, 0), 22);
+    assert.equal(api.isMazePyramidRoomSectionCoord(pyramid.q, pyramid.r), true);
+    assert.equal(api.isMazePyramidRoomSectionCoord(14, 0), false);
+    assert.equal(api.isMazePyramidRoomSectionCoord(8, 1), false);
+
+    for (let side = 0; side < directions.length; side++) {
+        const dir = directions[side];
+        const neighborQ = pyramid.q + dir.q;
+        const neighborR = pyramid.r + dir.r;
+        const neighborSide = (side + 3) % 6;
+        assert.equal(api.isMazeSharedHallOpen(pyramid.q, pyramid.r, side, options), true);
+        assert.equal(api.isMazeSharedHallOpen(neighborQ, neighborR, neighborSide, options), true);
+        assert.equal(api.getMazeSharedHallConnection(neighborQ, neighborR, neighborSide, options, true).open, true);
+    }
+});
+
 test("Wizard of Flatland outside doors use normal, wide, and full-wall variants", () => {
     const api = loadMazeWorkerExports();
     const normalOpening = api.getMazeOutsideDoorOpening("outside-fixture-1|outside-door-opening|0,0");
@@ -508,6 +552,41 @@ test("Wizard of Flatland opens one wall at three-hallway junctions", () => {
 
     assert.equal(neighborSegments.length, 1);
     assert.equal(neighborSegments[0].labelCode, api.WALL_LABEL_HALLWAY_SIDE_HALF);
+});
+
+test("Wizard of Flatland opens one wall at four-section hallway loops", () => {
+    const api = loadMazeWorkerExports();
+    const options = {
+        seed: "four-loop-0",
+        chunkSize: 44,
+        roomScale: 0.56,
+        twistiness: 0.62,
+        squarePocketIncorporateChance: 1
+    };
+    const room = api.buildMazeRoom(-2, -1, options);
+    const side = 5;
+
+    assert.equal(api.getMazeSharedHallConnection(-2, -1, 5, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(-2, -1, 0, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(-1, -2, 0, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(-1, -1, 5, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(-1, -2, 1, options, false).open, false);
+    const omissions = api.getMazeThreeHallwayJunctionWallOmissions(room, side, options);
+    assert.equal(omissions.left, false);
+    assert.equal(omissions.right, true);
+
+    const walls = api.createWallBufferBuilder();
+    api.appendMazeHalfHallwayToNeighbor(
+        walls,
+        room,
+        side,
+        api.getMazeSharedHallConnection(-2, -1, side, options, true),
+        options
+    );
+    const segments = wallSegments(api.finishWallBuffer(walls));
+
+    assert.equal(segments.length, 1);
+    assert.equal(segments[0].labelCode, api.WALL_LABEL_HALLWAY_SIDE_HALF);
 });
 
 test("Wizard of Flatland three-hallway omission clips against corner pocket back walls", () => {
@@ -1411,6 +1490,83 @@ test("Wizard of Flatland hallway connects to incorporated square pocket instead 
             "hallway should meet the pocket back wall at a right angle"
         );
     }
+});
+
+test("Wizard of Flatland square-pocket hallways honor three-hallway junction openings", () => {
+    const api = loadMazeWorkerExports();
+    const options = {
+        seed: "tri-pocket-5",
+        chunkSize: 44,
+        roomScale: 0.56,
+        twistiness: 0.62,
+        squarePocketIncorporateChance: 1
+    };
+    const room = api.buildMazeRoom(2, 0, options);
+    const side = 5;
+    const connection = api.getMazeSharedHallConnection(2, 0, side, options, true);
+    const target = api.getMazeSquarePocketHallwayTarget(room, side, options);
+    const omissions = api.getMazeThreeHallwayJunctionWallOmissions(room, side, options);
+
+    assert.ok(target, "test fixture should route the hallway into an incorporated square pocket");
+    assert.equal(omissions.left, false);
+    assert.equal(omissions.right, true);
+
+    const walls = api.createWallBufferBuilder();
+    api.appendMazeHalfHallwayToSquarePocket(walls, room, side, connection, target.pocket, options);
+    const segments = wallSegments(api.finishWallBuffer(walls));
+
+    assert.equal(segments.length, 1);
+    assert.equal(segments[0].labelCode, api.WALL_LABEL_HALLWAY_SIDE_FULL);
+    const span = api.getMazeSquarePocketOrthogonalHallwaySpan(room, side, connection, target.pocket);
+    assert.ok(
+        pointSegmentDistance(span.startGap.left.x, span.startGap.left.y, segments[0].ax, segments[0].ay, segments[0].bx, segments[0].by) < 0.00001,
+        "left hallway side should remain anchored at the room opening"
+    );
+    assert.ok(
+        pointSegmentDistance(span.startGap.right.x, span.startGap.right.y, segments[0].ax, segments[0].ay, segments[0].bx, segments[0].by) > 0.5,
+        "right hallway side should be omitted at the three-hallway junction"
+    );
+});
+
+test("Wizard of Flatland square-pocket hallways honor four-section loop openings", () => {
+    const api = loadMazeWorkerExports();
+    const options = {
+        seed: "four-loop-2",
+        chunkSize: 44,
+        roomScale: 0.56,
+        twistiness: 0.62,
+        squarePocketIncorporateChance: 1
+    };
+    const room = api.buildMazeRoom(1, -3, options);
+    const side = 0;
+    const connection = api.getMazeSharedHallConnection(1, -3, side, options, true);
+    const target = api.getMazeSquarePocketHallwayTarget(room, side, options);
+    const omissions = api.getMazeThreeHallwayJunctionWallOmissions(room, side, options);
+
+    assert.equal(api.getMazeSharedHallConnection(1, -3, 0, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(1, -3, 1, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(2, -3, 1, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(1, -2, 0, options, false).open, true);
+    assert.equal(api.getMazeSharedHallConnection(2, -3, 2, options, false).open, false);
+    assert.ok(target, "test fixture should route the four-section loop hallway into an incorporated square pocket");
+    assert.equal(omissions.left, false);
+    assert.equal(omissions.right, true);
+
+    const walls = api.createWallBufferBuilder();
+    api.appendMazeHalfHallwayToSquarePocket(walls, room, side, connection, target.pocket, options);
+    const segments = wallSegments(api.finishWallBuffer(walls));
+
+    assert.equal(segments.length, 1);
+    assert.equal(segments[0].labelCode, api.WALL_LABEL_HALLWAY_SIDE_FULL);
+    const span = api.getMazeSquarePocketOrthogonalHallwaySpan(room, side, connection, target.pocket);
+    assert.ok(
+        pointSegmentDistance(span.startGap.left.x, span.startGap.left.y, segments[0].ax, segments[0].ay, segments[0].bx, segments[0].by) < 0.00001,
+        "left square-pocket hallway side should remain anchored at the room opening"
+    );
+    assert.ok(
+        pointSegmentDistance(span.startGap.right.x, span.startGap.right.y, segments[0].ax, segments[0].ay, segments[0].bx, segments[0].by) > 0.5,
+        "right square-pocket hallway side should be omitted at the four-section loop"
+    );
 });
 
 function getWallGapEndpointsForTest(api, a, b, gapT, gapWidth) {

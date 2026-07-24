@@ -31,6 +31,7 @@ const PATH_NODE_CLEARANCE = 3;
 const PATH_NODE_XINDEX = 4;
 const PATH_NODE_YINDEX = 5;
 const PATH_NODE_HAS_UNBLOCKED_NEIGHBOR = 6;
+const PATH_NODE_BLOCKED_NEIGHBOR_COUNT = 7;
 const PATH_EDGE_FROM = 0;
 const PATH_EDGE_TO = 1;
 const MAZE_CHUNK_MIN_SIZE = 28;
@@ -48,6 +49,8 @@ const MAZE_SQUARE_ROOM_SIDE_GAP_WIDTH = 4;
 const MAZE_SQUARE_ROOM_WALL_END_SHORTEN = 2;
 const MAZE_SQUARE_ROOM_HALLWAY_SNAP_DISTANCE = 3;
 const MAZE_SQUARE_ROOM_POCKET_INCORPORATE_CHANCE = 0.4;
+const PYRAMID_FIRST_ROOM_DISTANCE = 8;
+const PYRAMID_ROOM_DISTANCE_STEP = 7;
 const MAZE_SECTION_DIRECTIONS = [
     { q: 1, r: 0 },
     { q: 0, r: 1 },
@@ -249,6 +252,26 @@ function parseMazeSectionKey(key) {
     return { q, r };
 }
 
+function isMazePyramidRoomSectionCoord(q, r) {
+    return getMazePyramidRoomDistance(q, r) !== null;
+}
+
+function getMazePyramidRoomDistance(q, r) {
+    if (!Number.isInteger(q) || !Number.isInteger(r)) {
+        throw new Error("Wizard of Flatland pyramid room check requires integer section coordinates");
+    }
+    if (q === 0 && r === 0) return 0;
+    for (const dir of MAZE_SECTION_DIRECTIONS) {
+        if (!dir) throw new Error("Wizard of Flatland pyramid direction is invalid");
+        const distance = dir.q !== 0 ? q / dir.q : r / dir.r;
+        if (!Number.isInteger(distance) || distance < PYRAMID_FIRST_ROOM_DISTANCE) continue;
+        if (q !== dir.q * distance || r !== dir.r * distance) continue;
+        if ((distance - PYRAMID_FIRST_ROOM_DISTANCE) % PYRAMID_ROOM_DISTANCE_STEP !== 0) continue;
+        return distance;
+    }
+    return null;
+}
+
 function mazeSectionCenter(q, r, options) {
     const radius = getMazeSectionRadius(options);
     return {
@@ -274,7 +297,7 @@ function appendMazeSectionWalls(walls, q, r, options) {
         if (isMazeHallwaySuppressedByIncomingSquarePocket(room, side, options)) continue;
         const squarePocketHallway = getMazeSquarePocketHallwayTarget(room, side, options);
         if (squarePocketHallway) {
-            appendMazeHalfHallwayToSquarePocket(walls, room, side, connection, squarePocketHallway.pocket);
+            appendMazeHalfHallwayToSquarePocket(walls, room, side, connection, squarePocketHallway.pocket, options);
             continue;
         }
         appendMazeHalfHallwayToNeighbor(walls, room, side, connection, options);
@@ -931,6 +954,7 @@ function canMazeSharedHallwayUseFullWall(q, r, side, options) {
 function isMazeSharedHallOpen(q, r, side, options) {
     const dir = MAZE_SECTION_DIRECTIONS[side];
     if (!dir) throw new Error("Wizard of Flatland maze hallway side is invalid");
+    if (isMazePyramidRoomSectionCoord(q, r) || isMazePyramidRoomSectionCoord(q + dir.q, r + dir.r)) return true;
     const thisKey = mazeSectionKey(q, r);
     const neighborKey = mazeSectionKey(q + dir.q, r + dir.r);
     const ordered = thisKey < neighborKey ? `${thisKey}|${neighborKey}` : `${neighborKey}|${thisKey}`;
@@ -1865,6 +1889,11 @@ function isMazeRoomSideDefaultHex(room, side, options) {
 }
 
 function shouldOpenMazeThreeHallwayJunctionAtCorner(room, cornerIndex, omittedSide, options) {
+    return shouldOpenMazeThreeSectionHallwayLoopAtCorner(room, cornerIndex, omittedSide, options)
+        || shouldOpenMazeFourSectionHallwayLoopAtCorner(room, cornerIndex, omittedSide, options);
+}
+
+function shouldOpenMazeThreeSectionHallwayLoopAtCorner(room, cornerIndex, omittedSide, options) {
     const sideBefore = (cornerIndex + 5) % 6;
     const sideAfter = cornerIndex;
     if (omittedSide !== sideBefore) return false;
@@ -1882,6 +1911,22 @@ function shouldOpenMazeThreeHallwayJunctionAtCorner(room, cornerIndex, omittedSi
         mazeSectionKey(room.q + afterDir.q, room.r + afterDir.r)
     ].sort();
     return room.key === keys[0];
+}
+
+function shouldOpenMazeFourSectionHallwayLoopAtCorner(room, cornerIndex, omittedSide, options) {
+    const sideBefore = (cornerIndex + 5) % 6;
+    const sideAfter = cornerIndex;
+    if (omittedSide !== sideBefore) return false;
+    if (!isMazeSharedHallOpen(room.q, room.r, sideBefore, options)) return false;
+    if (!isMazeSharedHallOpen(room.q, room.r, sideAfter, options)) return false;
+    const beforeDir = MAZE_SECTION_DIRECTIONS[sideBefore];
+    const afterDir = MAZE_SECTION_DIRECTIONS[sideAfter];
+    if (!beforeDir || !afterDir) throw new Error("Wizard of Flatland maze four-section hallway loop requires valid adjacent sides");
+    if (!isMazeSharedHallOpen(room.q + beforeDir.q, room.r + beforeDir.r, sideAfter, options)) return false;
+    if (!isMazeSharedHallOpen(room.q + afterDir.q, room.r + afterDir.r, sideBefore, options)) return false;
+
+    const diagonalKey = mazeSectionKey(room.q + beforeDir.q + afterDir.q, room.r + beforeDir.r + afterDir.r);
+    return room.key === [room.key, diagonalKey].sort()[0];
 }
 
 function getMazeDirectionSide(q, r) {
@@ -1940,10 +1985,20 @@ function appendHalfHallwaySideWall(walls, start, end, sectionCorners) {
     appendSegmentWall(walls, start.x, start.y, clippedEnd.x, clippedEnd.y, WALL_LABEL_HALLWAY_SIDE_HALF);
 }
 
-function appendMazeHalfHallwayToSquarePocket(walls, room, side, connection, pocket) {
+function appendMazeHalfHallwayToSquarePocket(walls, room, side, connection, pocket, options = null) {
     const span = getMazeSquarePocketOrthogonalHallwaySpan(room, side, connection, pocket);
-    appendFullHallwaySideWall(walls, span.startGap.left, span.leftPoint, room.sectionCorners);
-    appendFullHallwaySideWall(walls, span.startGap.right, span.rightPoint, room.sectionCorners);
+    const omissions = options
+        ? getMazeThreeHallwayJunctionWallOmissions(room, side, options)
+        : { left: false, right: false };
+    if (!omissions.left) appendFullHallwaySideWall(walls, span.startGap.left, span.leftPoint, room.sectionCorners);
+    appendFullHallwaySideWallWithJunctionOmission(
+        walls,
+        span.startGap.right,
+        span.rightPoint,
+        room,
+        side,
+        omissions.right
+    );
 }
 
 function appendFullHallwaySideWall(walls, start, end, sectionCorners) {
@@ -1955,6 +2010,24 @@ function appendFullHallwaySideWall(walls, start, end, sectionCorners) {
     );
     if (Math.hypot(clippedEnd.x - start.x, clippedEnd.y - start.y) <= 0.5) return;
     appendSegmentWall(walls, start.x, start.y, clippedEnd.x, clippedEnd.y, WALL_LABEL_HALLWAY_SIDE_FULL);
+}
+
+function appendFullHallwaySideWallWithJunctionOmission(walls, start, end, room, side, omitForJunction) {
+    if (!omitForJunction) {
+        appendFullHallwaySideWall(walls, start, end, room.sectionCorners);
+        return;
+    }
+    const clippedEnd = shortenSegmentEndToPolygon(
+        start,
+        end,
+        room.sectionCorners,
+        "Wizard of Flatland maze omitted square-pocket hallway wall"
+    );
+    const cornerIndex = (side + 1) % 6;
+    const clipPoint = getMazeHallwayWallCornerPocketClipPoint(room, cornerIndex, side, start, clippedEnd);
+    if (!clipPoint) return;
+    if (Math.hypot(clipPoint.x - start.x, clipPoint.y - start.y) <= 0.5) return;
+    appendSegmentWall(walls, start.x, start.y, clipPoint.x, clipPoint.y, WALL_LABEL_HALLWAY_SIDE_FULL);
 }
 
 function getWallGapEndpointsForConnection(a, b, connection) {
@@ -2166,7 +2239,7 @@ function buildPathfindingNodeLayer(walls, bounds, targetRadius) {
         packedNodes[base + PATH_NODE_XINDEX] = node.xindex;
         packedNodes[base + PATH_NODE_YINDEX] = node.yindex;
         packedNodes[base + PATH_NODE_HAS_UNBLOCKED_NEIGHBOR] = hasUnblockedPathfindingNeighbor(node) ? 1 : 0;
-        packedNodes[base + 7] = 0;
+        packedNodes[base + PATH_NODE_BLOCKED_NEIGHBOR_COUNT] = getPathfindingBlockedNeighborCount(node);
     }
 
     return {
@@ -2235,6 +2308,17 @@ function hasUnblockedPathfindingNeighbor(node) {
         return true;
     }
     return false;
+}
+
+function getPathfindingBlockedNeighborCount(node) {
+    if (!node || !Array.isArray(node.neighbors) || !(node.blockedNeighbors instanceof Set)) {
+        throw new Error("Wizard of Flatland maze pathfinding blocked neighbor count requires a node");
+    }
+    let count = 0;
+    for (let dir = 0; dir < node.neighbors.length; dir++) {
+        if (node.neighbors[dir] && node.blockedNeighbors.has(dir)) count += 1;
+    }
+    return count;
 }
 
 function isPathfindingNodeTerrainPassable(node, walls, targetRadius) {

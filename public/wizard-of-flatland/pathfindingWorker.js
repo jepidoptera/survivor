@@ -9,6 +9,7 @@ const NODE_X = 0;
 const NODE_Y = 1;
 const NODE_BLOCKED = 2;
 const NODE_CLEARANCE = 3;
+const NODE_BLOCKED_NEIGHBOR_COUNT = 7;
 const EDGE_FROM = 0;
 const EDGE_TO = 1;
 const EDGE_STRIDE_FALLBACK = 4;
@@ -161,6 +162,7 @@ function handleRequestPath(message) {
     const allowBlockedDestination = options.allowBlockedDestination === true;
     const requiredClearance = Number.isFinite(options.clearance) ? Math.max(0, Math.floor(options.clearance)) : 0;
     const wallAvoidance = Number.isFinite(options.wallAvoidance) ? Math.max(0, options.wallAvoidance) : 0;
+    const blockedNeighborAvoidance = Number.isFinite(options.blockedNeighborAvoidance) ? Math.max(0, options.blockedNeighborAvoidance) : 0;
     const maxPathLength = Number.isFinite(options.maxPathLength) ? Math.max(0, options.maxPathLength) : Infinity;
 
     if (!Number.isInteger(startIndex) || !Number.isInteger(goalIndex) || startIndex < 0 || startIndex >= nodeCount || goalIndex < 0 || goalIndex >= nodeCount) {
@@ -248,9 +250,12 @@ function handleRequestPath(message) {
             if (tentativeDistance > maxPathLength) continue;
 
             const clearanceForCost = clearance >= 0 ? clearance : 0;
-            const stepCost = wallAvoidance > 0
+            let stepCost = wallAvoidance > 0
                 ? stepDist * (1 + wallAvoidance / (1 + clearanceForCost))
                 : stepDist;
+            if (blockedNeighborAvoidance > 0) {
+                stepCost *= 1 + getNodeBlockedNeighborCount(nodes, nodeStride, toIndex) * blockedNeighborAvoidance;
+            }
             const tentativeG = currentG + stepCost;
             if (tentativeG >= gScore[toIndex]) continue;
 
@@ -295,6 +300,12 @@ function getNodeBlocked(nodes, stride, index) {
 function getNodeClearance(nodes, stride, index) {
     const clearance = nodes[index * stride + NODE_CLEARANCE];
     return Number.isFinite(clearance) ? clearance : Infinity;
+}
+
+function getNodeBlockedNeighborCount(nodes, stride, index) {
+    const count = nodes[index * stride + NODE_BLOCKED_NEIGHBOR_COUNT];
+    if (!Number.isFinite(count) || count < 0) throw new Error(`pathfinding node ${index} has invalid blocked neighbor count`);
+    return count;
 }
 
 function nodeDistance(nodes, stride, leftIndex, rightIndex) {
