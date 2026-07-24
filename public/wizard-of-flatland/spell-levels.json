@@ -9,11 +9,11 @@
           "level": 1,
           "headline": "Spitfire",
           "subtitle": "Pew! Pew!",
-          "manaCost": 10,
-          "damage": 9,
+          "manaCost": 20,
+          "damage": 10,
           "range": 10,
           "explosionRadius": 1,
-          "castDelay": 1,
+          "castDelay": 0.75,
           "projectileRadius": 0.4,
           "projectileSpeed": 10
         },
@@ -21,55 +21,55 @@
           "level": 2,
           "headline": "Fireball I",
           "subtitle": "Snap crackle",
-          "manaCost": 9.5,
-          "damage": 12,
+          "manaCost": 19,
+          "damage": 14,
           "explosionRadius": 1.1,
           "range": 11,
-          "castDelay": 0.9,
+          "castDelay": 0.7,
           "projectileRadius": 0.5,
           "projectileSpeed": 11
         },
         {
           "level": 3,
           "headline": "Fireball II",
-          "subtitle": "The blast carries farther.",
-          "manaCost": 9,
-          "damage": 16,
+          "subtitle": "Pow!",
+          "manaCost": 17,
+          "damage": 20,
           "explosionRadius": 1.25,
           "range": 12,
-          "castDelay": 0.8,
+          "castDelay": 0.65,
           "projectileRadius": 0.62,
           "projectileSpeed": 12
         },
         {
           "level": 4,
           "headline": "Fireball III",
-          "subtitle": "A stronger explosion on impact.",
-          "manaCost": 8.5,
-          "damage": 21,
+          "subtitle": "Bigger, better.",
+          "manaCost": 17,
+          "damage": 29,
           "explosionRadius": 1.4,
           "range": 13,
-          "castDelay": 0.7,
+          "castDelay": 0.6,
           "projectileRadius": 0.75,
           "projectileSpeed": 13
         },
         {
           "level": 5,
           "headline": "Fireball IV",
-          "subtitle": "Dense flame punches through the room.",
-          "manaCost": 8,
-          "damage": 50,
+          "subtitle": "Boom.",
+          "manaCost": 16,
+          "damage": 41,
           "explosionRadius": 1.8,
           "range": 14,
-          "castDelay": 0.6,
+          "castDelay": 0.55,
           "projectileRadius": 0.9,
           "projectileSpeed": 14
         },
         {
           "level": 6,
           "headline": "Fireball V",
-          "subtitle": "A fierce spell with little hesitation.",
-          "manaCost": 7.5,
+          "subtitle": "Faster, stronger.",
+          "manaCost": 15,
           "damage": 72,
           "explosionRadius": 2.3,
           "range": 15,
@@ -80,8 +80,8 @@
         {
           "level": 7,
           "headline": "Inferno",
-          "subtitle": "Mastered fire that ends the argument.",
-          "manaCost": 7,
+          "subtitle": "Burn, baby.",
+          "manaCost": 12.5,
           "damage": 100,
           "explosionRadius": 3,
           "range": 16,
@@ -169,58 +169,80 @@
       ]
     },
     {
-      "id": "speed",
-      "displayName": "Speed",
-      "icon": "/assets/images/thumbnails/speed.png",
+      "id": "spikes",
+      "displayName": "Spikes",
+      "icon": "/assets/images/magic/spike.png",
       "levels": [
         {
           "level": 1,
-          "headline": "Speed I",
-          "subtitle": "Move with a little extra snap.",
-          "costPerSecond": 12,
-          "power": 1.15
+          "headline": "Splinter",
+          "subtitle": "You could put somebody's eye out with that thing.",
+          "manaCost": 17,
+          "damage": 20,
+          "range": 14,
+          "castDelay": 0.65,
+          "duration": 2,
+          "projectileSpeed": 10
         },
         {
           "level": 2,
-          "headline": "Speed II",
-          "subtitle": "Quicker feet for narrow escapes.",
-          "costPerSecond": 11,
-          "power": 1.22
+          "headline": "Spikes I",
+          "subtitle": "Combine with freeze for bonus damage.",
+          "manaCost": 11,
+          "damage": 22,
+          "range": 15,
+          "castDelay": 0.55,
+          "projectileSpeed": 11
         },
         {
           "level": 3,
-          "headline": "Speed III",
-          "subtitle": "Momentum comes more easily.",
-          "costPerSecond": 10,
-          "power": 1.3
+          "headline": "Spikes II",
+          "subtitle": "Spikier spikes.",
+          "manaCost": 8,
+          "damage": 22,
+          "range": 16,
+          "castDelay": 0.45,
+          "projectileSpeed": 12
         },
         {
           "level": 4,
-          "headline": "Speed IV",
-          "subtitle": "The maze starts feeling slower than you.",
-          "costPerSecond": 9,
-          "power": 1.38
+          "headline": "Spikes III",
+          "subtitle": "Spikier and spikier.",
+          "manaCost": 6,
+          "damage": 24,
+          "range": 17,
+          "castDelay": 0.35,
+          "projectileSpeed": 13
         },
         {
           "level": 5,
-          "headline": "Speed V",
-          "subtitle": "Fast enough to make bad decisions confidently.",
-          "costPerSecond": 8,
-          "power": 1.48
+          "headline": "Spikes IV",
+          "subtitle": "The spikeiest.",
+          "manaCost": 4.5,
+          "damage": 25,
+          "range": 18,
+          "castDelay": 0.25,
+          "projectileSpeed": 14
         },
         {
           "level": 6,
-          "headline": "Speed VI",
-          "subtitle": "Sharp movement with less strain.",
-          "costPerSecond": 7,
-          "power": 1.6
+          "headline": "Spikes V",
+          "subtitle": "Wow. Such spikes.",
+          "manaCost": 3.5,
+          "damage": 26,
+          "range": 19,
+          "castDelay": 0.15,
+          "projectileSpeed": 15
         },
         {
           "level": 7,
-          "headline": "Haste Mastery",
-          "subtitle": "Mastered motion at wizard speed.",
-          "costPerSecond": 6,
-          "power": 1.75
+          "headline": "Storm of Blades",
+          "subtitle": "Maximum carnage.",
+          "manaCost": 2.5,
+          "damage": 27,
+          "range": 20,
+          "castDelay": 0.05,
+          "projectileSpeed": 16
         }
       ]
     },
@@ -337,84 +359,6 @@
       ]
     },
     {
-      "id": "spikes",
-      "displayName": "Spikes",
-      "icon": "/assets/images/magic/spike.png",
-      "levels": [
-        {
-          "level": 1,
-          "headline": "Splinter",
-          "subtitle": "You could put somebody's eye out with that thing.",
-          "manaCost": 26,
-          "damage": 10,
-          "range": 9,
-          "castDelay": 0.7,
-          "duration": 2,
-          "projectileSpeed": 10
-        },
-        {
-          "level": 2,
-          "headline": "Spikes I",
-          "subtitle": "Combine with freeze for bonus damage.",
-          "manaCost": 24,
-          "damage": 18,
-          "range": 10,
-          "castDelay": 0.65,
-          "projectileSpeed": 11
-        },
-        {
-          "level": 3,
-          "headline": "Spikes II",
-          "subtitle": "Spikier spikes.",
-          "manaCost": 22,
-          "damage": 28,
-          "range": 11,
-          "castDelay": 0.6,
-          "projectileSpeed": 12
-        },
-        {
-          "level": 4,
-          "headline": "Spikes III",
-          "subtitle": "Spikier and spikier.",
-          "manaCost": 20,
-          "damage": 30,
-          "range": 12,
-          "castDelay": 0.55,
-          "projectileSpeed": 13
-        },
-        {
-          "level": 5,
-          "headline": "Spikes IV",
-          "subtitle": "The spikeiest.",
-          "manaCost": 18,
-          "damage": 44,
-          "range": 13,
-          "castDelay": 0.5,
-          "projectileSpeed": 14
-        },
-        {
-          "level": 6,
-          "headline": "Spikes V",
-          "subtitle": "Wow. Such spikes.",
-          "manaCost": 16,
-          "damage": 60,
-          "range": 14,
-          "castDelay": 0.45,
-          "projectileSpeed": 15
-        },
-        {
-          "level": 7,
-          "headline": "Storm of Blades",
-          "subtitle": "Maximum carnage.",
-          "manaCost": 12,
-          "damage": 80,
-          "range": 15,
-          "castDelay": 0.25,
-          "projectileSpeed": 16
-        }
-      ]
-    },
-        {
       "id": "invisibility",
       "displayName": "Invisibility",
       "icon": "/assets/images/magic/invisible.png",
