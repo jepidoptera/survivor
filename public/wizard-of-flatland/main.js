@@ -1855,7 +1855,10 @@
         const visiblePlacedCoins = placedCoins
             .filter((coin) => !state.collectedCoinKeys.has(coin.key))
             .map((coin) => preserveVisibleMazeCoinState(coin, existingCoinsByKey.get(coin.key)));
-        const visibleDroppedCoins = getVisibleDroppedMazeCoins(options, existingCoinsByKey);
+        const visibleDroppedCoins = excludeDroppedCoinsRestoredBySectionSnapshots(
+            getVisibleDroppedMazeCoins(options, existingCoinsByKey),
+            placedCoinKeys
+        );
         const visibleDroppedCoinKeys = new Set(visibleDroppedCoins.map((coin) => coin.key));
         const retainedEdgeCoins = state.coins.filter((coin) => {
             validateCoin(coin);
@@ -1871,6 +1874,21 @@
             visiblePlacedCoins,
             visibleDroppedCoins,
             retainedEdgeCoins
+        });
+    }
+
+    function excludeDroppedCoinsRestoredBySectionSnapshots(droppedCoins, restoredCoinKeys) {
+        if (!Array.isArray(droppedCoins)) {
+            throw new Error("Wizard of Flatland dropped coin reconciliation requires dropped coins");
+        }
+        if (!(restoredCoinKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland dropped coin reconciliation requires restored coin keys");
+        }
+        return droppedCoins.filter((coin) => {
+            if (!coin || typeof coin.key !== "string" || coin.key.length === 0) {
+                throw new Error("Wizard of Flatland dropped coin reconciliation found an invalid coin");
+            }
+            return !restoredCoinKeys.has(coin.key);
         });
     }
 
