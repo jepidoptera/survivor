@@ -62,7 +62,8 @@
             if (!Number.isFinite(damage) || damage <= 0) return 0;
             validateWizardVitals();
             const previousHealth = state.wizardVitals.health;
-            state.wizardVitals.health = Math.max(0, previousHealth - damage);
+            const minimumHealth = state.debug && state.debug.wizardImmortal === true ? 1 : 0;
+            state.wizardVitals.health = Math.max(minimumHealth, previousHealth - damage);
             const appliedDamage = previousHealth - state.wizardVitals.health;
             callRequiredCallback("updateStatusBars");
             if (previousHealth > 0 && state.wizardVitals.health <= 0) {
