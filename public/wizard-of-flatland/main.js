@@ -968,7 +968,16 @@
         magicBar.style.width = `${magicRatio * 100}%`;
         expBar.style.width = `${expRatio * 100}%`;
         expCounter.textContent = `${Math.floor(state.wizardVitals.exp)}/${state.wizardVitals.maxExp}`;
-        expLevelUpButton.classList.toggle("hidden", state.levelPoints <= 0);
+        const spellLevels = normalizeWizardSpellLevels();
+        const hasSpellBelowMaxLevel = Object.values(spellLevels)
+            .some((level) => level < SPELL_LEVEL_MAX);
+        const hasAvailableSpellUpgrade = state.levelPoints > 0 && hasSpellBelowMaxLevel;
+        expLevelUpButton.classList.remove("hidden");
+        expLevelUpButton.classList.toggle("unavailable", !hasAvailableSpellUpgrade);
+        expLevelUpButton.setAttribute(
+            "aria-label",
+            hasAvailableSpellUpgrade ? "Upgrade spells" : "View spell levels"
+        );
     }
 
     function validateSpellCooldownHud() {
@@ -8421,6 +8430,12 @@
     if (scenarioSelect) scenarioSelect.addEventListener("change", createScenario);
     if (expLevelUpButton) expLevelUpButton.addEventListener("click", showSpellLevelPanel);
     if (spellLevelCloseButton) spellLevelCloseButton.addEventListener("click", hideSpellLevelPanel);
+    document.addEventListener("pointerdown", (event) => {
+        if (!spellLevelPanel || spellLevelPanel.classList.contains("hidden")) return;
+        if (spellLevelPanel.contains(event.target)) return;
+        if (expLevelUpButton && expLevelUpButton.contains(event.target)) return;
+        hideSpellLevelPanel();
+    });
     document.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && spellLevelPanel && !spellLevelPanel.classList.contains("hidden")) {
             hideSpellLevelPanel();

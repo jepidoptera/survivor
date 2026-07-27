@@ -56,6 +56,26 @@ test("Wizard of Flatland spell hotkeys cannot select unlearned spells", () => {
     );
 });
 
+test("Wizard of Flatland spell-level button stays visible when no upgrade is available", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(
+        source,
+        /const hasAvailableSpellUpgrade = state\.levelPoints > 0 && hasSpellBelowMaxLevel;[\s\S]*?expLevelUpButton\.classList\.remove\("hidden"\);[\s\S]*?expLevelUpButton\.classList\.toggle\("unavailable", !hasAvailableSpellUpgrade\);/
+    );
+    assert.match(
+        source,
+        /expLevelUpButton\.addEventListener\("click", showSpellLevelPanel\)/
+    );
+});
+
+test("Wizard of Flatland spell-level panel closes on an outside pointer press", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(
+        source,
+        /document\.addEventListener\("pointerdown", \(event\) => \{[\s\S]*?spellLevelPanel\.contains\(event\.target\)[\s\S]*?expLevelUpButton\.contains\(event\.target\)[\s\S]*?hideSpellLevelPanel\(\);[\s\S]*?\}\);/
+    );
+});
+
 test("Wizard of Flatland fireballs use the copied main-game animation sheet", () => {
     assert.ok(fs.existsSync(FIREBALL_TEXTURE_PATH), "copied fireball spritesheet exists");
     const source = fs.readFileSync(MAIN_PATH, "utf8");
