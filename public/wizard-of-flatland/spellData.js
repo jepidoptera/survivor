@@ -178,10 +178,30 @@
 
         function getActiveHealingStats() {
             const { level, levelData } = getActiveSpellLevelData("healing");
-            const healthPerSecond = requirePositiveSpellLevelNumber("healing", level, levelData, "healthPerSecond");
+            const secondsToFullHealth = requirePositiveSpellLevelNumber("healing", level, levelData, "secondsToFullHealth");
             return {
                 level,
-                healthPerSecond
+                secondsToFullHealth
+            };
+        }
+
+        function getMagicRechargeStats() {
+            const level = getWizardSpellLevel("magicrecharge");
+            if (level < 1) {
+                const secondsToFullMagic = Number(constants.WIZARD_MAGIC_RECHARGE_SECONDS_LEVEL_0);
+                if (!(secondsToFullMagic > 0)) {
+                    throw new Error("Wizard of Flatland magic recharge level 0 requires positive secondsToFullMagic");
+                }
+                return {
+                    level,
+                    secondsToFullMagic
+                };
+            }
+            const { levelData } = getActiveSpellLevelData("magicrecharge");
+            const secondsToFullMagic = requirePositiveSpellLevelNumber("magicrecharge", level, levelData, "secondsToFullMagic");
+            return {
+                level,
+                secondsToFullMagic
             };
         }
 
@@ -197,7 +217,8 @@
             getActiveSpellLevelData,
             getActiveFireballStats,
             getActiveSpikeStats,
-            getActiveHealingStats
+            getActiveHealingStats,
+            getMagicRechargeStats
         });
     }
 

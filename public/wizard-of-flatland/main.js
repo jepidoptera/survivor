@@ -88,8 +88,7 @@
     const WIZARD_MAX_HEALTH = 100;
     const WIZARD_MAX_MAGIC = 100;
     const WIZARD_MAX_EXP = 100;
-    const WIZARD_HEALTH_REGEN_PER_SECOND = WIZARD_MAX_HEALTH * 0.005;
-    const WIZARD_MAGIC_REGEN_PER_SECOND = 7;
+    const WIZARD_MAGIC_RECHARGE_SECONDS_LEVEL_0 = 14;
     const ENEMY_HIT_DAMAGE = 10;
     const WALL_BREAK_HITPOINTS = 150;
     const WALL_BREAK_SECTION_LENGTH = 3;
@@ -113,7 +112,8 @@
         ["costPerSecond", "Cost per second"],
         ["power", "Power"],
         ["damage", "Damage"],
-        ["healthPerSecond", "Health per second"],
+        ["secondsToFullHealth", "Seconds to full health"],
+        ["secondsToFullMagic", "Seconds to full magic"],
         ["range", "Range"],
         ["explosionRadius", "Explosion radius"],
         ["projectileRadius", "Projectile radius"],
@@ -484,7 +484,8 @@
         spellLevels: {
             fireball: 1,
             spikes: 0,
-            healing: 0
+            healing: 0,
+            magicrecharge: 0
         },
         spellCooldownRemaining: 0,
         spellCooldownDuration: 0,
@@ -622,7 +623,8 @@
         constants: {
             SPELL_LEVEL_DATA_URL,
             SPELL_LEVEL_MIN,
-            SPELL_LEVEL_MAX
+            SPELL_LEVEL_MAX,
+            WIZARD_MAGIC_RECHARGE_SECONDS_LEVEL_0
         }
     });
     const clampSpellLevel = spellDataSystem.clampSpellLevel;
@@ -633,6 +635,7 @@
     const getActiveFireballStats = spellDataSystem.getActiveFireballStats;
     const getActiveSpikeStats = spellDataSystem.getActiveSpikeStats;
     const getActiveHealingStats = spellDataSystem.getActiveHealingStats;
+    const getMagicRechargeStats = spellDataSystem.getMagicRechargeStats;
     let spellLevelPanelSystem = null;
     const refreshSpellLevelPanel = () => spellLevelPanelSystem.refreshSpellLevelPanel();
     const playLevelUpAnnouncement = () => {
@@ -652,15 +655,14 @@
         constants: {
             WIZARD_MAX_HEALTH,
             WIZARD_MAX_MAGIC,
-            WIZARD_MAX_EXP,
-            WIZARD_HEALTH_REGEN_PER_SECOND,
-            WIZARD_MAGIC_REGEN_PER_SECOND
+            WIZARD_MAX_EXP
         },
         callbacks: {
             updateStatusBars,
             refreshSpellLevelPanel,
             playLevelUpAnnouncement,
             canRechargeMagic,
+            getMagicRechargeSecondsToFull: () => getMagicRechargeStats().secondsToFullMagic,
             respawnWizardAfterDeath
         }
     });
@@ -1034,7 +1036,8 @@
         return {
             fireball: 1,
             spikes: 0,
-            healing: 0
+            healing: 0,
+            magicrecharge: 0
         };
     }
 
@@ -3617,7 +3620,7 @@
         const missingHealth = state.wizardVitals.maxHealth - state.wizardVitals.health;
         if (!(missingHealth > 0)) return;
         const healingStats = getActiveHealingStats();
-        const healingAmount = Math.min(missingHealth, healingStats.healthPerSecond * dt);
+        const healingAmount = Math.min(missingHealth, state.wizardVitals.maxHealth / healingStats.secondsToFullHealth * dt);
         if (!(healingAmount > 0)) return;
         healWizard(healingAmount);
     }

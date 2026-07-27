@@ -33,12 +33,13 @@ function createTestVitalsSystem(canRechargeMagic) {
         constants: {
             WIZARD_MAX_HEALTH: 100,
             WIZARD_MAX_MAGIC: 100,
-            WIZARD_MAX_EXP: 100,
-            WIZARD_HEALTH_REGEN_PER_SECOND: 5,
-            WIZARD_MAGIC_REGEN_PER_SECOND: 7
+            WIZARD_MAX_EXP: 100
         },
         callbacks: {
             canRechargeMagic,
+            getMagicRechargeSecondsToFull() {
+                return 6.5;
+            },
             updateStatusBars() {
                 statusUpdates += 1;
             },
@@ -49,23 +50,23 @@ function createTestVitalsSystem(canRechargeMagic) {
     return { state, system, getStatusUpdates: () => statusUpdates };
 }
 
-test("Wizard of Flatland magic recharge pauses while spell cooldown is active", () => {
+test("Wizard of Flatland magic recharge pauses while spell cooldown is active without baseline healing", () => {
     const { state, system, getStatusUpdates } = createTestVitalsSystem(() => false);
 
     system.regenerateWizardVitals(2);
 
-    assert.equal(state.wizardVitals.health, 60);
+    assert.equal(state.wizardVitals.health, 50);
     assert.equal(state.wizardVitals.magic, 25);
     assert.equal(getStatusUpdates(), 1);
 });
 
-test("Wizard of Flatland magic recharge resumes when spell cooldown ends", () => {
+test("Wizard of Flatland magic recharge resumes when spell cooldown ends without baseline healing", () => {
     const { state, system } = createTestVitalsSystem(() => true);
 
     system.regenerateWizardVitals(2);
 
-    assert.equal(state.wizardVitals.health, 60);
-    assert.equal(state.wizardVitals.magic, 39);
+    assert.equal(state.wizardVitals.health, 50);
+    assert.equal(state.wizardVitals.magic, 25 + 100 / 6.5 * 2);
 });
 
 test("Wizard of Flatland healing restores health without exceeding the maximum", () => {
@@ -84,4 +85,5 @@ test("Wizard of Flatland wires magic recharge to the spell cooldown timer", () =
     assert.match(source, /const canRechargeMagic = \(\) => \{/);
     assert.match(source, /return state\.spellCooldownRemaining <= 0/);
     assert.match(source, /canRechargeMagic,/);
+    assert.match(source, /getMagicRechargeSecondsToFull: \(\) => getMagicRechargeStats\(\)\.secondsToFullMagic/);
 });

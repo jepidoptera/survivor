@@ -50,9 +50,12 @@
             if (!Number.isFinite(dt) || dt <= 0) return;
             validateWizardVitals();
             const vitals = state.wizardVitals;
-            vitals.health = Math.min(vitals.maxHealth, vitals.health + constants.WIZARD_HEALTH_REGEN_PER_SECOND * dt);
             if (callRequiredCallback("canRechargeMagic")) {
-                vitals.magic = Math.min(vitals.maxMagic, vitals.magic + constants.WIZARD_MAGIC_REGEN_PER_SECOND * dt);
+                const secondsToFullMagic = Number(callRequiredCallback("getMagicRechargeSecondsToFull"));
+                if (!(secondsToFullMagic > 0)) {
+                    throw new Error("Wizard of Flatland magic recharge requires positive secondsToFullMagic");
+                }
+                vitals.magic = Math.min(vitals.maxMagic, vitals.magic + vitals.maxMagic / secondsToFullMagic * dt);
             }
             callRequiredCallback("updateStatusBars");
         }
