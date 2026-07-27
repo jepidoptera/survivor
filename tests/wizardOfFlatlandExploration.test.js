@@ -121,3 +121,26 @@ test("Wizard of Flatland explored coverage is inherited by surviving wall pieces
     assert.equal(explored.length, 2);
     assert.ok(explored.every((entry) => entry.startT === 0 && entry.endT === 1));
 });
+
+test("Wizard of Flatland exploration round-trips packed section wall state", () => {
+    const context = loadScript(EXPLORATION_PATH);
+    const source = context.getWizardFlatlandExplorationApi().createExplorationSystem({ cellSize: 0.25 });
+    const walls = Float32Array.from([
+        ...wall(0, 0, 2, 0),
+        ...wall(0, 1, 2, 1)
+    ]);
+    source.syncWalls(walls, LAYOUT);
+    source.applyVisibility(Int32Array.from([1]), Float32Array.from([0.5]));
+    const saved = source.exportWalls(walls, LAYOUT);
+
+    assert.equal(saved.length, 1);
+    assert.ok(saved[0].bits instanceof Uint32Array);
+
+    const restored = context.getWizardFlatlandExplorationApi().createExplorationSystem({ cellSize: 0.25 });
+    restored.importWalls(saved);
+    restored.syncWalls(walls, LAYOUT);
+    const restoredIntervals = intervals(restored);
+    assert.equal(restoredIntervals.length, 1);
+    assert.equal(restoredIntervals[0].ay, 1);
+    assert.deepEqual([restoredIntervals[0].startT, restoredIntervals[0].endT], [0.375, 0.75]);
+});

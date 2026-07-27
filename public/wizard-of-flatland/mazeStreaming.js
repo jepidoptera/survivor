@@ -41,6 +41,7 @@
             typeof callbacks.getRequiredMazeSectionKeys !== "function" ||
             typeof callbacks.removeFurthestGeneratedMazeSection !== "function" ||
             typeof callbacks.getPathfindingLayerBounds !== "function" ||
+            typeof callbacks.getSavedSectionWallOverrides !== "function" ||
             typeof callbacks.setWorkerStatus !== "function" ||
             typeof callbacks.installGeneratedMazeWorkerResult !== "function"
         ) {
@@ -91,6 +92,10 @@
         function requestGeneratedMazeRefresh(options, keys, signature) {
             const bounds = callbacks.getPathfindingLayerBounds();
             const manualWalls = wallBuffer.cloneWallBuffer(state.manualWalls, "manual walls");
+            const savedSections = callbacks.getSavedSectionWallOverrides(keys);
+            if (!Array.isArray(savedSections)) {
+                throw new Error("Wizard of Flatland maze streaming requires saved section wall overrides");
+            }
             const requestId = state.generatedMazeRequestId++;
             state.generatedMazeActiveRequestId = requestId;
             state.generatedMazePendingSignature = signature;
@@ -98,6 +103,13 @@
             profiler.beginLoad({ requestId, signature, keys });
             callbacks.setWorkerStatus(`${constants.MAZE_WORKER_STATUS_PREFIX} loading`);
             profiler.span("post maze worker request", () => {
+                const transfer = [manualWalls.buffer];
+                for (const section of savedSections) {
+                    if (!section || typeof section.sectionKey !== "string" || !(section.walls instanceof Float32Array)) {
+                        throw new Error("Wizard of Flatland maze streaming found an invalid saved section wall override");
+                    }
+                    transfer.push(section.walls.buffer);
+                }
                 worker.postMessage({
                     type: "build_maze_sections",
                     requestId,
@@ -105,9 +117,10 @@
                     options,
                     keys,
                     manualWalls,
+                    savedSections,
                     bounds,
                     targetRadius: constants.TARGET_RADIUS
-                }, [manualWalls.buffer]);
+                }, transfer);
             });
         }
 

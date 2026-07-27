@@ -63,6 +63,8 @@ function loadMazeWorkerExports() {
             buildMazeSquarePocketWallPlan,
             createWallBufferBuilder,
             finishWallBuffer,
+            appendWallBuffer,
+            normalizeSavedSections,
             getHexCornersWorld,
             getMazeSharedHallConnection,
             canMazeSharedHallwayUseFullWall,
@@ -107,6 +109,18 @@ function loadMazeWorkerExports() {
     `, context);
     return context.self.__mazeWorkerTestExports;
 }
+
+test("Wizard of Flatland maze worker accepts exact saved wall buffers by section key", () => {
+    const worker = loadMazeWorkerExports();
+    const walls = Float32Array.from([1, 2, 3, 4, 10, 0, 0, 0]);
+    const saved = worker.normalizeSavedSections([{ sectionKey: "2,-1", walls }]);
+    assert.equal(saved.size, 1);
+    assert.deepEqual(Array.from(saved.get("2,-1")), Array.from(walls));
+
+    const builder = worker.createWallBufferBuilder();
+    worker.appendWallBuffer(builder, saved.get("2,-1"));
+    assert.deepEqual(Array.from(worker.finishWallBuffer(builder)), Array.from(walls));
+});
 
 function wallSegments(buffer) {
     const segments = [];

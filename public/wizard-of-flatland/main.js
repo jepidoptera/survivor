@@ -408,6 +408,7 @@
         labelCode: WALL_LABEL_CODE,
         sideCode: WALL_LABEL_SIDE
     });
+    const saveStore = getWizardFlatlandSaveStoreApi().createSaveStore();
     const mathApi = getWizardFlatlandMathApi();
     const hashString = mathApi.hashString;
     const seededRandom = mathApi.seededRandom;
@@ -489,6 +490,9 @@
         generatedMazeLookaheadKeys: [],
         generatedMazeLookaheadNextRefreshAt: 0,
         generatedMazeInitialEnemySpawnBudgetsBySectionKey: new Map(),
+        sectionSnapshotsByKey: new Map(),
+        restoredSectionSnapshotKeys: new Set(),
+        lastCheckpointSnapshot: null,
         target: { x: 0, y: 0, heading: -Math.PI / 2 },
         los: {
             enabled: true,
@@ -593,6 +597,7 @@
             dirty: true
         }
     };
+    let checkpointWriteChain = Promise.resolve();
     state.hexGridLayer.ctx = state.hexGridLayer.canvas.getContext("2d");
     state.nodeLayer.ctx = state.nodeLayer.canvas.getContext("2d");
     const mazePopulationSystem = getWizardFlatlandMazePopulationApi().createMazePopulationSystem({
@@ -700,7 +705,12 @@
             playLevelUpAnnouncement,
             canRechargeMagic,
             getMagicRechargeSecondsToFull: () => getMagicRechargeStats().secondsToFullMagic,
-            respawnWizardAfterDeath
+            respawnWizardAfterDeath: () => {
+                void respawnWizardAfterDeath().catch((error) => {
+                    setLabelText(labels.workerStatus, "checkpoint load failed");
+                    console.error("[wizard of flatland respawn]", error);
+                });
+            }
         }
     });
     const validateWizardVitals = wizardVitalsSystem.validateWizardVitals;
@@ -817,7 +827,7 @@
         setLabelText(labels.workerStatus, event.message || "pathfinding failed");
     });
 
-    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-29");
+    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-30");
     const mazeStreamingSystem = getWizardFlatlandMazeStreamingApi().createMazeStreamingSystem({
         state,
         worker: mazeWorker,
@@ -837,6 +847,7 @@
             getRequiredMazeSectionKeys,
             removeFurthestGeneratedMazeSection,
             getPathfindingLayerBounds,
+            getSavedSectionWallOverrides,
             setWorkerStatus: (text) => setLabelText(labels.workerStatus, text),
             installGeneratedMazeWorkerResult
         }
@@ -872,6 +883,15 @@
         const api = typeof factory === "function" ? factory() : null;
         if (!api || typeof api.createExplorationSystem !== "function") {
             throw new Error("Wizard of Flatland requires /wizard-of-flatland/exploration.js");
+        }
+        return api;
+    }
+
+    function getWizardFlatlandSaveStoreApi() {
+        const factory = window.getWizardFlatlandSaveStoreApi;
+        const api = typeof factory === "function" ? factory() : null;
+        if (!api || typeof api.createSaveStore !== "function") {
+            throw new Error("Wizard of Flatland requires /wizard-of-flatland/saveStore.js");
         }
         return api;
     }
@@ -1147,10 +1167,6 @@
         return `${TALISMAN_STORAGE_KEY_PREFIX}${encodeURIComponent(playerName)}`;
     }
 
-    function getActiveWizardCheckpointStorageKey() {
-        return getWizardCheckpointStorageKeyForPlayer(validateStartupPlayerName(state.playerName, "active checkpoint"));
-    }
-
     function parseWizardCheckpointSaveIndex(text) {
         if (text === null) return [];
         let parsed = null;
@@ -1165,21 +1181,32 @@
         return parsed.map((name) => validateStartupPlayerName(name, "checkpoint index entry"));
     }
 
-    function getWizardCheckpointSaveNames() {
+    async function migrateLegacyWizardCheckpoints() {
         const storage = getWizardCheckpointStorage();
-        const names = parseWizardCheckpointSaveIndex(storage.getItem(TALISMAN_SAVE_INDEX_KEY));
-        return names.filter((name) => storage.getItem(getWizardCheckpointStorageKeyForPlayer(name)) !== null)
-            .sort((a, b) => a.localeCompare(b));
+        const legacyNames = parseWizardCheckpointSaveIndex(storage.getItem(TALISMAN_SAVE_INDEX_KEY));
+        if (legacyNames.length === 0) return 0;
+        const existingNames = new Set((await saveStore.listSaves()).map((save) => save.playerName));
+        let migrated = 0;
+        for (const name of legacyNames) {
+            const key = getWizardCheckpointStorageKeyForPlayer(name);
+            if (!existingNames.has(name)) {
+                const text = storage.getItem(key);
+                if (text === null) continue;
+                const snapshot = parseWizardCheckpointSnapshot(text);
+                snapshot.playerName = name;
+                await saveStore.putSave(snapshot, []);
+                migrated++;
+            }
+            storage.removeItem(key);
+        }
+        storage.removeItem(TALISMAN_SAVE_INDEX_KEY);
+        return migrated;
     }
 
-    function getWizardCheckpointSaveEntries() {
-        const storage = getWizardCheckpointStorage();
-        return getWizardCheckpointSaveNames().map((name) => {
-            const savedCheckpoint = storage.getItem(getWizardCheckpointStorageKeyForPlayer(name));
-            const snapshot = parseWizardCheckpointSnapshot(savedCheckpoint);
-            if (typeof snapshot.playerName === "string" && snapshot.playerName !== name) {
-                throw new Error(`Wizard of Flatland checkpoint index entry "${name}" points to save for "${snapshot.playerName}"`);
-            }
+    async function getWizardCheckpointSaveEntries() {
+        const saves = await saveStore.listSaves();
+        return saves.map((snapshot) => {
+            const name = validateStartupPlayerName(snapshot.playerName, "save index entry");
             return {
                 name,
                 savedAt: typeof snapshot.savedAt === "string" ? snapshot.savedAt : "",
@@ -1189,21 +1216,6 @@
             if (a.savedAt && b.savedAt && a.savedAt !== b.savedAt) return b.savedAt.localeCompare(a.savedAt);
             return a.name.localeCompare(b.name);
         });
-    }
-
-    function rememberWizardCheckpointSaveName(name) {
-        const playerName = validateStartupPlayerName(name, "checkpoint index update");
-        const storage = getWizardCheckpointStorage();
-        const names = getWizardCheckpointSaveNames();
-        if (!names.includes(playerName)) names.push(playerName);
-        storage.setItem(TALISMAN_SAVE_INDEX_KEY, JSON.stringify(names.sort((a, b) => a.localeCompare(b))));
-    }
-
-    function forgetWizardCheckpointSaveName(name) {
-        const playerName = validateStartupPlayerName(name, "checkpoint index update");
-        const storage = getWizardCheckpointStorage();
-        const names = getWizardCheckpointSaveNames().filter((entry) => entry !== playerName);
-        storage.setItem(TALISMAN_SAVE_INDEX_KEY, JSON.stringify(names));
     }
 
     function setStartupValidation(element, message) {
@@ -1222,15 +1234,15 @@
         setStartupValidation(startupNewValidation, "");
         setStartupValidation(startupLoadValidation, "");
         if (view === "new" && startupNewNameInput) startupNewNameInput.focus();
-        if (view === "load") refreshStartupSaveNameOptions();
+        if (view === "load") void refreshStartupSaveNameOptions().catch(showStartupPersistenceError);
     }
 
-    function refreshStartupSaveNameOptions() {
+    async function refreshStartupSaveNameOptions() {
         if (!startupLoadList || !startupLoadEmpty || !startupLoadSubmitButton) {
             throw new Error("Wizard of Flatland load menu is missing required elements");
         }
         startupLoadList.replaceChildren();
-        const entries = getWizardCheckpointSaveEntries();
+        const entries = await getWizardCheckpointSaveEntries();
         const selectedNameIsValid = entries.some((entry) => entry.name === state.startupSelectedLoadName);
         if (!selectedNameIsValid) state.startupSelectedLoadName = entries.length > 0 ? entries[0].name : "";
         for (const entry of entries) {
@@ -1252,12 +1264,18 @@
             button.addEventListener("click", () => {
                 state.startupSelectedLoadName = entry.name;
                 setStartupValidation(startupLoadValidation, "");
-                refreshStartupSaveNameOptions();
+                void refreshStartupSaveNameOptions().catch(showStartupPersistenceError);
             });
             startupLoadList.append(button);
         }
         startupLoadEmpty.classList.toggle("hidden", entries.length > 0);
         startupLoadSubmitButton.disabled = entries.length === 0;
+    }
+
+    function showStartupPersistenceError(error) {
+        const message = error && error.message ? error.message : String(error);
+        setStartupValidation(startupLoadValidation, message);
+        console.error("[wizard of flatland saves]", error);
     }
 
     function formatStartupSaveMeta(entry) {
@@ -1279,14 +1297,12 @@
         if (shouldStartLoop) requestAnimationFrame(tick);
     }
 
-    function startNewWizardGame(playerName) {
+    async function startNewWizardGame(playerName) {
         const normalizedName = validateStartupPlayerName(playerName, "new game");
         state.playerName = normalizedName;
         state.mazeSeed = normalizedName;
         if (mazeSeedInput) mazeSeedInput.value = normalizedName;
-        const storage = getWizardCheckpointStorage();
-        storage.removeItem(getWizardCheckpointStorageKeyForPlayer(normalizedName));
-        forgetWizardCheckpointSaveName(normalizedName);
+        await saveStore.deleteSave(normalizedName);
         updateControlLabels();
         createScenario();
         updateStats();
@@ -1294,52 +1310,56 @@
         console.log("Wizard of Flatland new game started", { playerName: normalizedName, seed: getMazeSeed() });
     }
 
-    function loadWizardGame(playerName) {
+    async function loadWizardGame(playerName) {
         const normalizedName = validateStartupPlayerName(playerName, "load game");
-        const storage = getWizardCheckpointStorage();
-        const saveKey = getWizardCheckpointStorageKeyForPlayer(normalizedName);
-        const savedCheckpoint = storage.getItem(saveKey);
-        if (savedCheckpoint === null) {
+        const snapshot = await saveStore.getSave(normalizedName);
+        if (!snapshot) {
             throw new Error(`No talisman checkpoint save exists for "${normalizedName}"`);
         }
         state.playerName = normalizedName;
-        const snapshot = parseWizardCheckpointSnapshot(savedCheckpoint);
+        validateWizardCheckpointSnapshot(snapshot);
         if (typeof snapshot.playerName === "string" && snapshot.playerName !== normalizedName) {
             throw new Error(`Saved checkpoint belongs to "${snapshot.playerName}", not "${normalizedName}"`);
         }
+        const sectionRecords = await saveStore.getSections(normalizedName);
+        state.sectionSnapshotsByKey = new Map(sectionRecords.map((record) => {
+            validateMazeSectionSnapshot(record, record.sectionKey);
+            return [record.sectionKey, record];
+        }));
+        state.restoredSectionSnapshotKeys = new Set();
         applyWizardCheckpointSnapshot(snapshot);
-        rememberWizardCheckpointSaveName(normalizedName);
         updateStats();
         closeStartupMenu();
         console.log("Wizard of Flatland game loaded", { playerName: normalizedName, checkpoint: snapshot });
     }
 
-    function setupStartupMenu() {
+    async function setupStartupMenu() {
         if (!startupMenu) {
             throw new Error("Wizard of Flatland startup menu is missing");
         }
-        refreshStartupSaveNameOptions();
+        await migrateLegacyWizardCheckpoints();
+        await refreshStartupSaveNameOptions();
         setStartupView("mode");
         if (startupNewButton) startupNewButton.addEventListener("click", () => setStartupView("new"));
         if (startupLoadButton) startupLoadButton.addEventListener("click", () => {
-            refreshStartupSaveNameOptions();
+            void refreshStartupSaveNameOptions().catch(showStartupPersistenceError);
             setStartupView("load");
         });
         if (startupNewBackButton) startupNewBackButton.addEventListener("click", () => setStartupView("mode"));
         if (startupLoadBackButton) startupLoadBackButton.addEventListener("click", () => setStartupView("mode"));
         if (startupNewNameInput) startupNewNameInput.addEventListener("input", () => setStartupValidation(startupNewValidation, ""));
-        if (startupNewForm) startupNewForm.addEventListener("submit", (event) => {
+        if (startupNewForm) startupNewForm.addEventListener("submit", async (event) => {
             event.preventDefault();
             try {
-                startNewWizardGame(startupNewNameInput ? startupNewNameInput.value : "");
+                await startNewWizardGame(startupNewNameInput ? startupNewNameInput.value : "");
             } catch (error) {
                 setStartupValidation(startupNewValidation, error && error.message ? error.message : String(error));
             }
         });
-        if (startupLoadForm) startupLoadForm.addEventListener("submit", (event) => {
+        if (startupLoadForm) startupLoadForm.addEventListener("submit", async (event) => {
             event.preventDefault();
             try {
-                loadWizardGame(state.startupSelectedLoadName);
+                await loadWizardGame(state.startupSelectedLoadName);
             } catch (error) {
                 setStartupValidation(startupLoadValidation, error && error.message ? error.message : String(error));
             }
@@ -1567,6 +1587,12 @@
             state.worldVersion += 1;
             clearWallBreakTrackingForAllAgents();
         });
+        profiler.span("restore wall exploration", () => {
+            for (const sectionKey of state.generatedMazeInstalledChunkKeys) {
+                const snapshot = state.sectionSnapshotsByKey.get(sectionKey);
+                if (snapshot) explorationSystem.importWalls(snapshot.wallExploration);
+            }
+        });
         profiler.span("populate maze coins", () => populateGeneratedMazeCoins(getMazeOptions()));
         profiler.span("populate maze talismans", () => populateGeneratedMazeTalismans(getMazeOptions()));
         profiler.span("populate maze rooms", () => populateGeneratedMazeRooms(getMazeOptions()));
@@ -1693,9 +1719,98 @@
             if (!furthest || distance > furthest.distance) furthest = { key, distance };
         }
         if (!furthest) return false;
+        captureMazeSectionSnapshot(furthest.key);
         state.generatedMazeChunkKeys.delete(furthest.key);
         freezeAgentsInMazeSection(furthest.key, options);
         return true;
+    }
+
+    function getSavedSectionWallOverrides(sectionKeys) {
+        if (!Array.isArray(sectionKeys)) throw new Error("Wizard of Flatland saved wall override lookup requires section keys");
+        if (!(state.sectionSnapshotsByKey instanceof Map)) {
+            throw new Error("Wizard of Flatland saved wall override lookup requires section snapshots");
+        }
+        const overrides = [];
+        for (const sectionKey of sectionKeys) {
+            const snapshot = state.sectionSnapshotsByKey.get(sectionKey);
+            if (!snapshot) continue;
+            validateMazeSectionSnapshot(snapshot, sectionKey);
+            overrides.push({ sectionKey, walls: snapshot.walls.slice() });
+        }
+        return overrides;
+    }
+
+    function getWallsOwnedByMazeSection(sectionKey, options = getMazeOptions()) {
+        validateMazeRoomEnemyBudgetSectionKey(sectionKey);
+        validateWallBuffer(state.walls, "section snapshot walls");
+        const values = [];
+        for (let base = 0; base < state.walls.length; base += WALL_STRIDE) {
+            const midpointX = (state.walls[base + WALL_X1] + state.walls[base + WALL_X2]) * 0.5;
+            const midpointY = (state.walls[base + WALL_Y1] + state.walls[base + WALL_Y2]) * 0.5;
+            const coord = worldToMazeSectionCoord(midpointX, midpointY, options);
+            if (mazeSectionKey(coord.q, coord.r) !== sectionKey) continue;
+            for (let field = 0; field < WALL_STRIDE; field++) values.push(state.walls[base + field]);
+        }
+        return Float32Array.from(values);
+    }
+
+    function captureMazeSectionSnapshot(sectionKey) {
+        if (!(state.generatedMazeInstalledChunkKeys instanceof Set) || !state.generatedMazeInstalledChunkKeys.has(sectionKey)) {
+            throw new Error(`Wizard of Flatland cannot snapshot unloaded section ${sectionKey}`);
+        }
+        const walls = getWallsOwnedByMazeSection(sectionKey);
+        const coins = state.coins
+            .filter((coin) => coin.sectionKey === sectionKey)
+            .map((coin) => ({ ...coin }));
+        const enemies = state.agents
+            .filter((agent) => getActorMazeSectionKey(agent) === sectionKey)
+            .map((agent) => createAgentCheckpointSnapshot(agent, sectionKey, getAgentHomeSectionKey(agent)));
+        const previous = state.sectionSnapshotsByKey.get(sectionKey);
+        const snapshot = {
+            version: 1,
+            playerName: validateStartupPlayerName(state.playerName, "section snapshot"),
+            sectionKey,
+            revision: previous ? previous.revision + 1 : 1,
+            savedAt: new Date().toISOString(),
+            walls,
+            wallExploration: explorationSystem.exportWalls(walls, explorationWallLayout),
+            coins,
+            enemies,
+            obstacles: [],
+            constructs: [],
+            scenery: []
+        };
+        validateMazeSectionSnapshot(snapshot, sectionKey);
+        state.sectionSnapshotsByKey.set(sectionKey, snapshot);
+        state.restoredSectionSnapshotKeys.add(sectionKey);
+        return snapshot;
+    }
+
+    function captureActiveMazeSectionSnapshots() {
+        if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland active section snapshot requires installed sections");
+        }
+        for (const sectionKey of state.generatedMazeInstalledChunkKeys) captureMazeSectionSnapshot(sectionKey);
+        return Array.from(state.sectionSnapshotsByKey.values());
+    }
+
+    function validateMazeSectionSnapshot(snapshot, expectedSectionKey = snapshot && snapshot.sectionKey) {
+        if (!snapshot || snapshot.version !== 1) throw new Error("Wizard of Flatland section snapshot version is unsupported");
+        if (snapshot.sectionKey !== expectedSectionKey) {
+            throw new Error(`Wizard of Flatland section snapshot key mismatch: expected ${expectedSectionKey}, got ${snapshot.sectionKey}`);
+        }
+        if (!(snapshot.walls instanceof Float32Array) || snapshot.walls.length % WALL_STRIDE !== 0) {
+            throw new Error(`Wizard of Flatland section ${expectedSectionKey} snapshot has invalid walls`);
+        }
+        if (!Array.isArray(snapshot.wallExploration) || !Array.isArray(snapshot.coins) || !Array.isArray(snapshot.enemies)) {
+            throw new Error(`Wizard of Flatland section ${expectedSectionKey} snapshot arrays are malformed`);
+        }
+        for (const collection of ["obstacles", "constructs", "scenery"]) {
+            if (!Array.isArray(snapshot[collection])) {
+                throw new Error(`Wizard of Flatland section ${expectedSectionKey} snapshot requires ${collection}`);
+            }
+        }
+        return snapshot;
     }
 
     function resetGeneratedMazeCoinPopulation() {
@@ -1727,7 +1842,13 @@
         const placedCoins = [];
         const keys = Array.from(state.generatedMazeInstalledChunkKeys).sort();
         for (const sectionKey of keys) {
-            placedCoins.push(...createMazeCoinsForSection(sectionKey, options, placedCoins));
+            const snapshot = state.sectionSnapshotsByKey.get(sectionKey);
+            if (snapshot) {
+                validateMazeSectionSnapshot(snapshot, sectionKey);
+                placedCoins.push(...snapshot.coins.map((coin) => ({ ...coin })));
+            } else {
+                placedCoins.push(...createMazeCoinsForSection(sectionKey, options, placedCoins));
+            }
         }
         const existingCoinsByKey = new Map(state.coins.map((coin) => [coin.key, coin]));
         const placedCoinKeys = new Set(placedCoins.map((coin) => coin.key));
@@ -2168,6 +2289,9 @@
         state.generatedMazePendingSignature = "";
         state.generatedMazeLoading = false;
         state.generatedMazeInitialEnemySpawnBudgetsBySectionKey = new Map();
+        state.sectionSnapshotsByKey = new Map();
+        state.restoredSectionSnapshotKeys = new Set();
+        state.lastCheckpointSnapshot = null;
         state.pendingSolverDt = 0;
         invalidateMazeLookaheadCache();
         clearPathfindingNodeLayer();
@@ -2213,16 +2337,17 @@
         return window.localStorage;
     }
 
-    function respawnWizardAfterDeath() {
-        const storage = getWizardCheckpointStorage();
-        const savedCheckpoint = storage.getItem(getActiveWizardCheckpointStorageKey());
-        if (savedCheckpoint === null) {
+    async function respawnWizardAfterDeath() {
+        const playerName = validateStartupPlayerName(state.playerName, "death checkpoint");
+        const savedCheckpoint = await saveStore.getSave(playerName);
+        if (!savedCheckpoint) {
             console.log("Wizard of Flatland death: no checkpoint found; reloading scenario from scratch");
             createScenario();
             return { source: "fresh-scenario" };
         }
-        const snapshot = parseWizardCheckpointSnapshot(savedCheckpoint);
-        const applied = applyWizardCheckpointSnapshot(snapshot);
+        const sections = await saveStore.getSections(playerName);
+        state.sectionSnapshotsByKey = new Map(sections.map((section) => [section.sectionKey, validateMazeSectionSnapshot(section)]));
+        const applied = applyWizardCheckpointSnapshot(savedCheckpoint);
         console.log("Wizard of Flatland death: respawned from checkpoint", applied);
         return { source: "checkpoint", checkpoint: applied };
     }
@@ -2258,7 +2383,8 @@
             spawnBudgetsBySectionKey.set(homeSectionKey, (spawnBudgetsBySectionKey.get(homeSectionKey) || 0) + 1);
         }
         return {
-            version: 1,
+            version: 2,
+            sectionSnapshotVersion: 1,
             savedAt: new Date().toISOString(),
             playerName: validateStartupPlayerName(state.playerName, "checkpoint save"),
             scenario: getScenarioValue(),
@@ -2444,7 +2570,7 @@
         if (!snapshot || typeof snapshot !== "object") {
             throw new Error("Wizard of Flatland saved checkpoint must be an object");
         }
-        if (snapshot.version !== 1) {
+        if (snapshot.version !== 1 && snapshot.version !== 2) {
             throw new Error(`Wizard of Flatland saved checkpoint version is unsupported: ${snapshot.version}`);
         }
         validateWizardPositionTarget(snapshot.wizard, "saved checkpoint wizard position");
@@ -2481,7 +2607,8 @@
             y: snapshot.wizard.y,
             heading: normalizeAngle(snapshot.wizard.heading)
         };
-        state.agents = snapshot.enemies.map(createAgentFromCheckpointSnapshot);
+        state.agents = snapshot.version >= 2 ? [] : snapshot.enemies.map(createAgentFromCheckpointSnapshot);
+        state.restoredSectionSnapshotKeys = new Set();
         state.fireballs = [];
         state.fireballExplosions = [];
         state.freezeParticles = [];
@@ -2527,6 +2654,9 @@
         refreshSpellLevelPanel();
         state.generatedMazeWalls = createEmptyWallBuffer();
         state.walls = createEmptyWallBuffer();
+        state.manualWalls = createEmptyWallBuffer();
+        explorationSystem.reset();
+        state.los.lastResult = null;
         state.generatedMazeChunkKeys = new Set();
         state.generatedMazeInstalledChunkKeys = new Set();
         state.generatedMazeSignature = "";
@@ -2538,6 +2668,7 @@
         clearAgentPathRequestsForMapRebuild();
         invalidateMazeLookaheadCache();
         clearPathfindingNodeLayer();
+        state.lastCheckpointSnapshot = snapshot;
         refreshGeneratedMazeIfNeeded(true);
         return snapshot;
     }
@@ -2670,32 +2801,48 @@
         return state.activatedTalismanSectionKeys.has(sectionKey) ? sectionKey : "";
     }
 
-    function saveWizardCheckpointToSlot() {
-        const snapshot = getWizardCheckpointSnapshot();
-        getWizardCheckpointStorage().setItem(getActiveWizardCheckpointStorageKey(), JSON.stringify(snapshot));
-        rememberWizardCheckpointSaveName(state.playerName);
-        refreshStartupSaveNameOptions();
-        console.log("Wizard of Flatland checkpoint saved", snapshot);
-        return snapshot;
+    async function saveWizardCheckpointToSlot() {
+        const operation = checkpointWriteChain.then(async () => {
+            const sectionSnapshots = captureActiveMazeSectionSnapshots();
+            const snapshot = getWizardCheckpointSnapshot();
+            snapshot.revision = state.lastCheckpointSnapshot && Number.isInteger(state.lastCheckpointSnapshot.revision)
+                ? state.lastCheckpointSnapshot.revision + 1
+                : 1;
+            await saveStore.putSave(snapshot, sectionSnapshots);
+            state.lastCheckpointSnapshot = snapshot;
+            state.manualWalls = createEmptyWallBuffer();
+            state.brokenWallGaps = [];
+            await refreshStartupSaveNameOptions();
+            console.log("Wizard of Flatland checkpoint saved", snapshot);
+            return snapshot;
+        });
+        checkpointWriteChain = operation.catch(() => undefined);
+        return operation;
     }
 
-    function loadWizardCheckpointFromSlot() {
-        const snapshot = parseWizardCheckpointSnapshot(getWizardCheckpointStorage().getItem(getActiveWizardCheckpointStorageKey()));
+    async function loadWizardCheckpointFromSlot() {
+        const playerName = validateStartupPlayerName(state.playerName, "active checkpoint");
+        const snapshot = await saveStore.getSave(playerName);
+        if (!snapshot) throw new Error(`No talisman checkpoint save exists for "${playerName}"`);
+        const sections = await saveStore.getSections(playerName);
+        state.sectionSnapshotsByKey = new Map(sections.map((section) => [section.sectionKey, validateMazeSectionSnapshot(section)]));
         const applied = applyWizardCheckpointSnapshot(snapshot);
         console.log("Wizard of Flatland checkpoint loaded", applied);
         return applied;
     }
 
-    function showSavedWizardCheckpointFromSlot() {
-        const snapshot = parseWizardCheckpointSnapshot(getWizardCheckpointStorage().getItem(getActiveWizardCheckpointStorageKey()));
+    async function showSavedWizardCheckpointFromSlot() {
+        const snapshot = await saveStore.getSave(validateStartupPlayerName(state.playerName, "active checkpoint"));
+        if (!snapshot) throw new Error("Wizard of Flatland saved checkpoint is missing");
         console.log("Wizard of Flatland saved checkpoint", snapshot);
         return snapshot;
     }
 
-    function clearSavedWizardCheckpointFromSlot() {
-        getWizardCheckpointStorage().removeItem(getActiveWizardCheckpointStorageKey());
-        forgetWizardCheckpointSaveName(state.playerName);
-        refreshStartupSaveNameOptions();
+    async function clearSavedWizardCheckpointFromSlot() {
+        await saveStore.deleteSave(validateStartupPlayerName(state.playerName, "active checkpoint"));
+        state.lastCheckpointSnapshot = null;
+        state.sectionSnapshotsByKey = new Map();
+        await refreshStartupSaveNameOptions();
         console.log("Wizard of Flatland saved checkpoint cleared");
         return true;
     }
@@ -2919,6 +3066,17 @@
     }
 
     function populateGeneratedMazeRoom(sectionKey, options) {
+        const savedSnapshot = state.sectionSnapshotsByKey.get(sectionKey);
+        if (savedSnapshot) {
+            validateMazeSectionSnapshot(savedSnapshot, sectionKey);
+            state.generatedMazeInitialEnemySpawnBudgetsBySectionKey.set(sectionKey, 0);
+            if (state.restoredSectionSnapshotKeys.has(sectionKey)) return;
+            for (const enemySnapshot of savedSnapshot.enemies) {
+                state.agents.push(createAgentFromCheckpointSnapshot(enemySnapshot));
+            }
+            state.restoredSectionSnapshotKeys.add(sectionKey);
+            return;
+        }
         const coord = parseMazeSectionKey(sectionKey);
         const count = consumeMazeRoomEnemySpawnBudget(sectionKey, options);
         if (count <= 0) return;
@@ -4046,7 +4204,10 @@
         state.homeBaseTalismanSectionKey = talisman.sectionKey;
         talisman.activated = true;
         talisman.flashSeconds = TALISMAN_ACTIVATION_FLASH_SECONDS;
-        saveWizardCheckpointToSlot();
+        void saveWizardCheckpointToSlot().catch((error) => {
+            setLabelText(labels.workerStatus, "checkpoint save failed");
+            console.error("[wizard of flatland checkpoint]", error);
+        });
         return true;
     }
 
@@ -8672,6 +8833,6 @@
     });
     setSpeedScaleValue(SPEED_SCALE_DEFAULT);
     updateControlLabels();
-    setupStartupMenu();
+    setupStartupMenu().catch(showStartupPersistenceError);
     resizeCanvas();
 })();

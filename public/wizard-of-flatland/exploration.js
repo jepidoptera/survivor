@@ -205,6 +205,64 @@
             return changed;
         }
 
+        function exportWalls(walls, layout) {
+            validateWallInput(walls, layout);
+            const exported = [];
+            for (let base = 0; base < walls.length; base += layout.stride) {
+                const key = wallKey(
+                    walls[base + layout.x1],
+                    walls[base + layout.y1],
+                    walls[base + layout.x2],
+                    walls[base + layout.y2],
+                    walls[base + layout.labelCode],
+                    walls[base + layout.sideCode]
+                );
+                const record = records.get(key);
+                if (!record || !record.bits.some((word) => word !== 0)) continue;
+                exported.push({
+                    key,
+                    ax: record.ax,
+                    ay: record.ay,
+                    bx: record.bx,
+                    by: record.by,
+                    labelCode: Math.round(walls[base + layout.labelCode]),
+                    sideCode: Math.round(walls[base + layout.sideCode]),
+                    cellCount: record.cellCount,
+                    bits: record.bits.slice()
+                });
+            }
+            return exported;
+        }
+
+        function importWalls(exported) {
+            if (!Array.isArray(exported)) throw new Error("Wizard of Flatland exploration import requires wall records");
+            let changed = false;
+            for (const saved of exported) {
+                if (!saved || !(saved.bits instanceof Uint32Array)) {
+                    throw new Error("Wizard of Flatland exploration import contains an invalid bitset");
+                }
+                const record = getOrCreateRecord(
+                    saved.ax,
+                    saved.ay,
+                    saved.bx,
+                    saved.by,
+                    saved.labelCode,
+                    saved.sideCode
+                );
+                if (saved.cellCount !== record.cellCount || saved.bits.length !== record.bits.length) {
+                    throw new Error(`Wizard of Flatland exploration import is incompatible with wall ${record.key}`);
+                }
+                for (let word = 0; word < record.bits.length; word++) {
+                    const merged = record.bits[word] | saved.bits[word];
+                    if (merged === record.bits[word]) continue;
+                    record.bits[word] = merged;
+                    changed = true;
+                }
+            }
+            if (changed) version++;
+            return changed;
+        }
+
         function reset() {
             records.clear();
             activeRecords = [];
@@ -216,6 +274,8 @@
             applyVisibility,
             forEachActiveInterval,
             inheritSplit,
+            exportWalls,
+            importWalls,
             reset,
             getVersion: () => version,
             getCellSize: () => cellSize

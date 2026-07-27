@@ -89,8 +89,13 @@ self.addEventListener("message", (event) => {
 function buildMazeSections(message) {
     const options = normalizeMazeOptions(message.options);
     const keys = normalizeSectionKeys(message.keys);
+    const savedSections = normalizeSavedSections(message.savedSections || []);
     const generatedWallBuilder = createWallBufferBuilder();
     for (const key of keys) {
+        if (savedSections.has(key)) {
+            appendWallBuffer(generatedWallBuilder, savedSections.get(key));
+            continue;
+        }
         const coord = parseMazeSectionKey(key);
         appendMazeSectionWalls(generatedWallBuilder, coord.q, coord.r, options);
     }
@@ -108,6 +113,21 @@ function buildMazeSections(message) {
         allWalls,
         nodeLayer
     };
+}
+
+function normalizeSavedSections(savedSections) {
+    if (!Array.isArray(savedSections)) throw new Error("Wizard of Flatland maze worker saved sections must be an array");
+    const byKey = new Map();
+    for (const saved of savedSections) {
+        if (!saved || typeof saved.sectionKey !== "string") {
+            throw new Error("Wizard of Flatland maze worker saved section is malformed");
+        }
+        const coord = parseMazeSectionKey(saved.sectionKey);
+        const key = mazeSectionKey(coord.q, coord.r);
+        if (byKey.has(key)) throw new Error(`Wizard of Flatland maze worker received duplicate saved section ${key}`);
+        byKey.set(key, normalizeWalls(saved.walls, `saved section ${key} walls`));
+    }
+    return byKey;
 }
 
 function normalizeMazeOptions(raw) {
@@ -215,6 +235,12 @@ function ensureWallBufferCapacity(walls, requiredLength) {
 
 function finishWallBuffer(walls) {
     return walls.buffer.slice(0, walls.length);
+}
+
+function appendWallBuffer(builder, walls) {
+    ensureWallBufferCapacity(builder, builder.length + walls.length);
+    builder.buffer.set(walls, builder.length);
+    builder.length += walls.length;
 }
 
 function concatWallBuffers(left, right) {
