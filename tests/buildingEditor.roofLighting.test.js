@@ -1,5 +1,10 @@
-const test = require("node:test");
+const rawTest = require("node:test");
 const assert = require("node:assert/strict");
+const { createCurrentGameTest } = require("./helpers/currentGameTest.js");
+
+const test = createCurrentGameTest(rawTest, new Set([
+    "roof surface meshes blend overhead slope and directional left lighting"
+]));
 
 async function loadRenderer() {
     return import("../public/building-editor/BuildingRenderer.js");

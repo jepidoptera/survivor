@@ -44,13 +44,24 @@ shield: can cast on yourself for protection or project elsewhere to act as a tem
   level 7: cost 25, power 500
 
 healing.
-  level 1: heals 5 hp per second. costs 10 magic per second.
-  level 2: heals 8 hp, costs 9.5 magic
-  level 3: heals 13 hp, costs 9 magic
-  level 4: heals 22 hp, costs 8 magic
-  level 5: heals 37 hp, costs 7 magic
-  level 6: heals 60 hp, costs 6 magic
-  level 7: wolverine mode. heals 100 hp, costs 5 magic
+  level 0: no healing.
+  level 1: heals to full in 50 seconds.
+  level 2: heals to full in 36 seconds.
+  level 3: heals to full in 26 seconds.
+  level 4: heals to full in 18.5 seconds.
+  level 5: heals to full in 13.5 seconds.
+  level 6: heals to full in 9.5 seconds.
+  level 7: wolverine mode. heals to full in 7 seconds.
+
+magic recharge.
+  level 0: recharges to full in 14 seconds.
+  level 1: recharges to full in 9.5 seconds.
+  level 2: recharges to full in 6.5 seconds.
+  level 3: recharges to full in 4.5 seconds.
+  level 4: recharges to full in 3 seconds.
+  level 5: recharges to full in 2 seconds.
+  level 6: recharges to full in 1.5 seconds.
+  level 7: recharges to full in 1 second.
 
 fireball.
   level 1: 11 damage, 10 magic, 1 meter explosion radius, 1 second cooldown

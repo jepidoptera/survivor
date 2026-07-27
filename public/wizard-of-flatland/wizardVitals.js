@@ -8,6 +8,13 @@
         if (!state || typeof state !== "object") throw new Error("Wizard of Flatland vitals require state");
         if (!constants || typeof constants !== "object") throw new Error("Wizard of Flatland vitals require constants");
 
+        function getWizardLevelExpIncrement() {
+            if (!Number.isFinite(constants.WIZARD_LEVEL_EXP_INCREMENT) || constants.WIZARD_LEVEL_EXP_INCREMENT <= 0) {
+                throw new Error("Wizard of Flatland vitals require a positive WIZARD_LEVEL_EXP_INCREMENT");
+            }
+            return constants.WIZARD_LEVEL_EXP_INCREMENT;
+        }
+
         function validateWizardVitals() {
             const vitals = state.wizardVitals;
             if (!vitals || typeof vitals !== "object") {
@@ -50,9 +57,12 @@
             if (!Number.isFinite(dt) || dt <= 0) return;
             validateWizardVitals();
             const vitals = state.wizardVitals;
-            vitals.health = Math.min(vitals.maxHealth, vitals.health + constants.WIZARD_HEALTH_REGEN_PER_SECOND * dt);
             if (callRequiredCallback("canRechargeMagic")) {
-                vitals.magic = Math.min(vitals.maxMagic, vitals.magic + constants.WIZARD_MAGIC_REGEN_PER_SECOND * dt);
+                const secondsToFullMagic = Number(callRequiredCallback("getMagicRechargeSecondsToFull"));
+                if (!(secondsToFullMagic > 0)) {
+                    throw new Error("Wizard of Flatland magic recharge requires positive secondsToFullMagic");
+                }
+                vitals.magic = Math.min(vitals.maxMagic, vitals.magic + vitals.maxMagic / secondsToFullMagic * dt);
             }
             callRequiredCallback("updateStatusBars");
         }
@@ -62,7 +72,8 @@
             if (!Number.isFinite(damage) || damage <= 0) return 0;
             validateWizardVitals();
             const previousHealth = state.wizardVitals.health;
-            state.wizardVitals.health = Math.max(0, previousHealth - damage);
+            const minimumHealth = state.debug && state.debug.wizardImmortal === true ? 1 : 0;
+            state.wizardVitals.health = Math.max(minimumHealth, previousHealth - damage);
             const appliedDamage = previousHealth - state.wizardVitals.health;
             callRequiredCallback("updateStatusBars");
             if (previousHealth > 0 && state.wizardVitals.health <= 0) {
@@ -101,10 +112,18 @@
             }
             validateWizardVitals();
             validateWizardLevelPoints();
-            const nextExp = state.wizardVitals.exp + exp;
-            const gainedLevelPoints = Math.floor(nextExp / state.wizardVitals.maxExp);
+            const expIncrement = getWizardLevelExpIncrement();
+            let nextExp = state.wizardVitals.exp + exp;
+            let nextMaxExp = state.wizardVitals.maxExp;
+            let gainedLevelPoints = 0;
+            while (nextExp >= nextMaxExp) {
+                nextExp -= nextMaxExp;
+                nextMaxExp += expIncrement;
+                gainedLevelPoints += 1;
+            }
             if (gainedLevelPoints > 0) {
-                state.wizardVitals.exp = nextExp % state.wizardVitals.maxExp;
+                state.wizardVitals.exp = nextExp;
+                state.wizardVitals.maxExp = nextMaxExp;
                 state.levelPoints += gainedLevelPoints;
                 callRequiredCallback("updateStatusBars");
                 callOptionalCallback("refreshSpellLevelPanel");

@@ -248,43 +248,92 @@
           "level": 1,
           "headline": "Regeneration",
           "subtitle": "Restores a small amount of health over time.",
-          "healthPerSecond": 1
+          "secondsToFullHealth": 50
         },
         {
           "level": 2,
           "headline": "Healing II",
           "subtitle": "A steadier restorative aura.",
-          "healthPerSecond": 1.4
+          "secondsToFullHealth": 36
         },
         {
           "level": 3,
           "headline": "Healing III",
           "subtitle": "Recovery strengthens while the spell holds.",
-          "healthPerSecond": 1.9
+          "secondsToFullHealth": 26
         },
         {
           "level": 4,
           "headline": "Healing IV",
           "subtitle": "Warm magic closes wounds quickly.",
-          "healthPerSecond": 2.6
+          "secondsToFullHealth": 18.5
         },
         {
           "level": 5,
           "headline": "Healing V",
           "subtitle": "A strong regenerative current.",
-          "healthPerSecond": 3.7
+          "secondsToFullHealth": 13.5
         },
         {
           "level": 6,
           "headline": "Healing VI",
           "subtitle": "Walk it off.",
-          "healthPerSecond": 5
+          "secondsToFullHealth": 9.5
         },
         {
           "level": 7,
           "headline": "Wolverine Mode",
           "subtitle": "Shrug it off.",
-          "healthPerSecond": 7
+          "secondsToFullHealth": 7
+        }
+      ]
+    },
+    {
+      "id": "magicrecharge",
+      "displayName": "Magic Recharge",
+      "icon": "/assets/images/magic/lightning.png",
+      "levels": [
+        {
+          "level": 1,
+          "headline": "Channeling I",
+          "subtitle": "Magic returns more quickly.",
+          "secondsToFullMagic": 9.5
+        },
+        {
+          "level": 2,
+          "headline": "Channeling II",
+          "subtitle": "A steadier inner current.",
+          "secondsToFullMagic": 6.5
+        },
+        {
+          "level": 3,
+          "headline": "Channeling III",
+          "subtitle": "Power gathers fast.",
+          "secondsToFullMagic": 4.5
+        },
+        {
+          "level": 4,
+          "headline": "Channeling IV",
+          "subtitle": "The reservoir fills sharply.",
+          "secondsToFullMagic": 3
+        },
+        {
+          "level": 5,
+          "headline": "Channeling V",
+          "subtitle": "Almost never dry.",
+          "secondsToFullMagic": 2
+        },
+        {
+          "level": 6,
+          "headline": "Channeling VI",
+          "subtitle": "Magic surges back.",
+          "secondsToFullMagic": 1.5
+        },
+        {
+          "level": 7,
+          "headline": "Arcane Conduit",
+          "subtitle": "A floodgate of power.",
+          "secondsToFullMagic": 1
         }
       ]
     },

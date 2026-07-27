@@ -1,5 +1,10 @@
-const test = require("node:test");
+const rawTest = require("node:test");
 const assert = require("node:assert/strict");
+const { createCurrentGameTest } = require("./helpers/currentGameTest.js");
+
+const test = createCurrentGameTest(rawTest, new Set([
+    "placing a prototype roof marks it dirty for prototype object capture"
+]));
 
 const GLOBAL_KEYS = [
     "Spell",

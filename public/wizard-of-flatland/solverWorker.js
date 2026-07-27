@@ -2,8 +2,8 @@
 
 importScripts("/wizard-of-flatland/orcaSolver.js?v=wizard-of-flatland-1");
 
-const STRIDE = 17;
-const OUT_STRIDE = 14;
+const STRIDE = 18;
+const OUT_STRIDE = 15;
 const WALL_STRIDE = 8;
 const STATE_MILLING = 1;
 const STATE_ATTACKING = 3;
@@ -26,6 +26,8 @@ const ATTACK_LUNGE_TIMEOUT_PADDING_SECONDS = 0.45;
 const ATTACK_SLOT_RUN_SPEED_MULTIPLIER = 1.45;
 const ATTACK_SLOT_ARRIVAL_RADIUS_SCALE = 0.22;
 const ATTACK_READY_RANGE_RADIUS_SCALE = 1.25;
+const WALL_ATTACK_BACKUP_SECONDS = 0.35;
+const WALL_ATTACK_LUNGE_TIMEOUT_SECONDS = 0.65;
 const VACATE_ATTACK_RING_CLEARANCE_SCALE = 0.65;
 const VACATE_ATTACK_RING_RELEASE_SCALE = 1.75;
 const RECOVER_ATTACK_RING_RELEASE_SCALE = 1.35;
@@ -148,6 +150,8 @@ function solveStep(message) {
     let blocked = 0;
     let hits = 0;
     const hitAgentIds = [];
+    let wallHits = 0;
+    const wallHitAgentIds = [];
     let crowdThrottleCount = 0;
     let crowdThrottlePressure = 0;
 
@@ -177,6 +181,7 @@ function solveStep(message) {
             throw new Error(`pathfinding mode requires finite path goal for agent ${id}`);
         }
         const followingWorkerPath = pathMode === PATH_MODE_WORKER;
+        const attackingWallPath = followingWorkerPath && agents[base + 17] >= 0.5;
         let nextMillingDirection = millingDirection;
         let nextMillingWallTurnLock = Math.max(0, millingWallTurnLock - dt);
 
@@ -216,6 +221,8 @@ function solveStep(message) {
         const mustRecover = phase === PHASE_RECOVERING && remainingCooldown > 0;
         const seekingGoalX = followingWorkerPath ? pathGoalX : slotPoint.x;
         const seekingGoalY = followingWorkerPath ? pathGoalY : slotPoint.y;
+        const toWallGoalX = followingWorkerPath ? pathGoalX - x : 0;
+        const toWallGoalY = followingWorkerPath ? pathGoalY - y : 0;
         const ringFullMilling = !isDesignatedAttacker && isTargetRingFullForMilling(
             agents,
             count,
@@ -243,7 +250,7 @@ function solveStep(message) {
             targetY
         );
 
-        if (ringFullMilling || millingPressure) {
+        if (!attackingWallPath && (ringFullMilling || millingPressure)) {
             nextPhase = PHASE_MILLING;
             state = STATE_MILLING;
             milling += 1;
@@ -262,6 +269,41 @@ function solveStep(message) {
             movementGoalX = millingIntent.goalX;
             movementGoalY = millingIntent.goalY;
             outerMillingCanReverseAtWall = millingIntent.canReverseAtWall;
+        } else if (attackingWallPath) {
+            movementGoalX = pathGoalX;
+            movementGoalY = pathGoalY;
+            if (phase === PHASE_ATTACKING && phaseTime <= WALL_ATTACK_LUNGE_TIMEOUT_SECONDS) {
+                nextPhase = PHASE_ATTACKING;
+                state = STATE_ATTACKING;
+                attacking += 1;
+                desiredX += toWallGoalX;
+                desiredY += toWallGoalY;
+            } else if (phase === PHASE_RECOVERING && phaseTime <= WALL_ATTACK_BACKUP_SECONDS) {
+                nextPhase = PHASE_RECOVERING;
+                state = STATE_RECOVERING;
+                retreating += 1;
+                const escape = computeWallAttackBackupVector(x, y, pathGoalX, pathGoalY, homeAngle, ringRadius);
+                desiredX += escape.x;
+                desiredY += escape.y;
+                movementGoalX = escape.goalX;
+                movementGoalY = escape.goalY;
+            } else {
+                nextPhase = phase === PHASE_RECOVERING ? PHASE_ATTACKING : PHASE_RECOVERING;
+                nextPhaseTime = 0;
+                state = nextPhase === PHASE_ATTACKING ? STATE_ATTACKING : STATE_RECOVERING;
+                if (state === STATE_ATTACKING) {
+                    attacking += 1;
+                    desiredX += toWallGoalX;
+                    desiredY += toWallGoalY;
+                } else {
+                    retreating += 1;
+                    const escape = computeWallAttackBackupVector(x, y, pathGoalX, pathGoalY, homeAngle, ringRadius);
+                    desiredX += escape.x;
+                    desiredY += escape.y;
+                    movementGoalX = escape.goalX;
+                    movementGoalY = escape.goalY;
+                }
+            }
         } else if (followingWorkerPath) {
             nextPhase = PHASE_SEEKING;
             state = STATE_SEEKING;
@@ -445,9 +487,9 @@ function solveStep(message) {
         }
 
         if (state !== STATE_HOLDING && state !== STATE_MILLING) {
-            const goalX = state === STATE_ATTACKING ? targetX : movementGoalX;
-            const goalY = state === STATE_ATTACKING ? targetY : movementGoalY;
-            const detour = computeWallDetour(x, y, goalX, goalY, radius, walls);
+            const goalX = state === STATE_ATTACKING ? (attackingWallPath ? pathGoalX : targetX) : movementGoalX;
+            const goalY = state === STATE_ATTACKING ? (attackingWallPath ? pathGoalY : targetY) : movementGoalY;
+            const detour = attackingWallPath && state === STATE_ATTACKING ? null : computeWallDetour(x, y, goalX, goalY, radius, walls);
             if (detour) {
                 const currentDesiredLen = Math.hypot(desiredX, desiredY);
                 const weight = Math.max(radius * 2.8, Math.min(ringRadius, currentDesiredLen || radius * 2));
@@ -546,7 +588,7 @@ function solveStep(message) {
                 const facingHeading = velocityLength > EPSILON ? Math.atan2(vy, vx) : Math.atan2(desiredY, desiredX);
                 nextHeading = rotateTowardAngle(heading, facingHeading, Math.PI * 2 * dt);
             }
-        } else if (followingWorkerPath) {
+        } else if (followingWorkerPath && !attackingWallPath) {
             if (len > EPSILON) {
                 nextHeading = rotateTowardAngle(heading, Math.atan2(desiredY, desiredX), Math.PI * 2 * dt);
                 const pathSpeed = getAttackSlotRunSpeed(baseSpeed, speedScale);
@@ -561,12 +603,12 @@ function solveStep(message) {
                 vy = Math.sin(slideHeading) * speed * WAITING_RING_SLIDE_SPEED_SCALE;
             }
         } else if (state === STATE_ATTACKING) {
-            nextHeading = Math.atan2(toTargetY, toTargetX);
+            nextHeading = attackingWallPath ? Math.atan2(toWallGoalY, toWallGoalX) : Math.atan2(toTargetY, toTargetX);
             vx = Math.cos(nextHeading) * attackSpeed;
             vy = Math.sin(nextHeading) * attackSpeed;
         } else if (state === STATE_SEEKING || state === STATE_RECOVERING || state === STATE_VACATING) {
             const retreatHeading = Math.atan2(desiredY, desiredX);
-            const targetHeading = Math.atan2(toTargetY, toTargetX);
+            const targetHeading = attackingWallPath ? Math.atan2(toWallGoalY, toWallGoalX) : Math.atan2(toTargetY, toTargetX);
             nextHeading = state === STATE_SEEKING
                 ? rotateTowardAngle(heading, targetHeading, Math.PI * 2 * dt)
                 : targetHeading;
@@ -591,7 +633,9 @@ function solveStep(message) {
             vy = Math.sin(nextHeading) * phaseSpeed * turnSpeedScale;
         }
         if (state === STATE_RECOVERING || state === STATE_VACATING) {
-            const outward = enforceMinimumOutwardVelocity(vx, vy, x, y, targetX, targetY, ringRadius, speed);
+            const outward = attackingWallPath
+                ? { vx, vy }
+                : enforceMinimumOutwardVelocity(vx, vy, x, y, targetX, targetY, ringRadius, speed);
             vx = outward.vx;
             vy = outward.vy;
         }
@@ -604,16 +648,18 @@ function solveStep(message) {
         let candidateX = x + vx * dt;
         let candidateY = y + vy * dt;
         if (state === STATE_ATTACKING) {
-            const contact = clampDartToTargetContact(x, y, candidateX, candidateY, targetX, targetY, touchDistance);
-            candidateX = contact.x;
-            candidateY = contact.y;
-            if (contact.touched) {
-                nextPhase = PHASE_RECOVERING;
-                nextPhaseTime = 0;
-                const resetCooldown = getAttackRecoveryCooldown(id);
-                nextCooldown = isDesignatedAttacker ? -(resetCooldown + 1) : resetCooldown;
-                hits += 1;
-                hitAgentIds.push(id);
+            if (!attackingWallPath) {
+                const contact = clampDartToTargetContact(x, y, candidateX, candidateY, targetX, targetY, touchDistance);
+                candidateX = contact.x;
+                candidateY = contact.y;
+                if (contact.touched) {
+                    nextPhase = PHASE_RECOVERING;
+                    nextPhaseTime = 0;
+                    const resetCooldown = getAttackRecoveryCooldown(id);
+                    nextCooldown = isDesignatedAttacker ? -(resetCooldown + 1) : resetCooldown;
+                    hits += 1;
+                    hitAgentIds.push(id);
+                }
             }
         } else if (!followingWorkerPath && (state === STATE_HOLDING || state === STATE_SEEKING || state === STATE_RECOVERING || state === STATE_VACATING)) {
             const outsideRing = clampOutsideTargetRing(x, y, candidateX, candidateY, targetX, targetY, ringRadius);
@@ -628,6 +674,12 @@ function solveStep(message) {
         candidateX = constrained.x;
         candidateY = constrained.y;
         wallClamps += constrained.clamps;
+        if (constrained.clamps > 0 && attackingWallPath && state === STATE_ATTACKING) {
+            wallHits += 1;
+            wallHitAgentIds.push(id);
+            nextPhase = PHASE_RECOVERING;
+            nextPhaseTime = 0;
+        }
         if (constrained.clamps > 0 && state === STATE_MILLING) {
             if (nextMillingWallTurnLock <= EPSILON) {
                 nextMillingDirection = -millingDirection;
@@ -656,6 +708,7 @@ function solveStep(message) {
         next[outBase + 11] = nextHeading;
         next[outBase + 12] = nextMillingDirection;
         next[outBase + 13] = nextMillingWallTurnLock;
+        next[outBase + 14] = (isDesignatedAttacker || attackingWallPath) ? 1 : 0;
     }
 
     const contactStats = NPC_AGENT_CONTACTS_ENABLED
@@ -684,6 +737,8 @@ function solveStep(message) {
             attacking,
             hits,
             hitAgentIds,
+            wallHits,
+            wallHitAgentIds,
             blocked,
             contactPushes: contactStats.pushes,
             contactPasses: contactStats.passes,
@@ -970,6 +1025,22 @@ function getAttackTimeoutSeconds(ringRadius, radius, touchDistance, attackSpeed)
     const attackRange = Math.max(0, ringRadius + radius * 0.35 - touchDistance);
     const travelSeconds = attackRange / Math.max(EPSILON, attackSpeed);
     return Math.max(1.2, travelSeconds + ATTACK_LUNGE_TIMEOUT_PADDING_SECONDS);
+}
+
+function computeWallAttackBackupVector(x, y, wallGoalX, wallGoalY, fallbackAngle, backupDistance) {
+    const awayX = x - wallGoalX;
+    const awayY = y - wallGoalY;
+    const distance = Math.hypot(awayX, awayY);
+    const nx = distance > EPSILON ? awayX / distance : Math.cos(fallbackAngle);
+    const ny = distance > EPSILON ? awayY / distance : Math.sin(fallbackAngle);
+    const goalX = x + nx * Math.max(0.5, backupDistance);
+    const goalY = y + ny * Math.max(0.5, backupDistance);
+    return {
+        x: goalX - x,
+        y: goalY - y,
+        goalX,
+        goalY
+    };
 }
 
 function getRingSlotPoint(targetX, targetY, ringRadius, angle) {
@@ -1384,6 +1455,10 @@ function selectAttackingNpcs(agents, count, targetX, targetY, ringRadius, walls,
         const remainingCooldown = cooldown < 0 ? Math.max(0, -cooldown - 1) : Math.max(0, cooldown);
 
         if (phase === PHASE_ATTACKING && !targetMoved && selected.size < maxAttackers) {
+            selected.add(candidate.index);
+            continue;
+        }
+        if (phase === PHASE_RECOVERING && cooldown < 0 && selected.size < maxAttackers) {
             selected.add(candidate.index);
             continue;
         }

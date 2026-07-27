@@ -1,8 +1,16 @@
-const test = require("node:test");
+const rawTest = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { createCurrentGameTest } = require("./helpers/currentGameTest.js");
+
+const test = createCurrentGameTest(rawTest, new Set([
+    "floor polygon paint applies selected texture to nonzero fragment and asset record",
+    "floor polygon paint reprojects screen clicks onto the selected floor level",
+    "floor polygon paint ignores level zero fragments",
+    "floor shape started from boundary vertices inherits surface after side is chosen"
+]));
 
 function assertNearlyEqual(actual, expected, epsilon = 1e-12) {
     assert.ok(

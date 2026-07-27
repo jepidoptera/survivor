@@ -1,9 +1,19 @@
-const test = require("node:test");
+const rawTest = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const sectionWorldBuildings = require("../public/assets/javascript/prototypes/sectionWorldBuildings.js");
+const { createCurrentGameTest } = require("./helpers/currentGameTest.js");
+
+const test = createCurrentGameTest(rawTest, new Set([
+    "wizard body gets active interior floor depth bump when the active plan has no live items",
+    "building cutaway ghosts all fragments in active building",
+    "level 0 chunk floor visuals preserve interior holes",
+    "level 0 chunk hole clipping is cached across frames",
+    "roads are considered baked only when every covering chunk is current and ready",
+    "level 0 terrain polygon floor visuals use active section assets without floor fragments"
+]));
 
 function loadRenderingImpl(options = {}) {
     const context = {

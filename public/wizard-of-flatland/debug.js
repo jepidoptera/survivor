@@ -5,11 +5,13 @@
         return {
             showHexGrid: false,
             showAgentPath: false,
+            showDeathPathDiagnostics: false,
             showPathBlockedEdges: false,
             showWallLabels: false,
             showSectionBoundaries: false,
             coinDiagnosticsEnabled: false,
             coinDiagnostics: [],
+            wizardImmortal: false,
             headingGlitchFrame: 0,
             headingGlitchLogged: false,
             lastPathingMetrics: null,
@@ -31,6 +33,14 @@
         }
         window.__wizardOfFlatlandDebug = state;
         window.debug = state.debug;
+        state.debug.toggleWizardImmortality = function toggleWizardImmortality(value) {
+            if (value === undefined) {
+                state.debug.wizardImmortal = !state.debug.wizardImmortal;
+            } else {
+                state.debug.wizardImmortal = !!value;
+            }
+            return state.debug.wizardImmortal;
+        };
         if (profiler) window.__wizardOfFlatlandProfiler = profiler;
         return state.debug;
     }
