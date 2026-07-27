@@ -396,6 +396,18 @@
     const getWallDebugLabel = wallLabelSystem.getWallDebugLabel;
     const losApi = getWizardFlatlandLosApi();
     const computeLosVisibilityPolygon = losApi.computeVisibilityPolygon;
+    const explorationSystem = getWizardFlatlandExplorationApi().createExplorationSystem({
+        cellSize: 0.25
+    });
+    const explorationWallLayout = Object.freeze({
+        stride: WALL_STRIDE,
+        x1: WALL_X1,
+        y1: WALL_Y1,
+        x2: WALL_X2,
+        y2: WALL_Y2,
+        labelCode: WALL_LABEL_CODE,
+        sideCode: WALL_LABEL_SIDE
+    });
     const mathApi = getWizardFlatlandMathApi();
     const hashString = mathApi.hashString;
     const seededRandom = mathApi.seededRandom;
@@ -483,7 +495,13 @@
             bins: 3600,
             maxDistance: 34,
             opacity: 1,
-            lastMetrics: null
+            lastMetrics: null,
+            lastResult: null
+        },
+        exploredWallRenderCache: {
+            path: null,
+            explorationVersion: -1,
+            worldVersion: -1
         },
         wizardVitals: {
             health: WIZARD_MAX_HEALTH,
@@ -845,6 +863,15 @@
             typeof api.cloneWallBuffer !== "function"
         ) {
             throw new Error("Wizard of Flatland requires /wizard-of-flatland/wallBuffer.js");
+        }
+        return api;
+    }
+
+    function getWizardFlatlandExplorationApi() {
+        const factory = window.getWizardFlatlandExplorationApi;
+        const api = typeof factory === "function" ? factory() : null;
+        if (!api || typeof api.createExplorationSystem !== "function") {
+            throw new Error("Wizard of Flatland requires /wizard-of-flatland/exploration.js");
         }
         return api;
     }
@@ -2130,6 +2157,8 @@
         state.activatedTalismanSectionKeys = new Set();
         state.homeBaseTalismanSectionKey = "";
         state.visitedMazeSectionKeys = new Set();
+        explorationSystem.reset();
+        state.los.lastResult = null;
         state.walls = createEmptyWallBuffer();
         state.manualWalls = createEmptyWallBuffer();
         state.generatedMazeWalls = createEmptyWallBuffer();
@@ -5348,7 +5377,9 @@
         if (!wallSegmentMatchesGap(walls, wallBase, gap)) {
             throw new Error("Wizard of Flatland wall break split target does not match the requested gap");
         }
+        const parent = readWallPiece(walls, wallBase);
         const pieces = [];
+        const children = [];
         for (let base = 0; base < walls.length; base += WALL_STRIDE) {
             if (base !== wallBase) {
                 pieces.push(readWallPiece(walls, base));
@@ -5356,9 +5387,16 @@
             }
             const left = createWallPieceForRange(gap, 0, gap.startT);
             const right = createWallPieceForRange(gap, gap.endT, 1);
-            if (left) pieces.push(left);
-            if (right) pieces.push(right);
+            if (left) {
+                pieces.push(left);
+                children.push(left);
+            }
+            if (right) {
+                pieces.push(right);
+                children.push(right);
+            }
         }
+        explorationSystem.inheritSplit(parent, children);
         return packWallPieces(pieces);
     }
 
@@ -6277,12 +6315,10 @@
         drawWalls();
     }
 
-    function drawLosOverlay() {
+    function updateLosAndExploration() {
         const los = state.los;
         if (!los || los.enabled !== true) return;
-        if (!(state.view.width > 0 && state.view.height > 0 && state.view.scale > 0)) {
-            throw new Error("Wizard of Flatland LOS overlay requires a valid viewport");
-        }
+        explorationSystem.syncWalls(state.walls, explorationWallLayout);
         const result = computeLosVisibilityPolygon({
             x: state.target.x,
             y: state.target.y,
@@ -6300,7 +6336,18 @@
             candidateWallCount: result.candidateWallCount,
             elapsedMs: result.elapsedMs
         };
-        drawLosVisibilityMask(result.points, los.opacity);
+        los.lastResult = result;
+        explorationSystem.applyVisibility(result.hitWallIndices, result.hitWallTs);
+    }
+
+    function drawLosOverlay() {
+        const los = state.los;
+        if (!los || los.enabled !== true) return;
+        if (!(state.view.width > 0 && state.view.height > 0 && state.view.scale > 0)) {
+            throw new Error("Wizard of Flatland LOS overlay requires a valid viewport");
+        }
+        if (!los.lastResult) throw new Error("Wizard of Flatland LOS overlay requires a computed visibility result");
+        drawLosVisibilityMask(los.lastResult.points, los.opacity);
     }
 
     function drawLosVisibilityMask(points, opacity) {
@@ -6939,18 +6986,45 @@
     }
 
     function drawWalls() {
+        explorationSystem.syncWalls(state.walls, explorationWallLayout);
+        const cache = state.exploredWallRenderCache;
+        const explorationVersion = explorationSystem.getVersion();
+        if (
+            !cache.path ||
+            cache.explorationVersion !== explorationVersion ||
+            cache.worldVersion !== state.worldVersion
+        ) {
+            if (typeof Path2D !== "function") {
+                throw new Error("Wizard of Flatland explored wall rendering requires Path2D");
+            }
+            const path = new Path2D();
+            explorationSystem.forEachActiveInterval((wall, startT, endT) => {
+                path.moveTo(
+                    wall.ax + (wall.bx - wall.ax) * startT,
+                    wall.ay + (wall.by - wall.ay) * startT
+                );
+                path.lineTo(
+                    wall.ax + (wall.bx - wall.ax) * endT,
+                    wall.ay + (wall.by - wall.ay) * endT
+                );
+            });
+            cache.path = path;
+            cache.explorationVersion = explorationVersion;
+            cache.worldVersion = state.worldVersion;
+        }
         ctx.save();
         ctx.lineCap = "round";
-        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
-            const a = worldToScreen(state.walls[i + WALL_X1], state.walls[i + WALL_Y1]);
-            const b = worldToScreen(state.walls[i + WALL_X2], state.walls[i + WALL_Y2]);
-            ctx.lineWidth = state.view.scale * WALL_WORLD_THICKNESS;
-            ctx.strokeStyle = "#ffffff";
-            ctx.beginPath();
-            ctx.moveTo(a.x, a.y);
-            ctx.lineTo(b.x, b.y);
-            ctx.stroke();
-        }
+        ctx.setTransform(
+            state.view.scale,
+            0,
+            0,
+            state.view.scale,
+            state.view.offsetX - state.view.centerX * state.view.scale,
+            state.view.offsetY - state.view.centerY * state.view.scale
+        );
+        ctx.lineWidth = WALL_WORLD_THICKNESS;
+        ctx.strokeStyle = "#ffffff";
+        ctx.stroke(cache.path);
         ctx.restore();
     }
 
@@ -8395,6 +8469,7 @@
         framePart("target movement", () => updateTargetKeyboardMovement(dt));
         framePart("refresh maze sections", () => refreshGeneratedMazeIfNeeded(false));
         framePart("refresh path bounds", () => refreshMazePathBoundsIfNeeded());
+        framePart("line of sight", () => updateLosAndExploration());
         framePart("spell cooldowns", () => updateSpellCooldowns(dt));
         framePart("held spell casting", () => updateHeldSpellCasting(dt));
         framePart("freeze particles", () => updateFreezeParticles(dt));

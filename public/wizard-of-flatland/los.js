@@ -24,17 +24,19 @@
         return ax * by - ay * bx;
     }
 
-    function raySegmentDistance(originX, originY, dirX, dirY, ax, ay, bx, by) {
+    function raySegmentHit(originX, originY, dirX, dirY, ax, ay, bx, by, out) {
         const sx = bx - ax;
         const sy = by - ay;
         const qpx = ax - originX;
         const qpy = ay - originY;
         const denominator = cross2(dirX, dirY, sx, sy);
-        if (Math.abs(denominator) < DEFAULT_EPSILON) return null;
+        if (Math.abs(denominator) < DEFAULT_EPSILON) return false;
         const t = cross2(qpx, qpy, sx, sy) / denominator;
         const u = cross2(qpx, qpy, dirX, dirY) / denominator;
-        if (t >= 0 && u >= 0 && u <= 1) return t;
-        return null;
+        if (t < 0 || u < 0 || u > 1) return false;
+        out.distance = t;
+        out.wallT = u;
+        return true;
     }
 
     function wallCouldAffectCircle(originX, originY, maxDistance, ax, ay, bx, by) {
@@ -66,7 +68,7 @@
             const bx = finiteNumber(walls[i + x2], "wall end x");
             const by = finiteNumber(walls[i + y2], "wall end y");
             if (!wallCouldAffectCircle(originX, originY, maxDistance, ax, ay, bx, by)) continue;
-            out.push({ ax, ay, bx, by });
+            out.push({ ax, ay, bx, by, wallIndex: i / wallStride });
         }
         return out;
     }
@@ -101,6 +103,11 @@
         });
         const points = new Array(bins);
         const depths = new Float32Array(bins);
+        const hitWallIndices = new Int32Array(bins);
+        hitWallIndices.fill(-1);
+        const hitWallTs = new Float32Array(bins);
+        hitWallTs.fill(NaN);
+        const rayHit = { distance: 0, wallT: 0 };
         const twoPi = Math.PI * 2;
 
         for (let i = 0; i < bins; i++) {
@@ -108,12 +115,20 @@
             const dirX = Math.cos(theta);
             const dirY = Math.sin(theta);
             let best = maxDistance;
+            let bestWallIndex = -1;
+            let bestWallT = NaN;
             for (let w = 0; w < candidates.length; w++) {
                 const wall = candidates[w];
-                const distance = raySegmentDistance(originX, originY, dirX, dirY, wall.ax, wall.ay, wall.bx, wall.by);
-                if (distance !== null && distance < best) best = distance;
+                const hit = raySegmentHit(originX, originY, dirX, dirY, wall.ax, wall.ay, wall.bx, wall.by, rayHit);
+                if (hit && (rayHit.distance < best || (bestWallIndex < 0 && rayHit.distance <= best))) {
+                    best = rayHit.distance;
+                    bestWallIndex = wall.wallIndex;
+                    bestWallT = rayHit.wallT;
+                }
             }
             depths[i] = best;
+            hitWallIndices[i] = bestWallIndex;
+            hitWallTs[i] = bestWallT;
             points[i] = {
                 x: originX + dirX * best,
                 y: originY + dirY * best
@@ -125,6 +140,8 @@
             maxDistance,
             points,
             depths,
+            hitWallIndices,
+            hitWallTs,
             candidateWallCount: candidates.length,
             elapsedMs: performance.now() - startedAt
         };
