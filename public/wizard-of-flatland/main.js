@@ -93,6 +93,8 @@
     const ENEMY_HIT_DAMAGE = 10;
     const ENEMY_SCALE_RING_INTERVAL = 7;
     const ENEMY_SCALE_INCREMENT = 0.1;
+    const ENEMY_DAMAGE_BASE_SCALE = 0.75;
+    const ENEMY_DAMAGE_ZONE_MULTIPLIER = 1.25;
     const SPELL_LEVEL_DATA_URL = "/wizard-of-flatland/spell-levels.json";
     const SPELL_LEVEL_MIN = 0;
     const SPELL_LEVEL_MAX = 7;
@@ -548,6 +550,8 @@
             MAZE_ROOM_ENEMY_DISTRIBUTION_POWER,
             ENEMY_SCALE_RING_INTERVAL,
             ENEMY_SCALE_INCREMENT,
+            ENEMY_DAMAGE_BASE_SCALE,
+            ENEMY_DAMAGE_ZONE_MULTIPLIER,
             MAZE_COIN_AVERAGE_COUNT,
             MAZE_COIN_MIN_COUNT,
             MAZE_COIN_MAX_COUNT,
@@ -586,6 +590,7 @@
     const getMazeRoomEnemyCount = mazePopulationSystem.getMazeRoomEnemyCount;
     const getMazeRoomMaxEnemyCount = mazePopulationSystem.getMazeRoomMaxEnemyCount;
     const getEnemyScaleForMazeSectionKey = mazePopulationSystem.getEnemyScaleForMazeSectionKey;
+    const getEnemyDamageScaleForMazeSectionKey = mazePopulationSystem.getEnemyDamageScaleForMazeSectionKey;
     const createMazeCoinsForSection = mazePopulationSystem.createMazeCoinsForSection;
     const createMazeTalismanForSection = mazePopulationSystem.createMazeTalismanForSection;
     const spellDataSystem = getWizardFlatlandSpellDataApi().createSpellDataSystem({
@@ -2426,6 +2431,7 @@
             }
         }
         const enemyScale = getEnemyScaleForCheckpointSnapshot(snapshot);
+        const enemyDamageScale = getEnemyDamageScaleForCheckpointSnapshot(snapshot);
         const maxHealth = ENEMY_MAX_HEALTH * enemyScale;
         const agent = {
             id: snapshot.id,
@@ -2437,7 +2443,7 @@
             speed: snapshot.speed,
             health: getScaledCheckpointEnemyHealth(snapshot, maxHealth),
             maxHealth,
-            hitDamage: ENEMY_HIT_DAMAGE * enemyScale,
+            hitDamage: ENEMY_HIT_DAMAGE * enemyDamageScale,
             priority: Number.isFinite(snapshot.priority) ? snapshot.priority : 0,
             waitTime: Number.isFinite(snapshot.waitTime) ? snapshot.waitTime : 0,
             phase: Number.isFinite(snapshot.phase) ? snapshot.phase : PHASE_MILLING,
@@ -2495,6 +2501,16 @@
             return getEnemyScaleForMazeSectionKey(snapshot.autoSpawnSectionKey);
         }
         return 1;
+    }
+
+    function getEnemyDamageScaleForCheckpointSnapshot(snapshot) {
+        if (snapshot && typeof snapshot.homeSectionKey === "string" && snapshot.homeSectionKey.length > 0) {
+            return getEnemyDamageScaleForMazeSectionKey(snapshot.homeSectionKey);
+        }
+        if (snapshot && typeof snapshot.autoSpawnSectionKey === "string" && snapshot.autoSpawnSectionKey.length > 0) {
+            return getEnemyDamageScaleForMazeSectionKey(snapshot.autoSpawnSectionKey);
+        }
+        return ENEMY_DAMAGE_BASE_SCALE;
     }
 
     function getHomeBaseTalismanSectionKeyFromCheckpointSnapshot(snapshot) {
@@ -2890,6 +2906,7 @@
             throw new Error("Wizard of Flatland agent creation requires a random source");
         }
         const enemyScale = getEnemyScaleForAgentMetadata(metadata);
+        const enemyDamageScale = getEnemyDamageScaleForAgentMetadata(metadata);
         const agent = {
             id,
             x,
@@ -2900,7 +2917,7 @@
             speed: 5.7 + random() * 0.9,
             health: ENEMY_MAX_HEALTH * enemyScale,
             maxHealth: ENEMY_MAX_HEALTH * enemyScale,
-            hitDamage: ENEMY_HIT_DAMAGE * enemyScale,
+            hitDamage: ENEMY_HIT_DAMAGE * enemyDamageScale,
             priority: random(),
             waitTime: random() * 1.5,
             phase: PHASE_MILLING,
@@ -2956,10 +2973,21 @@
         return 1;
     }
 
+    function getEnemyDamageScaleForAgentMetadata(metadata) {
+        if (!metadata || typeof metadata !== "object") return ENEMY_DAMAGE_BASE_SCALE;
+        if (typeof metadata.homeSectionKey === "string" && metadata.homeSectionKey.length > 0) {
+            return getEnemyDamageScaleForMazeSectionKey(metadata.homeSectionKey);
+        }
+        if (typeof metadata.autoSpawnSectionKey === "string" && metadata.autoSpawnSectionKey.length > 0) {
+            return getEnemyDamageScaleForMazeSectionKey(metadata.autoSpawnSectionKey);
+        }
+        return ENEMY_DAMAGE_BASE_SCALE;
+    }
+
     function getAgentHitDamage(agent) {
         const damage = Number(agent && agent.hitDamage);
         if (Number.isFinite(damage) && damage > 0) return damage;
-        const scale = getEnemyScaleForAgentMetadata(agent);
+        const scale = getEnemyDamageScaleForAgentMetadata(agent);
         return ENEMY_HIT_DAMAGE * scale;
     }
 

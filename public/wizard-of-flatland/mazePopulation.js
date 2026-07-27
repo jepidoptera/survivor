@@ -82,6 +82,14 @@
             return 1 + Math.floor(ring / constants.ENEMY_SCALE_RING_INTERVAL) * constants.ENEMY_SCALE_INCREMENT;
         }
 
+        function getEnemyDamageScaleForMazeSectionKey(sectionKey) {
+            validateMazeRoomEnemyBudgetSectionKey(sectionKey);
+            const coord = mazeSections.parseMazeSectionKey(sectionKey);
+            const ring = mazeSections.getMazeSectionRing(coord.q, coord.r);
+            const zone = Math.floor(ring / constants.MAZE_RING_BOUNDARY_INTERVAL);
+            return constants.ENEMY_DAMAGE_BASE_SCALE * constants.ENEMY_DAMAGE_ZONE_MULTIPLIER ** zone;
+        }
+
         function createMazeCoinsForSection(sectionKey, options, existingCoins) {
             if (mazeSections.isMazePyramidRoomSectionKey(sectionKey)) return [];
             const coord = mazeSections.parseMazeSectionKey(sectionKey);
@@ -297,6 +305,7 @@
             getMazeRoomEnemyCount,
             getMazeRoomMaxEnemyCount,
             getEnemyScaleForMazeSectionKey,
+            getEnemyDamageScaleForMazeSectionKey,
             createMazeCoinsForSection,
             getMazeCoinCount,
             getMazeCoinKey,
