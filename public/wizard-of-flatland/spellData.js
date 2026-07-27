@@ -176,6 +176,24 @@
             };
         }
 
+        function getActiveFreezeStats() {
+            const { level, levelData } = getActiveSpellLevelData("freeze");
+            const costPerSecond = requirePositiveSpellLevelNumber("freeze", level, levelData, "costPerSecond");
+            const damagePerSecond = requirePositiveSpellLevelNumber("freeze", level, levelData, "damage");
+            const range = requirePositiveSpellLevelNumber("freeze", level, levelData, "range");
+            const coneAngleDegrees = requirePositiveSpellLevelNumber("freeze", level, levelData, "coneAngleDegrees");
+            if (!(coneAngleDegrees > 0 && coneAngleDegrees < 360)) {
+                throw new Error(`Wizard of Flatland freeze level ${level} requires coneAngleDegrees below 360`);
+            }
+            return {
+                level,
+                costPerSecond,
+                damagePerSecond,
+                range,
+                coneAngleRadians: coneAngleDegrees * Math.PI / 180
+            };
+        }
+
         function getActiveHealingStats() {
             const { level, levelData } = getActiveSpellLevelData("healing");
             const healthPerSecond = requirePositiveSpellLevelNumber("healing", level, levelData, "healthPerSecond");
@@ -197,6 +215,7 @@
             getActiveSpellLevelData,
             getActiveFireballStats,
             getActiveSpikeStats,
+            getActiveFreezeStats,
             getActiveHealingStats
         });
     }

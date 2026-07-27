@@ -98,73 +98,66 @@
       "levels": [
         {
           "level": 1,
-          "headline": "Snowball",
-          "subtitle": "Might kill a squirrel.",
-          "manaCost": 20,
-          "damage": 5,
-          "range": 7,
-          "castDelay": 0.7,
-          "projectileSpeed": 8
+          "headline": "Freeze I",
+          "subtitle": "A focused storm of biting snow.",
+          "costPerSecond": 10,
+          "damage": 10.0,
+          "range": 3,
+          "coneAngleDegrees": 30
         },
         {
           "level": 2,
-          "headline": "Frostbite",
-          "subtitle": "A cold spell with some teeth.",
-          "manaCost": 18,
-          "damage": 10,
-          "range": 8,
-          "castDelay": 0.65,
-          "projectileSpeed": 8.5
+          "headline": "Freeze II",
+          "subtitle": "The snowstorm reaches farther.",
+          "costPerSecond": 10,
+          "damage": 13,
+          "range": 3.6666666667,
+          "coneAngleDegrees": 30
         },
         {
           "level": 3,
-          "headline": "Frostbite II",
-          "subtitle": "Follow up with spikes for bonus damage.",
-          "manaCost": 16,
-          "damage": 15,
-          "range": 9,
-          "castDelay": 0.6,
-          "projectileSpeed": 9
+          "headline": "Freeze III",
+          "subtitle": "A stronger cone of driven snow.",
+          "costPerSecond": 10,
+          "damage": 17,
+          "range": 4.3333333333,
+          "coneAngleDegrees": 30
         },
         {
           "level": 4,
-          "headline": "Frozen Orb",
-          "subtitle": "Freeze them where they stand.",
-          "manaCost": 14,
-          "damage": 20,
-          "range": 10,
-          "castDelay": 0.55,
-          "projectileSpeed": 9.5
+          "headline": "Freeze IV",
+          "subtitle": "Winter answers with greater reach.",
+          "costPerSecond": 10,
+          "damage": 22,
+          "range": 5,
+          "coneAngleDegrees": 30
         },
         {
           "level": 5,
-          "headline": "Frozen Orb II",
-          "subtitle": "End them where they freeze.",
-          "manaCost": 12,
-          "damage": 46,
-          "range": 11,
-          "castDelay": 0.5,
-          "projectileSpeed": 10
+          "headline": "Freeze V",
+          "subtitle": "A punishing whiteout.",
+          "costPerSecond": 10,
+          "damage": 29,
+          "range": 5.6666666667,
+          "coneAngleDegrees": 30
         },
         {
           "level": 6,
-          "headline": "Frozen Orb III",
-          "subtitle": "A punishing blast of deep winter.",
-          "manaCost": 10,
-          "damage": 56,
-          "range": 12,
-          "castDelay": 0.45,
-          "projectileSpeed": 10.5
+          "headline": "Freeze VI",
+          "subtitle": "Deep winter pours from your hands.",
+          "costPerSecond": 10,
+          "damage": 38,
+          "range": 6.3333333333,
+          "coneAngleDegrees": 30
         },
         {
           "level": 7,
-          "headline": "Heart of Ice",
-          "subtitle": "A perfected bolt of freezing magic.",
-          "manaCost": 8,
-          "damage": 68,
-          "range": 13,
-          "castDelay": 0.4,
-          "projectileSpeed": 11
+          "headline": "Heart of Winter",
+          "subtitle": "A perfected storm of killing cold.",
+          "costPerSecond": 10,
+          "damage": 50,
+          "range": 7,
+          "coneAngleDegrees": 30
         }
       ]
     },

@@ -71,6 +71,13 @@
     const FIREBALL_ANIMATION_TEXTURE_PATH = "/wizard-of-flatland/hi-fi-fireball.png";
     const FIREBALL_ICON_PATH = "/assets/images/thumbnails/fireball.png";
     const SPIKE_ICON_PATH = "/assets/images/magic/spike.png";
+    const FREEZE_ICON_PATH = "/assets/images/magic/iceball.png";
+    const FREEZE_PARTICLES_PER_SECOND_PER_RANGE = 22;
+    const FREEZE_PARTICLE_MIN_LIFETIME = 0.18;
+    const FREEZE_PARTICLE_MAX_LIFETIME = 0.52;
+    const ENEMY_TEMPERATURE_RECOVERY_PER_SECOND = 1;
+    const FREEZE_TEMPERATURE_DROP_DEGREES = 10;
+    const FREEZE_DAMAGE_FRACTION_PER_TEMPERATURE_DROP = 1 / 3;
     const TROPHY_TEXTURE_PATH = "/wizard-of-flatland/chalice.png";
     const FIREBALL_ANIMATION_FRAME_COLUMNS = 5;
     const FIREBALL_ANIMATION_FRAME_ROWS = 2;
@@ -103,6 +110,7 @@
         ["costPerSecond", "Cost per second"],
         ["power", "Power"],
         ["damage", "Damage"],
+        ["coneAngleDegrees", "Cone angle"],
         ["healthPerSecond", "Health per second"],
         ["range", "Range"],
         ["explosionRadius", "Explosion radius"],
@@ -422,6 +430,7 @@
         agents: [],
         fireballs: [],
         fireballExplosions: [],
+        freezeParticles: [],
         coins: [],
         collectedCoinKeys: new Set(),
         collectedCoinSectionKeysByCoinKey: new Map(),
@@ -456,6 +465,7 @@
         selectedSpell: "fireball",
         spellLevels: {
             fireball: 1,
+            freeze: 0,
             spikes: 0,
             healing: 0
         },
@@ -608,6 +618,7 @@
     const getWizardSpellLevel = spellDataSystem.getWizardSpellLevel;
     const getActiveFireballStats = spellDataSystem.getActiveFireballStats;
     const getActiveSpikeStats = spellDataSystem.getActiveSpikeStats;
+    const getActiveFreezeStats = spellDataSystem.getActiveFreezeStats;
     const getActiveHealingStats = spellDataSystem.getActiveHealingStats;
     let spellLevelPanelSystem = null;
     const refreshSpellLevelPanel = () => spellLevelPanelSystem.refreshSpellLevelPanel();
@@ -621,7 +632,7 @@
         if (!Number.isFinite(state.spellCooldownRemaining)) {
             throw new Error("Wizard of Flatland magic recharge requires finite spell cooldown");
         }
-        return state.spellCooldownRemaining <= 0;
+        return state.spellCooldownRemaining <= 0 && !(state.selectedSpell === "freeze" && state.spaceHeld);
     };
     const wizardVitalsSystem = getWizardFlatlandVitalsApi().createWizardVitalsSystem({
         state,
@@ -1002,19 +1013,24 @@
             spellStatusIconImage.src = SPIKE_ICON_PATH;
             return;
         }
+        if (state.selectedSpell === "freeze") {
+            spellStatusIconImage.src = FREEZE_ICON_PATH;
+            return;
+        }
         throw new Error(`Wizard of Flatland selected spell HUD cannot display unknown spell: ${state.selectedSpell}`);
     }
 
     function getStartingSpellLevels() {
         return {
             fireball: 1,
+            freeze: 0,
             spikes: 0,
             healing: 0
         };
     }
 
     function isSelectableSpellId(spellId) {
-        return spellId === "fireball" || spellId === "spikes";
+        return spellId === "fireball" || spellId === "freeze" || spellId === "spikes";
     }
 
     function getWizardOfFlatlandDebugApi() {
@@ -2024,6 +2040,7 @@
         state.agents = [];
         state.fireballs = [];
         state.fireballExplosions = [];
+        state.freezeParticles = [];
         state.spellCooldownRemaining = 0;
         state.spellCooldownDuration = 0;
         resetWizardVitals();
@@ -2271,6 +2288,7 @@
 
     function createAgentCheckpointSnapshot(agent, sectionKey, homeSectionKey) {
         validateAgentHealth(agent);
+        validateAgentTemperature(agent);
         return {
             id: agent.id,
             sectionKey,
@@ -2283,6 +2301,8 @@
             speed: agent.speed,
             health: agent.health,
             maxHealth: agent.maxHealth,
+            temperature: agent.temperature,
+            freezeDamageSinceTemperatureDrop: agent.freezeDamageSinceTemperatureDrop,
             priority: agent.priority,
             waitTime: agent.waitTime,
             phase: agent.phase,
@@ -2354,6 +2374,7 @@
         state.agents = snapshot.enemies.map(createAgentFromCheckpointSnapshot);
         state.fireballs = [];
         state.fireballExplosions = [];
+        state.freezeParticles = [];
         state.spellCooldownRemaining = 0;
         state.spellCooldownDuration = 0;
         state.coins = [];
@@ -2382,7 +2403,7 @@
         state.selectedSpell = typeof snapshot.selectedSpell === "string" && snapshot.selectedSpell.length > 0
             ? snapshot.selectedSpell
             : "fireball";
-        if (state.selectedSpell !== "fireball" && state.selectedSpell !== "spikes") state.selectedSpell = "fireball";
+        if (!isSelectableSpellId(state.selectedSpell)) state.selectedSpell = "fireball";
         updateSelectedSpellHud();
         state.spellLevels = snapshot.spellLevels && typeof snapshot.spellLevels === "object"
             ? { ...getStartingSpellLevels(), ...snapshot.spellLevels }
@@ -2443,6 +2464,10 @@
             speed: snapshot.speed,
             health: getScaledCheckpointEnemyHealth(snapshot, maxHealth),
             maxHealth,
+            temperature: Number.isFinite(snapshot.temperature) ? Math.min(0, snapshot.temperature) : 0,
+            freezeDamageSinceTemperatureDrop: Number.isFinite(snapshot.freezeDamageSinceTemperatureDrop)
+                ? Math.max(0, snapshot.freezeDamageSinceTemperatureDrop)
+                : 0,
             hitDamage: ENEMY_HIT_DAMAGE * enemyDamageScale,
             priority: Number.isFinite(snapshot.priority) ? snapshot.priority : 0,
             waitTime: Number.isFinite(snapshot.waitTime) ? snapshot.waitTime : 0,
@@ -2917,6 +2942,8 @@
             speed: 5.7 + random() * 0.9,
             health: ENEMY_MAX_HEALTH * enemyScale,
             maxHealth: ENEMY_MAX_HEALTH * enemyScale,
+            temperature: 0,
+            freezeDamageSinceTemperatureDrop: 0,
             hitDamage: ENEMY_HIT_DAMAGE * enemyDamageScale,
             priority: random(),
             waitTime: random() * 1.5,
@@ -3477,6 +3504,7 @@
             shootSpike();
             return;
         }
+        if (state.selectedSpell === "freeze") return;
         throw new Error(`Wizard of Flatland cannot cast unknown selected spell: ${state.selectedSpell}`);
     }
 
@@ -3546,9 +3574,121 @@
         updateSpellCooldownHud();
     }
 
-    function updateHeldSpellCasting() {
+    function updateHeldSpellCasting(dt) {
         if (!state.spaceHeld) return;
+        if (state.selectedSpell === "freeze") {
+            updateFreezeSpell(dt);
+            return;
+        }
         shootSelectedSpell();
+    }
+
+    function updateFreezeSpell(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        const stats = getActiveFreezeStats();
+        const freezeTickCost = stats.costPerSecond * dt;
+        if (!spendWizardMagic(freezeTickCost)) {
+            state.spaceHeld = false;
+            return;
+        }
+        const dirX = Math.cos(state.target.heading);
+        const dirY = Math.sin(state.target.heading);
+        const halfAngle = stats.coneAngleRadians * 0.5;
+        const minimumDot = Math.cos(halfAngle);
+        const damage = stats.damagePerSecond * dt;
+        state.agents = state.agents.filter((agent) => {
+            const dx = agent.x - state.target.x;
+            const dy = agent.y - state.target.y;
+            const distance = Math.hypot(dx, dy);
+            if (distance > stats.range + agent.radius || distance <= 0.000001) return true;
+            const dot = (dx * dirX + dy * dirY) / distance;
+            if (dot < minimumDot) return true;
+            return !damageAgentWithFreezeTemperatureAndMaybeDropCoin(agent, damage);
+        });
+        emitFreezeParticles(dt, stats, dirX, dirY, halfAngle);
+    }
+
+    function damageAgentWithFreezeTemperatureAndMaybeDropCoin(agent, damage) {
+        validateAgentTemperature(agent);
+        const previousHealth = agent.health;
+        const killed = damageAgentAndMaybeDropCoin(agent, damage);
+        const appliedDamage = previousHealth - agent.health;
+        if (appliedDamage < 0) {
+            throw new Error(`Wizard of Flatland freeze damage increased enemy ${agent.id} health`);
+        }
+        agent.freezeDamageSinceTemperatureDrop += appliedDamage;
+        const damagePerDrop = agent.maxHealth * FREEZE_DAMAGE_FRACTION_PER_TEMPERATURE_DROP;
+        if (!(damagePerDrop > 0)) {
+            throw new Error(`Wizard of Flatland enemy ${agent.id} requires positive freeze temperature threshold`);
+        }
+        const dropCount = Math.floor((agent.freezeDamageSinceTemperatureDrop + 0.000000001) / damagePerDrop);
+        if (dropCount > 0) {
+            agent.temperature -= dropCount * FREEZE_TEMPERATURE_DROP_DEGREES;
+            agent.freezeDamageSinceTemperatureDrop -= dropCount * damagePerDrop;
+            if (agent.freezeDamageSinceTemperatureDrop < 0.000000001) {
+                agent.freezeDamageSinceTemperatureDrop = 0;
+            }
+        }
+        return killed;
+    }
+
+    function emitFreezeParticles(dt, stats, dirX, dirY, halfAngle) {
+        const requestedCount = dt * FREEZE_PARTICLES_PER_SECOND_PER_RANGE * stats.range;
+        const count = Math.floor(requestedCount) + (Math.random() < requestedCount % 1 ? 1 : 0);
+        const heading = Math.atan2(dirY, dirX);
+        for (let i = 0; i < count; i++) {
+            const angle = heading + (Math.random() * 2 - 1) * halfAngle;
+            const distance = TARGET_RADIUS + Math.random() * Math.max(0, stats.range - TARGET_RADIUS);
+            const lifetime = FREEZE_PARTICLE_MIN_LIFETIME +
+                Math.random() * (FREEZE_PARTICLE_MAX_LIFETIME - FREEZE_PARTICLE_MIN_LIFETIME);
+            state.freezeParticles.push({
+                x: state.target.x + Math.cos(angle) * distance,
+                y: state.target.y + Math.sin(angle) * distance,
+                vx: Math.cos(angle) * (1.5 + Math.random() * 2.5),
+                vy: Math.sin(angle) * (1.5 + Math.random() * 2.5),
+                radius: 0.025 + Math.random() * 0.055,
+                age: 0,
+                lifetime
+            });
+        }
+    }
+
+    function updateFreezeParticles(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        state.freezeParticles = state.freezeParticles.filter((particle) => {
+            particle.age += dt;
+            particle.x += particle.vx * dt;
+            particle.y += particle.vy * dt;
+            return particle.age < particle.lifetime;
+        });
+    }
+
+    function getEnemyTemperatureSpeedMultiplier(agent) {
+        validateAgentTemperature(agent);
+        return 1 / (2 ** (-agent.temperature / 10));
+    }
+
+    function validateAgentTemperature(agent) {
+        if (!agent || typeof agent !== "object") {
+            throw new Error("Wizard of Flatland enemy temperature requires an agent");
+        }
+        if (!Number.isFinite(agent.temperature) || agent.temperature > 0) {
+            throw new Error(`Wizard of Flatland enemy ${agent.id} requires a finite non-positive temperature`);
+        }
+        if (!Number.isFinite(agent.freezeDamageSinceTemperatureDrop) || agent.freezeDamageSinceTemperatureDrop < 0) {
+            throw new Error(`Wizard of Flatland enemy ${agent.id} requires finite accumulated freeze damage`);
+        }
+    }
+
+    function updateEnemyTemperatures(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        for (const agent of state.agents) {
+            validateAgentTemperature(agent);
+            agent.temperature = Math.min(
+                0,
+                agent.temperature + ENEMY_TEMPERATURE_RECOVERY_PER_SECOND * dt
+            );
+        }
     }
 
     function updatePassiveHealing(dt) {
@@ -4493,7 +4633,7 @@
             packed[base + 1] = agent.x;
             packed[base + 2] = agent.y;
             packed[base + 3] = agent.radius;
-            packed[base + 4] = agent.speed;
+            packed[base + 4] = agent.speed * getEnemyTemperatureSpeedMultiplier(agent);
             packed[base + 5] = agent.priority;
             packed[base + 6] = agent.waitTime;
             packed[base + 7] = agent.phase;
@@ -5252,6 +5392,7 @@
         drawTalismans();
         drawTarget();
         if (state.debug.showAgentPath) drawAgentPaths();
+        drawFreezeParticles();
         drawFireballs();
         drawFireballExplosions();
         drawAgents();
@@ -6443,6 +6584,28 @@
         ctx.restore();
     }
 
+    function drawFreezeParticles() {
+        ctx.save();
+        ctx.fillStyle = "#ffffff";
+        for (const particle of state.freezeParticles) {
+            if (
+                !Number.isFinite(particle.x) ||
+                !Number.isFinite(particle.y) ||
+                !Number.isFinite(particle.radius) ||
+                !Number.isFinite(particle.age) ||
+                !(particle.lifetime > 0)
+            ) {
+                throw new Error("Wizard of Flatland freeze particle render requires finite particle data");
+            }
+            const point = worldToScreen(particle.x, particle.y);
+            ctx.globalAlpha = Math.max(0, 1 - particle.age / particle.lifetime);
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, Math.max(1, particle.radius * state.view.scale), 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.restore();
+    }
+
     function getFireballAnimationFrameIndex(fireball) {
         if (!fireball || !Number.isFinite(fireball.age) || !(fireball.maxAge > 0)) {
             throw new Error("Wizard of Flatland fireball animation requires finite age and max age");
@@ -7211,7 +7374,9 @@
         framePart("refresh maze sections", () => refreshGeneratedMazeIfNeeded(false));
         framePart("refresh path bounds", () => refreshMazePathBoundsIfNeeded());
         framePart("spell cooldowns", () => updateSpellCooldowns(dt));
-        framePart("held spell casting", () => updateHeldSpellCasting());
+        framePart("held spell casting", () => updateHeldSpellCasting(dt));
+        framePart("freeze particles", () => updateFreezeParticles(dt));
+        framePart("enemy temperatures", () => updateEnemyTemperatures(dt));
         framePart("fireballs", () => updateFireballs(dt));
         framePart("coins", () => updateCoins(dt));
         framePart("talismans", () => updateTalismans(dt));
@@ -7328,6 +7493,11 @@
         if (!isEditableEventTarget(event.target) && event.code === "KeyK") {
             event.preventDefault();
             setSelectedSpell("spikes");
+            return;
+        }
+        if (!isEditableEventTarget(event.target) && event.code === "KeyI") {
+            event.preventDefault();
+            setSelectedSpell("freeze");
             return;
         }
         if (event.code === "Space" || event.key === " ") {
