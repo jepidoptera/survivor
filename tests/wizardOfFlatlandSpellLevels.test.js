@@ -48,6 +48,14 @@ test("Wizard of Flatland fireball gameplay resolves level stats", () => {
     assert.match(source, /damageAgentsIntersectingCircle\(fireball\.x, fireball\.y, fireball\.explosionRadius, fireball\.damage\)/);
 });
 
+test("Wizard of Flatland spell hotkeys cannot select unlearned spells", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(
+        source,
+        /function setSelectedSpell\(spellId\) \{[\s\S]*?if \(getWizardSpellLevel\(id\) < 1\) return false;[\s\S]*?state\.selectedSpell = id;/
+    );
+});
+
 test("Wizard of Flatland fireballs use the copied main-game animation sheet", () => {
     assert.ok(fs.existsSync(FIREBALL_TEXTURE_PATH), "copied fireball spritesheet exists");
     const source = fs.readFileSync(MAIN_PATH, "utf8");

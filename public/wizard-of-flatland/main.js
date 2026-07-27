@@ -1033,9 +1033,11 @@
         if (!isSelectableSpellId(id)) {
             throw new Error(`Wizard of Flatland cannot select unknown spell: ${spellId}`);
         }
+        if (getWizardSpellLevel(id) < 1) return false;
         state.selectedSpell = id;
         updateSelectedSpellHud();
         refreshSpellLevelPanel();
+        return true;
     }
 
     function updateSelectedSpellHud() {
