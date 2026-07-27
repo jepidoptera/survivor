@@ -382,6 +382,8 @@
     });
     const validateWallLabelBuffer = wallLabelSystem.validateWallLabelBuffer;
     const getWallDebugLabel = wallLabelSystem.getWallDebugLabel;
+    const losApi = getWizardFlatlandLosApi();
+    const computeLosVisibilityPolygon = losApi.computeVisibilityPolygon;
     const mathApi = getWizardFlatlandMathApi();
     const hashString = mathApi.hashString;
     const seededRandom = mathApi.seededRandom;
@@ -463,6 +465,13 @@
         generatedMazeLookaheadNextRefreshAt: 0,
         generatedMazeInitialEnemySpawnBudgetsBySectionKey: new Map(),
         target: { x: 0, y: 0, heading: -Math.PI / 2 },
+        los: {
+            enabled: true,
+            bins: 3600,
+            maxDistance: 34,
+            opacity: 1,
+            lastMetrics: null
+        },
         wizardVitals: {
             health: WIZARD_MAX_HEALTH,
             maxHealth: WIZARD_MAX_HEALTH,
@@ -6048,6 +6057,10 @@
             `Contact ${contactPasses}p/${contactPairChecks}c`,
             `Crowd ${crowdThrottleCount}`
         ];
+        if (state.los && state.los.lastMetrics) {
+            const losMetrics = state.los.lastMetrics;
+            lines.push(`LOS ${Number(losMetrics.elapsedMs || 0).toFixed(2)} ms/${Number(losMetrics.candidateWallCount || 0)}w`);
+        }
         if (slowestPart) lines.push(`Main ${slowestPart.label} ${slowestPart.duration.toFixed(2)} ms`);
         element.textContent = lines.join("\n");
         state.debug.lastFpsCounterUpdateAt = now;
@@ -6059,7 +6072,6 @@
         drawMazeRingBoundaries();
         if (state.debug.showHexGrid) drawHexGridLayer();
         drawPathfindingNodeLayer();
-        drawWalls();
         drawWallShatterEffects();
         drawSectionBoundaries();
         drawWallLabels();
@@ -6075,6 +6087,62 @@
         drawFireballs();
         drawFireballExplosions();
         drawAgents();
+        drawLosOverlay();
+        drawWalls();
+    }
+
+    function drawLosOverlay() {
+        const los = state.los;
+        if (!los || los.enabled !== true) return;
+        if (!(state.view.width > 0 && state.view.height > 0 && state.view.scale > 0)) {
+            throw new Error("Wizard of Flatland LOS overlay requires a valid viewport");
+        }
+        const result = computeLosVisibilityPolygon({
+            x: state.target.x,
+            y: state.target.y,
+            walls: state.walls,
+            wallStride: WALL_STRIDE,
+            wallX1: WALL_X1,
+            wallY1: WALL_Y1,
+            wallX2: WALL_X2,
+            wallY2: WALL_Y2,
+            bins: los.bins,
+            maxDistance: los.maxDistance
+        });
+        los.lastMetrics = {
+            bins: result.bins,
+            candidateWallCount: result.candidateWallCount,
+            elapsedMs: result.elapsedMs
+        };
+        drawLosVisibilityMask(result.points, los.opacity);
+    }
+
+    function drawLosVisibilityMask(points, opacity) {
+        if (!Array.isArray(points) || points.length < 3) {
+            throw new Error("Wizard of Flatland LOS overlay requires a visibility polygon");
+        }
+        const alpha = Number.isFinite(Number(opacity)) ? Math.max(0, Math.min(1, Number(opacity))) : 0.64;
+        if (alpha <= 0) return;
+
+        ctx.save();
+        ctx.fillStyle = `rgba(0,0,0,${alpha})`;
+        ctx.beginPath();
+        ctx.rect(0, 0, canvas.width, canvas.height);
+        const first = worldToScreen(points[0].x, points[0].y);
+        if (!Number.isFinite(first.x) || !Number.isFinite(first.y)) {
+            throw new Error("Wizard of Flatland LOS overlay generated an invalid screen point");
+        }
+        ctx.moveTo(first.x, first.y);
+        for (let i = 1; i < points.length; i++) {
+            const screen = worldToScreen(points[i].x, points[i].y);
+            if (!Number.isFinite(screen.x) || !Number.isFinite(screen.y)) {
+                throw new Error("Wizard of Flatland LOS overlay generated an invalid screen point");
+            }
+            ctx.lineTo(screen.x, screen.y);
+        }
+        ctx.closePath();
+        ctx.fill("evenodd");
+        ctx.restore();
     }
 
     function drawFloor() {
@@ -6691,7 +6759,7 @@
             const a = worldToScreen(state.walls[i + WALL_X1], state.walls[i + WALL_Y1]);
             const b = worldToScreen(state.walls[i + WALL_X2], state.walls[i + WALL_Y2]);
             ctx.lineWidth = state.view.scale * WALL_WORLD_THICKNESS;
-            ctx.strokeStyle = "#000000";
+            ctx.strokeStyle = "#ffffff";
             ctx.beginPath();
             ctx.moveTo(a.x, a.y);
             ctx.lineTo(b.x, b.y);
