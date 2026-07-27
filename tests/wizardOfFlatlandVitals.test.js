@@ -23,7 +23,7 @@ function createTestVitalsSystem(canRechargeMagic) {
             magic: 25,
             maxMagic: 100,
             exp: 0,
-            maxExp: 100
+            maxExp: 80
         },
         levelPoints: 0
     };
@@ -33,7 +33,8 @@ function createTestVitalsSystem(canRechargeMagic) {
         constants: {
             WIZARD_MAX_HEALTH: 100,
             WIZARD_MAX_MAGIC: 100,
-            WIZARD_MAX_EXP: 100
+            WIZARD_MAX_EXP: 80,
+            WIZARD_LEVEL_EXP_INCREMENT: 20
         },
         callbacks: {
             canRechargeMagic,
@@ -77,6 +78,30 @@ test("Wizard of Flatland healing restores health without exceeding the maximum",
     assert.equal(appliedHealing, 50);
     assert.equal(state.wizardVitals.health, 100);
     assert.equal(getStatusUpdates(), 1);
+});
+
+test("Wizard of Flatland first level point costs 80 exp and increases the next cost by 20", () => {
+    const { state, system } = createTestVitalsSystem(() => true);
+
+    system.gainWizardExp(79);
+    assert.equal(state.levelPoints, 0);
+    assert.equal(state.wizardVitals.exp, 79);
+    assert.equal(state.wizardVitals.maxExp, 80);
+
+    system.gainWizardExp(1);
+    assert.equal(state.levelPoints, 1);
+    assert.equal(state.wizardVitals.exp, 0);
+    assert.equal(state.wizardVitals.maxExp, 100);
+});
+
+test("Wizard of Flatland bulk exp gains apply increasing level costs", () => {
+    const { state, system } = createTestVitalsSystem(() => true);
+
+    system.gainWizardExp(190);
+
+    assert.equal(state.levelPoints, 2);
+    assert.equal(state.wizardVitals.exp, 10);
+    assert.equal(state.wizardVitals.maxExp, 120);
 });
 
 test("Wizard of Flatland wires magic recharge to the spell cooldown timer", () => {

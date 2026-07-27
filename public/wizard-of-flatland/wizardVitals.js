@@ -8,6 +8,13 @@
         if (!state || typeof state !== "object") throw new Error("Wizard of Flatland vitals require state");
         if (!constants || typeof constants !== "object") throw new Error("Wizard of Flatland vitals require constants");
 
+        function getWizardLevelExpIncrement() {
+            if (!Number.isFinite(constants.WIZARD_LEVEL_EXP_INCREMENT) || constants.WIZARD_LEVEL_EXP_INCREMENT <= 0) {
+                throw new Error("Wizard of Flatland vitals require a positive WIZARD_LEVEL_EXP_INCREMENT");
+            }
+            return constants.WIZARD_LEVEL_EXP_INCREMENT;
+        }
+
         function validateWizardVitals() {
             const vitals = state.wizardVitals;
             if (!vitals || typeof vitals !== "object") {
@@ -105,10 +112,18 @@
             }
             validateWizardVitals();
             validateWizardLevelPoints();
-            const nextExp = state.wizardVitals.exp + exp;
-            const gainedLevelPoints = Math.floor(nextExp / state.wizardVitals.maxExp);
+            const expIncrement = getWizardLevelExpIncrement();
+            let nextExp = state.wizardVitals.exp + exp;
+            let nextMaxExp = state.wizardVitals.maxExp;
+            let gainedLevelPoints = 0;
+            while (nextExp >= nextMaxExp) {
+                nextExp -= nextMaxExp;
+                nextMaxExp += expIncrement;
+                gainedLevelPoints += 1;
+            }
             if (gainedLevelPoints > 0) {
-                state.wizardVitals.exp = nextExp % state.wizardVitals.maxExp;
+                state.wizardVitals.exp = nextExp;
+                state.wizardVitals.maxExp = nextMaxExp;
                 state.levelPoints += gainedLevelPoints;
                 callRequiredCallback("updateStatusBars");
                 callOptionalCallback("refreshSpellLevelPanel");

@@ -87,7 +87,8 @@
     const ENEMY_MAX_HEALTH = 20;
     const WIZARD_MAX_HEALTH = 100;
     const WIZARD_MAX_MAGIC = 100;
-    const WIZARD_MAX_EXP = 100;
+    const WIZARD_MAX_EXP = 80;
+    const WIZARD_LEVEL_EXP_INCREMENT = 20;
     const WIZARD_MAGIC_RECHARGE_SECONDS_LEVEL_0 = 14;
     const ENEMY_HIT_DAMAGE = 10;
     const WALL_BREAK_HITPOINTS = 150;
@@ -655,7 +656,8 @@
         constants: {
             WIZARD_MAX_HEALTH,
             WIZARD_MAX_MAGIC,
-            WIZARD_MAX_EXP
+            WIZARD_MAX_EXP,
+            WIZARD_LEVEL_EXP_INCREMENT
         },
         callbacks: {
             updateStatusBars,
