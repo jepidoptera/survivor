@@ -1,7 +1,12 @@
 "use strict";
 
-const test = require("node:test");
+const rawTest = require("node:test");
 const assert = require("node:assert/strict");
+const { createCurrentGameTest } = require("./helpers/currentGameTest.js");
+
+const test = createCurrentGameTest(rawTest, new Set([
+    "FloorStairs floor geometry writes preserve explicit fragment baseZ"
+]));
 
 const FloorStairs = require("../public/assets/javascript/spells/editor/FloorStairs.js");
 

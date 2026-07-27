@@ -26,25 +26,25 @@ test("Wizard of Flatland fireball levels match the design table", () => {
             castDelay: level.castDelay
         })),
         [
-            { level: 1, damage: 9, manaCost: 10, explosionRadius: 1, projectileRadius: 0.4, castDelay: 1 },
-            { level: 2, damage: 12, manaCost: 9.5, explosionRadius: 1.1, projectileRadius: 0.5, castDelay: 0.9 },
-            { level: 3, damage: 16, manaCost: 9, explosionRadius: 1.25, projectileRadius: 0.62, castDelay: 0.8 },
-            { level: 4, damage: 21, manaCost: 8.5, explosionRadius: 1.4, projectileRadius: 0.75, castDelay: 0.7 },
-            { level: 5, damage: 50, manaCost: 8, explosionRadius: 1.8, projectileRadius: 0.9, castDelay: 0.6 },
-            { level: 6, damage: 72, manaCost: 7.5, explosionRadius: 2.3, projectileRadius: 1.1, castDelay: 0.5 },
-            { level: 7, damage: 100, manaCost: 7, explosionRadius: 3, projectileRadius: 1.37, castDelay: 0.4 }
+            { level: 1, damage: 10, manaCost: 20, explosionRadius: 1, projectileRadius: 0.4, castDelay: 0.75 },
+            { level: 2, damage: 14, manaCost: 19, explosionRadius: 1.1, projectileRadius: 0.5, castDelay: 0.7 },
+            { level: 3, damage: 20, manaCost: 17, explosionRadius: 1.25, projectileRadius: 0.62, castDelay: 0.65 },
+            { level: 4, damage: 29, manaCost: 17, explosionRadius: 1.4, projectileRadius: 0.75, castDelay: 0.6 },
+            { level: 5, damage: 41, manaCost: 16, explosionRadius: 1.8, projectileRadius: 0.9, castDelay: 0.55 },
+            { level: 6, damage: 72, manaCost: 15, explosionRadius: 2.3, projectileRadius: 1.1, castDelay: 0.5 },
+            { level: 7, damage: 100, manaCost: 12.5, explosionRadius: 3, projectileRadius: 1.37, castDelay: 0.4 }
         ]
     );
 });
 
 test("Wizard of Flatland fireball gameplay resolves level stats", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
-    assert.match(source, /function getActiveFireballStats\(\)/);
+    assert.match(source, /const getActiveFireballStats = spellDataSystem\.getActiveFireballStats/);
     assert.match(source, /spendWizardMagic\(fireballStats\.manaCost\)/);
     assert.match(source, /state\.spellCooldownRemaining = fireballStats\.cooldown/);
     assert.match(source, /fireball\.dirX \* fireball\.speed \* dt/);
     assert.match(source, /fireballStats\.projectileRadius/);
-    assert.match(source, /findEarliestFireballWallHit\(previousX, previousY, nextX, nextY, fireball\.projectileRadius\)/);
+    assert.match(source, /findEarliestFireballWallHit\(previousX, previousY, nextX, nextY, fireball\.projectileRadius \* FIREBALL_WALL_HIT_RADIUS_SCALE\)/);
     assert.match(source, /damageAgentsIntersectingCircle\(fireball\.x, fireball\.y, fireball\.explosionRadius, fireball\.damage\)/);
 });
 

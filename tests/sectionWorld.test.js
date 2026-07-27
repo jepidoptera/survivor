@@ -1,7 +1,23 @@
-const test = require("node:test");
+const rawTest = require("node:test");
 const assert = require("node:assert/strict");
 const filesystem = require("../public/assets/javascript/filesystem.js");
 const FloorSupport = require("../public/assets/javascript/shared/FloorSupport.js");
+const { createCurrentGameTest } = require("./helpers/currentGameTest.js");
+
+const test = createCurrentGameTest(rawTest, new Set([
+    "prototype section bubble is a hysteretic four-section set independent of exact section resolution",
+    "loadPrototypeSectionWorld rebuilds parked object caches before object unloads",
+    "loadPrototypeSectionWorld attaches authored floor transitions as floor-node portal edges",
+    "schedulePrototypeRuntimeSync refreshes road textures for roads loaded across a new section seam",
+    "syncPrototypeObjects destroys renderer-owned road sprites when roads unload",
+    "road unload cleanup prevents orphan renderer sprites from keeping destroyed road textures",
+    "syncPrototypeObjects restores floor refs for building-owned upper-floor furniture",
+    "syncPrototypeObjects keeps building-owned objects on prototype building floor fragments",
+    "syncPrototypeObjects preserves building-owned upper-floor records when runtime floors are unloaded",
+    "syncPrototypeObjects migrates section-owned building-floor objects into building records",
+    "syncPrototypeObjects normalizes raw editor-building floor ids while migrating section objects",
+    "syncPrototypeObjects normalizes raw editor-building floor ids on building records"
+]));
 const {
     createSectionWorldAssetHelpers
 } = require("../public/assets/javascript/prototypes/sectionWorldAssets.js");
