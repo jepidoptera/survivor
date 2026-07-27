@@ -22,7 +22,7 @@ const WALL_WORLD_THICKNESS = 0.3;
 const WALL_WORLD_HALF_THICKNESS = WALL_WORLD_THICKNESS * 0.5;
 const PATH_NODE_WALL_THICKNESS = WALL_WORLD_THICKNESS;
 const PATH_NODE_WALL_FACE_EXTEND = 0.501;
-const PATH_SNAPSHOT_NODE_STRIDE = 8;
+const PATH_SNAPSHOT_NODE_STRIDE = 9;
 const PATH_SNAPSHOT_EDGE_STRIDE = 4;
 const PATH_NODE_X = 0;
 const PATH_NODE_Y = 1;
@@ -32,6 +32,7 @@ const PATH_NODE_XINDEX = 4;
 const PATH_NODE_YINDEX = 5;
 const PATH_NODE_HAS_UNBLOCKED_NEIGHBOR = 6;
 const PATH_NODE_BLOCKED_NEIGHBOR_COUNT = 7;
+const PATH_NODE_TEMPORARY_COST = 8;
 const PATH_EDGE_FROM = 0;
 const PATH_EDGE_TO = 1;
 const MAZE_CHUNK_MIN_SIZE = 28;
@@ -2219,8 +2220,12 @@ function buildPathfindingNodeLayer(walls, bounds, targetRadius) {
         for (let dir = 0; dir < node.neighbors.length; dir++) {
             const neighbor = node.neighbors[dir];
             if (!neighbor) continue;
-            if (node.blockedNeighbors.has(dir)) continue;
-            edgeValues.push(node.index, neighbor.index, dir, 0);
+            edgeValues.push(
+                node.index,
+                neighbor.index,
+                dir,
+                node.blockedNeighbors.has(dir) ? 1 : 0
+            );
         }
     }
 
@@ -2240,6 +2245,7 @@ function buildPathfindingNodeLayer(walls, bounds, targetRadius) {
         packedNodes[base + PATH_NODE_YINDEX] = node.yindex;
         packedNodes[base + PATH_NODE_HAS_UNBLOCKED_NEIGHBOR] = hasUnblockedPathfindingNeighbor(node) ? 1 : 0;
         packedNodes[base + PATH_NODE_BLOCKED_NEIGHBOR_COUNT] = getPathfindingBlockedNeighborCount(node);
+        packedNodes[base + PATH_NODE_TEMPORARY_COST] = 0;
     }
 
     return {
@@ -2304,7 +2310,6 @@ function hasUnblockedPathfindingNeighbor(node) {
     for (let dir = 0; dir < node.neighbors.length; dir++) {
         const neighbor = node.neighbors[dir];
         if (!neighbor || neighbor.blocked === true) continue;
-        if (node.blockedNeighbors.has(dir)) continue;
         return true;
     }
     return false;

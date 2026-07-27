@@ -10,8 +10,10 @@ const NODE_Y = 1;
 const NODE_BLOCKED = 2;
 const NODE_CLEARANCE = 3;
 const NODE_BLOCKED_NEIGHBOR_COUNT = 7;
+const NODE_TEMPORARY_COST = 8;
 const EDGE_FROM = 0;
 const EDGE_TO = 1;
+const EDGE_WALL_BLOCKED = 3;
 const EDGE_STRIDE_FALLBACK = 4;
 
 self.postMessage({ type: "ready", version: null });
@@ -111,8 +113,8 @@ function rebuildAdjacency(snapshot) {
 
 function getNodeStride(snapshot) {
     const stride = Number(snapshot && snapshot.nodeStride);
-    if (!Number.isInteger(stride) || stride < 8) {
-        throw new Error("Wizard of Flatland packed pathfinding snapshot requires node stride >= 8");
+    if (!Number.isInteger(stride) || stride < 9) {
+        throw new Error("Wizard of Flatland packed pathfinding snapshot requires node stride >= 9");
     }
     return stride;
 }
@@ -127,6 +129,7 @@ function getEdgeStride(snapshot) {
 
 function emptyPathResult(message, reason) {
     const empty = new Int32Array(0);
+    const emptyWallBlockedEdges = new Uint8Array(0);
     const result = {
         type: "path_result",
         requestId: message.requestId,
@@ -134,11 +137,12 @@ function emptyPathResult(message, reason) {
         ok: false,
         reason,
         pathNodeIndices: empty,
+        wallBlockedPathEdges: emptyWallBlockedEdges,
         pathEdgeIds: [],
         plannedInteractions: [],
         stats: { iterations: 0, expanded: 0 }
     };
-    self.postMessage(result, [empty.buffer]);
+    self.postMessage(result, [empty.buffer, emptyWallBlockedEdges.buffer]);
 }
 
 function handleRequestPath(message) {
@@ -163,6 +167,8 @@ function handleRequestPath(message) {
     const requiredClearance = Number.isFinite(options.clearance) ? Math.max(0, Math.floor(options.clearance)) : 0;
     const wallAvoidance = Number.isFinite(options.wallAvoidance) ? Math.max(0, options.wallAvoidance) : 0;
     const blockedNeighborAvoidance = Number.isFinite(options.blockedNeighborAvoidance) ? Math.max(0, options.blockedNeighborAvoidance) : 0;
+    const wallBlockedConnectionCost = Number(options.wallBlockedConnectionCost);
+    const wallBlockedConnectionCostOverrides = buildWallBlockedConnectionCostOverrides(options.wallBlockedConnectionCostOverrides);
     const maxPathLength = Number.isFinite(options.maxPathLength) ? Math.max(0, options.maxPathLength) : Infinity;
 
     if (!Number.isInteger(startIndex) || !Number.isInteger(goalIndex) || startIndex < 0 || startIndex >= nodeCount || goalIndex < 0 || goalIndex >= nodeCount) {
@@ -175,26 +181,30 @@ function handleRequestPath(message) {
     }
     if (startIndex === goalIndex) {
         const empty = new Int32Array(0);
+        const emptyWallBlockedEdges = new Uint8Array(0);
         self.postMessage({
             type: "path_result",
             requestId: message.requestId,
             mapVersion: activeSnapshot.version,
             ok: true,
             pathNodeIndices: empty,
+            wallBlockedPathEdges: emptyWallBlockedEdges,
             pathEdgeIds: [],
             plannedInteractions: [],
             stats: { iterations: 0, expanded: 0 }
-        }, [empty.buffer]);
+        }, [empty.buffer, emptyWallBlockedEdges.buffer]);
         return;
     }
 
     const openSet = new Set();
     const openQueue = new MinPriorityQueue();
     const cameFrom = new Int32Array(nodeCount);
+    const cameFromEdge = new Int32Array(nodeCount);
     const gScore = new Float64Array(nodeCount);
     const distanceScore = new Float64Array(nodeCount);
     const fScore = new Float64Array(nodeCount);
     cameFrom.fill(-1);
+    cameFromEdge.fill(-1);
     gScore.fill(Infinity);
     distanceScore.fill(Infinity);
     fScore.fill(Infinity);
@@ -217,16 +227,18 @@ function handleRequestPath(message) {
         const currentIndex = currentEntry.value;
         if (currentIndex === goalIndex) {
             const path = reconstructPath(cameFrom, currentIndex);
+            const wallBlockedPathEdges = reconstructWallBlockedPathEdges(cameFrom, cameFromEdge, edges, edgeStride, currentIndex);
             self.postMessage({
                 type: "path_result",
                 requestId: message.requestId,
                 mapVersion: activeSnapshot.version,
                 ok: true,
                 pathNodeIndices: path,
+                wallBlockedPathEdges,
                 pathEdgeIds: [],
                 plannedInteractions: [],
                 stats: { iterations, expanded }
-            }, [path.buffer]);
+            }, [path.buffer, wallBlockedPathEdges.buffer]);
             return;
         }
 
@@ -256,10 +268,20 @@ function handleRequestPath(message) {
             if (blockedNeighborAvoidance > 0) {
                 stepCost *= 1 + getNodeBlockedNeighborCount(nodes, nodeStride, toIndex) * blockedNeighborAvoidance;
             }
+            if (edgeIsWallBlocked(edges, edgeStride, edgeBase)) {
+                stepCost += getWallBlockedConnectionCost(
+                    wallBlockedConnectionCost,
+                    wallBlockedConnectionCostOverrides,
+                    currentIndex,
+                    toIndex
+                );
+            }
+            stepCost += getNodeTemporaryCost(nodes, nodeStride, toIndex);
             const tentativeG = currentG + stepCost;
             if (tentativeG >= gScore[toIndex]) continue;
 
             cameFrom[toIndex] = currentIndex;
+            cameFromEdge[toIndex] = edgeIndex;
             gScore[toIndex] = tentativeG;
             distanceScore[toIndex] = tentativeDistance;
             fScore[toIndex] = tentativeG + nodeDistance(nodes, nodeStride, toIndex, goalIndex);
@@ -269,6 +291,7 @@ function handleRequestPath(message) {
     }
 
     const empty = new Int32Array(0);
+    const emptyWallBlockedEdges = new Uint8Array(0);
     self.postMessage({
         type: "path_result",
         requestId: message.requestId,
@@ -276,10 +299,51 @@ function handleRequestPath(message) {
         ok: false,
         reason: "no_path",
         pathNodeIndices: empty,
+        wallBlockedPathEdges: emptyWallBlockedEdges,
         pathEdgeIds: [],
         plannedInteractions: [],
         stats: { iterations, expanded }
-    }, [empty.buffer]);
+    }, [empty.buffer, emptyWallBlockedEdges.buffer]);
+}
+
+function buildWallBlockedConnectionCostOverrides(overrides) {
+    if (overrides === undefined || overrides === null) return new Map();
+    if (!Array.isArray(overrides)) {
+        throw new Error("pathfinding wall-blocked edge cost overrides must be an array");
+    }
+    const byEdgeKey = new Map();
+    for (const override of overrides) {
+        if (!override || typeof override !== "object") {
+            throw new Error("pathfinding wall-blocked edge cost override is missing");
+        }
+        const from = Number(override.from);
+        const to = Number(override.to);
+        const cost = Number(override.cost);
+        if (!Number.isInteger(from) || from < 0 || !Number.isInteger(to) || to < 0) {
+            throw new Error("pathfinding wall-blocked edge cost override requires non-negative node indices");
+        }
+        if (!Number.isFinite(cost) || cost < 0) {
+            throw new Error("pathfinding wall-blocked edge cost override requires a finite non-negative cost");
+        }
+        byEdgeKey.set(pathEdgeKey(from, to), cost);
+    }
+    return byEdgeKey;
+}
+
+function getWallBlockedConnectionCost(defaultCost, overrides, from, to) {
+    if (!(overrides instanceof Map)) {
+        throw new Error("pathfinding wall-blocked edge cost lookup requires override tracking");
+    }
+    const override = overrides.get(pathEdgeKey(from, to));
+    const cost = override === undefined ? Number(defaultCost) : override;
+    if (!Number.isFinite(cost) || cost < 0) {
+        throw new Error("pathfinding wall-blocked edge requires a finite non-negative wallBlockedConnectionCost");
+    }
+    return cost;
+}
+
+function pathEdgeKey(from, to) {
+    return `${from}->${to}`;
 }
 
 function popCurrent(openQueue, openSet, fScore) {
@@ -308,6 +372,24 @@ function getNodeBlockedNeighborCount(nodes, stride, index) {
     return count;
 }
 
+function getNodeTemporaryCost(nodes, stride, index) {
+    const cost = nodes[index * stride + NODE_TEMPORARY_COST];
+    if (!Number.isFinite(cost) || cost < 0) throw new Error(`pathfinding node ${index} has invalid temporary cost`);
+    return cost;
+}
+
+function edgeIsWallBlocked(edges, stride, edgeBase) {
+    if (!(edges instanceof Int32Array)) {
+        throw new Error("pathfinding wall-blocked edge lookup requires packed edges");
+    }
+    if (!Number.isInteger(stride) || stride <= EDGE_WALL_BLOCKED) {
+        throw new Error("pathfinding wall-blocked edge lookup requires edge flag data");
+    }
+    const value = edges[edgeBase + EDGE_WALL_BLOCKED];
+    if (value !== 0 && value !== 1) throw new Error(`pathfinding edge at ${edgeBase} has invalid wall-blocked flag`);
+    return value === 1;
+}
+
 function nodeDistance(nodes, stride, leftIndex, rightIndex) {
     const leftBase = leftIndex * stride;
     const rightBase = rightIndex * stride;
@@ -331,6 +413,27 @@ function reconstructPath(cameFrom, currentIndex) {
         path[i] = reversed[reversed.length - 1 - i];
     }
     return path;
+}
+
+function reconstructWallBlockedPathEdges(cameFrom, cameFromEdge, edges, edgeStride, currentIndex) {
+    const reversed = [];
+    let walkIndex = currentIndex;
+    const seen = new Set();
+    while (cameFrom[walkIndex] >= 0) {
+        const edgeIndex = cameFromEdge[walkIndex];
+        if (!Number.isInteger(edgeIndex) || edgeIndex < 0) {
+            throw new Error(`pathfinding node ${walkIndex} is missing its predecessor edge`);
+        }
+        reversed.push(edgeIsWallBlocked(edges, edgeStride, edgeIndex * edgeStride) ? 1 : 0);
+        walkIndex = cameFrom[walkIndex];
+        if (seen.has(walkIndex)) break;
+        seen.add(walkIndex);
+    }
+    const flags = new Uint8Array(reversed.length);
+    for (let i = 0; i < reversed.length; i++) {
+        flags[i] = reversed[reversed.length - 1 - i];
+    }
+    return flags;
 }
 
 self.addEventListener("message", (event) => {
