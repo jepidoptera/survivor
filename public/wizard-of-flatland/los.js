@@ -171,7 +171,7 @@
         for (const candidate of candidates) {
             addCandidateToRayBuckets(candidate, rayCandidates, originX, originY, bins);
         }
-        const points = new Array(bins);
+        const points = new Float32Array(bins * 2);
         const depths = new Float32Array(bins);
         const hitWallIndices = new Int32Array(bins);
         hitWallIndices.fill(-1);
@@ -202,10 +202,8 @@
             depths[i] = best;
             hitWallIndices[i] = bestWallIndex;
             hitWallTs[i] = bestWallT;
-            points[i] = {
-                x: originX + dirX * best,
-                y: originY + dirY * best
-            };
+            points[i * 2] = originX + dirX * best;
+            points[i * 2 + 1] = originY + dirY * best;
         }
 
         return {

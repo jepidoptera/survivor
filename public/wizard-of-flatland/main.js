@@ -417,8 +417,6 @@
     });
     const validateWallLabelBuffer = wallLabelSystem.validateWallLabelBuffer;
     const getWallDebugLabel = wallLabelSystem.getWallDebugLabel;
-    const losApi = getWizardFlatlandLosApi();
-    const computeLosVisibilityPolygon = losApi.computeVisibilityPolygon;
     const explorationSystem = getWizardFlatlandExplorationApi().createExplorationSystem({
         cellSize: 0.25
     });
@@ -493,6 +491,7 @@
         pathfindingRequestId: 1,
         pathfindingSnapshotVersion: 0,
         worldVersion: 1,
+        wallVersion: 1,
         temporaryPathCostsByNodeKey: new Map(),
         liveEnemyPathCostsByNodeKey: new Map(),
         liveEnemyPathCostSignature: "",
@@ -538,6 +537,12 @@
             bins: 3600,
             maxDistance: 20,
             opacity: 1,
+            workerInstalledWallRevision: 0,
+            nextRequestId: 1,
+            inFlightRequestId: 0,
+            inFlightWallRevision: 0,
+            staleResultCount: 0,
+            workerError: null,
             lastMetrics: null,
             lastResult: null
         },
@@ -879,6 +884,13 @@
     });
 
     const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-30");
+    const losWorker = new Worker("/wizard-of-flatland/losWorker.js?v=wizard-of-flatland-1");
+    losWorker.addEventListener("message", handleLosWorkerMessage);
+    losWorker.addEventListener("error", (event) => {
+        state.los.workerError = new Error(
+            `Wizard of Flatland LOS worker failed: ${event.message || "unknown worker error"}`
+        );
+    });
     const mazeStreamingSystem = getWizardFlatlandMazeStreamingApi().createMazeStreamingSystem({
         state,
         worker: mazeWorker,
@@ -1655,9 +1667,11 @@
         });
 
         profiler.span("install wall buffers and section keys", () => {
+            const wallGeometryChanged = !wallBuffersMatchExactly(state.walls, allWalls);
             state.generatedMazeWalls = generatedWalls;
             state.generatedMazeWallSectionRanges = wallSectionRanges;
             state.walls = allWalls;
+            if (wallGeometryChanged) markWallsChanged();
             state.generatedMazeSignature = message.signature;
             state.generatedMazePendingSignature = "";
             state.generatedMazeLoading = false;
@@ -2387,6 +2401,7 @@
             state.worldVersion += 1;
             rebuildPathfindingNodeLayer();
         }
+        markWallsChanged();
         constrainTargetToWalls();
         for (const agent of state.agents) {
             constrainAgentToWalls(agent);
@@ -2424,6 +2439,7 @@
         explorationSystem.reset();
         state.los.lastResult = null;
         state.walls = createEmptyWallBuffer();
+        markWallsChanged();
         state.manualWalls = createEmptyWallBuffer();
         state.generatedMazeWalls = createEmptyWallBuffer();
         state.generatedMazeWallSectionRanges = [];
@@ -2802,6 +2818,7 @@
         state.generatedMazeWalls = createEmptyWallBuffer();
         state.generatedMazeWallSectionRanges = [];
         state.walls = createEmptyWallBuffer();
+        markWallsChanged();
         state.manualWalls = createEmptyWallBuffer();
         explorationSystem.reset();
         state.los.lastResult = null;
@@ -3324,6 +3341,7 @@
         state.walls = appendWallSegment(state.walls, maxX, minY, maxX, maxY, WALL_LABEL_ARENA_BOUNDARY, 1);
         state.walls = appendWallSegment(state.walls, maxX, maxY, minX, maxY, WALL_LABEL_ARENA_BOUNDARY, 2);
         state.walls = appendWallSegment(state.walls, minX, maxY, minX, minY, WALL_LABEL_ARENA_BOUNDARY, 3);
+        markWallsChanged();
     }
 
     function spawnRing(count, radius, jitter) {
@@ -5936,6 +5954,7 @@
         } else {
             state.walls = splitWallBufferAtIndexForGap(state.walls, wallIndex, gap);
         }
+        markWallsChanged();
         for (const candidate of state.agents) {
             candidate.wallBreakDamageByEdge = new Map();
             candidate.wallBreakTargetEdgeKey = "";
@@ -6998,30 +7017,101 @@
     function updateLosAndExploration() {
         const los = state.los;
         if (!los || los.enabled !== true) return;
-        explorationSystem.syncWalls(state.walls, explorationWallLayout);
+        if (los.workerError) throw los.workerError;
+        publishLosWallsIfNeeded();
+        if (los.inFlightRequestId !== 0) return;
         const wallRanges = getLosWallRanges(los.maxDistance);
-        const result = computeLosVisibilityPolygon({
-            x: state.target.x,
-            y: state.target.y,
-            walls: state.walls,
-            wallStride: WALL_STRIDE,
-            wallX1: WALL_X1,
-            wallY1: WALL_Y1,
-            wallX2: WALL_X2,
-            wallY2: WALL_Y2,
-            bins: los.bins,
-            maxDistance: los.maxDistance,
-            wallRanges
+        const requestId = los.nextRequestId++;
+        los.inFlightRequestId = requestId;
+        los.inFlightWallRevision = state.wallVersion;
+        losWorker.postMessage({
+            type: "compute",
+            requestId,
+            wallRevision: state.wallVersion,
+            options: {
+                x: state.target.x,
+                y: state.target.y,
+                wallStride: WALL_STRIDE,
+                wallX1: WALL_X1,
+                wallY1: WALL_Y1,
+                wallX2: WALL_X2,
+                wallY2: WALL_Y2,
+                bins: los.bins,
+                maxDistance: los.maxDistance,
+                wallRanges
+            }
         });
+    }
+
+    function publishLosWallsIfNeeded() {
+        const los = state.los;
+        if (los.workerInstalledWallRevision === state.wallVersion) return;
+        validateWallBuffer(state.walls, "LOS worker wall publication");
+        const walls = cloneWallBuffer(state.walls, "LOS worker walls");
+        explorationSystem.syncWalls(state.walls, explorationWallLayout);
+        losWorker.postMessage({
+            type: "set-walls",
+            wallRevision: state.wallVersion,
+            walls
+        }, [walls.buffer]);
+        los.workerInstalledWallRevision = state.wallVersion;
+    }
+
+    function handleLosWorkerMessage(event) {
+        const message = event && event.data ? event.data : null;
+        const los = state.los;
+        if (!message || typeof message.type !== "string") {
+            los.workerError = new Error("Wizard of Flatland LOS worker returned a malformed message");
+            return;
+        }
+        if (message.type === "error") {
+            los.workerError = new Error(`Wizard of Flatland LOS worker error: ${message.message || "unknown error"}`);
+            return;
+        }
+        if (message.type !== "result") {
+            los.workerError = new Error(`Wizard of Flatland LOS worker returned unsupported message type ${message.type}`);
+            return;
+        }
+        if (message.requestId !== los.inFlightRequestId || message.wallRevision !== los.inFlightWallRevision) {
+            los.workerError = new Error(
+                `Wizard of Flatland LOS worker returned unexpected result ${message.requestId} at wall revision ${message.wallRevision}`
+            );
+            return;
+        }
+        los.inFlightRequestId = 0;
+        los.inFlightWallRevision = 0;
+        if (message.wallRevision !== state.wallVersion) {
+            los.staleResultCount++;
+            return;
+        }
+        validateLosWorkerResult(message);
         los.lastMetrics = {
-            bins: result.bins,
-            scannedWallCount: result.scannedWallCount,
-            candidateWallCount: result.candidateWallCount,
-            raySegmentTests: result.raySegmentTests,
-            elapsedMs: result.elapsedMs
+            bins: message.bins,
+            scannedWallCount: message.scannedWallCount,
+            candidateWallCount: message.candidateWallCount,
+            raySegmentTests: message.raySegmentTests,
+            elapsedMs: message.elapsedMs
         };
-        los.lastResult = result;
-        explorationSystem.applyVisibility(result.hitWallIndices, result.hitWallTs);
+        los.lastResult = message;
+        explorationSystem.applyVisibility(message.hitWallIndices, message.hitWallTs);
+    }
+
+    function validateLosWorkerResult(result) {
+        const bins = result.bins;
+        if (
+            !Number.isInteger(bins) ||
+            bins < 64 ||
+            !(result.points instanceof Float32Array) ||
+            result.points.length !== bins * 2 ||
+            !(result.depths instanceof Float32Array) ||
+            result.depths.length !== bins ||
+            !(result.hitWallIndices instanceof Int32Array) ||
+            result.hitWallIndices.length !== bins ||
+            !(result.hitWallTs instanceof Float32Array) ||
+            result.hitWallTs.length !== bins
+        ) {
+            throw new Error("Wizard of Flatland LOS worker returned invalid packed visibility data");
+        }
     }
 
     function getLosWallRanges(maxDistance) {
@@ -7055,19 +7145,36 @@
         return ranges;
     }
 
+    function markWallsChanged() {
+        if (!Number.isInteger(state.wallVersion) || state.wallVersion < 1) {
+            throw new Error("Wizard of Flatland wall mutation requires an initialized wall revision");
+        }
+        state.wallVersion++;
+    }
+
+    function wallBuffersMatchExactly(left, right) {
+        validateWallBuffer(left, "wall geometry comparison left buffer");
+        validateWallBuffer(right, "wall geometry comparison right buffer");
+        if (left.length !== right.length) return false;
+        for (let i = 0; i < left.length; i++) {
+            if (left[i] !== right[i]) return false;
+        }
+        return true;
+    }
+
     function drawLosOverlay() {
         const los = state.los;
         if (!los || los.enabled !== true) return;
         if (!(state.view.width > 0 && state.view.height > 0 && state.view.scale > 0)) {
             throw new Error("Wizard of Flatland LOS overlay requires a valid viewport");
         }
-        if (!los.lastResult) throw new Error("Wizard of Flatland LOS overlay requires a computed visibility result");
+        if (!los.lastResult) return;
         drawLosVisibilityMask(los.lastResult.points, los.opacity);
     }
 
     function drawLosVisibilityMask(points, opacity) {
-        if (!Array.isArray(points) || points.length < 3) {
-            throw new Error("Wizard of Flatland LOS overlay requires a visibility polygon");
+        if (!(points instanceof Float32Array) || points.length < 6 || points.length % 2 !== 0) {
+            throw new Error("Wizard of Flatland LOS overlay requires a packed visibility polygon");
         }
         const alpha = Number.isFinite(Number(opacity)) ? Math.max(0, Math.min(1, Number(opacity))) : 0.64;
         if (alpha <= 0) return;
@@ -7076,13 +7183,13 @@
         ctx.fillStyle = `rgba(0,0,0,${alpha})`;
         ctx.beginPath();
         ctx.rect(0, 0, canvas.width, canvas.height);
-        const first = worldToScreen(points[0].x, points[0].y);
+        const first = worldToScreen(points[0], points[1]);
         if (!Number.isFinite(first.x) || !Number.isFinite(first.y)) {
             throw new Error("Wizard of Flatland LOS overlay generated an invalid screen point");
         }
         ctx.moveTo(first.x, first.y);
-        for (let i = 1; i < points.length; i++) {
-            const screen = worldToScreen(points[i].x, points[i].y);
+        for (let i = 2; i < points.length; i += 2) {
+            const screen = worldToScreen(points[i], points[i + 1]);
             if (!Number.isFinite(screen.x) || !Number.isFinite(screen.y)) {
                 throw new Error("Wizard of Flatland LOS overlay generated an invalid screen point");
             }
