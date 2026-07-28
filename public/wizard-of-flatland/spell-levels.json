@@ -9,7 +9,7 @@
           "level": 1,
           "headline": "Spitfire",
           "subtitle": "Pew! Pew!",
-          "manaCost": 10,
+          "manaCost": 8,
           "damage": 10,
           "range": 10,
           "explosionRadius": 1,
@@ -21,73 +21,73 @@
           "level": 2,
           "headline": "Fireball I",
           "subtitle": "Snap crackle",
-          "manaCost": 11,
+          "manaCost": 9,
           "damage": 14,
           "explosionRadius": 1.1,
           "range": 11,
           "castDelay": 0.65,
           "projectileRadius": 0.5,
-          "projectileSpeed": 11
+          "projectileSpeed": 10
         },
         {
           "level": 3,
           "headline": "Fireball II",
           "subtitle": "Pow!",
-          "manaCost": 12,
+          "manaCost": 10,
           "damage": 20,
           "explosionRadius": 1.25,
           "range": 12,
           "castDelay": 0.6,
           "projectileRadius": 0.62,
-          "projectileSpeed": 12
+          "projectileSpeed": 10
         },
         {
           "level": 4,
           "headline": "Fireball III",
           "subtitle": "Bigger, better.",
-          "manaCost": 13,
+          "manaCost": 11,
           "damage": 29,
           "explosionRadius": 1.4,
           "range": 13,
           "castDelay": 0.55,
           "projectileRadius": 0.75,
-          "projectileSpeed": 13
+          "projectileSpeed": 10
         },
         {
           "level": 5,
           "headline": "Fireball IV",
           "subtitle": "Boom.",
-          "manaCost": 14,
+          "manaCost": 12,
           "damage": 41,
           "explosionRadius": 1.8,
           "range": 14,
           "castDelay": 0.5,
           "projectileRadius": 0.9,
-          "projectileSpeed": 14
+          "projectileSpeed": 10
         },
         {
           "level": 6,
           "headline": "Fireball V",
           "subtitle": "Faster, stronger.",
-          "manaCost": 15,
+          "manaCost": 13,
           "damage": 72,
           "explosionRadius": 2.3,
-          "range": 16,
+          "range": 15,
           "castDelay": 0.45,
           "projectileRadius": 1.1,
-          "projectileSpeed": 15
+          "projectileSpeed": 10
         },
         {
           "level": 7,
           "headline": "Inferno",
           "subtitle": "Burn, baby.",
-          "manaCost": 16,
+          "manaCost": 14,
           "damage": 100,
           "explosionRadius": 3,
           "range": 16,
           "castDelay": 0.4,
           "projectileRadius": 1.37,
-          "projectileSpeed": 16
+          "projectileSpeed": 10
         }
       ]
     },
@@ -112,7 +112,7 @@
           "costPerSecond": 11,
           "damage": 13,
           "range": 4,
-          "coneAngleDegrees": 33
+          "coneAngleDegrees": 31
         },
         {
           "level": 3,
@@ -121,7 +121,7 @@
           "costPerSecond": 12,
           "damage": 17,
           "range": 4.5,
-          "coneAngleDegrees": 35
+          "coneAngleDegrees": 33
         },
         {
           "level": 4,
@@ -130,7 +130,7 @@
           "costPerSecond": 13,
           "damage": 22,
           "range": 5,
-          "coneAngleDegrees": 37
+          "coneAngleDegrees": 35
         },
         {
           "level": 5,
@@ -139,7 +139,7 @@
           "costPerSecond": 15,
           "damage": 29,
           "range": 5.5,
-          "coneAngleDegrees": 42
+          "coneAngleDegrees": 37
         },
         {
           "level": 6,
@@ -148,12 +148,12 @@
           "costPerSecond": 17,
           "damage": 38,
           "range": 6.5,
-          "coneAngleDegrees": 30
+          "coneAngleDegrees": 40
         },
         {
           "level": 7,
           "headline": "Absolute Zero",
-          "subtitle": "A perfected storm of killing cold.",
+          "subtitle": "Colder than the black of deep space.",
           "costPerSecond": 20,
           "damage": 50,
           "range": 7.5,
@@ -201,7 +201,7 @@
           "level": 4,
           "headline": "Spikes III",
           "subtitle": "Spikier and spikier.",
-          "manaCost": 6,
+          "manaCost": 11,
           "damage": 24,
           "range": 18,
           "castDelay": 0.35,
@@ -211,7 +211,7 @@
           "level": 5,
           "headline": "Spikes IV",
           "subtitle": "The spikeiest.",
-          "manaCost": 4.5,
+          "manaCost": 9,
           "damage": 25,
           "range": 20,
           "castDelay": 0.25,
@@ -220,8 +220,8 @@
         {
           "level": 6,
           "headline": "Spikes V",
-          "subtitle": "Wow. Such spikes.",
-          "manaCost": 5,
+          "subtitle": "Such spikes.",
+          "manaCost": 7,
           "damage": 26,
           "range": 22,
           "castDelay": 0.15,
@@ -231,7 +231,7 @@
           "level": 7,
           "headline": "Storm of Blades",
           "subtitle": "Maximum carnage.",
-          "manaCost": 4,
+          "manaCost": 5,
           "damage": 27,
           "range": 25,
           "castDelay": 0.1,
@@ -297,37 +297,37 @@
           "level": 1,
           "headline": "Channeling I",
           "subtitle": "Magic returns more quickly.",
-          "secondsToFullMagic": 9.5
+          "secondsToFullMagic": 13
         },
         {
           "level": 2,
           "headline": "Channeling II",
           "subtitle": "A steadier inner current.",
-          "secondsToFullMagic": 6.5
+          "secondsToFullMagic": 8.5
         },
         {
           "level": 3,
           "headline": "Channeling III",
           "subtitle": "Power gathers fast.",
-          "secondsToFullMagic": 4.5
+          "secondsToFullMagic": 5.5
         },
         {
           "level": 4,
           "headline": "Channeling IV",
           "subtitle": "The reservoir fills sharply.",
-          "secondsToFullMagic": 3
+          "secondsToFullMagic": 3.5
         },
         {
           "level": 5,
           "headline": "Channeling V",
           "subtitle": "Almost never dry.",
-          "secondsToFullMagic": 2
+          "secondsToFullMagic": 2.5
         },
         {
           "level": 6,
           "headline": "Channeling VI",
           "subtitle": "Magic surges back.",
-          "secondsToFullMagic": 1.5
+          "secondsToFullMagic": 1.7
         },
         {
           "level": 7,
@@ -346,22 +346,22 @@
           "level": 1,
           "headline": "Flash I",
           "subtitle": "A burst of unnatural speed. Hold shift to activate.",
-          "costPerSecond": 10,
+          "costPerSecond": 15,
           "speedMultiplier": 1.5
         },
         {
           "level": 2,
           "headline": "Flash II",
           "subtitle": "Farther, faster.",
-          "costPerSecond": 12.5,
+          "costPerSecond": 20,
           "speedMultiplier": 2.25
         },
         {
           "level": 3,
           "headline": "Teleport I",
-          "subtitle": "Beam back to base.",
-          "manaCost": 26,
-          "range": 10,
+          "subtitle": "Beam back to base. Press T, then H for (T)eleport (H)ome.",
+          "manaCost": 50,
+          "range": 0,
           "castDelay": 0.7
         },
         {
@@ -400,56 +400,56 @@
     },
     {
       "id": "invisibility",
-      "displayName": "Invisibility",
+      "displayName": "Stealth",
       "icon": "/assets/images/magic/invisible.png",
       "levels": [
         {
           "level": 1,
           "headline": "Sneakiness",
           "subtitle": "You can get past the guards, as long as they don't notice you.",
-          "costPerSecond": 20,
+          "costPerSecond": 0,
           "range": 10
         },
         {
           "level": 2,
           "headline": "Stealth",
           "subtitle": "They probably won't notice you.",
-          "costPerSecond": 18,
+          "costPerSecond": 4,
           "range": 7
         },
         {
           "level": 3,
           "headline": "Camouflage",
           "subtitle": "They'll think you're just part of the scenery.",
-          "costPerSecond": 16,
+          "costPerSecond": 5,
           "range": 5
         },
         {
           "level": 4,
           "headline": "Transparency",
           "subtitle": "As thin as air... almost.",
-          "costPerSecond": 14,
+          "costPerSecond": 6,
           "range": 3
         },
         {
           "level": 5,
           "headline": "Invisibility I",
           "subtitle": "Literally invisible. But you can still be heard.",
-          "costPerSecond": 12,
+          "costPerSecond": 7,
           "range": 1
         },
         {
           "level": 6,
           "headline": "Invisibility II",
           "subtitle": "Silent.",
-          "costPerSecond": 10,
+          "costPerSecond": 8,
           "range": 0
         },
         {
           "level": 7,
           "headline": "Ghost Form",
           "subtitle": "Total invisibility AND you can walk through walls.",
-          "costPerSecond": 8,
+          "costPerSecond": 10,
           "range": 0
         }
       ]
