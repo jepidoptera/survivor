@@ -99,7 +99,7 @@ test("Wizard of Flatland magic recharge levels measure seconds to full magic", a
             SPELL_LEVEL_DATA_URL: "/wizard-of-flatland/spell-levels.json",
             SPELL_LEVEL_MIN: 0,
             SPELL_LEVEL_MAX: 7,
-            WIZARD_MAGIC_RECHARGE_SECONDS_LEVEL_0: 14
+            WIZARD_MAGIC_RECHARGE_SECONDS_LEVEL_0: 20
         }
     });
 
@@ -107,7 +107,7 @@ test("Wizard of Flatland magic recharge levels measure seconds to full magic", a
 
     let stats = system.getMagicRechargeStats();
     assert.equal(stats.level, 0);
-    assert.equal(stats.secondsToFullMagic, 14);
+    assert.equal(stats.secondsToFullMagic, 20);
 
     const magicRecharge = payload.spells.find((spell) => spell.id === "magicrecharge");
     assert.ok(magicRecharge, "magic recharge spell level definition exists");

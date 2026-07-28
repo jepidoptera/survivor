@@ -789,7 +789,8 @@
         },
         constants: {
             SPELL_LEVEL_MAX,
-            SPELL_LEVEL_STAT_LABELS
+            SPELL_LEVEL_STAT_LABELS,
+            WIZARD_MAGIC_RECHARGE_SECONDS_LEVEL_0
         },
         api: {
             fetchSpellLevelDefinitions,

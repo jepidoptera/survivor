@@ -77,6 +77,21 @@ test("Wizard of Flatland spell-level panel closes on an outside pointer press", 
     );
 });
 
+test("Wizard of Flatland magic recharge level 0 explains the baseline recharge time", () => {
+    const panelSource = fs.readFileSync(
+        path.join(__dirname, "../public/wizard-of-flatland/spellLevelPanel.js"),
+        "utf8"
+    );
+    assert.match(
+        panelSource,
+        /spellId !== "magicrecharge"[\s\S]*?At level 0, magic fully recharges in \$\{secondsToFullMagic\} seconds\./
+    );
+    assert.match(
+        fs.readFileSync(MAIN_PATH, "utf8"),
+        /constants:\s*\{[\s\S]*?SPELL_LEVEL_STAT_LABELS,\s*WIZARD_MAGIC_RECHARGE_SECONDS_LEVEL_0/
+    );
+});
+
 test("Wizard of Flatland requires a first spell upgrade before a new game starts", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
     const styles = fs.readFileSync(STYLES_PATH, "utf8");

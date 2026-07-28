@@ -58,6 +58,19 @@
             appendSpellLevelStats(container, levelData);
         }
 
+        function getLevelZeroSpellData(spellId) {
+            if (spellId !== "magicrecharge") return null;
+            const secondsToFullMagic = Number(constants.WIZARD_MAGIC_RECHARGE_SECONDS_LEVEL_0);
+            if (!(secondsToFullMagic > 0)) {
+                throw new Error("Wizard of Flatland magic recharge level 0 panel requires positive secondsToFullMagic");
+            }
+            return {
+                headline: "Natural Recharge",
+                subtitle: `At level 0, magic fully recharges in ${secondsToFullMagic} seconds.`,
+                secondsToFullMagic
+            };
+        }
+
         function renderSpellLevelLoading(message) {
             validatePanelDom();
             api.validateWizardLevelPoints();
@@ -117,7 +130,9 @@
             const selected = getSelectedSpellLevelDefinition();
             if (!selected) throw new Error("Wizard of Flatland selected spell level definition is missing");
             const currentLevel = api.getWizardSpellLevel(selected.id);
-            const currentData = currentLevel > 0 ? selected.levels[currentLevel - 1] : null;
+            const currentData = currentLevel > 0
+                ? selected.levels[currentLevel - 1]
+                : getLevelZeroSpellData(selected.id);
             const nextData = currentLevel < constants.SPELL_LEVEL_MAX ? selected.levels[currentLevel] : null;
             const current = document.createElement("div");
             current.className = "spellLevelSection";
