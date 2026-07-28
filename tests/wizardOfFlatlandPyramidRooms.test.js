@@ -69,6 +69,70 @@ function loadPyramidRoomExports() {
     return context.__testExports;
 }
 
+function loadPyramidLightExports() {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const pieces = [
+        extractConst(source, "FLOOR_HOME_BASE_LIGHT_SECTION_DISTANCE"),
+        extractConst(source, "FLOOR_HOME_BASE_LIGHT_BRIGHTNESS"),
+        extractConst(source, "FLOOR_HOME_BASE_LIGHT_MIN_VIEWPORT_EXAGGERATION_SECTIONS"),
+        extractConst(source, "FLOOR_HOME_BASE_LIGHT_MAX_VIEWPORT_EXAGGERATION_SECTIONS"),
+        extractFunction(source, "getHomeBaseFloorLightStops"),
+        "globalThis.__testExports = { getHomeBaseFloorLightStops };"
+    ];
+    const context = { Math, Number, Set };
+    vm.createContext(context);
+    vm.runInContext(pieces.join("\n"), context, { filename: "wizard-of-flatland-pyramid-light.js" });
+    return context.__testExports;
+}
+
+test("Wizard of Flatland base floor-zone colors are darkened by twenty-five percent", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(source, /const FLOOR_CENTER_COLOR = "#303030";/);
+    assert.match(source, /const FLOOR_EDGE_COLOR = "#4c2424";/);
+    assert.match(source, /const FLOOR_MID_OUTER_COLOR = "#193524";/);
+    assert.match(source, /const FLOOR_FAR_OUTER_COLOR = "#352951";/);
+    assert.match(source, /const FLOOR_OUTER_COLOR = "#3d2e00";/);
+});
+
+test("Wizard of Flatland pyramid light increases floor saturation with its brightness", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const drawSource = extractFunction(source, "drawHomeBaseFloorLight");
+    assert.match(
+        drawSource,
+        /saturationGradient\.addColorStop\(position, `rgba\(255,0,0,\$\{stop\.brightness\}\)`\)/
+    );
+    assert.match(
+        drawSource,
+        /globalCompositeOperation = "saturation"[\s\S]*?fillStyle = saturationGradient;[\s\S]*?fill\(\)[\s\S]*?globalCompositeOperation = "lighter"[\s\S]*?fillStyle = lightGradient;[\s\S]*?fill\(\)/
+    );
+    assert.match(drawSource, /requires saturation compositing/);
+});
+
+test("Wizard of Flatland increases visible pyramid-light exaggeration from one to three rooms", () => {
+    const { getHomeBaseFloorLightStops } = loadPyramidLightExports();
+    const maxBrightness = 0.5;
+    const radius = 7;
+    const exaggerationBrightnessAt = (centerDistance) =>
+        maxBrightness * (1 + 2 * centerDistance / radius) / radius;
+    const normalBrightness = (distance) => maxBrightness * (1 - distance / radius);
+    const closeView = getHomeBaseFloorLightStops(radius, 2, 3, 4);
+    const wideView = getHomeBaseFloorLightStops(radius, 1, 3, 5);
+    const brightnessAt = (stops, distance) =>
+        stops.find((stop) => stop.distance === distance).brightness;
+
+    assert.ok(Math.abs(brightnessAt(closeView, 2) - (normalBrightness(2) + exaggerationBrightnessAt(3))) < 1e-12);
+    assert.ok(Math.abs(brightnessAt(closeView, 3) - normalBrightness(3)) < 1e-12);
+    assert.ok(Math.abs(brightnessAt(closeView, 4) - (normalBrightness(4) - exaggerationBrightnessAt(3))) < 1e-12);
+    assert.equal(brightnessAt(wideView, 1), maxBrightness);
+    assert.ok(Math.abs(brightnessAt(wideView, 5) - (normalBrightness(5) - exaggerationBrightnessAt(3))) < 1e-12);
+    const pyramidView = getHomeBaseFloorLightStops(radius, 0, 0, 1);
+    assert.ok(Math.abs(brightnessAt(pyramidView, 1) - (normalBrightness(1) - maxBrightness / radius)) < 1e-12);
+    const outerEdgeView = getHomeBaseFloorLightStops(radius, 6, 7, 8);
+    assert.ok(Math.abs(brightnessAt(outerEdgeView, 6) - (normalBrightness(6) + 3 * maxBrightness / radius)) < 1e-12);
+    assert.equal(brightnessAt(getHomeBaseFloorLightStops(radius, 0, 0, 7), 0), maxBrightness);
+    assert.equal(brightnessAt(getHomeBaseFloorLightStops(radius, 0, 6, 7), 7), 0);
+});
+
 test("Wizard of Flatland pyramid rooms generate fourteen coins and no enemies", () => {
     const api = loadPyramidRoomExports();
     const options = { seed: "pyramid-room-contents" };

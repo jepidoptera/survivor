@@ -273,11 +273,11 @@
     const WIZARD_HAT_TOP_DOWN_BRIM_HEIGHT = 2.25;
     const WIZARD_HAT_TOP_DOWN_BRIM_DROP = 0.12;
     const WIZARD_HAT_TOP_DOWN_CONE_HEIGHT = 0.8112;
-    const FLOOR_CENTER_COLOR = "#404040";
-    const FLOOR_EDGE_COLOR = "#653030";
-    const FLOOR_MID_OUTER_COLOR = "#214730";
-    const FLOOR_FAR_OUTER_COLOR = "#46376c";
-    const FLOOR_OUTER_COLOR = "#513d00";
+    const FLOOR_CENTER_COLOR = "#303030";
+    const FLOOR_EDGE_COLOR = "#4c2424";
+    const FLOOR_MID_OUTER_COLOR = "#193524";
+    const FLOOR_FAR_OUTER_COLOR = "#352951";
+    const FLOOR_OUTER_COLOR = "#3d2e00";
     const FLOOR_ZONE_COLORS = [
         FLOOR_CENTER_COLOR,
         FLOOR_EDGE_COLOR,
@@ -290,7 +290,9 @@
     const FLOOR_GRADIENT_FAR_OUTER_SECTION_DISTANCE = FLOOR_GRADIENT_SECTION_DISTANCE * 3;
     const FLOOR_GRADIENT_OUTER_SECTION_DISTANCE = FLOOR_GRADIENT_SECTION_DISTANCE * 4;
     const FLOOR_HOME_BASE_LIGHT_SECTION_DISTANCE = 7;
-    const FLOOR_HOME_BASE_LIGHT_BRIGHTNESS = 0.4;
+    const FLOOR_HOME_BASE_LIGHT_BRIGHTNESS = 0.5;
+    const FLOOR_HOME_BASE_LIGHT_MIN_VIEWPORT_EXAGGERATION_SECTIONS = 1;
+    const FLOOR_HOME_BASE_LIGHT_MAX_VIEWPORT_EXAGGERATION_SECTIONS = 3;
     const MAZE_RING_BOUNDARY_INTERVAL = 7;
     const MAZE_RING_BOUNDARY_COLOR = "rgba(255,255,255,0.52)";
     const VIEW_ZOOM_MIN = 0.45;
@@ -6893,14 +6895,33 @@
         const center = worldToScreen(centerWorld.x, centerWorld.y);
         const lightRadius = lightRadiusWorld * state.view.scale;
         if (!(lightRadius > 0)) throw new Error("Wizard of Flatland home base floor light requires a positive screen radius");
-        const gradient = ctx.createRadialGradient(center.x, center.y, 0, center.x, center.y, lightRadius);
-        gradient.addColorStop(0, `rgba(255,255,255,${FLOOR_HOME_BASE_LIGHT_BRIGHTNESS})`);
-        gradient.addColorStop(1, "rgba(255,255,255,0)");
+        const viewportMinDistance = getMinDistanceFromPointToRect(centerWorld.x, centerWorld.y, viewport);
+        const viewportCenterDistance = Math.hypot(state.target.x - centerWorld.x, state.target.y - centerWorld.y);
+        const viewportMaxDistance = getMaxDistanceFromPointToRect(centerWorld.x, centerWorld.y, viewport);
+        const lightStops = getHomeBaseFloorLightStops(
+            lightRadiusWorld,
+            viewportMinDistance,
+            viewportCenterDistance,
+            viewportMaxDistance
+        );
+        const lightGradient = ctx.createRadialGradient(center.x, center.y, 0, center.x, center.y, lightRadius);
+        const saturationGradient = ctx.createRadialGradient(center.x, center.y, 0, center.x, center.y, lightRadius);
+        for (const stop of lightStops) {
+            const position = stop.distance / lightRadiusWorld;
+            lightGradient.addColorStop(position, `rgba(255,255,255,${stop.brightness})`);
+            saturationGradient.addColorStop(position, `rgba(255,0,0,${stop.brightness})`);
+        }
         ctx.save();
-        ctx.globalCompositeOperation = "lighter";
-        ctx.fillStyle = gradient;
         ctx.beginPath();
         ctx.arc(center.x, center.y, lightRadius, 0, Math.PI * 2);
+        ctx.globalCompositeOperation = "saturation";
+        if (ctx.globalCompositeOperation !== "saturation") {
+            throw new Error("Wizard of Flatland home base floor light requires saturation compositing");
+        }
+        ctx.fillStyle = saturationGradient;
+        ctx.fill();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = lightGradient;
         ctx.fill();
         ctx.restore();
     }
@@ -6936,6 +6957,21 @@
         const dx = x < rect.minX ? rect.minX - x : x > rect.maxX ? x - rect.maxX : 0;
         const dy = y < rect.minY ? rect.minY - y : y > rect.maxY ? y - rect.maxY : 0;
         return Math.hypot(dx, dy);
+    }
+
+    function getMaxDistanceFromPointToRect(x, y, rect) {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error("Wizard of Flatland point-rectangle distance requires a finite point");
+        }
+        if (!rect || !Number.isFinite(rect.minX) || !Number.isFinite(rect.minY) || !Number.isFinite(rect.maxX) || !Number.isFinite(rect.maxY)) {
+            throw new Error("Wizard of Flatland point-rectangle distance requires a finite rectangle");
+        }
+        return Math.max(
+            Math.hypot(rect.minX - x, rect.minY - y),
+            Math.hypot(rect.maxX - x, rect.minY - y),
+            Math.hypot(rect.maxX - x, rect.maxY - y),
+            Math.hypot(rect.minX - x, rect.maxY - y)
+        );
     }
 
     function drawMazeRingBoundaries() {
@@ -7483,6 +7519,59 @@
         ctx.strokeStyle = "#ffffff";
         ctx.stroke(cache.path);
         ctx.restore();
+    }
+
+    function getHomeBaseFloorLightStops(lightRadiusWorld, viewportMinDistance, viewportCenterDistance, viewportMaxDistance) {
+        if (!(lightRadiusWorld > 0)) {
+            throw new Error("Wizard of Flatland home base floor light stops require a positive light radius");
+        }
+        if (
+            !Number.isFinite(viewportMinDistance) ||
+            !Number.isFinite(viewportCenterDistance) ||
+            !Number.isFinite(viewportMaxDistance) ||
+            viewportMinDistance < 0 ||
+            viewportCenterDistance < viewportMinDistance ||
+            viewportMaxDistance < viewportCenterDistance
+        ) {
+            throw new Error("Wizard of Flatland home base floor light stops require ordered viewport distances");
+        }
+        const distanceProgress = Math.max(0, Math.min(1, viewportCenterDistance / lightRadiusWorld));
+        const viewportExaggerationSections =
+            FLOOR_HOME_BASE_LIGHT_MIN_VIEWPORT_EXAGGERATION_SECTIONS +
+            (
+                FLOOR_HOME_BASE_LIGHT_MAX_VIEWPORT_EXAGGERATION_SECTIONS -
+                FLOOR_HOME_BASE_LIGHT_MIN_VIEWPORT_EXAGGERATION_SECTIONS
+            ) * distanceProgress;
+        const viewportExaggerationBrightness =
+            FLOOR_HOME_BASE_LIGHT_BRIGHTNESS *
+            viewportExaggerationSections /
+            FLOOR_HOME_BASE_LIGHT_SECTION_DISTANCE;
+        const minDistance = Math.min(lightRadiusWorld, viewportMinDistance);
+        const centerDistance = Math.min(lightRadiusWorld, viewportCenterDistance);
+        const maxDistance = Math.min(lightRadiusWorld, viewportMaxDistance);
+        const distances = [...new Set([0, minDistance, centerDistance, maxDistance, lightRadiusWorld])]
+            .sort((a, b) => a - b);
+        return distances.map((distance) => {
+            const normalBrightness =
+                FLOOR_HOME_BASE_LIGHT_BRIGHTNESS * (1 - distance / lightRadiusWorld);
+            let exaggeration = 0;
+            if (distance < centerDistance && centerDistance > minDistance) {
+                exaggeration = viewportExaggerationBrightness *
+                    (centerDistance - distance) /
+                    (centerDistance - minDistance);
+            } else if (distance > centerDistance && maxDistance > centerDistance) {
+                exaggeration = -viewportExaggerationBrightness *
+                    (distance - centerDistance) /
+                    (maxDistance - centerDistance);
+            }
+            return {
+                distance,
+                brightness: Math.max(
+                    0,
+                    Math.min(FLOOR_HOME_BASE_LIGHT_BRIGHTNESS, normalBrightness + exaggeration)
+                )
+            };
+        });
     }
 
     function drawSectionBoundaries() {
