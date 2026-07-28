@@ -72,12 +72,16 @@
     const FIREBALL_ICON_PATH = "/assets/images/thumbnails/fireball.png";
     const SPIKE_ICON_PATH = "/assets/images/magic/spike.png";
     const FREEZE_ICON_PATH = "/assets/images/magic/iceball.png";
-    const FREEZE_PARTICLES_PER_SECOND_PER_RANGE = 22;
+    const FREEZE_PARTICLES_PER_SECOND_AT_LEVEL_ONE = 132;
+    const FREEZE_PARTICLE_COUNT_MULTIPLIER_PER_LEVEL = 1.25;
+    const FREEZE_CONE_START_WIDTH = 1;
     const FREEZE_PARTICLE_MIN_LIFETIME = 0.18;
     const FREEZE_PARTICLE_MAX_LIFETIME = 0.52;
+    const FREEZE_DEATH_PARTICLE_COUNT = 60;
+    const FREEZE_DEATH_PARTICLE_MAX_DISTANCE = 4;
     const ENEMY_TEMPERATURE_RECOVERY_PER_SECOND = 1;
     const FREEZE_TEMPERATURE_DROP_DEGREES = 10;
-    const FREEZE_DAMAGE_FRACTION_PER_TEMPERATURE_DROP = 1 / 3;
+    const FREEZE_DAMAGE_FRACTION_PER_TEMPERATURE_DROP = 1 / 4;
     const TROPHY_TEXTURE_PATH = "/wizard-of-flatland/chalice.png";
     const FIREBALL_ANIMATION_FRAME_COLUMNS = 5;
     const FIREBALL_ANIMATION_FRAME_ROWS = 2;
@@ -3902,15 +3906,17 @@
         const dirX = Math.cos(state.target.heading);
         const dirY = Math.sin(state.target.heading);
         const halfAngle = stats.coneAngleRadians * 0.5;
-        const minimumDot = Math.cos(halfAngle);
+        const startHalfWidth = FREEZE_CONE_START_WIDTH * 0.5;
+        const coneSlope = Math.tan(halfAngle);
         const damage = stats.damagePerSecond * dt;
         state.agents = state.agents.filter((agent) => {
             const dx = agent.x - state.target.x;
             const dy = agent.y - state.target.y;
-            const distance = Math.hypot(dx, dy);
-            if (distance > stats.range + agent.radius || distance <= 0.000001) return true;
-            const dot = (dx * dirX + dy * dirY) / distance;
-            if (dot < minimumDot) return true;
+            const forwardDistance = dx * dirX + dy * dirY;
+            if (forwardDistance < -agent.radius || forwardDistance > stats.range + agent.radius) return true;
+            const lateralDistance = Math.abs(dx * -dirY + dy * dirX);
+            const halfWidth = startHalfWidth + Math.max(0, forwardDistance) * coneSlope;
+            if (lateralDistance > halfWidth + agent.radius) return true;
             return !damageAgentWithFreezeTemperatureAndMaybeDropCoin(agent, damage);
         });
         emitFreezeParticles(dt, stats, dirX, dirY, halfAngle);
@@ -3937,26 +3943,64 @@
                 agent.freezeDamageSinceTemperatureDrop = 0;
             }
         }
+        if (killed) emitFreezeDeathParticles(agent);
         return killed;
     }
 
+    function emitFreezeDeathParticles(agent) {
+        if (!agent || !Number.isFinite(agent.x) || !Number.isFinite(agent.y) || !(agent.radius > 0)) {
+            throw new Error("Wizard of Flatland freeze death particles require a finite enemy position and positive radius");
+        }
+        for (let i = 0; i < FREEZE_DEATH_PARTICLE_COUNT; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const distance = Math.random() * agent.radius;
+            const speed = 1.5 + Math.random() * 2;
+            state.freezeParticles.push({
+                x: agent.x + Math.cos(angle) * distance,
+                y: agent.y + Math.sin(angle) * distance,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                radius: 0.045 + Math.random() * 0.09,
+                age: 0,
+                lifetime: 0.35 + Math.random() * 0.4,
+                sourceX: agent.x,
+                sourceY: agent.y,
+                maxDistance: FREEZE_DEATH_PARTICLE_MAX_DISTANCE,
+                boundaryKind: "burst",
+                color: Math.random() < 0.5 ? "#8fddff" : "#e8fbff"
+            });
+        }
+    }
+
     function emitFreezeParticles(dt, stats, dirX, dirY, halfAngle) {
-        const requestedCount = dt * FREEZE_PARTICLES_PER_SECOND_PER_RANGE * stats.range;
+        const levelParticleMultiplier = FREEZE_PARTICLE_COUNT_MULTIPLIER_PER_LEVEL ** (stats.level - 1);
+        const requestedCount = dt * FREEZE_PARTICLES_PER_SECOND_AT_LEVEL_ONE * levelParticleMultiplier;
         const count = Math.floor(requestedCount) + (Math.random() < requestedCount % 1 ? 1 : 0);
-        const heading = Math.atan2(dirY, dirX);
         for (let i = 0; i < count; i++) {
-            const angle = heading + (Math.random() * 2 - 1) * halfAngle;
-            const distance = TARGET_RADIUS + Math.random() * Math.max(0, stats.range - TARGET_RADIUS);
+            const forwardDistance = Math.random() * stats.range;
+            const halfWidth = FREEZE_CONE_START_WIDTH * 0.5 + forwardDistance * Math.tan(halfAngle);
+            const lateralDistance = (Math.random() * 2 - 1) * halfWidth;
+            const x = state.target.x + dirX * forwardDistance - dirY * lateralDistance;
+            const y = state.target.y + dirY * forwardDistance + dirX * lateralDistance;
+            const angle = Math.atan2(y - state.target.y, x - state.target.x);
             const lifetime = FREEZE_PARTICLE_MIN_LIFETIME +
                 Math.random() * (FREEZE_PARTICLE_MAX_LIFETIME - FREEZE_PARTICLE_MIN_LIFETIME);
             state.freezeParticles.push({
-                x: state.target.x + Math.cos(angle) * distance,
-                y: state.target.y + Math.sin(angle) * distance,
+                x,
+                y,
                 vx: Math.cos(angle) * (1.5 + Math.random() * 2.5),
                 vy: Math.sin(angle) * (1.5 + Math.random() * 2.5),
                 radius: 0.025 + Math.random() * 0.055,
                 age: 0,
-                lifetime
+                lifetime,
+                sourceX: state.target.x,
+                sourceY: state.target.y,
+                maxDistance: stats.range,
+                boundaryKind: "cone",
+                directionX: dirX,
+                directionY: dirY,
+                halfAngle,
+                color: "#ffffff"
             });
         }
     }
@@ -3964,10 +4008,43 @@
     function updateFreezeParticles(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
         state.freezeParticles = state.freezeParticles.filter((particle) => {
+            if (
+                !Number.isFinite(particle.sourceX) ||
+                !Number.isFinite(particle.sourceY) ||
+                !(particle.maxDistance > 0) ||
+                (particle.boundaryKind !== "cone" && particle.boundaryKind !== "burst")
+            ) {
+                throw new Error("Wizard of Flatland freeze particle update requires a finite source and positive range");
+            }
             particle.age += dt;
             particle.x += particle.vx * dt;
             particle.y += particle.vy * dt;
-            return particle.age < particle.lifetime;
+            let insideBoundary;
+            if (particle.boundaryKind === "burst") {
+                insideBoundary = Math.hypot(
+                    particle.x - particle.sourceX,
+                    particle.y - particle.sourceY
+                ) <= particle.maxDistance;
+            } else {
+                if (
+                    !Number.isFinite(particle.directionX) ||
+                    !Number.isFinite(particle.directionY) ||
+                    !(particle.halfAngle > 0)
+                ) {
+                    throw new Error("Wizard of Flatland cone particle requires a finite direction and positive half angle");
+                }
+                const dx = particle.x - particle.sourceX;
+                const dy = particle.y - particle.sourceY;
+                const forwardDistance = dx * particle.directionX + dy * particle.directionY;
+                const lateralDistance = Math.abs(dx * -particle.directionY + dy * particle.directionX);
+                const halfWidth = FREEZE_CONE_START_WIDTH * 0.5 +
+                    Math.max(0, forwardDistance) * Math.tan(particle.halfAngle);
+                insideBoundary =
+                    forwardDistance >= 0 &&
+                    forwardDistance <= particle.maxDistance &&
+                    lateralDistance <= halfWidth;
+            }
+            return particle.age < particle.lifetime && insideBoundary;
         });
     }
 
@@ -7826,19 +7903,21 @@
 
     function drawFreezeParticles() {
         ctx.save();
-        ctx.fillStyle = "#ffffff";
         for (const particle of state.freezeParticles) {
             if (
                 !Number.isFinite(particle.x) ||
                 !Number.isFinite(particle.y) ||
                 !Number.isFinite(particle.radius) ||
                 !Number.isFinite(particle.age) ||
-                !(particle.lifetime > 0)
+                !(particle.lifetime > 0) ||
+                typeof particle.color !== "string" ||
+                !/^#[0-9a-f]{6}$/i.test(particle.color)
             ) {
                 throw new Error("Wizard of Flatland freeze particle render requires finite particle data");
             }
             const point = worldToScreen(particle.x, particle.y);
             ctx.globalAlpha = Math.max(0, 1 - particle.age / particle.lifetime);
+            ctx.fillStyle = particle.color;
             ctx.beginPath();
             ctx.arc(point.x, point.y, Math.max(1, particle.radius * state.view.scale), 0, Math.PI * 2);
             ctx.fill();
@@ -8237,6 +8316,26 @@
         return getOppositeHexColor(getAgentHomeZoneColor(agent));
     }
 
+    function getAgentTemperatureColor(baseColor, temperature) {
+        if (typeof baseColor !== "string" || !/^#[0-9a-f]{6}$/i.test(baseColor)) {
+            throw new Error(`Wizard of Flatland enemy temperature color requires a six-digit hex color, got ${baseColor}`);
+        }
+        if (!Number.isFinite(temperature) || temperature > 0) {
+            throw new Error(`Wizard of Flatland enemy temperature color requires a finite non-positive temperature, got ${temperature}`);
+        }
+        const color = Number.parseInt(baseColor.slice(1), 16);
+        const coldDegrees = -temperature;
+        const redGreenProgress = Math.min(1, coldDegrees / 40);
+        const blueProgress = Math.min(1, coldDegrees / 20);
+        const warmRed = (color >> 16) & 0xff;
+        const warmGreen = (color >> 8) & 0xff;
+        const warmBlue = color & 0xff;
+        const red = Math.round(warmRed + (255 - warmRed) * redGreenProgress);
+        const green = Math.round(warmGreen + (255 - warmGreen) * redGreenProgress);
+        const blue = Math.round(warmBlue + (255 - warmBlue) * blueProgress);
+        return `rgb(${red}, ${green}, ${blue})`;
+    }
+
     function drawAgentTriangle(x, y, radius, angle, agent) {
         const wallClamped = agent.wallClamps > 0 || agent.solverState === STATE_BLOCKED;
         const cos = Math.cos(angle);
@@ -8249,7 +8348,8 @@
         const rightX = x + Math.cos(angle + Math.PI + baseAngleOffset) * radius;
         const rightY = y + Math.sin(angle + Math.PI + baseAngleOffset) * radius;
 
-        ctx.fillStyle = agent.isDesignatedAttacker ? "#6f0000" : getAgentHomeZoneOppositeColor(agent);
+        const warmColor = agent.isDesignatedAttacker ? "#6f0000" : getAgentHomeZoneOppositeColor(agent);
+        ctx.fillStyle = getAgentTemperatureColor(warmColor, agent.temperature);
         ctx.strokeStyle = "#ffffff";
         ctx.lineWidth = Math.max(1, state.view.scale * 0.026);
         ctx.beginPath();

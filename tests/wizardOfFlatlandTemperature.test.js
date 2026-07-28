@@ -5,10 +5,10 @@ const test = require("node:test");
 
 const MAIN_PATH = path.join(__dirname, "../public/wizard-of-flatland/main.js");
 
-test("Wizard of Flatland freeze damage lowers enemy temperature by health thirds", () => {
+test("Wizard of Flatland freeze damage lowers enemy temperature by health quarters", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
     assert.match(source, /const FREEZE_TEMPERATURE_DROP_DEGREES = 10/);
-    assert.match(source, /const FREEZE_DAMAGE_FRACTION_PER_TEMPERATURE_DROP = 1 \/ 3/);
+    assert.match(source, /const FREEZE_DAMAGE_FRACTION_PER_TEMPERATURE_DROP = 1 \/ 4/);
     assert.match(source, /agent\.freezeDamageSinceTemperatureDrop \+= appliedDamage/);
     assert.match(source, /const damagePerDrop = agent\.maxHealth \* FREEZE_DAMAGE_FRACTION_PER_TEMPERATURE_DROP/);
     assert.match(source, /agent\.temperature -= dropCount \* FREEZE_TEMPERATURE_DROP_DEGREES/);
@@ -27,6 +27,21 @@ test("Wizard of Flatland enemy speed follows temperature and recovers one degree
     assert.equal(multiplier(-10), 0.5);
     assert.equal(multiplier(-20), 0.25);
     assert.equal(multiplier(-30), 0.125);
+});
+
+test("Wizard of Flatland enemy color cools to full blue at -20 and full white at -40", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(source, /const redGreenProgress = Math\.min\(1, coldDegrees \/ 40\)/);
+    assert.match(source, /const blueProgress = Math\.min\(1, coldDegrees \/ 20\)/);
+    assert.match(source, /ctx\.fillStyle = getAgentTemperatureColor\(warmColor, agent\.temperature\)/);
+
+    const coolChannel = (warmValue, coldDegrees, fullAt) =>
+        Math.round(warmValue + (255 - warmValue) * Math.min(1, coldDegrees / fullAt));
+    assert.equal(coolChannel(0, 20, 20), 255);
+    assert.equal(coolChannel(0, 20, 40), 128);
+    assert.equal(coolChannel(0, 40, 40), 255);
+    assert.equal(coolChannel(0, 10, 20), 128);
+    assert.equal(coolChannel(0, 0, 20), 0);
 });
 
 test("Wizard of Flatland checkpoints preserve enemy temperature progress", () => {

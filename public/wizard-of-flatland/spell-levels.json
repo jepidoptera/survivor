@@ -98,8 +98,8 @@
       "levels": [
         {
           "level": 1,
-          "headline": "Freeze I",
-          "subtitle": "A focused storm of biting snow.",
+          "headline": "Chill",
+          "subtitle": "Hey. Slow down.",
           "costPerSecond": 10,
           "damage": 10.0,
           "range": 3,
@@ -107,26 +107,26 @@
         },
         {
           "level": 2,
-          "headline": "Freeze II",
-          "subtitle": "The snowstorm reaches farther.",
+          "headline": "Frostbite",
+          "subtitle": "Bit of a nip.",
           "costPerSecond": 10,
           "damage": 13,
-          "range": 3.6666666667,
+          "range": 4,
           "coneAngleDegrees": 30
         },
         {
           "level": 3,
-          "headline": "Freeze III",
-          "subtitle": "A stronger cone of driven snow.",
+          "headline": "Blizzard I",
+          "subtitle": "Frightful weather out there.",
           "costPerSecond": 10,
           "damage": 17,
-          "range": 4.3333333333,
+          "range": 4.5,
           "coneAngleDegrees": 30
         },
         {
           "level": 4,
-          "headline": "Freeze IV",
-          "subtitle": "Winter answers with greater reach.",
+          "headline": "Blizzard II",
+          "subtitle": "Freeze them where they stand.",
           "costPerSecond": 10,
           "damage": 22,
           "range": 5,
@@ -134,30 +134,30 @@
         },
         {
           "level": 5,
-          "headline": "Freeze V",
-          "subtitle": "A punishing whiteout.",
+          "headline": "Blizzard III",
+          "subtitle": "Blast them where they freeze.",
           "costPerSecond": 10,
           "damage": 29,
-          "range": 5.6666666667,
+          "range": 5.5,
           "coneAngleDegrees": 30
         },
         {
           "level": 6,
-          "headline": "Freeze VI",
-          "subtitle": "Deep winter pours from your hands.",
+          "headline": "Killing Frost",
+          "subtitle": "Shatter their frozen bones.",
           "costPerSecond": 10,
           "damage": 38,
-          "range": 6.3333333333,
+          "range": 6.5,
           "coneAngleDegrees": 30
         },
         {
           "level": 7,
-          "headline": "Heart of Winter",
+          "headline": "Absolute Zero",
           "subtitle": "A perfected storm of killing cold.",
           "costPerSecond": 10,
           "damage": 50,
-          "range": 7,
-          "coneAngleDegrees": 30
+          "range": 7.5,
+          "coneAngleDegrees": 45
         }
       ]
     },
