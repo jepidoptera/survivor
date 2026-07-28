@@ -93,6 +93,28 @@ test("Wizard of Flatland room enemy caps increase by one per ring after ring fou
     assert.equal(api.getMazeRoomMaxEnemyCount("7,0"), 11);
 });
 
+test("Wizard of Flatland raises average enemy population without raising the cap", () => {
+    const api = loadEnemyBudgetExports();
+    const sectionKey = "100,0";
+    const sampleCount = 50000;
+    let total = 0;
+    let observedMaximum = 0;
+
+    for (let seedIndex = 0; seedIndex < sampleCount; seedIndex++) {
+        const count = api.getMazeRoomEnemyCount(sectionKey, { seed: `enemy-average-${seedIndex}` });
+        total += count;
+        observedMaximum = Math.max(observedMaximum, count);
+    }
+
+    const cap = api.getMazeRoomMaxEnemyCount(sectionKey);
+    const previousDistributionAverage = cap * (0.01 + 0.99 / (3.25 + 1));
+    assert.ok(
+        Math.abs(total / sampleCount / previousDistributionAverage - 1.5) < 0.03,
+        "average enemy population should be approximately 50% above the previous distribution"
+    );
+    assert.equal(observedMaximum, cap);
+});
+
 test("Wizard of Flatland enemy scale increases ten percent per seven rings", () => {
     const api = loadEnemyBudgetExports();
 

@@ -107,7 +107,7 @@
     const WIZARD_MAX_MAGIC = 100;
     const WIZARD_MAX_EXP = 80;
     const WIZARD_LEVEL_EXP_INCREMENT = 20;
-    const WIZARD_MAGIC_RECHARGE_SECONDS_LEVEL_0 = 14;
+    const WIZARD_MAGIC_RECHARGE_SECONDS_LEVEL_0 = 20;
     const ENEMY_HIT_DAMAGE = 10;
     const WALL_BREAK_HITPOINTS = 150;
     const WALL_BREAK_SECTION_LENGTH = 3;
@@ -125,6 +125,8 @@
     const ENEMY_SCALE_INCREMENT = 0.1;
     const ENEMY_DAMAGE_BASE_SCALE = 0.75;
     const ENEMY_DAMAGE_ZONE_MULTIPLIER = 1.25;
+    const ENEMY_SPEED_ZONE_ZERO_SCALE = 0.9;
+    const ENEMY_SPEED_SCALE_PER_ZONE = 0.1;
     const SPELL_LEVEL_DATA_URL = "/wizard-of-flatland/spell-levels.json";
     const SPELL_LEVEL_MIN = 0;
     const SPELL_LEVEL_MAX = 7;
@@ -189,8 +191,11 @@
     const MAZE_ROOM_EMPTY_ENEMY_CHANCE = 0;
     const MAZE_ROOM_MAX_ENEMY_CHANCE = 1 / 100;
     const MAZE_ROOM_EARLY_ENEMY_CAPS = Object.freeze([0, 1, 2, 4, 8]);
-    const MAZE_ROOM_ENEMY_DISTRIBUTION_POWER = 3.25;
+    // Raise the typical room population by about 50% without changing any room's cap.
+    const MAZE_ROOM_ENEMY_DISTRIBUTION_POWER = 1.8;
     const MAZE_ROOM_ENEMY_SAFE_RADIUS_SCALE = 0.56;
+    const ENEMY_WAKE_DISTANCE_METERS = 50;
+    const ENEMY_SLEEP_SECTION_DISTANCE = 3;
     const MAZE_COIN_AVERAGE_COUNT = 10;
     const MAZE_COIN_MIN_COUNT = 7;
     const MAZE_COIN_MAX_COUNT = 13;
@@ -462,6 +467,18 @@
     const worldToMazeSectionCoord = mazeSectionSystem.worldToMazeSectionCoord;
     const getMazeSectionRing = mazeSectionSystem.getMazeSectionRing;
     const getMazeSectionPolygonForCoord = mazeSectionSystem.getMazeSectionPolygonForCoord;
+    const enemyActivationSystem = getWizardFlatlandEnemyActivationApi().createEnemyActivationSystem({
+        constants: {
+            ENEMY_WAKE_DISTANCE_METERS,
+            ENEMY_SLEEP_SECTION_DISTANCE
+        },
+        mazeSections: {
+            worldToMazeSectionCoord,
+            mazeSectionKey,
+            parseMazeSectionKey
+        }
+    });
+    const updateEnemyActivation = enemyActivationSystem.updateEnemyActivation;
     const state = {
         running: true,
         gameStarted: false,
@@ -2611,6 +2628,7 @@
             millingWallTurnLock: agent.millingWallTurnLock || 0,
             solverState: agent.solverState,
             wallClamps: agent.wallClamps || 0,
+            activated: agent.activated === true,
             pathGoalX: Number.isFinite(agent.pathGoalX) ? agent.pathGoalX : agent.x,
             pathGoalY: Number.isFinite(agent.pathGoalY) ? agent.pathGoalY : agent.y
         };
@@ -2810,6 +2828,7 @@
             wallBreakTargetEdgeKey: "",
             wallBreakTargetWallIndex: -1,
             wallBreakDamageByEdge: new Map(),
+            activated: snapshot.activated === true,
             homeSectionKey: snapshot.homeSectionKey
         };
         if (typeof snapshot.autoSpawnSectionKey === "string" && snapshot.autoSpawnSectionKey.length > 0) {
@@ -3321,7 +3340,8 @@
             pathGoalWallBlocked: false,
             wallBreakTargetEdgeKey: "",
             wallBreakTargetWallIndex: -1,
-            wallBreakDamageByEdge: new Map()
+            wallBreakDamageByEdge: new Map(),
+            activated: !isProceduralMazeScenario()
         };
         if (metadata && typeof metadata === "object") {
             if (metadata.autoSpawnSectionKey !== undefined) {
@@ -4095,6 +4115,13 @@
     function getEnemyTemperatureSpeedMultiplier(agent) {
         validateAgentTemperature(agent);
         return 1 / (2 ** (-agent.temperature / 10));
+    }
+
+    function getEnemyZoneSpeedMultiplier(agent) {
+        if (!agent || !Number.isInteger(agent.zoneLevel) || agent.zoneLevel < 0) {
+            throw new Error("Wizard of Flatland enemy speed requires a non-negative integer zone");
+        }
+        return ENEMY_SPEED_ZONE_ZERO_SCALE + agent.zoneLevel * ENEMY_SPEED_SCALE_PER_ZONE;
     }
 
     function validateAgentTemperature(agent) {
@@ -5071,6 +5098,7 @@
                 throw new Error("Wizard of Flatland live enemy path cost requires finite enemy positions");
             }
             if (Number.isFinite(agent.health) && agent.health <= 0) continue;
+            if (agent.activated !== true) continue;
             if (!isAgentInInstalledMazeSection(agent)) continue;
             const pathIndices = nearestLocalPassablePathfindingNodes(agent.x, agent.y, LIVE_ENEMY_PATH_COST_TILE_COUNT, {
                 allowFewer: true
@@ -5609,6 +5637,10 @@
                 freezeAgentForUnloadedSection(agent);
                 continue;
             }
+            if (agent.activated !== true) {
+                freezeAgentForUnloadedSection(agent);
+                continue;
+            }
             activeAgents.push(agent);
         }
         const packed = new Float32Array(activeAgents.length * STRIDE);
@@ -5619,7 +5651,9 @@
             packed[base + 1] = agent.x;
             packed[base + 2] = agent.y;
             packed[base + 3] = agent.radius;
-            packed[base + 4] = agent.speed * getEnemyTemperatureSpeedMultiplier(agent);
+            packed[base + 4] = agent.speed
+                * getEnemyZoneSpeedMultiplier(agent)
+                * getEnemyTemperatureSpeedMultiplier(agent);
             packed[base + 5] = agent.priority;
             packed[base + 6] = agent.waitTime;
             packed[base + 7] = agent.phase;
@@ -6142,9 +6176,15 @@
         let goalNodeIndex = null;
         let goalNodeKey = "";
         let requestsSent = 0;
+        updateEnemyActivation(state.agents, state.target, getMazeOptions(), isProceduralMazeScenario());
         for (const agent of state.agents) {
             metrics.agents += 1;
             if (!isAgentInInstalledMazeSection(agent)) {
+                freezeAgentForUnloadedSection(agent);
+                metrics.frozen += 1;
+                continue;
+            }
+            if (agent.activated !== true) {
                 freezeAgentForUnloadedSection(agent);
                 metrics.frozen += 1;
                 continue;

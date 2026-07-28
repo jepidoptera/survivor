@@ -19,7 +19,7 @@ test("Wizard of Flatland enemy speed follows temperature and recovers one degree
     const source = fs.readFileSync(MAIN_PATH, "utf8");
     assert.match(source, /const ENEMY_TEMPERATURE_RECOVERY_PER_SECOND = 1/);
     assert.match(source, /return 1 \/ \(2 \*\* \(-agent\.temperature \/ 10\)\)/);
-    assert.match(source, /agent\.speed \* getEnemyTemperatureSpeedMultiplier\(agent\)/);
+    assert.match(source, /agent\.speed\s*\* getEnemyZoneSpeedMultiplier\(agent\)\s*\* getEnemyTemperatureSpeedMultiplier\(agent\)/);
     assert.match(source, /agent\.temperature \+ ENEMY_TEMPERATURE_RECOVERY_PER_SECOND \* dt/);
 
     const multiplier = (temperature) => 1 / (2 ** (-temperature / 10));
@@ -27,6 +27,22 @@ test("Wizard of Flatland enemy speed follows temperature and recovers one degree
     assert.equal(multiplier(-10), 0.5);
     assert.equal(multiplier(-20), 0.25);
     assert.equal(multiplier(-30), 0.125);
+});
+
+test("Wizard of Flatland enemy speed starts ten percent slower and gains ten percentage points per zone", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(source, /const ENEMY_SPEED_ZONE_ZERO_SCALE = 0\.9/);
+    assert.match(source, /const ENEMY_SPEED_SCALE_PER_ZONE = 0\.1/);
+    assert.match(
+        source,
+        /return ENEMY_SPEED_ZONE_ZERO_SCALE \+ agent\.zoneLevel \* ENEMY_SPEED_SCALE_PER_ZONE/
+    );
+
+    const multiplier = (zone) => 0.9 + zone * 0.1;
+    assert.equal(multiplier(0), 0.9);
+    assert.equal(multiplier(1), 1);
+    assert.equal(multiplier(2), 1.1);
+    assert.ok(Math.abs(multiplier(3) - 1.2) < Number.EPSILON * 2);
 });
 
 test("Wizard of Flatland enemy color cools to full blue at -20 and full white at -40", () => {
