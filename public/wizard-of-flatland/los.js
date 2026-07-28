@@ -2,7 +2,7 @@
     "use strict";
 
     const DEFAULT_BINS = 720;
-    const DEFAULT_MAX_DISTANCE = 34;
+    const DEFAULT_MAX_DISTANCE = 20;
     const DEFAULT_MIN_DISTANCE = 1.2;
     const DEFAULT_EPSILON = 1e-8;
 
