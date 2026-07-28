@@ -68,6 +68,8 @@
     const SPELL_COOLDOWN_RING_RADIUS = 13;
     const SPELL_COOLDOWN_RING_CIRCUMFERENCE = 2 * Math.PI * SPELL_COOLDOWN_RING_RADIUS;
     const FIREBALL_EXPLOSION_VISUAL_SECONDS = 0.16;
+    const FIRE_DEATH_VISUAL_SECONDS = 1.275;
+    const FIRE_DEATH_FLAME_COUNT = 3;
     const FIREBALL_ANIMATION_TEXTURE_PATH = "/wizard-of-flatland/hi-fi-fireball.png";
     const FIREBALL_ICON_PATH = "/assets/images/thumbnails/fireball.png";
     const SPIKE_ICON_PATH = "/assets/images/magic/spike.png";
@@ -89,12 +91,16 @@
     const FIREBALL_IMPACT_ANIMATION_SPEED_MULTIPLIER = 10;
     const FIREBALL_SELF_DAMAGE_SCALE = 0.25;
     const FIREBALL_WALL_HIT_RADIUS_SCALE = 0.5;
+    const FIREBALL_HALF_DAMAGE_OUTER_RADIUS = 1;
     const SPIKE_PROJECTILE_RADIUS = 0.18;
     const SPIKE_BOUNCE_MAX_SPIN_HZ = 5;
     const SPIKE_BOUNCE_MAX_DAMAGE_LOSS_RATIO = 0.75;
     const SPIKE_BOUNCE_MAX_SPEED_LOSS_RATIO = 0.5;
     const SPIKE_BOUNCE_MAX_SCATTER_RADIANS = 22 * Math.PI / 180;
     const SPIKE_BOUNCE_WALL_EXIT_EPSILON = 0.003;
+    const SPIKE_SHATTER_VISUAL_SECONDS = 0.5;
+    const SPIKE_SHATTER_MAX_OFFSET_RADIUS = 0.5;
+    const SPIKE_SHATTER_MAX_ROTATION = 30 * Math.PI / 180;
     const ENEMY_MAX_HEALTH = 20;
     const WIZARD_MAX_HEALTH = 100;
     const WIZARD_NEW_GAME_STARTING_HEALTH = 10;
@@ -472,7 +478,9 @@
         agents: [],
         fireballs: [],
         fireballExplosions: [],
+        fireDeathEffects: [],
         freezeParticles: [],
+        spikeShatterEffects: [],
         wallShatterEffects: [],
         brokenWallGaps: [],
         coins: [],
@@ -2310,7 +2318,9 @@
         state.agents = [];
         state.fireballs = [];
         state.fireballExplosions = [];
+        state.fireDeathEffects = [];
         state.freezeParticles = [];
+        state.spikeShatterEffects = [];
         state.wallShatterEffects = [];
         state.brokenWallGaps = [];
         state.spellCooldownRemaining = 0;
@@ -2658,7 +2668,9 @@
         state.restoredSectionSnapshotKeys = new Set();
         state.fireballs = [];
         state.fireballExplosions = [];
+        state.fireDeathEffects = [];
         state.freezeParticles = [];
+        state.spikeShatterEffects = [];
         state.wallShatterEffects = [];
         state.brokenWallGaps = [];
         state.spellCooldownRemaining = 0;
@@ -4152,6 +4164,7 @@
             if (hitAgent) {
                 if (fireball.spellId === "spikes") {
                     if (damageAgentAndMaybeDropCoin(hitAgent, fireball.damage)) {
+                        state.spikeShatterEffects.push(createSpikeShatterEffect(hitAgent));
                         state.agents = state.agents.filter((agent) => agent !== hitAgent);
                     }
                     continue;
@@ -4665,8 +4678,9 @@
             throw new Error("Wizard of Flatland fireball self-damage requires a finite wizard position");
         }
         const distance = Math.hypot(state.target.x - circleX, state.target.y - circleY);
-        if (distance > radius + TARGET_RADIUS) return;
-        damageWizard(damage * FIREBALL_SELF_DAMAGE_SCALE);
+        if (distance > radius + FIREBALL_HALF_DAMAGE_OUTER_RADIUS + TARGET_RADIUS) return;
+        const damageScale = distance <= radius + TARGET_RADIUS ? 1 : 0.5;
+        damageWizard(damage * damageScale * FIREBALL_SELF_DAMAGE_SCALE);
     }
 
     function updateFireballExplosions(dt) {
@@ -4674,6 +4688,143 @@
             explosion.age += dt;
             return explosion.age < FIREBALL_EXPLOSION_VISUAL_SECONDS;
         });
+    }
+
+    function updateFireDeathEffects(dt) {
+        if (!Array.isArray(state.fireDeathEffects)) {
+            throw new Error("Wizard of Flatland fire death update requires effect tracking");
+        }
+        state.fireDeathEffects = state.fireDeathEffects.filter((effect) => {
+            validateFireDeathEffect(effect);
+            effect.age += dt;
+            return effect.age < FIRE_DEATH_VISUAL_SECONDS;
+        });
+    }
+
+    function createFireDeathEffect(agent) {
+        if (!agent || !Number.isFinite(agent.x) || !Number.isFinite(agent.y) || !(agent.radius > 0)) {
+            throw new Error("Wizard of Flatland fire death requires finite enemy geometry");
+        }
+        const flames = [];
+        for (let i = 0; i < FIRE_DEATH_FLAME_COUNT; i++) {
+            flames.push({
+                offsetX: (Math.random() - 0.5) * agent.radius * 0.9,
+                offsetY: (Math.random() - 0.5) * agent.radius * 0.45,
+                size: agent.radius * (0.38 + Math.random() * 0.28) * 1.6875,
+                phase: Math.random() * Math.PI * 2,
+                sway: 0.65 + Math.random() * 0.7,
+                speed: 27 + Math.random() * 16,
+                delay: Math.random() * 0.12
+            });
+        }
+        return { age: 0, x: agent.x, y: agent.y, radius: agent.radius, flames };
+    }
+
+    function validateFireDeathEffect(effect) {
+        if (
+            !effect ||
+            !Number.isFinite(effect.age) ||
+            effect.age < 0 ||
+            !Number.isFinite(effect.x) ||
+            !Number.isFinite(effect.y) ||
+            !(effect.radius > 0) ||
+            !Array.isArray(effect.flames) ||
+            effect.flames.length !== FIRE_DEATH_FLAME_COUNT
+        ) {
+            throw new Error("Wizard of Flatland fire death effect requires finite flame geometry");
+        }
+    }
+
+    function updateSpikeShatterEffects(dt) {
+        if (!Array.isArray(state.spikeShatterEffects)) {
+            throw new Error("Wizard of Flatland spike shatter update requires effect tracking");
+        }
+        state.spikeShatterEffects = state.spikeShatterEffects.filter((effect) => {
+            validateSpikeShatterEffect(effect);
+            effect.age += dt;
+            return effect.age < SPIKE_SHATTER_VISUAL_SECONDS;
+        });
+    }
+
+    function createSpikeShatterEffect(agent) {
+        if (
+            !agent ||
+            !Number.isFinite(agent.x) ||
+            !Number.isFinite(agent.y) ||
+            !(agent.radius > 0) ||
+            !Number.isFinite(agent.temperature)
+        ) {
+            throw new Error("Wizard of Flatland spike shatter requires finite enemy geometry");
+        }
+        const angle = getAgentFacingAngle(agent);
+        const baseAngleOffset = Math.PI / 6;
+        const vertices = [
+            { x: Math.cos(angle) * agent.radius, y: Math.sin(angle) * agent.radius },
+            {
+                x: Math.cos(angle + Math.PI - baseAngleOffset) * agent.radius,
+                y: Math.sin(angle + Math.PI - baseAngleOffset) * agent.radius
+            },
+            {
+                x: Math.cos(angle + Math.PI + baseAngleOffset) * agent.radius,
+                y: Math.sin(angle + Math.PI + baseAngleOffset) * agent.radius
+            }
+        ];
+        const centerWeights = vertices.map(() => 0.7 + Math.random() * 0.6);
+        const weightTotal = centerWeights.reduce((sum, weight) => sum + weight, 0);
+        const center = vertices.reduce((point, vertex, index) => ({
+            x: point.x + vertex.x * centerWeights[index] / weightTotal,
+            y: point.y + vertex.y * centerWeights[index] / weightTotal
+        }), { x: 0, y: 0 });
+        const edgePoints = vertices.map((vertex, index) => {
+            const next = vertices[(index + 1) % vertices.length];
+            const ratio = 0.32 + Math.random() * 0.36;
+            return {
+                x: vertex.x + (next.x - vertex.x) * ratio,
+                y: vertex.y + (next.y - vertex.y) * ratio
+            };
+        });
+        const polygons = [];
+        for (let i = 0; i < vertices.length; i++) {
+            polygons.push([center, vertices[i], edgePoints[i]]);
+            polygons.push([center, edgePoints[i], vertices[(i + 1) % vertices.length]]);
+        }
+        const fragments = polygons.map((polygon) => {
+            const centroid = polygon.reduce((point, vertex) => ({
+                x: point.x + vertex.x / polygon.length,
+                y: point.y + vertex.y / polygon.length
+            }), { x: 0, y: 0 });
+            let directionAngle = Math.atan2(centroid.y, centroid.x);
+            if (Math.hypot(centroid.x, centroid.y) < 0.000001) directionAngle = Math.random() * Math.PI * 2;
+            directionAngle += (Math.random() - 0.5) * Math.PI / 3;
+            const offsetRadius = SPIKE_SHATTER_MAX_OFFSET_RADIUS * (0.55 + Math.random() * 0.45);
+            return {
+                centerX: agent.x + centroid.x,
+                centerY: agent.y + centroid.y,
+                points: polygon.map((vertex) => ({
+                    x: vertex.x - centroid.x,
+                    y: vertex.y - centroid.y
+                })),
+                offsetX: Math.cos(directionAngle) * offsetRadius,
+                offsetY: Math.sin(directionAngle) * offsetRadius,
+                rotation: (Math.random() * 2 - 1) * SPIKE_SHATTER_MAX_ROTATION
+            };
+        });
+        const warmColor = agent.isDesignatedAttacker ? "#6f0000" : getAgentHomeZoneOppositeColor(agent);
+        return {
+            age: 0,
+            fillColor: getAgentTemperatureColor(warmColor, agent.temperature),
+            fragments
+        };
+    }
+
+    function validateSpikeShatterEffect(effect) {
+        if (!effect || typeof effect !== "object") throw new Error("Wizard of Flatland spike shatter effect is missing");
+        if (!Number.isFinite(effect.age) || effect.age < 0) {
+            throw new Error("Wizard of Flatland spike shatter effect requires finite age");
+        }
+        if (typeof effect.fillColor !== "string" || !Array.isArray(effect.fragments) || effect.fragments.length === 0) {
+            throw new Error("Wizard of Flatland spike shatter effect requires color and fragments");
+        }
     }
 
     function updateWallShatterEffects(dt) {
@@ -4729,8 +4880,11 @@
         if (!(damage > 0)) throw new Error("Wizard of Flatland fireball damage requires a positive amount");
         state.agents = state.agents.filter((agent) => {
             const distance = Math.hypot(agent.x - circleX, agent.y - circleY);
-            if (distance > radius + agent.radius) return true;
-            return !damageAgentAndMaybeDropCoin(agent, damage);
+            if (distance > radius + FIREBALL_HALF_DAMAGE_OUTER_RADIUS + agent.radius) return true;
+            const damageScale = distance <= radius + agent.radius ? 1 : 0.5;
+            const killed = damageAgentAndMaybeDropCoin(agent, damage * damageScale);
+            if (killed) state.fireDeathEffects.push(createFireDeathEffect(agent));
+            return !killed;
         });
     }
 
@@ -6611,6 +6765,8 @@
         }
         drawFireballs();
         drawFireballExplosions();
+        drawFireDeathEffects();
+        drawSpikeShatterEffects();
         drawAgents();
         drawLosOverlay();
         drawWalls();
@@ -8290,6 +8446,14 @@
             const center = worldToScreen(explosion.x, explosion.y);
             const t = Math.max(0, Math.min(1, explosion.age / FIREBALL_EXPLOSION_VISUAL_SECONDS));
             const radius = explosion.radius * state.view.scale * (0.72 + t * 0.28);
+            const outerRadius = (explosion.radius + FIREBALL_HALF_DAMAGE_OUTER_RADIUS)
+                * state.view.scale
+                * (0.72 + t * 0.28);
+            ctx.strokeStyle = `rgba(255,132,49,${0.52 * (1 - t)})`;
+            ctx.lineWidth = Math.max(1, state.view.scale * 0.035);
+            ctx.beginPath();
+            ctx.arc(center.x, center.y, outerRadius, 0, Math.PI * 2);
+            ctx.stroke();
             ctx.fillStyle = `rgba(255,115,36,${0.28 * (1 - t)})`;
             ctx.strokeStyle = `rgba(255,209,102,${0.95 * (1 - t)})`;
             ctx.lineWidth = Math.max(2, state.view.scale * 0.06);
@@ -8299,6 +8463,115 @@
             ctx.stroke();
         }
         ctx.restore();
+    }
+
+    function drawFireDeathEffects() {
+        if (!Array.isArray(state.fireDeathEffects) || state.fireDeathEffects.length === 0) return;
+        for (const effect of state.fireDeathEffects) {
+            validateFireDeathEffect(effect);
+            const center = worldToScreen(effect.x, effect.y);
+            ctx.save();
+            ctx.translate(center.x, center.y);
+            for (const flame of effect.flames) {
+                if (
+                    !flame ||
+                    !Number.isFinite(flame.offsetX) ||
+                    !Number.isFinite(flame.offsetY) ||
+                    !(flame.size > 0) ||
+                    !Number.isFinite(flame.phase) ||
+                    !Number.isFinite(flame.sway) ||
+                    !(flame.speed > 0) ||
+                    !Number.isFinite(flame.delay) ||
+                    flame.delay < 0 ||
+                    flame.delay >= FIRE_DEATH_VISUAL_SECONDS
+                ) {
+                    throw new Error("Wizard of Flatland fire death flame requires finite animation data");
+                }
+                const flameProgress = Math.max(
+                    0,
+                    Math.min(1, (effect.age - flame.delay) / (FIRE_DEATH_VISUAL_SECONDS - flame.delay))
+                );
+                const flameEnvelope = Math.sin(flameProgress * Math.PI);
+                const flicker = 0.82 + Math.sin(effect.age * flame.speed + flame.phase) * 0.18;
+                const sway = Math.sin(effect.age * 22 + flame.phase) * flame.size * flame.sway;
+                const x = flame.offsetX * state.view.scale;
+                const riseAndFall = Math.sin(effect.age * flame.speed * 0.22 + flame.phase)
+                    * effect.radius
+                    * state.view.scale
+                    * 0.1;
+                const y = flame.offsetY * state.view.scale + riseAndFall;
+                const width = flame.size * state.view.scale * flicker * flameEnvelope;
+                const height = width * (1.7 + flicker * 0.45);
+                if (!(width > 0.000001)) continue;
+                ctx.globalAlpha = Math.min(1, flameEnvelope * 1.6);
+                ctx.fillStyle = "#ff7a18";
+                ctx.beginPath();
+                ctx.moveTo(x - width * 0.55, y + height * 0.35);
+                ctx.quadraticCurveTo(x - width * 0.25, y - height * 0.25, x + sway, y - height);
+                ctx.quadraticCurveTo(x + width * 0.55, y - height * 0.12, x + width * 0.55, y + height * 0.35);
+                ctx.closePath();
+                ctx.fill();
+                ctx.fillStyle = "#ffd15c";
+                ctx.beginPath();
+                ctx.moveTo(x - width * 0.24, y + height * 0.3);
+                ctx.quadraticCurveTo(x, y - height * 0.08, x + sway * 0.45, y - height * 0.52);
+                ctx.quadraticCurveTo(x + width * 0.25, y, x + width * 0.24, y + height * 0.3);
+                ctx.closePath();
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+    }
+
+    function drawSpikeShatterEffects() {
+        if (!Array.isArray(state.spikeShatterEffects) || state.spikeShatterEffects.length === 0) return;
+        for (const effect of state.spikeShatterEffects) {
+            validateSpikeShatterEffect(effect);
+            const progress = Math.max(0, Math.min(1, effect.age / SPIKE_SHATTER_VISUAL_SECONDS));
+            const movementProgress = 1 - Math.pow(1 - progress, 3);
+            const alpha = Math.min(1, (1 - progress) * 2.5);
+            for (const fragment of effect.fragments) {
+                if (
+                    !fragment ||
+                    !Number.isFinite(fragment.centerX) ||
+                    !Number.isFinite(fragment.centerY) ||
+                    !Number.isFinite(fragment.offsetX) ||
+                    !Number.isFinite(fragment.offsetY) ||
+                    !Number.isFinite(fragment.rotation) ||
+                    !Array.isArray(fragment.points) ||
+                    fragment.points.length !== 3 ||
+                    fragment.points.some((point) => !point || !Number.isFinite(point.x) || !Number.isFinite(point.y))
+                ) {
+                    throw new Error("Wizard of Flatland spike shatter fragment requires finite triangular geometry");
+                }
+                if (Math.hypot(fragment.offsetX, fragment.offsetY) > SPIKE_SHATTER_MAX_OFFSET_RADIUS + 0.000001) {
+                    throw new Error("Wizard of Flatland spike shatter fragment exceeds maximum offset radius");
+                }
+                if (Math.abs(fragment.rotation) > SPIKE_SHATTER_MAX_ROTATION + 0.000001) {
+                    throw new Error("Wizard of Flatland spike shatter fragment exceeds maximum rotation");
+                }
+                const center = worldToScreen(
+                    fragment.centerX + fragment.offsetX * movementProgress,
+                    fragment.centerY + fragment.offsetY * movementProgress
+                );
+                ctx.save();
+                ctx.globalAlpha = alpha;
+                ctx.translate(center.x, center.y);
+                ctx.rotate(fragment.rotation * movementProgress);
+                ctx.fillStyle = effect.fillColor;
+                ctx.strokeStyle = "#ffffff";
+                ctx.lineWidth = Math.max(1, state.view.scale * 0.026);
+                ctx.beginPath();
+                ctx.moveTo(fragment.points[0].x * state.view.scale, fragment.points[0].y * state.view.scale);
+                for (let i = 1; i < fragment.points.length; i++) {
+                    ctx.lineTo(fragment.points[i].x * state.view.scale, fragment.points[i].y * state.view.scale);
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
     }
 
     function drawWallShatterEffects() {
@@ -8828,6 +9101,8 @@
         framePart("freeze particles", () => updateFreezeParticles(dt));
         framePart("enemy temperatures", () => updateEnemyTemperatures(dt));
         framePart("fireballs", () => updateFireballs(dt));
+        framePart("fire deaths", () => updateFireDeathEffects(dt));
+        framePart("spike shatters", () => updateSpikeShatterEffects(dt));
         framePart("wall shatters", () => updateWallShatterEffects(dt));
         framePart("temporary path costs", () => updateTemporaryPathfindingCosts());
         framePart("live enemy path costs", () => updateLiveEnemyPathfindingCosts());
