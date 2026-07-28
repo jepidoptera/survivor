@@ -518,6 +518,7 @@
         walls: createEmptyWallBuffer(),
         manualWalls: createEmptyWallBuffer(),
         generatedMazeWalls: createEmptyWallBuffer(),
+        generatedMazeWallSectionRanges: [],
         generatedMazeChunkKeys: new Set(),
         generatedMazeInstalledChunkKeys: new Set(),
         generatedMazeSignature: "",
@@ -1622,6 +1623,11 @@
             validateWallLabelBuffer(message.allWalls, "maze pathfinding wall labels");
         });
         let generatedWalls = message.generatedWalls;
+        let wallSectionRanges = validateMazeWallSectionRanges(
+            message.wallSectionRanges,
+            getWallCount(generatedWalls),
+            "maze worker result"
+        );
         let allWalls = message.allWalls;
         const manualOffset = generatedWalls.length;
         if (allWalls.length !== generatedWalls.length + state.manualWalls.length) {
@@ -1636,13 +1642,21 @@
         });
         profiler.span("apply broken wall gaps", () => {
             if (Array.isArray(state.brokenWallGaps) && state.brokenWallGaps.length > 0) {
-                generatedWalls = applyBrokenWallGapsToBuffer(generatedWalls, state.brokenWallGaps, "generated maze walls");
+                const brokenResult = applyBrokenWallGapsToBuffer(
+                    generatedWalls,
+                    state.brokenWallGaps,
+                    "generated maze walls",
+                    wallSectionRanges
+                );
+                generatedWalls = brokenResult.walls;
+                wallSectionRanges = brokenResult.wallSectionRanges;
                 allWalls = concatWallBuffers(generatedWalls, state.manualWalls);
             }
         });
 
         profiler.span("install wall buffers and section keys", () => {
             state.generatedMazeWalls = generatedWalls;
+            state.generatedMazeWallSectionRanges = wallSectionRanges;
             state.walls = allWalls;
             state.generatedMazeSignature = message.signature;
             state.generatedMazePendingSignature = "";
@@ -1956,6 +1970,49 @@
             }
             return !restoredCoinKeys.has(coin.key);
         });
+    }
+
+    function validateMazeWallSectionRanges(ranges, generatedWallCount, context) {
+        if (!Array.isArray(ranges)) {
+            throw new Error(`Wizard of Flatland ${context} requires maze wall section ranges`);
+        }
+        if (!Number.isInteger(generatedWallCount) || generatedWallCount < 0) {
+            throw new Error(`Wizard of Flatland ${context} requires a valid generated wall count`);
+        }
+        let expectedStart = 0;
+        const validated = ranges.map((range) => {
+            if (
+                !range ||
+                typeof range.sectionKey !== "string" ||
+                range.sectionKey.length === 0 ||
+                !Number.isInteger(range.startWallIndex) ||
+                !Number.isInteger(range.wallCount) ||
+                range.wallCount <= 0 ||
+                range.startWallIndex !== expectedStart ||
+                !Number.isFinite(range.minX) ||
+                !Number.isFinite(range.minY) ||
+                !Number.isFinite(range.maxX) ||
+                !Number.isFinite(range.maxY) ||
+                range.minX > range.maxX ||
+                range.minY > range.maxY
+            ) {
+                throw new Error(`Wizard of Flatland ${context} has invalid maze wall section ranges`);
+            }
+            expectedStart += range.wallCount;
+            return {
+                sectionKey: range.sectionKey,
+                startWallIndex: range.startWallIndex,
+                wallCount: range.wallCount,
+                minX: range.minX,
+                minY: range.minY,
+                maxX: range.maxX,
+                maxY: range.maxY
+            };
+        });
+        if (expectedStart !== generatedWallCount) {
+            throw new Error(`Wizard of Flatland ${context} maze wall section ranges do not cover generated walls`);
+        }
+        return validated;
     }
 
     function getVisibleDroppedMazeCoins(options = getMazeOptions(), existingCoinsByKey = new Map()) {
@@ -2369,6 +2426,7 @@
         state.walls = createEmptyWallBuffer();
         state.manualWalls = createEmptyWallBuffer();
         state.generatedMazeWalls = createEmptyWallBuffer();
+        state.generatedMazeWallSectionRanges = [];
         state.generatedMazeChunkKeys = new Set();
         state.generatedMazeInstalledChunkKeys = new Set();
         state.generatedMazeSignature = "";
@@ -2742,6 +2800,7 @@
         updateStatusBars();
         refreshSpellLevelPanel();
         state.generatedMazeWalls = createEmptyWallBuffer();
+        state.generatedMazeWallSectionRanges = [];
         state.walls = createEmptyWallBuffer();
         state.manualWalls = createEmptyWallBuffer();
         explorationSystem.reset();
@@ -5914,7 +5973,13 @@
     function applyProceduralWallBreak(wallIndex, gap) {
         const generatedWallCount = getWallCount(state.generatedMazeWalls);
         if (wallIndex < generatedWallCount) {
+            const previousCount = generatedWallCount;
             state.generatedMazeWalls = splitWallBufferAtIndexForGap(state.generatedMazeWalls, wallIndex, gap);
+            state.generatedMazeWallSectionRanges = adjustMazeWallSectionRangesForSplit(
+                state.generatedMazeWallSectionRanges,
+                wallIndex,
+                getWallCount(state.generatedMazeWalls) - previousCount
+            );
         } else {
             const manualWallIndex = wallIndex - generatedWallCount;
             state.manualWalls = splitWallBufferAtIndexForGap(state.manualWalls, manualWallIndex, gap);
@@ -5923,15 +5988,49 @@
         state.generatedMazeSignature = "";
     }
 
-    function applyBrokenWallGapsToBuffer(walls, gaps, label) {
+    function applyBrokenWallGapsToBuffer(walls, gaps, label, wallSectionRanges) {
         validateWallBuffer(walls, label);
         let next = walls;
+        let nextRanges = validateMazeWallSectionRanges(
+            wallSectionRanges,
+            getWallCount(walls),
+            `${label} broken gap application`
+        );
         for (const gap of gaps) {
             validateBrokenWallGap(gap);
             const wallIndex = findMatchingWallGapIndex(next, gap);
             if (wallIndex < 0) continue;
+            const previousCount = getWallCount(next);
             next = splitWallBufferAtIndexForGap(next, wallIndex, gap);
+            nextRanges = adjustMazeWallSectionRangesForSplit(
+                nextRanges,
+                wallIndex,
+                getWallCount(next) - previousCount
+            );
         }
+        return { walls: next, wallSectionRanges: nextRanges };
+    }
+
+    function adjustMazeWallSectionRangesForSplit(ranges, wallIndex, wallCountDelta) {
+        if (!Number.isInteger(wallIndex) || wallIndex < 0 || !Number.isInteger(wallCountDelta)) {
+            throw new Error("Wizard of Flatland wall split range update requires a valid wall index and count delta");
+        }
+        const next = ranges.map((range) => ({ ...range }));
+        const ownerIndex = next.findIndex((range) => (
+            wallIndex >= range.startWallIndex &&
+            wallIndex < range.startWallIndex + range.wallCount
+        ));
+        if (ownerIndex < 0) {
+            throw new Error(`Wizard of Flatland wall split range update cannot locate generated wall ${wallIndex}`);
+        }
+        next[ownerIndex].wallCount += wallCountDelta;
+        if (next[ownerIndex].wallCount < 0) {
+            throw new Error("Wizard of Flatland wall split range update produced a negative wall count");
+        }
+        for (let i = ownerIndex + 1; i < next.length; i++) {
+            next[i].startWallIndex += wallCountDelta;
+        }
+        if (next[ownerIndex].wallCount === 0) next.splice(ownerIndex, 1);
         return next;
     }
 
@@ -6858,6 +6957,7 @@
             const losMetrics = state.los.lastMetrics;
             lines.push(
                 `LOS ${Number(losMetrics.elapsedMs || 0).toFixed(2)} ms/` +
+                `${Number(losMetrics.scannedWallCount || 0)}s/` +
                 `${Number(losMetrics.candidateWallCount || 0)}w/` +
                 `${Number(losMetrics.raySegmentTests || 0)}t`
             );
@@ -6899,6 +6999,7 @@
         const los = state.los;
         if (!los || los.enabled !== true) return;
         explorationSystem.syncWalls(state.walls, explorationWallLayout);
+        const wallRanges = getLosWallRanges(los.maxDistance);
         const result = computeLosVisibilityPolygon({
             x: state.target.x,
             y: state.target.y,
@@ -6909,16 +7010,49 @@
             wallX2: WALL_X2,
             wallY2: WALL_Y2,
             bins: los.bins,
-            maxDistance: los.maxDistance
+            maxDistance: los.maxDistance,
+            wallRanges
         });
         los.lastMetrics = {
             bins: result.bins,
+            scannedWallCount: result.scannedWallCount,
             candidateWallCount: result.candidateWallCount,
             raySegmentTests: result.raySegmentTests,
             elapsedMs: result.elapsedMs
         };
         los.lastResult = result;
         explorationSystem.applyVisibility(result.hitWallIndices, result.hitWallTs);
+    }
+
+    function getLosWallRanges(maxDistance) {
+        if (!isProceduralMazeScenario()) return undefined;
+        if (!Number.isFinite(maxDistance) || maxDistance <= 0) {
+            throw new Error("Wizard of Flatland LOS section filtering requires a positive sight radius");
+        }
+        const generatedWallCount = getWallCount(state.generatedMazeWalls);
+        const sectionRanges = validateMazeWallSectionRanges(
+            state.generatedMazeWallSectionRanges,
+            generatedWallCount,
+            "LOS section filtering"
+        );
+        const ranges = [];
+        for (const range of sectionRanges) {
+            const nearestX = Math.max(range.minX, Math.min(range.maxX, state.target.x));
+            const nearestY = Math.max(range.minY, Math.min(range.maxY, state.target.y));
+            if (Math.hypot(nearestX - state.target.x, nearestY - state.target.y) > maxDistance) continue;
+            ranges.push({
+                startWallIndex: range.startWallIndex,
+                wallCount: range.wallCount
+            });
+        }
+        const manualWallCount = getWallCount(state.manualWalls);
+        if (manualWallCount > 0) {
+            ranges.push({
+                startWallIndex: generatedWallCount,
+                wallCount: manualWallCount
+            });
+        }
+        return ranges;
     }
 
     function drawLosOverlay() {

@@ -65,6 +65,7 @@ function loadMazeWorkerExports() {
             finishWallBuffer,
             appendWallBuffer,
             normalizeSavedSections,
+            buildMazeSections,
             getHexCornersWorld,
             getMazeSharedHallConnection,
             canMazeSharedHallwayUseFullWall,
@@ -109,6 +110,44 @@ function loadMazeWorkerExports() {
     `, context);
     return context.self.__mazeWorkerTestExports;
 }
+
+test("Wizard of Flatland maze worker reports contiguous wall ranges for each section", () => {
+    const api = loadMazeWorkerExports();
+    const firstWalls = Float32Array.from([0, 0, 1, 0, 1, 0, 0, 0]);
+    const secondWalls = Float32Array.from([
+        10, 0, 11, 0, 1, 0, 0, 0,
+        10, 1, 11, 1, 1, 0, 0, 0
+    ]);
+    const result = api.buildMazeSections({
+        requestId: 1,
+        signature: "ranges",
+        options: { seed: "ranges", chunkSize: 28, roomScale: 0.5, twistiness: 0.5 },
+        keys: ["0,0", "1,0"],
+        savedSections: [
+            { sectionKey: "0,0", walls: firstWalls },
+            { sectionKey: "1,0", walls: secondWalls }
+        ],
+        manualWalls: new Float32Array(0),
+        bounds: { minX: -2, minY: -2, maxX: 12, maxY: 3 },
+        targetRadius: 0.42
+    });
+
+    assert.deepEqual(
+        Array.from(result.wallSectionRanges, (range) => ({
+            sectionKey: range.sectionKey,
+            startWallIndex: range.startWallIndex,
+            wallCount: range.wallCount,
+            minX: range.minX,
+            minY: range.minY,
+            maxX: range.maxX,
+            maxY: range.maxY
+        })),
+        [
+            { sectionKey: "0,0", startWallIndex: 0, wallCount: 1, minX: 0, minY: 0, maxX: 1, maxY: 0 },
+            { sectionKey: "1,0", startWallIndex: 1, wallCount: 2, minX: 10, minY: 0, maxX: 11, maxY: 1 }
+        ]
+    );
+});
 
 test("Wizard of Flatland maze worker accepts exact saved wall buffers by section key", () => {
     const worker = loadMazeWorkerExports();

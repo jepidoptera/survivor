@@ -91,13 +91,20 @@ function buildMazeSections(message) {
     const keys = normalizeSectionKeys(message.keys);
     const savedSections = normalizeSavedSections(message.savedSections || []);
     const generatedWallBuilder = createWallBufferBuilder();
+    const wallSectionRanges = [];
     for (const key of keys) {
+        const startWallIndex = generatedWallBuilder.length / WALL_STRIDE;
         if (savedSections.has(key)) {
             appendWallBuffer(generatedWallBuilder, savedSections.get(key));
-            continue;
+        } else {
+            const coord = parseMazeSectionKey(key);
+            appendMazeSectionWalls(generatedWallBuilder, coord.q, coord.r, options);
         }
-        const coord = parseMazeSectionKey(key);
-        appendMazeSectionWalls(generatedWallBuilder, coord.q, coord.r, options);
+        const wallCount = generatedWallBuilder.length / WALL_STRIDE - startWallIndex;
+        if (wallCount > 0) {
+            const bounds = getWallBuilderRangeBounds(generatedWallBuilder, startWallIndex, wallCount);
+            wallSectionRanges.push({ sectionKey: key, startWallIndex, wallCount, ...bounds });
+        }
     }
     const generatedWalls = finishWallBuffer(generatedWallBuilder);
     const manualWalls = normalizeWalls(message.manualWalls || [], "manual walls");
@@ -111,8 +118,31 @@ function buildMazeSections(message) {
         signature: String(message.signature || ""),
         generatedWalls,
         allWalls,
+        wallSectionRanges,
         nodeLayer
     };
+}
+
+function getWallBuilderRangeBounds(builder, startWallIndex, wallCount) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    const end = (startWallIndex + wallCount) * WALL_STRIDE;
+    for (let base = startWallIndex * WALL_STRIDE; base < end; base += WALL_STRIDE) {
+        const ax = builder.buffer[base];
+        const ay = builder.buffer[base + 1];
+        const bx = builder.buffer[base + 2];
+        const by = builder.buffer[base + 3];
+        minX = Math.min(minX, ax, bx);
+        minY = Math.min(minY, ay, by);
+        maxX = Math.max(maxX, ax, bx);
+        maxY = Math.max(maxY, ay, by);
+    }
+    if (![minX, minY, maxX, maxY].every(Number.isFinite)) {
+        throw new Error("Wizard of Flatland maze worker cannot bound a section wall range");
+    }
+    return { minX, minY, maxX, maxY };
 }
 
 function normalizeSavedSections(savedSections) {

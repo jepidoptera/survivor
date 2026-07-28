@@ -158,6 +158,29 @@ test("Wizard of Flatland optimized LOS matches brute-force ray intersections", (
     assert.ok(optimized.raySegmentTests < optimized.candidateWallCount * bins);
 });
 
+test("Wizard of Flatland LOS scans only supplied wall ranges while preserving global indices", () => {
+    const context = loadScript(LOS_PATH);
+    const api = context.getWizardFlatlandLosApi();
+    const result = api.computeVisibilityPolygon({
+        x: 0,
+        y: 0,
+        walls: Float32Array.from([
+            ...wall(2, -5, 2, 5),
+            ...wall(4, -5, 4, 5),
+            ...wall(6, -5, 6, 5)
+        ]),
+        wallStride: 8,
+        bins: 64,
+        maxDistance: 20,
+        wallRanges: [{ startWallIndex: 1, wallCount: 1 }]
+    });
+
+    assert.equal(result.scannedWallCount, 1);
+    assert.equal(result.candidateWallCount, 1);
+    assert.ok(Array.from(result.hitWallIndices).some((index) => index === 1));
+    assert.ok(Array.from(result.hitWallIndices).every((index) => index === -1 || index === 1));
+});
+
 test("Wizard of Flatland exploration fills adjacent LOS hits with one-cell padding", () => {
     const context = loadScript(EXPLORATION_PATH);
     const system = context.getWizardFlatlandExplorationApi().createExplorationSystem({ cellSize: 0.25 });

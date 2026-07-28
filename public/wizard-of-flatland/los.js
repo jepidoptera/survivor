@@ -80,16 +80,38 @@
         const originX = options.originX;
         const originY = options.originY;
         const maxDistance = options.maxDistance;
-        for (let i = 0; i < walls.length; i += wallStride) {
-            const ax = finiteNumber(walls[i + x1], "wall start x");
-            const ay = finiteNumber(walls[i + y1], "wall start y");
-            const bx = finiteNumber(walls[i + x2], "wall end x");
-            const by = finiteNumber(walls[i + y2], "wall end y");
-            const clipped = clipSegmentToCircle(originX, originY, maxDistance, ax, ay, bx, by);
-            if (!clipped) continue;
-            out.push({ ax, ay, bx, by, wallIndex: i / wallStride, clipped });
+        const wallCount = walls.length / wallStride;
+        const ranges = options.wallRanges === undefined
+            ? [{ startWallIndex: 0, wallCount }]
+            : options.wallRanges;
+        if (!Array.isArray(ranges)) {
+            throw new Error("Wizard of Flatland LOS wall ranges must be an array");
         }
-        return out;
+        let scannedWallCount = 0;
+        for (const range of ranges) {
+            if (
+                !range ||
+                !Number.isInteger(range.startWallIndex) ||
+                !Number.isInteger(range.wallCount) ||
+                range.startWallIndex < 0 ||
+                range.wallCount < 0 ||
+                range.startWallIndex + range.wallCount > wallCount
+            ) {
+                throw new Error("Wizard of Flatland LOS received an invalid wall range");
+            }
+            const end = (range.startWallIndex + range.wallCount) * wallStride;
+            for (let i = range.startWallIndex * wallStride; i < end; i += wallStride) {
+                scannedWallCount++;
+                const ax = finiteNumber(walls[i + x1], "wall start x");
+                const ay = finiteNumber(walls[i + y1], "wall start y");
+                const bx = finiteNumber(walls[i + x2], "wall end x");
+                const by = finiteNumber(walls[i + y2], "wall end y");
+                const clipped = clipSegmentToCircle(originX, originY, maxDistance, ax, ay, bx, by);
+                if (!clipped) continue;
+                out.push({ ax, ay, bx, by, wallIndex: i / wallStride, clipped });
+            }
+        }
+        return { candidates: out, scannedWallCount };
     }
 
     function addCandidateToRayBuckets(candidate, buckets, originX, originY, bins) {
@@ -133,7 +155,7 @@
         const wallX2 = Number.isInteger(input.wallX2) ? input.wallX2 : 2;
         const wallY2 = Number.isInteger(input.wallY2) ? input.wallY2 : 3;
         const startedAt = performance.now();
-        const candidates = collectCandidateWalls(walls, {
+        const collected = collectCandidateWalls(walls, {
             wallStride,
             wallX1,
             wallY1,
@@ -141,8 +163,10 @@
             wallY2,
             originX,
             originY,
-            maxDistance
+            maxDistance,
+            wallRanges: input.wallRanges
         });
+        const candidates = collected.candidates;
         const rayCandidates = Array.from({ length: bins }, () => []);
         for (const candidate of candidates) {
             addCandidateToRayBuckets(candidate, rayCandidates, originX, originY, bins);
@@ -191,6 +215,7 @@
             depths,
             hitWallIndices,
             hitWallTs,
+            scannedWallCount: collected.scannedWallCount,
             candidateWallCount: candidates.length,
             raySegmentTests,
             elapsedMs: performance.now() - startedAt
