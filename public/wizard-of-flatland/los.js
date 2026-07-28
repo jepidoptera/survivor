@@ -39,17 +39,35 @@
         return true;
     }
 
-    function wallCouldAffectCircle(originX, originY, maxDistance, ax, ay, bx, by) {
-        const minX = Math.min(ax, bx);
-        const maxX = Math.max(ax, bx);
-        const minY = Math.min(ay, by);
-        const maxY = Math.max(ay, by);
-        return (
-            maxX >= originX - maxDistance &&
-            minX <= originX + maxDistance &&
-            maxY >= originY - maxDistance &&
-            minY <= originY + maxDistance
-        );
+    function clipSegmentToCircle(originX, originY, maxDistance, ax, ay, bx, by) {
+        const startX = ax - originX;
+        const startY = ay - originY;
+        const dx = bx - ax;
+        const dy = by - ay;
+        const segmentLengthSquared = dx * dx + dy * dy;
+        const radiusSquared = maxDistance * maxDistance;
+        if (segmentLengthSquared <= DEFAULT_EPSILON) {
+            if (startX * startX + startY * startY > radiusSquared) return null;
+            return { ax, ay, bx, by, containsOrigin: startX * startX + startY * startY <= DEFAULT_EPSILON };
+        }
+        const closestT = Math.max(0, Math.min(1, -(startX * dx + startY * dy) / segmentLengthSquared));
+        const closestX = startX + dx * closestT;
+        const closestY = startY + dy * closestT;
+        const b = 2 * (startX * dx + startY * dy);
+        const c = startX * startX + startY * startY - radiusSquared;
+        const discriminant = b * b - 4 * segmentLengthSquared * c;
+        if (discriminant < 0) return null;
+        const root = Math.sqrt(Math.max(0, discriminant));
+        const startT = Math.max(0, (-b - root) / (2 * segmentLengthSquared));
+        const endT = Math.min(1, (-b + root) / (2 * segmentLengthSquared));
+        if (startT > endT) return null;
+        return {
+            ax: ax + dx * startT,
+            ay: ay + dy * startT,
+            bx: ax + dx * endT,
+            by: ay + dy * endT,
+            containsOrigin: closestX * closestX + closestY * closestY <= DEFAULT_EPSILON
+        };
     }
 
     function collectCandidateWalls(walls, options) {
@@ -67,10 +85,34 @@
             const ay = finiteNumber(walls[i + y1], "wall start y");
             const bx = finiteNumber(walls[i + x2], "wall end x");
             const by = finiteNumber(walls[i + y2], "wall end y");
-            if (!wallCouldAffectCircle(originX, originY, maxDistance, ax, ay, bx, by)) continue;
-            out.push({ ax, ay, bx, by, wallIndex: i / wallStride });
+            const clipped = clipSegmentToCircle(originX, originY, maxDistance, ax, ay, bx, by);
+            if (!clipped) continue;
+            out.push({ ax, ay, bx, by, wallIndex: i / wallStride, clipped });
         }
         return out;
+    }
+
+    function addCandidateToRayBuckets(candidate, buckets, originX, originY, bins) {
+        const twoPi = Math.PI * 2;
+        const step = twoPi / bins;
+        const clipped = candidate.clipped;
+        if (clipped.containsOrigin) {
+            for (const bucket of buckets) bucket.push(candidate);
+            return;
+        }
+        const startAngle = Math.atan2(clipped.ay - originY, clipped.ax - originX);
+        const endAngle = Math.atan2(clipped.by - originY, clipped.bx - originX);
+        let delta = endAngle - startAngle;
+        while (delta > Math.PI) delta -= twoPi;
+        while (delta < -Math.PI) delta += twoPi;
+        const low = delta >= 0 ? startAngle : startAngle + delta;
+        const high = delta >= 0 ? startAngle + delta : startAngle;
+        const first = Math.ceil((low + Math.PI) / step - 0.5 - DEFAULT_EPSILON);
+        const last = Math.floor((high + Math.PI) / step - 0.5 + DEFAULT_EPSILON);
+        for (let unwrappedIndex = first; unwrappedIndex <= last; unwrappedIndex++) {
+            const index = ((unwrappedIndex % bins) + bins) % bins;
+            buckets[index].push(candidate);
+        }
     }
 
     function computeVisibilityPolygon(input) {
@@ -101,6 +143,10 @@
             originY,
             maxDistance
         });
+        const rayCandidates = Array.from({ length: bins }, () => []);
+        for (const candidate of candidates) {
+            addCandidateToRayBuckets(candidate, rayCandidates, originX, originY, bins);
+        }
         const points = new Array(bins);
         const depths = new Float32Array(bins);
         const hitWallIndices = new Int32Array(bins);
@@ -109,6 +155,7 @@
         hitWallTs.fill(NaN);
         const rayHit = { distance: 0, wallT: 0 };
         const twoPi = Math.PI * 2;
+        let raySegmentTests = 0;
 
         for (let i = 0; i < bins; i++) {
             const theta = -Math.PI + ((i + 0.5) / bins) * twoPi;
@@ -117,8 +164,10 @@
             let best = maxDistance;
             let bestWallIndex = -1;
             let bestWallT = NaN;
-            for (let w = 0; w < candidates.length; w++) {
-                const wall = candidates[w];
+            const candidatesForRay = rayCandidates[i];
+            for (let w = 0; w < candidatesForRay.length; w++) {
+                const wall = candidatesForRay[w];
+                raySegmentTests++;
                 const hit = raySegmentHit(originX, originY, dirX, dirY, wall.ax, wall.ay, wall.bx, wall.by, rayHit);
                 if (hit && (rayHit.distance < best || (bestWallIndex < 0 && rayHit.distance <= best))) {
                     best = rayHit.distance;
@@ -143,6 +192,7 @@
             hitWallIndices,
             hitWallTs,
             candidateWallCount: candidates.length,
+            raySegmentTests,
             elapsedMs: performance.now() - startedAt
         };
     }

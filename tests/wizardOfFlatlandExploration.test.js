@@ -45,6 +45,37 @@ function intervals(system) {
     return result;
 }
 
+function bruteForceLos(walls, bins, maxDistance) {
+    const depths = new Float32Array(bins);
+    const hitWallIndices = new Int32Array(bins);
+    hitWallIndices.fill(-1);
+    for (let i = 0; i < bins; i++) {
+        const theta = -Math.PI + ((i + 0.5) / bins) * Math.PI * 2;
+        const dirX = Math.cos(theta);
+        const dirY = Math.sin(theta);
+        let best = maxDistance;
+        for (let offset = 0; offset < walls.length; offset += LAYOUT.stride) {
+            const ax = walls[offset + LAYOUT.x1];
+            const ay = walls[offset + LAYOUT.y1];
+            const sx = walls[offset + LAYOUT.x2] - ax;
+            const sy = walls[offset + LAYOUT.y2] - ay;
+            const denominator = dirX * sy - dirY * sx;
+            if (Math.abs(denominator) < 1e-8) continue;
+            const qpx = ax;
+            const qpy = ay;
+            const distance = (qpx * sy - qpy * sx) / denominator;
+            const wallT = (qpx * dirY - qpy * dirX) / denominator;
+            if (distance < 0 || wallT < 0 || wallT > 1) continue;
+            if (distance < best || (hitWallIndices[i] < 0 && distance <= best)) {
+                best = distance;
+                hitWallIndices[i] = offset / LAYOUT.stride;
+            }
+        }
+        depths[i] = best;
+    }
+    return { depths, hitWallIndices };
+}
+
 test("Wizard of Flatland LOS returns the wall and normalized position hit by each ray", () => {
     const context = loadScript(LOS_PATH);
     const api = context.getWizardFlatlandLosApi();
@@ -65,6 +96,66 @@ test("Wizard of Flatland LOS returns the wall and normalized position hit by eac
         assert.ok(result.hitWallTs[i] >= 0 && result.hitWallTs[i] <= 1);
         assert.ok(result.depths[i] < result.maxDistance);
     }
+});
+
+test("Wizard of Flatland LOS retains crossing walls and rejects walls outside the sight circle", () => {
+    const context = loadScript(LOS_PATH);
+    const api = context.getWizardFlatlandLosApi();
+    const bins = 3600;
+    const result = api.computeVisibilityPolygon({
+        x: 0,
+        y: 0,
+        walls: Float32Array.from([
+            ...wall(5, -30, 5, 30),
+            ...wall(15, 15, 25, 15)
+        ]),
+        wallStride: 8,
+        bins,
+        maxDistance: 20
+    });
+
+    assert.equal(result.candidateWallCount, 1);
+    assert.ok(Array.from(result.hitWallIndices).some((index) => index === 0));
+    assert.ok(Array.from(result.hitWallIndices).every((index) => index !== 1));
+    assert.ok(result.raySegmentTests > 0);
+    assert.ok(result.raySegmentTests < bins);
+});
+
+test("Wizard of Flatland LOS tests origin-crossing walls against every ray", () => {
+    const context = loadScript(LOS_PATH);
+    const api = context.getWizardFlatlandLosApi();
+    const bins = 64;
+    const result = api.computeVisibilityPolygon({
+        x: 0,
+        y: 0,
+        walls: Float32Array.from(wall(-5, 0, 5, 0)),
+        wallStride: 8,
+        bins,
+        maxDistance: 20
+    });
+
+    assert.equal(result.raySegmentTests, bins);
+    assert.ok(Array.from(result.depths).every((depth) => depth === 0));
+});
+
+test("Wizard of Flatland optimized LOS matches brute-force ray intersections", () => {
+    const context = loadScript(LOS_PATH);
+    const api = context.getWizardFlatlandLosApi();
+    const walls = Float32Array.from([
+        ...wall(5, -30, 5, 30),
+        ...wall(-14, -3, -7, 8),
+        ...wall(-8, -0.2, -8, 0.2),
+        ...wall(15, 15, 25, 15),
+        ...wall(-30, -4, 30, -4)
+    ]);
+    const bins = 720;
+    const maxDistance = 20;
+    const optimized = api.computeVisibilityPolygon({ x: 0, y: 0, walls, wallStride: 8, bins, maxDistance });
+    const brute = bruteForceLos(walls, bins, maxDistance);
+
+    assert.deepEqual(Array.from(optimized.hitWallIndices), Array.from(brute.hitWallIndices));
+    assert.deepEqual(Array.from(optimized.depths), Array.from(brute.depths));
+    assert.ok(optimized.raySegmentTests < optimized.candidateWallCount * bins);
 });
 
 test("Wizard of Flatland exploration fills adjacent LOS hits with one-cell padding", () => {

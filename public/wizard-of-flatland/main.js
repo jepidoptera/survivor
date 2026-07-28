@@ -6856,7 +6856,11 @@
         ];
         if (state.los && state.los.lastMetrics) {
             const losMetrics = state.los.lastMetrics;
-            lines.push(`LOS ${Number(losMetrics.elapsedMs || 0).toFixed(2)} ms/${Number(losMetrics.candidateWallCount || 0)}w`);
+            lines.push(
+                `LOS ${Number(losMetrics.elapsedMs || 0).toFixed(2)} ms/` +
+                `${Number(losMetrics.candidateWallCount || 0)}w/` +
+                `${Number(losMetrics.raySegmentTests || 0)}t`
+            );
         }
         if (slowestPart) lines.push(`Main ${slowestPart.label} ${slowestPart.duration.toFixed(2)} ms`);
         element.textContent = lines.join("\n");
@@ -6910,6 +6914,7 @@
         los.lastMetrics = {
             bins: result.bins,
             candidateWallCount: result.candidateWallCount,
+            raySegmentTests: result.raySegmentTests,
             elapsedMs: result.elapsedMs
         };
         los.lastResult = result;
