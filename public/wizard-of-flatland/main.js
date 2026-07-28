@@ -205,6 +205,9 @@
     const MAZE_COIN_OTHER_WALL_MIN_DISTANCE = 1;
     const MAZE_COIN_ATTRACT_DISTANCE = 2;
     const MAZE_COIN_RUSH_SPEED = 11;
+    const ENEMY_COIN_DROP_MAX_LANDING_RADIUS = 0.33 * 1.5;
+    const ENEMY_COIN_DROP_POP_SECONDS = 0.38 * Math.sqrt(1.5);
+    const ENEMY_COIN_DROP_POP_HEIGHT = 0.22 * 1.5;
     const ENEMY_COIN_BASE_AVERAGE = 0.5;
     const ENEMY_COIN_ZONE_MULTIPLIER = 1.37;
     const ENEMY_COIN_DROP_PROBABILITIES_BY_ZONE = [
@@ -293,6 +296,8 @@
     const FLOOR_HOME_BASE_LIGHT_BRIGHTNESS = 0.5;
     const FLOOR_HOME_BASE_LIGHT_MIN_VIEWPORT_EXAGGERATION_SECTIONS = 1;
     const FLOOR_HOME_BASE_LIGHT_MAX_VIEWPORT_EXAGGERATION_SECTIONS = 3;
+    const FLOOR_INACTIVE_PYRAMID_DARKNESS_SECTION_DISTANCE = 3;
+    const FLOOR_INACTIVE_PYRAMID_DARKNESS = 0.5;
     const MAZE_RING_BOUNDARY_INTERVAL = 7;
     const MAZE_RING_BOUNDARY_COLOR = "rgba(255,255,255,0.52)";
     const VIEW_ZOOM_MIN = 0.45;
@@ -4272,6 +4277,17 @@
         const survivors = [];
         for (const coin of state.coins) {
             validateCoin(coin);
+            if (coin.dropPop) {
+                coin.dropPop.age = Math.min(coin.dropPop.duration, coin.dropPop.age + dt);
+                const popProgress = coin.dropPop.age / coin.dropPop.duration;
+                coin.x = coin.dropPop.startX + (coin.homeX - coin.dropPop.startX) * popProgress;
+                coin.y = coin.dropPop.startY + (coin.homeY - coin.dropPop.startY) * popProgress;
+                if (coin.dropPop.age >= coin.dropPop.duration) {
+                    coin.x = coin.homeX;
+                    coin.y = coin.homeY;
+                    coin.dropPop = null;
+                }
+            }
             const dx = state.target.x - coin.x;
             const dy = state.target.y - coin.y;
             const distance = Math.hypot(dx, dy);
@@ -4287,8 +4303,16 @@
             }
             if (coin.rushing && distance > 0.000001) {
                 const step = Math.min(distance, MAZE_COIN_RUSH_SPEED * dt);
-                coin.x += dx / distance * step;
-                coin.y += dy / distance * step;
+                const rushX = dx / distance * step;
+                const rushY = dy / distance * step;
+                coin.x += rushX;
+                coin.y += rushY;
+                if (coin.dropPop) {
+                    coin.dropPop.startX += rushX;
+                    coin.dropPop.startY += rushY;
+                    coin.homeX += rushX;
+                    coin.homeY += rushY;
+                }
             }
             const nextDistance = Math.hypot(state.target.x - coin.x, state.target.y - coin.y);
             if (coin.rushing && nextDistance <= getMazeCoinCollectDistance(coin)) {
@@ -4517,7 +4541,18 @@
             throw new Error("Wizard of Flatland dropped coin creation requires dropped coin tracking");
         }
         state.nextDroppedCoinId = getNextAvailableDroppedCoinId();
-        const coord = worldToMazeSectionCoord(x, y, getMazeOptions());
+        const landingAngle = Math.random() * Math.PI * 2;
+        const landingDistance = Math.sqrt(Math.random()) * ENEMY_COIN_DROP_MAX_LANDING_RADIUS;
+        const desiredLandingX = x + Math.cos(landingAngle) * landingDistance;
+        const desiredLandingY = y + Math.sin(landingAngle) * landingDistance;
+        const landing = constrainMovementToSegmentWalls(
+            x,
+            y,
+            desiredLandingX,
+            desiredLandingY,
+            MAZE_COIN_RADIUS
+        );
+        const coord = worldToMazeSectionCoord(landing.x, landing.y, getMazeOptions());
         const coin = {
             key: `drop|${state.nextDroppedCoinId}`,
             sectionKey: mazeSectionKey(coord.q, coord.r),
@@ -4526,14 +4561,20 @@
             wallIndex: -1,
             x,
             y,
-            homeX: x,
-            homeY: y,
+            homeX: landing.x,
+            homeY: landing.y,
             radius: MAZE_COIN_RADIUS,
             kind: "coin",
             value: MAZE_COIN_VALUE,
             rushing: false,
             phase: Math.random() * Math.PI * 2,
-            source: "enemy-drop"
+            source: "enemy-drop",
+            dropPop: {
+                age: 0,
+                duration: ENEMY_COIN_DROP_POP_SECONDS,
+                startX: x,
+                startY: y
+            }
         };
         state.nextDroppedCoinId += 1;
         validateCoin(coin);
@@ -4597,6 +4638,21 @@
         }
         if (coin.kind === "coin" && (coin.value !== MAZE_COIN_VALUE || coin.radius !== MAZE_COIN_RADIUS)) {
             throw new Error(`Wizard of Flatland coin ${coin.key} requires value ${MAZE_COIN_VALUE}`);
+        }
+        if (
+            coin.dropPop &&
+            (
+                !Number.isFinite(coin.dropPop.age) ||
+                coin.dropPop.age < 0 ||
+                !(coin.dropPop.duration > 0) ||
+                coin.dropPop.age > coin.dropPop.duration ||
+                !Number.isFinite(coin.dropPop.startX) ||
+                !Number.isFinite(coin.dropPop.startY) ||
+                Math.hypot(coin.homeX - coin.dropPop.startX, coin.homeY - coin.dropPop.startY)
+                    > ENEMY_COIN_DROP_MAX_LANDING_RADIUS + 0.000001
+            )
+        ) {
+            throw new Error(`Wizard of Flatland dropped coin ${coin.key} has invalid pop motion`);
         }
     }
 
@@ -6855,6 +6911,7 @@
         ctx.fillStyle = FLOOR_OUTER_COLOR;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         if (getMinDistanceFromOriginToRect(viewport) >= outerWorldRadius) {
+            drawInactivePyramidFloorDarkness(options, viewport, sectionWorldStep);
             drawHomeBaseFloorLight(options, viewport, sectionWorldStep);
             return;
         }
@@ -6876,7 +6933,101 @@
         ctx.fillStyle = gradient;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.restore();
+        drawInactivePyramidFloorDarkness(options, viewport, sectionWorldStep);
         drawHomeBaseFloorLight(options, viewport, sectionWorldStep);
+    }
+
+    function drawInactivePyramidFloorDarkness(options, viewport, sectionWorldStep) {
+        if (!options || typeof options !== "object") {
+            throw new Error("Wizard of Flatland pyramid darkness requires maze options");
+        }
+        if (!viewport) throw new Error("Wizard of Flatland pyramid darkness requires a current viewport");
+        if (!(sectionWorldStep > 0)) {
+            throw new Error("Wizard of Flatland pyramid darkness requires a positive section step");
+        }
+        if (!(state.activatedTalismanSectionKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland pyramid darkness requires activated talisman tracking");
+        }
+        const darknessRadiusWorld = sectionWorldStep * FLOOR_INACTIVE_PYRAMID_DARKNESS_SECTION_DISTANCE;
+        const darknessRadius = darknessRadiusWorld * state.view.scale;
+        if (!(darknessRadius > 0)) {
+            throw new Error("Wizard of Flatland pyramid darkness requires a positive screen radius");
+        }
+        const sectionRadius = getMazeSectionRadius(options);
+        const expandedViewport = {
+            minX: viewport.minX - darknessRadiusWorld,
+            minY: viewport.minY - darknessRadiusWorld,
+            maxX: viewport.maxX + darknessRadiusWorld,
+            maxY: viewport.maxY + darknessRadiusWorld
+        };
+        const bounds = getMazeSectionCoordBoundsForRect(expandedViewport, sectionRadius);
+        for (let q = bounds.minQ; q <= bounds.maxQ; q += 1) {
+            for (let r = bounds.minR; r <= bounds.maxR; r += 1) {
+                if (getMazePyramidRoomDistance(q, r) === null) continue;
+                const sectionKey = mazeSectionKey(q, r);
+                if (state.activatedTalismanSectionKeys.has(sectionKey)) continue;
+                const centerWorld = mazeSectionCenter(q, r, options);
+                if (getMinDistanceFromPointToRect(centerWorld.x, centerWorld.y, viewport) >= darknessRadiusWorld) continue;
+                drawInactivePyramidFloorDarknessGradient(centerWorld, darknessRadius);
+            }
+        }
+    }
+
+    function getMazeSectionCoordBoundsForRect(rect, sectionRadius) {
+        if (
+            !rect ||
+            !Number.isFinite(rect.minX) ||
+            !Number.isFinite(rect.minY) ||
+            !Number.isFinite(rect.maxX) ||
+            !Number.isFinite(rect.maxY) ||
+            rect.maxX < rect.minX ||
+            rect.maxY < rect.minY ||
+            !(sectionRadius > 0)
+        ) {
+            throw new Error("Wizard of Flatland pyramid darkness requires finite section-coordinate bounds");
+        }
+        const coords = [];
+        for (const x of [rect.minX, rect.maxX]) {
+            for (const y of [rect.minY, rect.maxY]) {
+                const r = 2 * y / (3 * sectionRadius);
+                coords.push({
+                    q: x / (Math.sqrt(3) * sectionRadius) - r * 0.5,
+                    r
+                });
+            }
+        }
+        return {
+            minQ: Math.floor(Math.min(...coords.map((coord) => coord.q))) - 1,
+            maxQ: Math.ceil(Math.max(...coords.map((coord) => coord.q))) + 1,
+            minR: Math.floor(Math.min(...coords.map((coord) => coord.r))) - 1,
+            maxR: Math.ceil(Math.max(...coords.map((coord) => coord.r))) + 1
+        };
+    }
+
+    function drawInactivePyramidFloorDarknessGradient(centerWorld, darknessRadius) {
+        if (!centerWorld || !Number.isFinite(centerWorld.x) || !Number.isFinite(centerWorld.y)) {
+            throw new Error("Wizard of Flatland pyramid darkness gradient requires a finite center");
+        }
+        if (!(darknessRadius > 0)) {
+            throw new Error("Wizard of Flatland pyramid darkness gradient requires a positive radius");
+        }
+        const center = worldToScreen(centerWorld.x, centerWorld.y);
+        const gradient = ctx.createRadialGradient(
+            center.x,
+            center.y,
+            0,
+            center.x,
+            center.y,
+            darknessRadius
+        );
+        gradient.addColorStop(0, `rgba(0,0,0,${FLOOR_INACTIVE_PYRAMID_DARKNESS})`);
+        gradient.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.save();
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(center.x, center.y, darknessRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
     }
 
     function drawHomeBaseFloorLight(options, viewport, sectionWorldStep) {
@@ -8331,6 +8482,10 @@
         for (const coin of state.coins) {
             validateCoin(coin);
             const point = worldToScreen(coin.x, coin.y);
+            if (coin.dropPop) {
+                const popProgress = coin.dropPop.age / coin.dropPop.duration;
+                point.y -= Math.sin(popProgress * Math.PI) * ENEMY_COIN_DROP_POP_HEIGHT * state.view.scale;
+            }
             const radius = Math.max(3.5, coin.radius * state.view.scale);
             if (coin.kind === "trophy") {
                 drawTrophyCoin(coin, point, radius);

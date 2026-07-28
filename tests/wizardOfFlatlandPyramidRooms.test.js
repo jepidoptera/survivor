@@ -85,6 +85,17 @@ function loadPyramidLightExports() {
     return context.__testExports;
 }
 
+function countPyramidsOnRing(api, ring) {
+    let count = 0;
+    for (let q = -ring; q <= ring; q += 1) {
+        for (let r = -ring; r <= ring; r += 1) {
+            if (Math.max(Math.abs(q), Math.abs(r), Math.abs(-q - r)) !== ring) continue;
+            if (api.getMazePyramidRoomDistance(q, r) === ring) count += 1;
+        }
+    }
+    return count;
+}
+
 test("Wizard of Flatland base floor-zone colors are darkened by twenty-five percent", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
     assert.match(source, /const FLOOR_CENTER_COLOR = "#303030";/);
@@ -106,6 +117,22 @@ test("Wizard of Flatland pyramid light increases floor saturation with its brigh
         /globalCompositeOperation = "saturation"[\s\S]*?fillStyle = saturationGradient;[\s\S]*?fill\(\)[\s\S]*?globalCompositeOperation = "lighter"[\s\S]*?fillStyle = lightGradient;[\s\S]*?fill\(\)/
     );
     assert.match(drawSource, /requires saturation compositing/);
+});
+
+test("Wizard of Flatland darkens three rooms around non-activated pyramids", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const drawSource = extractFunction(source, "drawInactivePyramidFloorDarkness");
+    const gradientSource = extractFunction(source, "drawInactivePyramidFloorDarknessGradient");
+    assert.match(source, /const FLOOR_INACTIVE_PYRAMID_DARKNESS_SECTION_DISTANCE = 3;/);
+    assert.match(source, /const FLOOR_INACTIVE_PYRAMID_DARKNESS = 0\.5;/);
+    assert.match(
+        drawSource,
+        /getMazePyramidRoomDistance\(q, r\) === null\) continue;/
+    );
+    assert.match(drawSource, /state\.activatedTalismanSectionKeys\.has\(sectionKey\)\) continue;/);
+    assert.doesNotMatch(drawSource, /state\.talismans/);
+    assert.match(gradientSource, /gradient\.addColorStop\(0, `rgba\(0,0,0,\$\{FLOOR_INACTIVE_PYRAMID_DARKNESS\}\)`\)/);
+    assert.match(gradientSource, /gradient\.addColorStop\(1, "rgba\(0,0,0,0\)"\)/);
 });
 
 test("Wizard of Flatland increases visible pyramid-light exaggeration from one to three rooms", () => {
@@ -147,8 +174,14 @@ test("Wizard of Flatland pyramid rooms generate fourteen coins and no enemies", 
     assert.equal(api.isMazePyramidRoomSectionKey("0,-8"), true);
     assert.equal(api.isMazePyramidRoomSectionKey("8,-8"), true);
     assert.equal(api.getMazePyramidRoomDistance(15, 0), 15);
+    assert.equal(api.isMazePyramidRoomSectionKey("8,7"), true);
+    assert.equal(api.getMazePyramidRoomDistance(8, 7), 15);
+    assert.equal(api.isMazePyramidRoomSectionKey("8,8"), false);
     assert.equal(api.isMazePyramidRoomSectionKey("14,0"), false);
     assert.equal(api.isMazePyramidRoomSectionKey("8,1"), false);
+    assert.equal(countPyramidsOnRing(api, 8), 6);
+    assert.equal(countPyramidsOnRing(api, 15), 12);
+    assert.equal(countPyramidsOnRing(api, 22), 18);
 
     assert.equal(api.getMazeCoinCount("0,0", options), 14);
     assert.equal(api.getMazeCoinCount("8,0", options), 14);

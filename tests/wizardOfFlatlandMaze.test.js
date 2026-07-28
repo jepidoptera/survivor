@@ -370,6 +370,9 @@ test("Wizard of Flatland pyramid rooms open every adjacent hall", () => {
     assert.equal(api.getMazePyramidRoomDistance(pyramid.q, pyramid.r), 8);
     assert.equal(api.getMazePyramidRoomDistance(15, 0), 15);
     assert.equal(api.getMazePyramidRoomDistance(22, 0), 22);
+    assert.equal(api.getMazePyramidRoomDistance(8, 7), 15);
+    assert.equal(api.getMazePyramidRoomDistance(15, 7), 22);
+    assert.equal(api.getMazePyramidRoomDistance(8, 14), 22);
     assert.equal(api.isMazePyramidRoomSectionCoord(pyramid.q, pyramid.r), true);
     assert.equal(api.isMazePyramidRoomSectionCoord(14, 0), false);
     assert.equal(api.isMazePyramidRoomSectionCoord(8, 1), false);
