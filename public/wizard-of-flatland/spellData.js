@@ -194,6 +194,17 @@
             };
         }
 
+        function getActiveRelocateSprintStats() {
+            const definition = getLoadedSpellLevelDefinition("teleport");
+            const level = getWizardSpellLevel("teleport");
+            if (level < 1) throw new Error("Wizard of Flatland cannot sprint with unlearned spell teleport");
+            const sprintLevel = Math.min(level, 2);
+            const levelData = definition.levels[sprintLevel - 1];
+            const costPerSecond = requirePositiveSpellLevelNumber("teleport", sprintLevel, levelData, "costPerSecond");
+            const speedMultiplier = requirePositiveSpellLevelNumber("teleport", sprintLevel, levelData, "speedMultiplier");
+            return { level, sprintLevel, costPerSecond, speedMultiplier };
+        }
+
         function getActiveHealingStats() {
             const { level, levelData } = getActiveSpellLevelData("healing");
             const secondsToFullHealth = requirePositiveSpellLevelNumber("healing", level, levelData, "secondsToFullHealth");
@@ -236,6 +247,7 @@
             getActiveFireballStats,
             getActiveSpikeStats,
             getActiveFreezeStats,
+            getActiveRelocateSprintStats,
             getActiveHealingStats,
             getMagicRechargeStats
         });

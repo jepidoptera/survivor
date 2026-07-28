@@ -38,7 +38,6 @@
     const TARGET_RADIUS = AGENT_RADIUS;
     const COMBAT_RING_RADIUS = 1.6;
     const TARGET_KEYBOARD_MOVE_SPEED = 5.67;
-    const TARGET_KEYBOARD_FAST_MOVE_SPEED = 14.49;
     const TARGET_KEYBOARD_SIDEWAYS_SPEED_MULTIPLIER = 2 / 3;
     const TARGET_KEYBOARD_FORWARD_DIAGONAL_SPEED_MULTIPLIER = 5 / 6;
     const TARGET_KEYBOARD_BACKWARD_SPEED_MULTIPLIER = 1 / 2;
@@ -536,7 +535,7 @@
         los: {
             enabled: true,
             bins: 3600,
-            maxDistance: 34,
+            maxDistance: 20,
             opacity: 1,
             lastMetrics: null,
             lastResult: null
@@ -587,7 +586,8 @@
         pressedMovementKeys: Object.create(null),
         spaceHeld: false,
         zoomHeld: false,
-        fastMovementHeld: false,
+        relocateSprintHeld: false,
+        relocateSprintActive: false,
         stats: null,
         debug: createWizardOfFlatlandDebugState(),
         wallTool: {
@@ -714,6 +714,7 @@
     const getActiveFireballStats = spellDataSystem.getActiveFireballStats;
     const getActiveSpikeStats = spellDataSystem.getActiveSpikeStats;
     const getActiveFreezeStats = spellDataSystem.getActiveFreezeStats;
+    const getActiveRelocateSprintStats = spellDataSystem.getActiveRelocateSprintStats;
     const getActiveHealingStats = spellDataSystem.getActiveHealingStats;
     const getMagicRechargeStats = spellDataSystem.getMagicRechargeStats;
     let spellLevelPanelSystem = null;
@@ -728,7 +729,10 @@
         if (!Number.isFinite(state.spellCooldownRemaining)) {
             throw new Error("Wizard of Flatland magic recharge requires finite spell cooldown");
         }
-        return state.spellCooldownRemaining <= 0 && !(state.selectedSpell === "freeze" && state.spaceHeld);
+        const relocateSprintInUse = state.relocateSprintHeld && getWizardSpellLevel("teleport") >= 1;
+        return state.spellCooldownRemaining <= 0 &&
+            !(state.selectedSpell === "freeze" && state.spaceHeld) &&
+            !relocateSprintInUse;
     };
     const wizardVitalsSystem = getWizardFlatlandVitalsApi().createWizardVitalsSystem({
         state,
@@ -2991,7 +2995,8 @@
         state.pressedMovementKeys = Object.create(null);
         state.spaceHeld = false;
         state.zoomHeld = false;
-        state.fastMovementHeld = false;
+        state.relocateSprintHeld = false;
+        state.relocateSprintActive = false;
         clearAgentPathRequestsForMapRebuild();
         invalidateMazeLookaheadCache();
         state.hexGridLayer.dirty = true;
@@ -3445,9 +3450,13 @@
         const dirY = forwardY * signedForward + sideY * signedSideways;
         const magnitude = Math.hypot(dirX, dirY);
         if (!(magnitude > 0)) throw new Error("Wizard of Flatland keyboard direction must be non-zero");
-        const speed = (state.fastMovementHeld ? TARGET_KEYBOARD_FAST_MOVE_SPEED : TARGET_KEYBOARD_MOVE_SPEED) *
+        const sprintSpeedMultiplier = state.relocateSprintActive
+            ? getActiveRelocateSprintStats().speedMultiplier
+            : 1;
+        const speed = TARGET_KEYBOARD_MOVE_SPEED *
+            sprintSpeedMultiplier *
             movementSpeedMultiplier *
-            getProjectedCursorMovementSpeedMultiplier();
+            getProjectedCursorMovementSpeedMultiplier(state.relocateSprintActive);
         const startX = state.target.x;
         const startY = state.target.y;
         moveTargetWithNpcPush(
@@ -3463,13 +3472,15 @@
         state.targetTravelVector.y = 0;
     }
 
-    function getProjectedCursorMovementSpeedMultiplier() {
+    function getProjectedCursorMovementSpeedMultiplier(useMaximumExtension = false) {
         const cursor = state.projectedCursor;
         if (!cursor || typeof cursor !== "object") throw new Error("Wizard of Flatland projected cursor state is missing");
         if (!Number.isFinite(cursor.distance)) throw new Error("Wizard of Flatland cursor speed bonus requires a finite distance");
         const extensionRange = TARGET_PROJECTED_CURSOR_MAX_DISTANCE - TARGET_PROJECTED_CURSOR_DISTANCE;
         if (!(extensionRange > 0)) throw new Error("Wizard of Flatland cursor speed bonus requires a positive extension range");
-        const extensionRatio = Math.max(0, Math.min(1, (cursor.distance - TARGET_PROJECTED_CURSOR_DISTANCE) / extensionRange));
+        const extensionRatio = useMaximumExtension
+            ? 1
+            : Math.max(0, Math.min(1, (cursor.distance - TARGET_PROJECTED_CURSOR_DISTANCE) / extensionRange));
         return 1 + extensionRatio * TARGET_PROJECTED_CURSOR_MAX_SPEED_BONUS;
     }
 
@@ -4010,6 +4021,15 @@
         }
         if (killed) emitFreezeDeathParticles(agent);
         return killed;
+    }
+
+    function updateRelocateSprint(dt) {
+        state.relocateSprintActive = false;
+        if (!state.relocateSprintHeld || getWizardSpellLevel("teleport") < 1) return;
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        const stats = getActiveRelocateSprintStats();
+        if (!spendWizardMagic(stats.costPerSecond * dt)) return;
+        state.relocateSprintActive = true;
     }
 
     function emitFreezeDeathParticles(agent) {
@@ -9377,6 +9397,7 @@
         framePart("idle target facing", () => updateIdleTargetFacingAndCursor(dt));
         framePart("projected cursor distance return", () => updateProjectedCursorDistanceReturn(dt));
         framePart("target heading", () => updateTargetHeadingFromProjectedCursor(dt));
+        framePart("relocate sprint", () => updateRelocateSprint(dt));
         framePart("target movement", () => updateTargetKeyboardMovement(dt));
         framePart("refresh maze sections", () => refreshGeneratedMazeIfNeeded(false));
         framePart("refresh path bounds", () => refreshMazePathBoundsIfNeeded());
@@ -9539,14 +9560,14 @@
             return;
         }
         if (event.key === "Shift") {
-            state.fastMovementHeld = true;
+            state.relocateSprintHeld = true;
             return;
         }
         const movementKey = getTargetKeyboardControlKey(event);
         if (!movementKey) return;
         event.preventDefault();
         if (TARGET_CURSOR_KEYS.has(movementKey)) deactivateProjectedCursorMouseMode();
-        state.fastMovementHeld = event.shiftKey;
+        state.relocateSprintHeld = event.shiftKey;
         state.pressedMovementKeys[movementKey] = true;
     });
     window.addEventListener("keyup", (event) => {
@@ -9566,7 +9587,8 @@
             return;
         }
         if (event.key === "Shift") {
-            state.fastMovementHeld = false;
+            state.relocateSprintHeld = false;
+            state.relocateSprintActive = false;
             return;
         }
         const movementKey = getTargetKeyboardControlKey(event);
@@ -9578,7 +9600,8 @@
         state.pressedMovementKeys = Object.create(null);
         state.spaceHeld = false;
         state.zoomHeld = false;
-        state.fastMovementHeld = false;
+        state.relocateSprintHeld = false;
+        state.relocateSprintActive = false;
         state.wallTool.active = false;
         cancelWallBuildDrag();
     });

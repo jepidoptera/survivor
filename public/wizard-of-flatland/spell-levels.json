@@ -345,18 +345,16 @@
         {
           "level": 1,
           "headline": "Flash I",
-          "subtitle": "A burst of unnatural speed.",
-          "manaCost": 30,
-          "range": 8,
-          "castDelay": 1
+          "subtitle": "A burst of unnatural speed. Hold shift to activate.",
+          "costPerSecond": 10,
+          "speedMultiplier": 1.5
         },
         {
           "level": 2,
           "headline": "Flash II",
           "subtitle": "Farther, faster.",
-          "manaCost": 28,
-          "range": 9,
-          "castDelay": 0.8
+          "costPerSecond": 12.5,
+          "speedMultiplier": 2.25
         },
         {
           "level": 3,
