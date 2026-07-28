@@ -72,7 +72,16 @@
             validateMazeRoomEnemyBudgetSectionKey(sectionKey);
             const coord = mazeSections.parseMazeSectionKey(sectionKey);
             const ring = mazeSections.getMazeSectionRing(coord.q, coord.r);
-            return Math.max(1, constants.MAZE_ROOM_BASE_ENEMY_CAP + ring - constants.MAZE_ROOM_BASE_ENEMY_CAP_RING);
+            const earlyCaps = constants.MAZE_ROOM_EARLY_ENEMY_CAPS;
+            if (!Array.isArray(earlyCaps) || earlyCaps.length === 0) {
+                throw new Error("Wizard of Flatland early enemy caps must be a non-empty array");
+            }
+            if (earlyCaps.some((cap) => !Number.isInteger(cap) || cap < 0)) {
+                throw new Error("Wizard of Flatland early enemy caps must be non-negative integers");
+            }
+            if (ring < earlyCaps.length) return earlyCaps[ring];
+            const finalEarlyRing = earlyCaps.length - 1;
+            return earlyCaps[finalEarlyRing] + ring - finalEarlyRing;
         }
 
         function getEnemyScaleForMazeSectionKey(sectionKey) {
@@ -91,7 +100,6 @@
         }
 
         function createMazeCoinsForSection(sectionKey, options, existingCoins) {
-            if (mazeSections.isMazePyramidRoomSectionKey(sectionKey)) return [];
             const coord = mazeSections.parseMazeSectionKey(sectionKey);
             const count = getMazeCoinCount(sectionKey, options);
             const sectionPolygon = mazeSections.getMazeSectionPolygonForCoord(coord, options);
@@ -121,6 +129,12 @@
         function getMazeCoinCount(sectionKey, options) {
             if (typeof sectionKey !== "string" || sectionKey.length === 0) {
                 throw new Error("Wizard of Flatland coin count requires a section key");
+            }
+            if (mazeSections.isMazePyramidRoomSectionKey(sectionKey)) {
+                if (!Number.isInteger(constants.MAZE_PYRAMID_COIN_COUNT) || constants.MAZE_PYRAMID_COIN_COUNT < 0) {
+                    throw new Error("Wizard of Flatland pyramid coin count must be a non-negative integer");
+                }
+                return constants.MAZE_PYRAMID_COIN_COUNT;
             }
             const random = math.seededRandom(math.hashString(`${options.seed}|coin-count|${sectionKey}`));
             const coord = mazeSections.parseMazeSectionKey(sectionKey);
@@ -163,6 +177,7 @@
                 activated: sectionKey === homeBaseSectionKey,
                 flashSeconds: 0,
                 blockedFlashSeconds: 0,
+                gameSavedPromptSeconds: 0,
                 touching: false
             };
         }
@@ -223,6 +238,7 @@
         }
 
         function shouldCreateMazeTrophyForCoin(sectionKey, coinKey) {
+            if (mazeSections.isMazePyramidRoomSectionKey(sectionKey)) return false;
             const coord = mazeSections.parseMazeSectionKey(sectionKey);
             const roomDistance = mazeSections.getMazeSectionRing(coord.q, coord.r);
             const chance = getMazeTrophyChanceForRoomDistance(roomDistance);

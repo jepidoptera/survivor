@@ -97,6 +97,7 @@
     const SPIKE_BOUNCE_WALL_EXIT_EPSILON = 0.003;
     const ENEMY_MAX_HEALTH = 20;
     const WIZARD_MAX_HEALTH = 100;
+    const WIZARD_NEW_GAME_STARTING_HEALTH = 10;
     const WIZARD_MAX_MAGIC = 100;
     const WIZARD_MAX_EXP = 80;
     const WIZARD_LEVEL_EXP_INCREMENT = 20;
@@ -181,13 +182,13 @@
     const MAZE_LOOKAHEAD_REFRESH_INTERVAL_MS = 1000;
     const MAZE_ROOM_EMPTY_ENEMY_CHANCE = 0;
     const MAZE_ROOM_MAX_ENEMY_CHANCE = 1 / 100;
-    const MAZE_ROOM_BASE_ENEMY_CAP = 2;
-    const MAZE_ROOM_BASE_ENEMY_CAP_RING = 2;
+    const MAZE_ROOM_EARLY_ENEMY_CAPS = Object.freeze([0, 1, 2, 4, 8]);
     const MAZE_ROOM_ENEMY_DISTRIBUTION_POWER = 3.25;
     const MAZE_ROOM_ENEMY_SAFE_RADIUS_SCALE = 0.56;
     const MAZE_COIN_AVERAGE_COUNT = 10;
     const MAZE_COIN_MIN_COUNT = 7;
     const MAZE_COIN_MAX_COUNT = 13;
+    const MAZE_PYRAMID_COIN_COUNT = 14;
     const MAZE_COIN_ZONE_MULTIPLIER = 1.17;
     const MAZE_COIN_RADIUS = 0.16;
     const MAZE_TROPHY_RADIUS = MAZE_COIN_RADIUS * 2;
@@ -225,6 +226,7 @@
     const TALISMAN_TOUCH_DISTANCE = TARGET_RADIUS + TALISMAN_RADIUS * 0.75;
     const TALISMAN_ACTIVATION_FLASH_SECONDS = 0.42;
     const TALISMAN_BLOCKED_FLASH_SECONDS = 0.25;
+    const TALISMAN_GAME_SAVED_PROMPT_SECONDS = 3;
     const TALISMAN_INITIAL_WIZARD_DISTANCE = 4;
     const MAZE_SECTION_DIRECTIONS = [
         { q: 1, r: 0 },
@@ -451,6 +453,7 @@
         running: true,
         gameStarted: false,
         startupMenuOpen: true,
+        initialSpellChoiceRequired: false,
         playerName: "",
         mazeSeed: DEFAULT_MAZE_SEED,
         startupSelectedLoadName: "",
@@ -614,8 +617,7 @@
             WALL_Y2,
             MAZE_ROOM_EMPTY_ENEMY_CHANCE,
             MAZE_ROOM_MAX_ENEMY_CHANCE,
-            MAZE_ROOM_BASE_ENEMY_CAP,
-            MAZE_ROOM_BASE_ENEMY_CAP_RING,
+            MAZE_ROOM_EARLY_ENEMY_CAPS,
             MAZE_ROOM_ENEMY_DISTRIBUTION_POWER,
             ENEMY_SCALE_RING_INTERVAL,
             ENEMY_SCALE_INCREMENT,
@@ -624,6 +626,7 @@
             MAZE_COIN_AVERAGE_COUNT,
             MAZE_COIN_MIN_COUNT,
             MAZE_COIN_MAX_COUNT,
+            MAZE_PYRAMID_COIN_COUNT,
             MAZE_COIN_ZONE_MULTIPLIER,
             MAZE_RING_BOUNDARY_INTERVAL,
             MAZE_COIN_RADIUS,
@@ -736,6 +739,12 @@
         state.levelPoints -= 1;
         const nextLevel = setWizardSpellLevel(spellId, currentLevel + 1);
         updateStatusBars();
+        if (state.initialSpellChoiceRequired) {
+            state.initialSpellChoiceRequired = false;
+            if (isSelectableSpellId(spellId)) setSelectedSpell(spellId);
+            hideSpellLevelPanel();
+            closeStartupMenu();
+        }
         return nextLevel;
     };
     spellLevelPanelSystem = getWizardFlatlandSpellLevelPanelApi().createSpellLevelPanelSystem({
@@ -1017,6 +1026,7 @@
         const expRatio = Math.max(0, Math.min(1, state.wizardVitals.exp / state.wizardVitals.maxExp));
         healthBar.style.width = `${healthRatio * 100}%`;
         magicBar.style.width = `${magicRatio * 100}%`;
+        healthBar.classList.toggle("lowHealthWarning", healthRatio < 0.2);
         expBar.style.width = `${expRatio * 100}%`;
         expCounter.textContent = `${Math.floor(state.wizardVitals.exp)}/${state.wizardVitals.maxExp}`;
         const spellLevels = normalizeWizardSpellLevels();
@@ -1245,10 +1255,10 @@
         if (!startupLoadList || !startupLoadEmpty || !startupLoadSubmitButton) {
             throw new Error("Wizard of Flatland load menu is missing required elements");
         }
-        startupLoadList.replaceChildren();
         const entries = await getWizardCheckpointSaveEntries();
         const selectedNameIsValid = entries.some((entry) => entry.name === state.startupSelectedLoadName);
         if (!selectedNameIsValid) state.startupSelectedLoadName = entries.length > 0 ? entries[0].name : "";
+        const saveButtons = [];
         for (const entry of entries) {
             const button = document.createElement("button");
             button.type = "button";
@@ -1270,8 +1280,9 @@
                 setStartupValidation(startupLoadValidation, "");
                 void refreshStartupSaveNameOptions().catch(showStartupPersistenceError);
             });
-            startupLoadList.append(button);
+            saveButtons.push(button);
         }
+        startupLoadList.replaceChildren(...saveButtons);
         startupLoadEmpty.classList.toggle("hidden", entries.length > 0);
         startupLoadSubmitButton.disabled = entries.length === 0;
     }
@@ -1293,7 +1304,12 @@
         if (!startupMenu) {
             throw new Error("Wizard of Flatland startup menu is missing");
         }
+        if (state.initialSpellChoiceRequired) {
+            throw new Error("Wizard of Flatland cannot start a new game before choosing a first spell");
+        }
         const shouldStartLoop = !state.gameStarted;
+        startupMenu.classList.remove("choosingInitialSpell");
+        spellLevelPanel.classList.remove("initialSpellChoice");
         startupMenu.classList.add("hidden");
         state.startupMenuOpen = false;
         state.gameStarted = true;
@@ -1307,11 +1323,21 @@
         state.mazeSeed = normalizedName;
         if (mazeSeedInput) mazeSeedInput.value = normalizedName;
         await saveStore.deleteSave(normalizedName);
+        state.spellLevels = Object.fromEntries(
+            Object.keys(getStartingSpellLevels()).map((spellId) => [spellId, 0])
+        );
+        state.selectedSpell = "fireball";
         updateControlLabels();
         createScenario();
+        state.wizardVitals.health = WIZARD_NEW_GAME_STARTING_HEALTH;
+        state.levelPoints = 1;
+        updateStatusBars();
         updateStats();
-        closeStartupMenu();
-        console.log("Wizard of Flatland new game started", { playerName: normalizedName, seed: getMazeSeed() });
+        state.initialSpellChoiceRequired = true;
+        startupMenu.classList.add("choosingInitialSpell");
+        spellLevelPanel.classList.add("initialSpellChoice");
+        showSpellLevelPanel();
+        console.log("Wizard of Flatland new game awaiting first spell choice", { playerName: normalizedName, seed: getMazeSeed() });
     }
 
     async function loadWizardGame(playerName) {
@@ -1346,7 +1372,6 @@
         setStartupView("mode");
         if (startupNewButton) startupNewButton.addEventListener("click", () => setStartupView("new"));
         if (startupLoadButton) startupLoadButton.addEventListener("click", () => {
-            void refreshStartupSaveNameOptions().catch(showStartupPersistenceError);
             setStartupView("load");
         });
         if (startupNewBackButton) startupNewBackButton.addEventListener("click", () => setStartupView("mode"));
@@ -4271,6 +4296,7 @@
             validateTalisman(talisman);
             talisman.flashSeconds = Math.max(0, talisman.flashSeconds - dt);
             talisman.blockedFlashSeconds = Math.max(0, talisman.blockedFlashSeconds - dt);
+            talisman.gameSavedPromptSeconds = Math.max(0, talisman.gameSavedPromptSeconds - dt);
             const distance = Math.hypot(state.target.x - talisman.x, state.target.y - talisman.y);
             const touching = distance <= TALISMAN_TOUCH_DISTANCE;
             if (!touching) {
@@ -4289,9 +4315,13 @@
             flashBlockedTalismanActivation(talisman);
             return false;
         }
+        const restoredHealth = state.wizardVitals.health < state.wizardVitals.maxHealth;
+        const restoredMagic = state.wizardVitals.magic < state.wizardVitals.maxMagic;
         state.wizardVitals.health = state.wizardVitals.maxHealth;
         state.wizardVitals.magic = state.wizardVitals.maxMagic;
         updateStatusBars();
+        if (restoredHealth) flashTalismanRestoredBar(healthBar);
+        if (restoredMagic) flashTalismanRestoredBar(magicBar);
         if (!(state.activatedTalismanSectionKeys instanceof Set)) {
             throw new Error("Wizard of Flatland talisman activation requires activated talisman tracking");
         }
@@ -4299,11 +4329,26 @@
         state.homeBaseTalismanSectionKey = talisman.sectionKey;
         talisman.activated = true;
         talisman.flashSeconds = TALISMAN_ACTIVATION_FLASH_SECONDS;
-        void saveWizardCheckpointToSlot().catch((error) => {
-            setLabelText(labels.workerStatus, "checkpoint save failed");
-            console.error("[wizard of flatland checkpoint]", error);
-        });
+        void saveWizardCheckpointToSlot()
+            .then(() => {
+                if (talisman.pyramidDistance === 0) {
+                    talisman.gameSavedPromptSeconds = TALISMAN_GAME_SAVED_PROMPT_SECONDS;
+                }
+            })
+            .catch((error) => {
+                setLabelText(labels.workerStatus, "checkpoint save failed");
+                console.error("[wizard of flatland checkpoint]", error);
+            });
         return true;
+    }
+
+    function flashTalismanRestoredBar(bar) {
+        if (!bar) {
+            throw new Error("Wizard of Flatland talisman recharge flash requires a status bar");
+        }
+        bar.classList.remove("talismanRechargeFlash");
+        void bar.offsetWidth;
+        bar.classList.add("talismanRechargeFlash");
     }
 
     function getHomeBaseTalismanSectionKey() {
@@ -4338,7 +4383,7 @@
         if (typeof talisman.sectionKey !== "string" || talisman.sectionKey.length === 0) {
             throw new Error("Wizard of Flatland talisman requires a section key");
         }
-        for (const field of ["x", "y", "radius"]) {
+        for (const field of ["x", "y", "radius", "flashSeconds", "blockedFlashSeconds", "gameSavedPromptSeconds"]) {
             if (!Number.isFinite(talisman[field])) {
                 throw new Error(`Wizard of Flatland talisman requires finite ${field}`);
             }
@@ -8132,7 +8177,36 @@
             drawTalismanFaceFill([projection.apex, projection.capBase[0], projection.capBase[1]], capColor);
             drawTalismanFaceFill([projection.apex, projection.capBase[1], projection.capBase[2]], capSideColor);
             drawTalismanVisibleEdges(projection, edgeColor, radius, activated, blocked);
+            if (talisman.pyramidDistance === 0) {
+                if (talisman.gameSavedPromptSeconds > 0) {
+                    drawInitialTalismanPrompt(projection, radius, "game saved");
+                } else if (!state.activatedTalismanSectionKeys.has(talisman.sectionKey)) {
+                    drawInitialTalismanPrompt(projection, radius, "touch the pyramid");
+                }
+            }
         }
+        ctx.restore();
+    }
+
+    function drawInitialTalismanPrompt(projection, radius, message) {
+        if (!projection || !projection.apex) {
+            throw new Error("Wizard of Flatland initial pyramid prompt requires a pyramid projection");
+        }
+        if (typeof message !== "string" || message.length === 0) {
+            throw new Error("Wizard of Flatland initial pyramid prompt requires a message");
+        }
+        const fontSize = Math.max(16, Math.min(28, radius * 0.42));
+        const promptY = projection.apex.y - Math.max(12, radius * 0.3);
+        ctx.save();
+        ctx.font = `800 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = Math.max(3, fontSize * 0.18);
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.92)";
+        ctx.strokeText(message, projection.apex.x, promptY);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(message, projection.apex.x, promptY);
         ctx.restore();
     }
 
@@ -8783,15 +8857,19 @@
     if (resetButton) resetButton.addEventListener("click", createScenario);
     if (scenarioSelect) scenarioSelect.addEventListener("change", createScenario);
     if (expLevelUpButton) expLevelUpButton.addEventListener("click", showSpellLevelPanel);
-    if (spellLevelCloseButton) spellLevelCloseButton.addEventListener("click", hideSpellLevelPanel);
+    if (spellLevelCloseButton) spellLevelCloseButton.addEventListener("click", () => {
+        if (!state.initialSpellChoiceRequired) hideSpellLevelPanel();
+    });
     document.addEventListener("pointerdown", (event) => {
         if (!spellLevelPanel || spellLevelPanel.classList.contains("hidden")) return;
         if (spellLevelPanel.contains(event.target)) return;
         if (expLevelUpButton && expLevelUpButton.contains(event.target)) return;
+        if (state.initialSpellChoiceRequired) return;
         hideSpellLevelPanel();
     });
     document.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && spellLevelPanel && !spellLevelPanel.classList.contains("hidden")) {
+            if (state.initialSpellChoiceRequired) return;
             hideSpellLevelPanel();
         }
     });

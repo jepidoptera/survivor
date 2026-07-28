@@ -5,6 +5,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const MAIN_PATH = path.join(__dirname, "../public/wizard-of-flatland/main.js");
+const STYLES_PATH = path.join(__dirname, "../public/wizard-of-flatland/styles.css");
 const MATH_PATH = path.join(__dirname, "../public/wizard-of-flatland/flatlandMath.js");
 const MAZE_SECTIONS_PATH = path.join(__dirname, "../public/wizard-of-flatland/mazeSections.js");
 const MAZE_POPULATION_PATH = path.join(__dirname, "../public/wizard-of-flatland/mazePopulation.js");
@@ -39,11 +40,11 @@ function loadPyramidRoomExports() {
         "const MAZE_SECTION_DIRECTIONS = [{ q: 1, r: 0 }, { q: 0, r: 1 }, { q: -1, r: 1 }, { q: -1, r: 0 }, { q: 0, r: -1 }, { q: 1, r: -1 }];",
         extractConst(source, "MAZE_ROOM_EMPTY_ENEMY_CHANCE"),
         extractConst(source, "MAZE_ROOM_MAX_ENEMY_CHANCE"),
-        extractConst(source, "MAZE_ROOM_BASE_ENEMY_CAP"),
-        extractConst(source, "MAZE_ROOM_BASE_ENEMY_CAP_RING"),
+        extractConst(source, "MAZE_ROOM_EARLY_ENEMY_CAPS"),
         extractConst(source, "MAZE_ROOM_ENEMY_DISTRIBUTION_POWER"),
         extractConst(source, "ENEMY_SCALE_RING_INTERVAL"),
         extractConst(source, "ENEMY_SCALE_INCREMENT"),
+        extractConst(source, "MAZE_PYRAMID_COIN_COUNT"),
         extractFunction(mathSource, "hashString", "flatlandMath.js"),
         extractFunction(mathSource, "seededRandom", "flatlandMath.js"),
         extractFunction(mazeSectionsSource, "validateMazeSectionKey", "mazeSections.js"),
@@ -53,14 +54,14 @@ function loadPyramidRoomExports() {
         extractFunction(mazeSectionsSource, "getMazePyramidRoomDistance", "mazeSections.js"),
         extractFunction(mazeSectionsSource, "isMazeInitialSafeSectionKey", "mazeSections.js"),
         extractFunction(mazeSectionsSource, "getMazeSectionRing", "mazeSections.js"),
-        "const constants = { MAZE_SECTION_DIRECTIONS, PYRAMID_FIRST_ROOM_DISTANCE, PYRAMID_ROOM_DISTANCE_STEP, MAZE_ROOM_EMPTY_ENEMY_CHANCE, MAZE_ROOM_MAX_ENEMY_CHANCE, MAZE_ROOM_BASE_ENEMY_CAP, MAZE_ROOM_BASE_ENEMY_CAP_RING, MAZE_ROOM_ENEMY_DISTRIBUTION_POWER, ENEMY_SCALE_RING_INTERVAL, ENEMY_SCALE_INCREMENT };",
+        "const constants = { MAZE_SECTION_DIRECTIONS, PYRAMID_FIRST_ROOM_DISTANCE, PYRAMID_ROOM_DISTANCE_STEP, MAZE_ROOM_EMPTY_ENEMY_CHANCE, MAZE_ROOM_MAX_ENEMY_CHANCE, MAZE_ROOM_EARLY_ENEMY_CAPS, MAZE_ROOM_ENEMY_DISTRIBUTION_POWER, ENEMY_SCALE_RING_INTERVAL, ENEMY_SCALE_INCREMENT, MAZE_PYRAMID_COIN_COUNT };",
         "const math = { hashString, seededRandom };",
         "const mazeSections = { isMazePyramidRoomSectionKey, isMazeInitialSafeSectionKey, parseMazeSectionKey, getMazeSectionRing };",
         extractFunction(mazePopulationSource, "validateMazeRoomEnemyBudgetSectionKey", "mazePopulation.js"),
         extractFunction(mazePopulationSource, "getMazeRoomMaxEnemyCount", "mazePopulation.js"),
         extractFunction(mazePopulationSource, "getMazeRoomEnemyCount", "mazePopulation.js"),
-        extractFunction(mazePopulationSource, "createMazeCoinsForSection", "mazePopulation.js"),
-        "globalThis.__testExports = { PYRAMID_FIRST_ROOM_DISTANCE, PYRAMID_ROOM_DISTANCE_STEP, getMazePyramidRoomDistance, isMazePyramidRoomSectionKey, getMazeRoomEnemyCount, createMazeCoinsForSection };"
+        extractFunction(mazePopulationSource, "getMazeCoinCount", "mazePopulation.js"),
+        "globalThis.__testExports = { PYRAMID_FIRST_ROOM_DISTANCE, PYRAMID_ROOM_DISTANCE_STEP, getMazePyramidRoomDistance, isMazePyramidRoomSectionKey, getMazeRoomEnemyCount, getMazeCoinCount };"
     ];
     const context = { Math, Number, String };
     vm.createContext(context);
@@ -68,7 +69,7 @@ function loadPyramidRoomExports() {
     return context.__testExports;
 }
 
-test("Wizard of Flatland pyramid rooms generate no coins or enemies", () => {
+test("Wizard of Flatland pyramid rooms generate fourteen coins and no enemies", () => {
     const api = loadPyramidRoomExports();
     const options = { seed: "pyramid-room-contents" };
 
@@ -85,6 +86,59 @@ test("Wizard of Flatland pyramid rooms generate no coins or enemies", () => {
     assert.equal(api.isMazePyramidRoomSectionKey("14,0"), false);
     assert.equal(api.isMazePyramidRoomSectionKey("8,1"), false);
 
-    assert.equal(api.createMazeCoinsForSection("8,0", options, []).length, 0);
+    assert.equal(api.getMazeCoinCount("0,0", options), 14);
+    assert.equal(api.getMazeCoinCount("8,0", options), 14);
+    assert.equal(api.getMazeCoinCount("-15,15", options), 14);
     assert.equal(api.getMazeRoomEnemyCount("8,0", options), 0);
+    const populationSource = fs.readFileSync(MAZE_POPULATION_PATH, "utf8");
+    assert.match(
+        populationSource,
+        /function shouldCreateMazeTrophyForCoin\(sectionKey, coinKey\) \{\s*if \(mazeSections\.isMazePyramidRoomSectionKey\(sectionKey\)\) return false;/
+    );
+});
+
+test("Wizard of Flatland labels the untouched opening pyramid", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(
+        source,
+        /talisman\.pyramidDistance === 0[\s\S]*?!state\.activatedTalismanSectionKeys\.has\(talisman\.sectionKey\)/
+    );
+    assert.match(
+        source,
+        /drawInitialTalismanPrompt\(projection, radius, "touch the pyramid"\)/
+    );
+    assert.match(
+        source,
+        /function drawInitialTalismanPrompt\(projection, radius, message\)[\s\S]*?strokeText\(message[\s\S]*?fillText\(message/
+    );
+});
+
+test("Wizard of Flatland confirms the opening-pyramid save for three seconds", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(source, /const TALISMAN_GAME_SAVED_PROMPT_SECONDS = 3;/);
+    assert.match(
+        source,
+        /saveWizardCheckpointToSlot\(\)[\s\S]*?talisman\.gameSavedPromptSeconds = TALISMAN_GAME_SAVED_PROMPT_SECONDS;/
+    );
+    assert.match(
+        source,
+        /talisman\.gameSavedPromptSeconds = Math\.max\(0, talisman\.gameSavedPromptSeconds - dt\);/
+    );
+    assert.match(
+        source,
+        /talisman\.gameSavedPromptSeconds > 0[\s\S]*?drawInitialTalismanPrompt\(projection, radius, "game saved"\)/
+    );
+});
+
+test("Wizard of Flatland flashes restored talisman vitals and warns on low health", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const styles = fs.readFileSync(STYLES_PATH, "utf8");
+    assert.match(source, /healthBar\.classList\.toggle\("lowHealthWarning", healthRatio < 0\.2\);/);
+    assert.match(
+        source,
+        /const restoredHealth = state\.wizardVitals\.health < state\.wizardVitals\.maxHealth;[\s\S]*?const restoredMagic = state\.wizardVitals\.magic < state\.wizardVitals\.maxMagic;[\s\S]*?if \(restoredHealth\) flashTalismanRestoredBar\(healthBar\);[\s\S]*?if \(restoredMagic\) flashTalismanRestoredBar\(magicBar\);/
+    );
+    assert.match(styles, /#healthBar\.lowHealthWarning\s*\{\s*animation: lowHealthWarningPulse 1s ease-in-out infinite;/);
+    assert.match(styles, /@keyframes lowHealthWarningPulse\s*\{[\s\S]*?0%,[\s\S]*?100%[\s\S]*?50%/);
+    assert.match(styles, /\.statusBar-fill\.talismanRechargeFlash\s*\{\s*animation: talismanRechargeFlash/);
 });

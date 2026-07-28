@@ -5,6 +5,7 @@ const test = require("node:test");
 
 const SPELL_LEVELS_PATH = path.join(__dirname, "../public/wizard-of-flatland/spell-levels.json");
 const MAIN_PATH = path.join(__dirname, "../public/wizard-of-flatland/main.js");
+const STYLES_PATH = path.join(__dirname, "../public/wizard-of-flatland/styles.css");
 const FIREBALL_TEXTURE_PATH = path.join(__dirname, "../public/wizard-of-flatland/hi-fi-fireball.png");
 
 function getFireballLevels() {
@@ -73,6 +74,30 @@ test("Wizard of Flatland spell-level panel closes on an outside pointer press", 
     assert.match(
         source,
         /document\.addEventListener\("pointerdown", \(event\) => \{[\s\S]*?spellLevelPanel\.contains\(event\.target\)[\s\S]*?expLevelUpButton\.contains\(event\.target\)[\s\S]*?hideSpellLevelPanel\(\);[\s\S]*?\}\);/
+    );
+});
+
+test("Wizard of Flatland requires a first spell upgrade before a new game starts", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const styles = fs.readFileSync(STYLES_PATH, "utf8");
+    assert.match(
+        source,
+        /state\.spellLevels = Object\.fromEntries\([\s\S]*?state\.levelPoints = 1;[\s\S]*?state\.initialSpellChoiceRequired = true;[\s\S]*?showSpellLevelPanel\(\);/
+    );
+    assert.match(
+        source,
+        /if \(state\.initialSpellChoiceRequired\) \{[\s\S]*?state\.initialSpellChoiceRequired = false;[\s\S]*?hideSpellLevelPanel\(\);[\s\S]*?closeStartupMenu\(\);/
+    );
+    assert.match(styles, /\.startupMenu\.choosingInitialSpell\s*\{\s*background: #000000;/);
+    assert.match(styles, /#spellLevelPanel\.initialSpellChoice\s*\{[\s\S]*?left: 50%;[\s\S]*?top: 50%;[\s\S]*?translate\(-50%, -50%\)/);
+});
+
+test("Wizard of Flatland new games begin at ten health", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(source, /const WIZARD_NEW_GAME_STARTING_HEALTH = 10;/);
+    assert.match(
+        source,
+        /async function startNewWizardGame\(playerName\)[\s\S]*?createScenario\(\);[\s\S]*?state\.wizardVitals\.health = WIZARD_NEW_GAME_STARTING_HEALTH;[\s\S]*?updateStatusBars\(\);/
     );
 });
 

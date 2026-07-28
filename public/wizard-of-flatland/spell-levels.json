@@ -9,11 +9,11 @@
           "level": 1,
           "headline": "Spitfire",
           "subtitle": "Pew! Pew!",
-          "manaCost": 20,
+          "manaCost": 10,
           "damage": 10,
           "range": 10,
           "explosionRadius": 1,
-          "castDelay": 0.75,
+          "castDelay": 0.7,
           "projectileRadius": 0.4,
           "projectileSpeed": 10
         },
@@ -21,11 +21,11 @@
           "level": 2,
           "headline": "Fireball I",
           "subtitle": "Snap crackle",
-          "manaCost": 19,
+          "manaCost": 11,
           "damage": 14,
           "explosionRadius": 1.1,
           "range": 11,
-          "castDelay": 0.7,
+          "castDelay": 0.65,
           "projectileRadius": 0.5,
           "projectileSpeed": 11
         },
@@ -33,11 +33,11 @@
           "level": 3,
           "headline": "Fireball II",
           "subtitle": "Pow!",
-          "manaCost": 17,
+          "manaCost": 12,
           "damage": 20,
           "explosionRadius": 1.25,
           "range": 12,
-          "castDelay": 0.65,
+          "castDelay": 0.6,
           "projectileRadius": 0.62,
           "projectileSpeed": 12
         },
@@ -45,11 +45,11 @@
           "level": 4,
           "headline": "Fireball III",
           "subtitle": "Bigger, better.",
-          "manaCost": 17,
+          "manaCost": 13,
           "damage": 29,
           "explosionRadius": 1.4,
           "range": 13,
-          "castDelay": 0.6,
+          "castDelay": 0.55,
           "projectileRadius": 0.75,
           "projectileSpeed": 13
         },
@@ -57,11 +57,11 @@
           "level": 5,
           "headline": "Fireball IV",
           "subtitle": "Boom.",
-          "manaCost": 16,
+          "manaCost": 14,
           "damage": 41,
           "explosionRadius": 1.8,
           "range": 14,
-          "castDelay": 0.55,
+          "castDelay": 0.5,
           "projectileRadius": 0.9,
           "projectileSpeed": 14
         },
@@ -72,8 +72,8 @@
           "manaCost": 15,
           "damage": 72,
           "explosionRadius": 2.3,
-          "range": 15,
-          "castDelay": 0.5,
+          "range": 16,
+          "castDelay": 0.45,
           "projectileRadius": 1.1,
           "projectileSpeed": 15
         },
@@ -81,7 +81,7 @@
           "level": 7,
           "headline": "Inferno",
           "subtitle": "Burn, baby.",
-          "manaCost": 12.5,
+          "manaCost": 16,
           "damage": 100,
           "explosionRadius": 3,
           "range": 16,
@@ -109,43 +109,43 @@
           "level": 2,
           "headline": "Frostbite",
           "subtitle": "Bit of a nip.",
-          "costPerSecond": 10,
+          "costPerSecond": 11,
           "damage": 13,
           "range": 4,
-          "coneAngleDegrees": 30
+          "coneAngleDegrees": 33
         },
         {
           "level": 3,
           "headline": "Blizzard I",
           "subtitle": "Frightful weather out there.",
-          "costPerSecond": 10,
+          "costPerSecond": 12,
           "damage": 17,
           "range": 4.5,
-          "coneAngleDegrees": 30
+          "coneAngleDegrees": 35
         },
         {
           "level": 4,
           "headline": "Blizzard II",
           "subtitle": "Freeze them where they stand.",
-          "costPerSecond": 10,
+          "costPerSecond": 13,
           "damage": 22,
           "range": 5,
-          "coneAngleDegrees": 30
+          "coneAngleDegrees": 37
         },
         {
           "level": 5,
           "headline": "Blizzard III",
           "subtitle": "Blast them where they freeze.",
-          "costPerSecond": 10,
+          "costPerSecond": 15,
           "damage": 29,
           "range": 5.5,
-          "coneAngleDegrees": 30
+          "coneAngleDegrees": 42
         },
         {
           "level": 6,
           "headline": "Killing Frost",
           "subtitle": "Shatter their frozen bones.",
-          "costPerSecond": 10,
+          "costPerSecond": 17,
           "damage": 38,
           "range": 6.5,
           "coneAngleDegrees": 30
@@ -154,7 +154,7 @@
           "level": 7,
           "headline": "Absolute Zero",
           "subtitle": "A perfected storm of killing cold.",
-          "costPerSecond": 10,
+          "costPerSecond": 20,
           "damage": 50,
           "range": 7.5,
           "coneAngleDegrees": 45
@@ -169,8 +169,8 @@
         {
           "level": 1,
           "headline": "Splinter",
-          "subtitle": "You could put somebody's eye out with that thing.",
-          "manaCost": 17,
+          "subtitle": "Sharpshooter.",
+          "manaCost": 20,
           "damage": 20,
           "range": 14,
           "castDelay": 0.65,
@@ -180,8 +180,8 @@
         {
           "level": 2,
           "headline": "Spikes I",
-          "subtitle": "Combine with freeze for bonus damage.",
-          "manaCost": 11,
+          "subtitle": "Nails in their coffin.",
+          "manaCost": 17,
           "damage": 22,
           "range": 15,
           "castDelay": 0.55,
@@ -191,9 +191,9 @@
           "level": 3,
           "headline": "Spikes II",
           "subtitle": "Spikier spikes.",
-          "manaCost": 8,
+          "manaCost": 14,
           "damage": 22,
-          "range": 16,
+          "range": 16.5,
           "castDelay": 0.45,
           "projectileSpeed": 12
         },
@@ -203,7 +203,7 @@
           "subtitle": "Spikier and spikier.",
           "manaCost": 6,
           "damage": 24,
-          "range": 17,
+          "range": 18,
           "castDelay": 0.35,
           "projectileSpeed": 13
         },
@@ -213,7 +213,7 @@
           "subtitle": "The spikeiest.",
           "manaCost": 4.5,
           "damage": 25,
-          "range": 18,
+          "range": 20,
           "castDelay": 0.25,
           "projectileSpeed": 14
         },
@@ -221,9 +221,9 @@
           "level": 6,
           "headline": "Spikes V",
           "subtitle": "Wow. Such spikes.",
-          "manaCost": 3.5,
+          "manaCost": 5,
           "damage": 26,
-          "range": 19,
+          "range": 22,
           "castDelay": 0.15,
           "projectileSpeed": 15
         },
@@ -231,10 +231,10 @@
           "level": 7,
           "headline": "Storm of Blades",
           "subtitle": "Maximum carnage.",
-          "manaCost": 2.5,
+          "manaCost": 4,
           "damage": 27,
-          "range": 20,
-          "castDelay": 0.05,
+          "range": 25,
+          "castDelay": 0.1,
           "projectileSpeed": 16
         }
       ]
@@ -247,38 +247,38 @@
         {
           "level": 1,
           "headline": "Regeneration",
-          "subtitle": "Restores a small amount of health over time.",
-          "secondsToFullHealth": 50
+          "subtitle": "Better than nothing.",
+          "secondsToFullHealth": 100
         },
         {
           "level": 2,
           "headline": "Healing II",
-          "subtitle": "A steadier restorative aura.",
-          "secondsToFullHealth": 36
+          "subtitle": "Starting to feel it now.",
+          "secondsToFullHealth": 64
         },
         {
           "level": 3,
           "headline": "Healing III",
-          "subtitle": "Recovery strengthens while the spell holds.",
-          "secondsToFullHealth": 26
+          "subtitle": "Recovery kicks in faster.",
+          "secondsToFullHealth": 41
         },
         {
           "level": 4,
           "headline": "Healing IV",
-          "subtitle": "Warm magic closes wounds quickly.",
-          "secondsToFullHealth": 18.5
+          "subtitle": "Healing comes swiftly.",
+          "secondsToFullHealth": 26
         },
         {
           "level": 5,
           "headline": "Healing V",
-          "subtitle": "A strong regenerative current.",
-          "secondsToFullHealth": 13.5
+          "subtitle": "Rapid regeneration.",
+          "secondsToFullHealth": 17
         },
         {
           "level": 6,
           "headline": "Healing VI",
           "subtitle": "Walk it off.",
-          "secondsToFullHealth": 9.5
+          "secondsToFullHealth": 11
         },
         {
           "level": 7,
@@ -339,45 +339,45 @@
     },
     {
       "id": "teleport",
-      "displayName": "Teleport",
+      "displayName": "Relocation",
       "icon": "/assets/images/magic/teleport.png",
       "levels": [
         {
           "level": 1,
-          "headline": "Teleport I",
-          "subtitle": "Blink a short distance to safety.",
+          "headline": "Flash I",
+          "subtitle": "A burst of unnatural speed.",
           "manaCost": 30,
           "range": 8,
           "castDelay": 1
         },
         {
           "level": 2,
-          "headline": "Teleport II",
-          "subtitle": "Blink farther with better control.",
+          "headline": "Flash II",
+          "subtitle": "Farther, faster.",
           "manaCost": 28,
           "range": 9,
           "castDelay": 0.8
         },
         {
           "level": 3,
-          "headline": "Teleport III",
-          "subtitle": "A faster fold through nearby space.",
+          "headline": "Teleport I",
+          "subtitle": "Beam back to base.",
           "manaCost": 26,
           "range": 10,
           "castDelay": 0.7
         },
         {
           "level": 4,
-          "headline": "Teleport IV",
-          "subtitle": "Reliable escape across a wider range.",
+          "headline": "Teleport II",
+          "subtitle": "Drop a waypoint and teleport back to it.",
           "manaCost": 24,
           "range": 11,
           "castDelay": 0.6
         },
         {
           "level": 5,
-          "headline": "Teleport V",
-          "subtitle": "Movement magic answers almost instantly.",
+          "headline": "Teleport III",
+          "subtitle": "Teleport anywhere you can see.",
           "manaCost": 22,
           "range": 12,
           "castDelay": 0.5
@@ -458,13 +458,13 @@
     },
     {
       "id": "omnivision",
-      "displayName": "Omnivision",
+      "displayName": "Perception",
       "icon": "/assets/images/thumbnails/eye.png",
       "levels": [
         {
           "level": 1,
-          "headline": "Omnivision I",
-          "subtitle": "See a little beyond ordinary sight.",
+          "headline": "Vision I",
+          "subtitle": "See a around corners.",
           "costPerSecond": 24,
           "damage": 0,
           "range": 8,
@@ -474,8 +474,8 @@
         },
         {
           "level": 2,
-          "headline": "Omnivision II",
-          "subtitle": "Awareness stretches farther outward.",
+          "headline": "Vision II",
+          "subtitle": "See through walls.",
           "costPerSecond": 22,
           "damage": 0,
           "range": 10,
@@ -485,8 +485,8 @@
         },
         {
           "level": 3,
-          "headline": "Omnivision III",
-          "subtitle": "Hidden movement becomes easier to read.",
+          "headline": "Vision III",
+          "subtitle": "Peripheral +2. Foward +4.",
           "costPerSecond": 20,
           "damage": 0,
           "range": 12,
@@ -496,8 +496,8 @@
         },
         {
           "level": 4,
-          "headline": "Omnivision IV",
-          "subtitle": "A wider window into nearby danger.",
+          "headline": "Seeing Beyond",
+          "subtitle": "Look further.",
           "costPerSecond": 18,
           "damage": 0,
           "range": 14,
@@ -507,8 +507,8 @@
         },
         {
           "level": 5,
-          "headline": "Omnivision V",
-          "subtitle": "The world answers your attention.",
+          "headline": "Astral Projection",
+          "subtitle": "See more.",
           "costPerSecond": 16,
           "damage": 0,
           "range": 16,
@@ -518,8 +518,8 @@
         },
         {
           "level": 6,
-          "headline": "Omnivision VI",
-          "subtitle": "Sight pierces deeper through uncertainty.",
+          "headline": "Omnivision",
+          "subtitle": "+2 peripheral. All walls transparent.",
           "costPerSecond": 14,
           "damage": 0,
           "range": 18,
@@ -530,7 +530,7 @@
         {
           "level": 7,
           "headline": "All-Seeing Eye",
-          "subtitle": "Mastered vision beyond the visible.",
+          "subtitle": "Limitless sight.",
           "costPerSecond": 12,
           "damage": 0,
           "range": 20,

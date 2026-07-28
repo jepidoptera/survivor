@@ -36,8 +36,7 @@ function loadEnemyBudgetExports() {
     const pieces = [
         extractConst(source, "MAZE_ROOM_EMPTY_ENEMY_CHANCE"),
         extractConst(source, "MAZE_ROOM_MAX_ENEMY_CHANCE"),
-        extractConst(source, "MAZE_ROOM_BASE_ENEMY_CAP"),
-        extractConst(source, "MAZE_ROOM_BASE_ENEMY_CAP_RING"),
+        extractConst(source, "MAZE_ROOM_EARLY_ENEMY_CAPS"),
         extractConst(source, "MAZE_ROOM_ENEMY_DISTRIBUTION_POWER"),
         extractConst(source, "ENEMY_SCALE_RING_INTERVAL"),
         extractConst(source, "ENEMY_SCALE_INCREMENT"),
@@ -46,6 +45,7 @@ function loadEnemyBudgetExports() {
         extractConst(source, "MAZE_COIN_AVERAGE_COUNT"),
         extractConst(source, "MAZE_COIN_MIN_COUNT"),
         extractConst(source, "MAZE_COIN_MAX_COUNT"),
+        extractConst(source, "MAZE_PYRAMID_COIN_COUNT"),
         extractConst(source, "MAZE_COIN_ZONE_MULTIPLIER"),
         extractConst(source, "MAZE_RING_BOUNDARY_INTERVAL"),
         extractConst(source, "PYRAMID_FIRST_ROOM_DISTANCE"),
@@ -60,7 +60,7 @@ function loadEnemyBudgetExports() {
         extractFunction(mazeSectionsSource, "getMazePyramidRoomDistance", "mazeSections.js"),
         extractFunction(mazeSectionsSource, "isMazeInitialSafeSectionKey", "mazeSections.js"),
         extractFunction(mazeSectionsSource, "getMazeSectionRing", "mazeSections.js"),
-        "const constants = { MAZE_SECTION_DIRECTIONS, PYRAMID_FIRST_ROOM_DISTANCE, PYRAMID_ROOM_DISTANCE_STEP, MAZE_ROOM_EMPTY_ENEMY_CHANCE, MAZE_ROOM_MAX_ENEMY_CHANCE, MAZE_ROOM_BASE_ENEMY_CAP, MAZE_ROOM_BASE_ENEMY_CAP_RING, MAZE_ROOM_ENEMY_DISTRIBUTION_POWER, ENEMY_SCALE_RING_INTERVAL, ENEMY_SCALE_INCREMENT, ENEMY_DAMAGE_BASE_SCALE, ENEMY_DAMAGE_ZONE_MULTIPLIER, MAZE_COIN_AVERAGE_COUNT, MAZE_COIN_MIN_COUNT, MAZE_COIN_MAX_COUNT, MAZE_COIN_ZONE_MULTIPLIER, MAZE_RING_BOUNDARY_INTERVAL };",
+        "const constants = { MAZE_SECTION_DIRECTIONS, PYRAMID_FIRST_ROOM_DISTANCE, PYRAMID_ROOM_DISTANCE_STEP, MAZE_ROOM_EMPTY_ENEMY_CHANCE, MAZE_ROOM_MAX_ENEMY_CHANCE, MAZE_ROOM_EARLY_ENEMY_CAPS, MAZE_ROOM_ENEMY_DISTRIBUTION_POWER, ENEMY_SCALE_RING_INTERVAL, ENEMY_SCALE_INCREMENT, ENEMY_DAMAGE_BASE_SCALE, ENEMY_DAMAGE_ZONE_MULTIPLIER, MAZE_COIN_AVERAGE_COUNT, MAZE_COIN_MIN_COUNT, MAZE_COIN_MAX_COUNT, MAZE_PYRAMID_COIN_COUNT, MAZE_COIN_ZONE_MULTIPLIER, MAZE_RING_BOUNDARY_INTERVAL };",
         "const math = { hashString, seededRandom };",
         "const mazeSections = { isMazePyramidRoomSectionKey, isMazeInitialSafeSectionKey, parseMazeSectionKey, getMazeSectionRing };",
         extractFunction(mazePopulationSource, "validateMazeRoomEnemyBudgetSectionKey", "mazePopulation.js"),
@@ -77,30 +77,20 @@ function loadEnemyBudgetExports() {
     return context.__testExports;
 }
 
-test("Wizard of Flatland second ring rooms cap at two enemies", () => {
+test("Wizard of Flatland first five ring caps scale zero, one, two, four, eight", () => {
     const api = loadEnemyBudgetExports();
-    const options = { seed: "second-ring-test" };
-    const secondRingKeys = [
-        "2,0",
-        "2,-1",
-        "1,1",
-        "0,2",
-        "-2,0",
-        "-1,-1",
-        "0,-2"
-    ];
-
-    for (const sectionKey of secondRingKeys) {
-        assert.equal(api.getMazeRoomMaxEnemyCount(sectionKey), 2, `${sectionKey} should be capped at two enemies`);
-        assert.ok(api.getMazeRoomEnemyCount(sectionKey, options) <= 2, `${sectionKey} spawned more than two enemies`);
-    }
+    assert.deepEqual(
+        ["0,0", "1,0", "2,0", "3,0", "4,0"].map((sectionKey) => api.getMazeRoomMaxEnemyCount(sectionKey)),
+        [0, 1, 2, 4, 8]
+    );
 });
 
-test("Wizard of Flatland room enemy caps increase by one per ring", () => {
+test("Wizard of Flatland room enemy caps increase by one per ring after ring four", () => {
     const api = loadEnemyBudgetExports();
 
-    assert.equal(api.getMazeRoomMaxEnemyCount("3,0"), 3);
-    assert.equal(api.getMazeRoomMaxEnemyCount("4,0"), 4);
+    assert.equal(api.getMazeRoomMaxEnemyCount("5,0"), 9);
+    assert.equal(api.getMazeRoomMaxEnemyCount("6,0"), 10);
+    assert.equal(api.getMazeRoomMaxEnemyCount("7,0"), 11);
 });
 
 test("Wizard of Flatland enemy scale increases ten percent per seven rings", () => {
@@ -135,7 +125,7 @@ test("Wizard of Flatland ground coin average increases seventeen percent per zon
     const api = loadEnemyBudgetExports();
     const sampleCount = 10000;
 
-    for (const [sectionKey, zone] of [["0,0", 0], ["7,0", 1], ["14,0", 2]]) {
+    for (const [sectionKey, zone] of [["1,0", 0], ["7,-1", 1], ["14,-1", 2]]) {
         let total = 0;
         for (let seedIndex = 0; seedIndex < sampleCount; seedIndex++) {
             total += api.getMazeCoinCount(sectionKey, { seed: `ground-coin-average-${seedIndex}` });
