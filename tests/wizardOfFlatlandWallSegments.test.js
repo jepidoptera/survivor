@@ -20,7 +20,7 @@ function createSystem() {
         wallLabelCode: 4,
         wallLabelSide: 5,
         baseSegmentLength: 3,
-        segmentLengthPerZone: 1,
+        segmentScalePerZone: 0.1,
         baseHitpoints: 150
     });
 }
@@ -38,36 +38,36 @@ test("Wizard of Flatland wall segments distribute wall length evenly", () => {
     const result = system.buildRegistry(wall(0, 0, 10, 0), ranges(1), new Map(), () => 0);
     const segments = Array.from(result.registry.values());
 
-    assert.equal(segments.length, 4);
-    assert.deepEqual(segments.map((segment) => segment.length), [2.5, 2.5, 2.5, 2.5]);
+    assert.equal(segments.length, 3);
+    assert.deepEqual(segments.map((segment) => segment.length), [10 / 3, 10 / 3, 10 / 3]);
     assert.deepEqual(segments.map((segment) => [segment.ax, segment.bx]), [
-        [0, 2.5],
-        [2.5, 5],
-        [5, 7.5],
-        [7.5, 10]
+        [0, 3.333333333333333],
+        [3.333333333333333, 6.666666666666666],
+        [6.666666666666666, 10]
     ]);
 });
 
-test("Wizard of Flatland higher-zone walls use larger break segments", () => {
+test("Wizard of Flatland wall break segment size is a zone-scaled minimum", () => {
     const system = createSystem();
-    const low = system.buildRegistry(wall(0, 0, 10, 0), ranges(1), new Map(), () => 0);
-    const high = system.buildRegistry(wall(0, 0, 10, 0), ranges(1, "14,0"), new Map(), () => 2);
+    const low = system.buildRegistry(wall(0, 0, 12, 0), ranges(1), new Map(), () => 0);
+    const high = system.buildRegistry(wall(0, 0, 12, 0), ranges(1, "14,0"), new Map(), () => 2);
 
     assert.equal(low.registry.size, 4);
-    assert.equal(high.registry.size, 2);
-    assert.deepEqual(Array.from(high.registry.values(), (segment) => segment.length), [5, 5]);
+    assert.equal(high.registry.size, 3);
+    assert.deepEqual(Array.from(high.registry.values(), (segment) => segment.length), [4, 4, 4]);
+    assert.ok(Array.from(high.registry.values()).every((segment) => segment.length >= 3 * 1.2));
 });
 
 test("Wizard of Flatland shared segment damage survives regrouping around a breach", () => {
     const system = createSystem();
-    const original = system.buildRegistry(wall(0, 0, 10, 0), ranges(1), new Map(), () => 0);
+    const original = system.buildRegistry(wall(0, 0, 12, 0), ranges(1), new Map(), () => 0);
     const originalSegments = Array.from(original.registry.values());
     originalSegments[0].damage = 25;
     originalSegments[3].damage = 60;
 
     const regroupedWalls = Float32Array.from([
-        0, 0, 5, 0, 10, 0, 0, 0,
-        7.5, 0, 10, 0, 10, 0, 0, 0
+        0, 0, 6, 0, 10, 0, 0, 0,
+        9, 0, 12, 0, 10, 0, 0, 0
     ]);
     const regrouped = system.buildRegistry(regroupedWalls, ranges(2), original.registry, () => 0);
 

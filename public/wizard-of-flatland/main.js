@@ -110,7 +110,6 @@
     const ENEMY_HIT_DAMAGE = 10;
     const WALL_BREAK_HITPOINTS = 150;
     const WALL_BREAK_SECTION_LENGTH = 3;
-    const WALL_BREAK_SECTION_LENGTH_PER_ZONE = 1;
     const WALL_SHATTER_VISUAL_SECONDS = 0.42;
     const WALL_SHATTER_FRAGMENT_COUNT = 14;
     const ENEMY_DEATH_PATH_COST = 10;
@@ -432,7 +431,7 @@
         wallLabelCode: WALL_LABEL_CODE,
         wallLabelSide: WALL_LABEL_SIDE,
         baseSegmentLength: WALL_BREAK_SECTION_LENGTH,
-        segmentLengthPerZone: WALL_BREAK_SECTION_LENGTH_PER_ZONE,
+        segmentScalePerZone: ENEMY_SCALE_INCREMENT,
         baseHitpoints: WALL_BREAK_HITPOINTS
     });
     const explorationWallLayout = Object.freeze({

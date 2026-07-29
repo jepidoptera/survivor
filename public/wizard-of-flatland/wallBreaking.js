@@ -12,7 +12,7 @@
         const wallLabelCode = requireNonNegativeInteger(options && options.wallLabelCode, "wall label offset");
         const wallLabelSide = requireNonNegativeInteger(options && options.wallLabelSide, "wall side offset");
         const baseSegmentLength = requirePositiveNumber(options && options.baseSegmentLength, "base segment length");
-        const segmentLengthPerZone = requireNonNegativeNumber(options && options.segmentLengthPerZone, "segment length per zone");
+        const segmentScalePerZone = requireNonNegativeNumber(options && options.segmentScalePerZone, "segment scale per zone");
         const baseHitpoints = requirePositiveNumber(options && options.baseHitpoints, "base hitpoints");
 
         function buildRegistry(walls, sectionRanges, previousRegistry, getSectionZone, getFallbackSectionKey = () => "manual") {
@@ -42,8 +42,8 @@
                 const sideCode = Math.round(walls[base + wallLabelSide]);
                 const length = Math.hypot(bx - ax, by - ay);
                 if (!(length > 0.001)) throw new Error(`Wizard of Flatland wall ${wallIndex} cannot be segmented`);
-                const targetLength = baseSegmentLength + zone * segmentLengthPerZone;
-                const count = Math.max(1, Math.ceil(length / targetLength - 0.000001));
+                const minimumLength = baseSegmentLength * (1 + zone * segmentScalePerZone);
+                const count = Math.max(1, Math.floor(length / minimumLength + 0.000001));
                 const actualLength = length / count;
                 const ids = [];
                 for (let segmentIndex = 0; segmentIndex < count; segmentIndex++) {
