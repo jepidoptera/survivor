@@ -136,6 +136,7 @@ function solveStep(message) {
     const separationStrength = Math.max(0, finiteNumber(params.separationStrength, "separationStrength"));
     const speedScale = Math.max(0, finiteNumber(params.speedScale, "speedScale"));
     const targetMoved = params.targetMoved === true;
+    const wallBreakTargets = normalizeWallBreakTargets(message.wallBreakTargets);
 
     const slotChoices = buildSlotChoices(agents, count, targetX, targetY, ringRadius, walls);
     const attackSlots = selectAttackingNpcs(agents, count, targetX, targetY, ringRadius, walls, targetMoved);
@@ -152,6 +153,7 @@ function solveStep(message) {
     const hitAgentIds = [];
     let wallHits = 0;
     const wallHitAgentIds = [];
+    const wallHitTargets = [];
     let crowdThrottleCount = 0;
     let crowdThrottlePressure = 0;
 
@@ -677,6 +679,11 @@ function solveStep(message) {
         if (constrained.clamps > 0 && attackingWallPath && state === STATE_ATTACKING) {
             wallHits += 1;
             wallHitAgentIds.push(id);
+            const segmentId = wallBreakTargets.get(id);
+            if (typeof segmentId !== "string" || segmentId.length === 0) {
+                throw new Error(`wall-attacking agent ${id} is missing its target segment`);
+            }
+            wallHitTargets.push({ agentId: id, segmentId });
             nextPhase = PHASE_RECOVERING;
             nextPhaseTime = 0;
         }
@@ -739,6 +746,7 @@ function solveStep(message) {
             hitAgentIds,
             wallHits,
             wallHitAgentIds,
+            wallHitTargets,
             blocked,
             contactPushes: contactStats.pushes,
             contactPasses: contactStats.passes,
@@ -748,6 +756,20 @@ function solveStep(message) {
             crowdThrottlePressure
         }
     };
+}
+
+function normalizeWallBreakTargets(entries) {
+    if (entries === undefined) return new Map();
+    if (!Array.isArray(entries)) throw new Error("wall break targets must be an array");
+    const targets = new Map();
+    for (const entry of entries) {
+        if (!entry || !Number.isFinite(entry.agentId) || typeof entry.segmentId !== "string" || entry.segmentId.length === 0) {
+            throw new Error("wall break target is malformed");
+        }
+        if (targets.has(entry.agentId)) throw new Error(`duplicate wall break target for agent ${entry.agentId}`);
+        targets.set(entry.agentId, entry.segmentId);
+    }
+    return targets;
 }
 
 function resolvePackedAgentAgentContacts(agents, next, count, walls, dt, targetX, targetY, activeRadius) {

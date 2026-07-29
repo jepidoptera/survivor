@@ -41,7 +41,14 @@
             }
             return state.debug.wizardImmortal;
         };
-        if (profiler) window.__wizardOfFlatlandProfiler = profiler;
+        if (profiler) {
+            if (typeof profiler.startMainThreadProfile !== "function") {
+                throw new Error("Wizard of Flatland profiler is missing startMainThreadProfile");
+            }
+            window.__wizardOfFlatlandProfiler = profiler;
+            window.profileWizardMainThread = profiler.startMainThreadProfile;
+            window.stopWizardMainThreadProfile = profiler.stopMainThreadProfile;
+        }
         return state.debug;
     }
 

@@ -106,7 +106,10 @@ function buildMazeSections(message) {
             wallSectionRanges.push({ sectionKey: key, startWallIndex, wallCount, ...bounds });
         }
     }
-    const generatedWalls = finishWallBuffer(generatedWallBuilder);
+    let generatedWalls = finishWallBuffer(generatedWallBuilder);
+    const brokenWallGaps = normalizeBrokenWallGaps(message.brokenWallGaps || []);
+    const brokenResult = applyBrokenWallGapsToBuffer(generatedWalls, wallSectionRanges, brokenWallGaps);
+    generatedWalls = brokenResult.walls;
     const manualWalls = normalizeWalls(message.manualWalls || [], "manual walls");
     const allWalls = concatWallBuffers(generatedWalls, manualWalls);
     const bounds = normalizeBounds(message.bounds);
@@ -118,9 +121,131 @@ function buildMazeSections(message) {
         signature: String(message.signature || ""),
         generatedWalls,
         allWalls,
-        wallSectionRanges,
+        wallSectionRanges: brokenResult.wallSectionRanges,
+        brokenWallGapCount: brokenWallGaps.length,
         nodeLayer
     };
+}
+
+function normalizeBrokenWallGaps(gaps) {
+    if (!Array.isArray(gaps)) throw new Error("Wizard of Flatland maze worker broken wall gaps must be an array");
+    return gaps.map((gap) => {
+        if (!gap || typeof gap !== "object") throw new Error("Wizard of Flatland maze worker broken wall gap is missing");
+        const normalized = {};
+        for (const field of ["ax", "ay", "bx", "by", "startT", "endT"]) {
+            normalized[field] = finiteNumber(gap[field], `broken wall gap ${field}`);
+        }
+        normalized.labelCode = Number(gap.labelCode);
+        normalized.sideCode = Number(gap.sideCode);
+        if (!(normalized.startT >= 0 && normalized.endT <= 1 && normalized.endT > normalized.startT)) {
+            throw new Error("Wizard of Flatland maze worker broken wall gap requires an ordered segment range");
+        }
+        if (!Number.isInteger(normalized.labelCode) || !Number.isInteger(normalized.sideCode)) {
+            throw new Error("Wizard of Flatland maze worker broken wall gap requires wall label data");
+        }
+        return normalized;
+    });
+}
+
+function applyBrokenWallGapsToBuffer(walls, wallSectionRanges, gaps) {
+    let nextWalls = walls;
+    let nextRanges = wallSectionRanges.map((range) => ({ ...range }));
+    for (const gap of gaps) {
+        const wallIndex = findMatchingWallGapIndex(nextWalls, gap);
+        if (wallIndex < 0) continue;
+        const pieces = [];
+        for (let base = 0; base < nextWalls.length; base += WALL_STRIDE) {
+            if (base !== wallIndex * WALL_STRIDE) {
+                pieces.push(readWallPiece(nextWalls, base));
+                continue;
+            }
+            const left = createWallPieceForRange(gap, 0, gap.startT);
+            const right = createWallPieceForRange(gap, gap.endT, 1);
+            if (left) pieces.push(left);
+            if (right) pieces.push(right);
+        }
+        const nextBuilder = createWallBufferBuilder();
+        for (const piece of pieces) appendWallPiece(nextBuilder, piece);
+        const previousWallCount = nextWalls.length / WALL_STRIDE;
+        nextWalls = finishWallBuffer(nextBuilder);
+        nextRanges = adjustWallSectionRangesForSplit(
+            nextRanges,
+            wallIndex,
+            nextWalls.length / WALL_STRIDE - previousWallCount
+        );
+    }
+    return { walls: nextWalls, wallSectionRanges: nextRanges };
+}
+
+function findMatchingWallGapIndex(walls, gap) {
+    for (let base = 0; base < walls.length; base += WALL_STRIDE) {
+        if (wallSegmentMatchesGap(walls, base, gap)) return base / WALL_STRIDE;
+    }
+    return -1;
+}
+
+function wallSegmentMatchesGap(walls, base, gap) {
+    const matches = (ax, ay, bx, by) => (
+        Math.abs(ax - gap.ax) < 0.001 &&
+        Math.abs(ay - gap.ay) < 0.001 &&
+        Math.abs(bx - gap.bx) < 0.001 &&
+        Math.abs(by - gap.by) < 0.001
+    );
+    return matches(walls[base], walls[base + 1], walls[base + 2], walls[base + 3])
+        || matches(walls[base + 2], walls[base + 3], walls[base], walls[base + 1]);
+}
+
+function readWallPiece(walls, base) {
+    return {
+        ax: walls[base],
+        ay: walls[base + 1],
+        bx: walls[base + 2],
+        by: walls[base + 3],
+        labelCode: Math.round(walls[base + 4]),
+        sideCode: Math.round(walls[base + 5])
+    };
+}
+
+function createWallPieceForRange(gap, startT, endT) {
+    if (endT - startT <= 0.001) return null;
+    return {
+        ax: gap.ax + (gap.bx - gap.ax) * startT,
+        ay: gap.ay + (gap.by - gap.ay) * startT,
+        bx: gap.ax + (gap.bx - gap.ax) * endT,
+        by: gap.ay + (gap.by - gap.ay) * endT,
+        labelCode: gap.labelCode,
+        sideCode: gap.sideCode
+    };
+}
+
+function appendWallPiece(builder, piece) {
+    ensureWallBufferCapacity(builder, builder.length + WALL_STRIDE);
+    builder.buffer[builder.length] = piece.ax;
+    builder.buffer[builder.length + 1] = piece.ay;
+    builder.buffer[builder.length + 2] = piece.bx;
+    builder.buffer[builder.length + 3] = piece.by;
+    builder.buffer[builder.length + 4] = piece.labelCode;
+    builder.buffer[builder.length + 5] = piece.sideCode;
+    builder.buffer[builder.length + 6] = 0;
+    builder.buffer[builder.length + 7] = 0;
+    builder.length += WALL_STRIDE;
+}
+
+function adjustWallSectionRangesForSplit(ranges, wallIndex, wallCountDelta) {
+    const next = ranges.map((range) => ({ ...range }));
+    const ownerIndex = next.findIndex((range) => (
+        wallIndex >= range.startWallIndex &&
+        wallIndex < range.startWallIndex + range.wallCount
+    ));
+    if (ownerIndex < 0) {
+        throw new Error(`Wizard of Flatland maze worker cannot locate broken generated wall ${wallIndex}`);
+    }
+    next[ownerIndex].wallCount += wallCountDelta;
+    for (let i = ownerIndex + 1; i < next.length; i++) {
+        next[i].startWallIndex += wallCountDelta;
+    }
+    if (next[ownerIndex].wallCount === 0) next.splice(ownerIndex, 1);
+    return next;
 }
 
 function getWallBuilderRangeBounds(builder, startWallIndex, wallCount) {

@@ -17,6 +17,8 @@
         if (
             !constants ||
             !Number.isInteger(constants.MAZE_SECTION_CACHE_LIMIT) ||
+            !Number.isInteger(constants.MAZE_SECTION_CACHE_OVERFLOW_LIMIT) ||
+            !Number.isFinite(constants.MAZE_SECTION_UNLOAD_HYSTERESIS_MS) ||
             typeof constants.MAZE_WORKER_STATUS_PREFIX !== "string" ||
             !Number.isFinite(constants.TARGET_RADIUS) ||
             !Number.isInteger(constants.WALL_STRIDE)
@@ -49,12 +51,16 @@
         }
 
         function getMazeSignature(options, keys) {
+            if (!Array.isArray(state.brokenWallGaps)) {
+                throw new Error("Wizard of Flatland maze streaming requires broken wall gap tracking");
+            }
             return [
                 options.seed,
                 options.chunkSize,
                 options.roomScale.toFixed(3),
                 options.twistiness.toFixed(3),
-                keys.join(";")
+                keys.join(";"),
+                `broken-gaps:${state.brokenWallGaps.length}`
             ].join("|");
         }
 
@@ -63,19 +69,25 @@
             const options = callbacks.getMazeOptions();
             const requiredKeys = callbacks.getRequiredMazeSectionKeys(options);
             const requiredSet = new Set(requiredKeys);
+            const now = performance.now();
             let changed = force;
 
             if (!(state.generatedMazeChunkKeys instanceof Set)) {
                 state.generatedMazeChunkKeys = new Set();
                 changed = true;
             }
+            if (!(state.generatedMazeSectionLastRequiredAt instanceof Map)) {
+                state.generatedMazeSectionLastRequiredAt = new Map();
+            }
             for (const key of requiredKeys) {
+                state.generatedMazeSectionLastRequiredAt.set(key, now);
                 if (state.generatedMazeChunkKeys.has(key)) continue;
                 state.generatedMazeChunkKeys.add(key);
                 changed = true;
             }
             while (state.generatedMazeChunkKeys.size > constants.MAZE_SECTION_CACHE_LIMIT) {
-                const removed = callbacks.removeFurthestGeneratedMazeSection(options, requiredSet);
+                const forceEviction = state.generatedMazeChunkKeys.size > constants.MAZE_SECTION_CACHE_OVERFLOW_LIMIT;
+                const removed = callbacks.removeFurthestGeneratedMazeSection(options, requiredSet, now, forceEviction);
                 if (!removed) break;
                 changed = true;
             }
@@ -92,6 +104,7 @@
         function requestGeneratedMazeRefresh(options, keys, signature) {
             const bounds = callbacks.getPathfindingLayerBounds();
             const manualWalls = wallBuffer.cloneWallBuffer(state.manualWalls, "manual walls");
+            const brokenWallGaps = state.brokenWallGaps.map((gap) => ({ ...gap }));
             const savedSections = callbacks.getSavedSectionWallOverrides(keys);
             if (!Array.isArray(savedSections)) {
                 throw new Error("Wizard of Flatland maze streaming requires saved section wall overrides");
@@ -118,6 +131,7 @@
                     keys,
                     manualWalls,
                     savedSections,
+                    brokenWallGaps,
                     bounds,
                     targetRadius: constants.TARGET_RADIUS
                 }, transfer);

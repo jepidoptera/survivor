@@ -110,6 +110,7 @@
     const ENEMY_HIT_DAMAGE = 10;
     const WALL_BREAK_HITPOINTS = 150;
     const WALL_BREAK_SECTION_LENGTH = 3;
+    const WALL_BREAK_SECTION_LENGTH_PER_ZONE = 1;
     const WALL_SHATTER_VISUAL_SECONDS = 0.42;
     const WALL_SHATTER_FRAGMENT_COUNT = 14;
     const ENEMY_DEATH_PATH_COST = 10;
@@ -183,6 +184,8 @@
     const MAZE_CHUNK_MIN_SIZE = 28;
     const MAZE_CHUNK_MAX_SIZE = 72;
     const MAZE_SECTION_CACHE_LIMIT = 15;
+    const MAZE_SECTION_CACHE_OVERFLOW_LIMIT = 18;
+    const MAZE_SECTION_UNLOAD_HYSTERESIS_MS = 3000;
     const MAZE_SECTION_NEARBY_LOAD_COUNT = 2;
     const MAZE_WORKER_STATUS_PREFIX = "maze";
     const MAZE_LOOKAHEAD_DISTANCE = 20;
@@ -420,6 +423,18 @@
     const explorationSystem = getWizardFlatlandExplorationApi().createExplorationSystem({
         cellSize: 0.25
     });
+    const wallBreakingSystem = getWizardFlatlandWallBreakingApi().createWallBreakingSystem({
+        wallStride: WALL_STRIDE,
+        wallX1: WALL_X1,
+        wallY1: WALL_Y1,
+        wallX2: WALL_X2,
+        wallY2: WALL_Y2,
+        wallLabelCode: WALL_LABEL_CODE,
+        wallLabelSide: WALL_LABEL_SIDE,
+        baseSegmentLength: WALL_BREAK_SECTION_LENGTH,
+        segmentLengthPerZone: WALL_BREAK_SECTION_LENGTH_PER_ZONE,
+        baseHitpoints: WALL_BREAK_HITPOINTS
+    });
     const explorationWallLayout = Object.freeze({
         stride: WALL_STRIDE,
         x1: WALL_X1,
@@ -505,6 +520,9 @@
         spikeShatterEffects: [],
         wallShatterEffects: [],
         brokenWallGaps: [],
+        wallBreakSegmentsById: new Map(),
+        wallBreakSegmentIdsByWallIndex: [],
+        wallBreakCostRevision: 1,
         coins: [],
         collectedCoinKeys: new Set(),
         collectedCoinSectionKeysByCoinKey: new Map(),
@@ -519,6 +537,7 @@
         generatedMazeWalls: createEmptyWallBuffer(),
         generatedMazeWallSectionRanges: [],
         generatedMazeChunkKeys: new Set(),
+        generatedMazeSectionLastRequiredAt: new Map(),
         generatedMazeInstalledChunkKeys: new Set(),
         generatedMazeSignature: "",
         generatedMazeRequestId: 1,
@@ -856,8 +875,10 @@
     const profiler = getWizardFlatlandProfilerApi().createWizardOfFlatlandProfiler({ state, labels });
     attachWizardOfFlatlandDebugGlobals(state, profiler);
 
-    const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-88");
-    worker.addEventListener("message", handleWorkerMessage);
+    const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-89");
+    worker.addEventListener("message", (event) => {
+        profiler.task("solver worker message", () => handleWorkerMessage(event));
+    });
     worker.addEventListener("error", (event) => {
         setLabelText(labels.workerStatus, event.message || "failed");
     });
@@ -873,19 +894,26 @@
             isValidPathfindingNodeIndex,
             getPathfindingNodeIndexForKey,
             getPathfindingBlockedEdgeWallIndex,
+            getWallBreakConnectionCostOverrides,
             advanceAgentPathCursor,
             getAgentPathWaypoint
         }
     });
     const requestAgentPath = pathfindingClientSystem.requestAgentPath;
-    pathfindingWorker.addEventListener("message", pathfindingClientSystem.handlePathfindingWorkerMessage);
+    pathfindingWorker.addEventListener("message", (event) => {
+        profiler.task("pathfinding worker message", () => {
+            pathfindingClientSystem.handlePathfindingWorkerMessage(event);
+        });
+    });
     pathfindingWorker.addEventListener("error", (event) => {
         setLabelText(labels.workerStatus, event.message || "pathfinding failed");
     });
 
-    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-30");
+    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-31");
     const losWorker = new Worker("/wizard-of-flatland/losWorker.js?v=wizard-of-flatland-1");
-    losWorker.addEventListener("message", handleLosWorkerMessage);
+    losWorker.addEventListener("message", (event) => {
+        profiler.task("LOS worker message", () => handleLosWorkerMessage(event));
+    });
     losWorker.addEventListener("error", (event) => {
         state.los.workerError = new Error(
             `Wizard of Flatland LOS worker failed: ${event.message || "unknown worker error"}`
@@ -896,6 +924,8 @@
         worker: mazeWorker,
         constants: {
             MAZE_SECTION_CACHE_LIMIT,
+            MAZE_SECTION_CACHE_OVERFLOW_LIMIT,
+            MAZE_SECTION_UNLOAD_HYSTERESIS_MS,
             MAZE_WORKER_STATUS_PREFIX,
             TARGET_RADIUS,
             WALL_STRIDE
@@ -918,7 +948,9 @@
     const getMazeSignature = mazeStreamingSystem.getMazeSignature;
     const refreshGeneratedMazeIfNeeded = mazeStreamingSystem.refreshGeneratedMazeIfNeeded;
     const requestGeneratedMazeRefresh = mazeStreamingSystem.requestGeneratedMazeRefresh;
-    mazeWorker.addEventListener("message", mazeStreamingSystem.handleMazeWorkerMessage);
+    mazeWorker.addEventListener("message", (event) => {
+        profiler.task("maze worker message", () => mazeStreamingSystem.handleMazeWorkerMessage(event));
+    });
     mazeWorker.addEventListener("error", mazeStreamingSystem.handleMazeWorkerError);
 
     function setLabelText(label, text) {
@@ -937,6 +969,14 @@
             typeof api.cloneWallBuffer !== "function"
         ) {
             throw new Error("Wizard of Flatland requires /wizard-of-flatland/wallBuffer.js");
+        }
+        return api;
+    }
+
+    function getWizardFlatlandWallBreakingApi() {
+        const api = window.WizardFlatlandWallBreaking;
+        if (!api || typeof api.createWallBreakingSystem !== "function") {
+            throw new Error("Wizard of Flatland wall breaking module failed to load");
         }
         return api;
     }
@@ -1634,13 +1674,19 @@
             validateWallLabelBuffer(message.generatedWalls, "generated maze wall labels");
             validateWallLabelBuffer(message.allWalls, "maze pathfinding wall labels");
         });
-        let generatedWalls = message.generatedWalls;
-        let wallSectionRanges = validateMazeWallSectionRanges(
+        const generatedWalls = message.generatedWalls;
+        const wallSectionRanges = validateMazeWallSectionRanges(
             message.wallSectionRanges,
             getWallCount(generatedWalls),
             "maze worker result"
         );
-        let allWalls = message.allWalls;
+        const allWalls = message.allWalls;
+        if (Number(message.brokenWallGapCount) !== state.brokenWallGaps.length) {
+            throw new Error(
+                `Wizard of Flatland maze worker returned ${message.brokenWallGapCount} broken gaps; `
+                + `${state.brokenWallGaps.length} are active`
+            );
+        }
         const manualOffset = generatedWalls.length;
         if (allWalls.length !== generatedWalls.length + state.manualWalls.length) {
             throw new Error("Wizard of Flatland maze worker wall count does not match active manual walls");
@@ -1652,20 +1698,6 @@
                 }
             }
         });
-        profiler.span("apply broken wall gaps", () => {
-            if (Array.isArray(state.brokenWallGaps) && state.brokenWallGaps.length > 0) {
-                const brokenResult = applyBrokenWallGapsToBuffer(
-                    generatedWalls,
-                    state.brokenWallGaps,
-                    "generated maze walls",
-                    wallSectionRanges
-                );
-                generatedWalls = brokenResult.walls;
-                wallSectionRanges = brokenResult.wallSectionRanges;
-                allWalls = concatWallBuffers(generatedWalls, state.manualWalls);
-            }
-        });
-
         profiler.span("install wall buffers and section keys", () => {
             const wallGeometryChanged = !wallBuffersMatchExactly(state.walls, allWalls);
             state.generatedMazeWalls = generatedWalls;
@@ -1679,7 +1711,8 @@
             state.generatedMazeInstalledChunkKeys = new Set(state.generatedMazeChunkKeys);
             rememberVisitedMazeSections(state.generatedMazeInstalledChunkKeys);
             state.worldVersion += 1;
-            clearWallBreakTrackingForAllAgents();
+            rebuildWallBreakSegmentRegistry();
+            reconcileAgentWallBreakTargets();
         });
         profiler.span("restore wall exploration", () => {
             for (const sectionKey of state.generatedMazeInstalledChunkKeys) {
@@ -1721,6 +1754,7 @@
             agent.pathRequestPending = false;
             agent.pathRequestId = 0;
             agent.pathRequestedWorldVersion = 0;
+            agent.pathRequestedWallBreakRevision = 0;
             agent.pathRequestedRawStartKey = "";
             agent.pathRequestedStartKey = "";
             agent.pathRequestedGoalKey = "";
@@ -1732,16 +1766,90 @@
             agent.pathGoalWallBlocked = false;
             agent.wallBreakTargetEdgeKey = "";
             agent.wallBreakTargetWallIndex = -1;
-            agent.wallBreakDamageByEdge = new Map();
+            agent.wallBreakTargetSegmentId = "";
         }
     }
 
-    function clearWallBreakTrackingForAllAgents() {
-        for (const agent of state.agents) {
-            agent.wallBreakTargetEdgeKey = "";
-            agent.wallBreakTargetWallIndex = -1;
-            agent.wallBreakDamageByEdge = new Map();
+    function rebuildWallBreakSegmentRegistry() {
+        const previousRegistry = new Map(state.wallBreakSegmentsById);
+        for (const range of state.generatedMazeWallSectionRanges) {
+            const snapshot = state.sectionSnapshotsByKey.get(range.sectionKey);
+            const savedDamage = snapshot && Array.isArray(snapshot.wallBreakDamage) ? snapshot.wallBreakDamage : [];
+            for (const entry of savedDamage) {
+                if (!entry || typeof entry.segmentId !== "string" || !Number.isFinite(entry.damage) || entry.damage < 0) {
+                    throw new Error(`Wizard of Flatland section ${range.sectionKey} has invalid saved wall damage`);
+                }
+                if (!previousRegistry.has(entry.segmentId)) previousRegistry.set(entry.segmentId, { damage: entry.damage });
+            }
         }
+        const result = wallBreakingSystem.buildRegistry(
+            state.walls,
+            state.generatedMazeWallSectionRanges,
+            previousRegistry,
+            getWallBreakZoneForSection,
+            getWallBreakSectionForPoint
+        );
+        state.wallBreakSegmentsById = result.registry;
+        state.wallBreakSegmentIdsByWallIndex = result.segmentIdsByWallIndex;
+    }
+
+    function getWallBreakZoneForSection(sectionKey) {
+        const coord = parseMazeSectionKey(sectionKey);
+        return Math.floor(getMazeSectionRing(coord.q, coord.r) / MAZE_RING_BOUNDARY_INTERVAL);
+    }
+
+    function getWallBreakSectionForPoint(x, y) {
+        if (!isProceduralMazeScenario()) return "manual";
+        const coord = worldToMazeSectionCoord(x, y, getMazeOptions());
+        return mazeSectionKey(coord.q, coord.r);
+    }
+
+    function clearAgentWallBreakTarget(agent) {
+        agent.pathGoalWallBlocked = false;
+        agent.wallBreakTargetEdgeKey = "";
+        agent.wallBreakTargetWallIndex = -1;
+        agent.wallBreakTargetSegmentId = "";
+    }
+
+    function reconcileAgentWallBreakTargets() {
+        for (const agent of state.agents) {
+            if (typeof agent.wallBreakTargetSegmentId !== "string" || agent.wallBreakTargetSegmentId.length === 0) {
+                if (agent.pathGoalWallBlocked === true) clearAgentWallBreakTarget(agent);
+                continue;
+            }
+            const segment = state.wallBreakSegmentsById.get(agent.wallBreakTargetSegmentId);
+            if (!segment) {
+                clearAgentWallBreakTarget(agent);
+                continue;
+            }
+            agent.wallBreakTargetWallIndex = segment.wallIndex;
+        }
+    }
+
+    function assignAgentWallBreakTarget(agent, wallIndex, edgeKey) {
+        const edgeMatch = /^(\d+)->(\d+)$/.exec(edgeKey);
+        if (!edgeMatch) throw new Error(`Wizard of Flatland enemy ${agent.id} has malformed blocked edge ${edgeKey}`);
+        const fromIndex = Number(edgeMatch[1]);
+        const toIndex = Number(edgeMatch[2]);
+        if (!isValidPathfindingNodeIndex(fromIndex) || !isValidPathfindingNodeIndex(toIndex)) {
+            throw new Error(`Wizard of Flatland enemy ${agent.id} has stale blocked edge ${edgeKey}`);
+        }
+        const targetX = (getPathfindingNodeX(fromIndex) + getPathfindingNodeX(toIndex)) * 0.5;
+        const targetY = (getPathfindingNodeY(fromIndex) + getPathfindingNodeY(toIndex)) * 0.5;
+        const target = wallBreakingSystem.chooseTarget(
+            state.wallBreakSegmentsById,
+            state.wallBreakSegmentIdsByWallIndex,
+            wallIndex,
+            targetX,
+            targetY
+        );
+        agent.pathGoalWallBlocked = true;
+        agent.wallBreakTargetEdgeKey = edgeKey;
+        agent.wallBreakTargetWallIndex = wallIndex;
+        agent.wallBreakTargetSegmentId = target.id;
+        agent.pathGoalX = (target.ax + target.bx) * 0.5;
+        agent.pathGoalY = (target.ay + target.by) * 0.5;
+        return target;
     }
 
     function installPathfindingNodeLayerFromWorker(workerLayer) {
@@ -1767,17 +1875,26 @@
         if (!Number.isFinite(state.nodeLayer.pathCenterX) || !Number.isFinite(state.nodeLayer.pathCenterY)) {
             throw new Error("Wizard of Flatland maze worker path center is invalid");
         }
-        state.nodeLayer.nodes = packedNodes;
-        state.nodeLayer.snapshotNodes = snapshotNodes;
-        state.nodeLayer.edges = packedEdges;
-        state.nodeLayer.blockedEdges = packedBlockedEdges;
-        state.nodeLayer.indexByKey = buildPathfindingNodeIndexByKey(packedNodes);
-        applyTemporaryPathfindingModifiersToNodes();
+        profiler.span("install packed path arrays", () => {
+            state.nodeLayer.nodes = packedNodes;
+            state.nodeLayer.snapshotNodes = snapshotNodes;
+            state.nodeLayer.edges = packedEdges;
+            state.nodeLayer.blockedEdges = packedBlockedEdges;
+        });
+        profiler.span("build path node key index", () => {
+            state.nodeLayer.indexByKey = buildPathfindingNodeIndexByKey(packedNodes);
+        });
+        profiler.span("apply dynamic path modifiers", () => {
+            applyTemporaryPathfindingModifiersToNodes();
+        });
         state.nodeLayer.nodeStride = PATH_SNAPSHOT_NODE_STRIDE;
         state.nodeLayer.edgeStride = PATH_SNAPSHOT_EDGE_STRIDE;
         state.nodeLayer.version += 1;
         state.nodeLayer.targetNodeCache = null;
         state.nodeLayer.dirty = true;
+        profiler.span("validate blocked edge wall indices", () => {
+            validatePathfindingWallIndices();
+        });
         profiler.span("publish pathfinding snapshot", () => publishPathfindingSnapshot());
     }
 
@@ -1803,10 +1920,13 @@
         return indexByKey;
     }
 
-    function removeFurthestGeneratedMazeSection(options, protectedKeys) {
+    function removeFurthestGeneratedMazeSection(options, protectedKeys, now, force = false) {
         let furthest = null;
         for (const key of state.generatedMazeChunkKeys) {
             if (protectedKeys.has(key)) continue;
+            if (!force && isMazeSectionAnActiveWallBreakTarget(key)) continue;
+            const lastRequiredAt = Number(state.generatedMazeSectionLastRequiredAt.get(key) || 0);
+            if (!force && now - lastRequiredAt < MAZE_SECTION_UNLOAD_HYSTERESIS_MS) continue;
             const coord = parseMazeSectionKey(key);
             const center = mazeSectionCenter(coord.q, coord.r, options);
             const distance = Math.hypot(center.x - state.target.x, center.y - state.target.y);
@@ -1815,8 +1935,18 @@
         if (!furthest) return false;
         captureMazeSectionSnapshot(furthest.key);
         state.generatedMazeChunkKeys.delete(furthest.key);
+        state.generatedMazeSectionLastRequiredAt.delete(furthest.key);
         freezeAgentsInMazeSection(furthest.key, options);
         return true;
+    }
+
+    function isMazeSectionAnActiveWallBreakTarget(sectionKey) {
+        for (const agent of state.agents) {
+            if (typeof agent.wallBreakTargetSegmentId !== "string" || agent.wallBreakTargetSegmentId.length === 0) continue;
+            const segment = state.wallBreakSegmentsById.get(agent.wallBreakTargetSegmentId);
+            if (segment && segment.sectionKey === sectionKey) return true;
+        }
+        return false;
     }
 
     function getSavedSectionWallOverrides(sectionKeys) {
@@ -1848,7 +1978,7 @@
         return Float32Array.from(values);
     }
 
-    function captureMazeSectionSnapshot(sectionKey) {
+    function captureMazeSectionSnapshot(sectionKey, options = {}) {
         if (!(state.generatedMazeInstalledChunkKeys instanceof Set) || !state.generatedMazeInstalledChunkKeys.has(sectionKey)) {
             throw new Error(`Wizard of Flatland cannot snapshot unloaded section ${sectionKey}`);
         }
@@ -1867,6 +1997,9 @@
             revision: previous ? previous.revision + 1 : 1,
             savedAt: new Date().toISOString(),
             walls,
+            wallBreakDamage: options.preserveWallBreakDamage === true
+                ? getWallBreakDamageForSection(sectionKey)
+                : [],
             wallExploration: explorationSystem.exportWalls(walls, explorationWallLayout),
             coins,
             enemies,
@@ -1880,11 +2013,22 @@
         return snapshot;
     }
 
+    function getWallBreakDamageForSection(sectionKey) {
+        const damage = [];
+        for (const segment of state.wallBreakSegmentsById.values()) {
+            if (segment.sectionKey !== sectionKey || !(segment.damage > 0)) continue;
+            damage.push({ segmentId: segment.id, damage: segment.damage });
+        }
+        return damage;
+    }
+
     function captureActiveMazeSectionSnapshots() {
         if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
             throw new Error("Wizard of Flatland active section snapshot requires installed sections");
         }
-        for (const sectionKey of state.generatedMazeInstalledChunkKeys) captureMazeSectionSnapshot(sectionKey);
+        for (const sectionKey of state.generatedMazeInstalledChunkKeys) {
+            captureMazeSectionSnapshot(sectionKey, { preserveWallBreakDamage: true });
+        }
         return Array.from(state.sectionSnapshotsByKey.values());
     }
 
@@ -1898,6 +2042,14 @@
         }
         if (!Array.isArray(snapshot.wallExploration) || !Array.isArray(snapshot.coins) || !Array.isArray(snapshot.enemies)) {
             throw new Error(`Wizard of Flatland section ${expectedSectionKey} snapshot arrays are malformed`);
+        }
+        if (snapshot.wallBreakDamage !== undefined && !Array.isArray(snapshot.wallBreakDamage)) {
+            throw new Error(`Wizard of Flatland section ${expectedSectionKey} wall damage must be an array`);
+        }
+        for (const entry of snapshot.wallBreakDamage || []) {
+            if (!entry || typeof entry.segmentId !== "string" || entry.segmentId.length === 0 || !Number.isFinite(entry.damage) || entry.damage < 0) {
+                throw new Error(`Wizard of Flatland section ${expectedSectionKey} has malformed wall damage`);
+            }
         }
         for (const collection of ["obstacles", "constructs", "scenery"]) {
             if (!Array.isArray(snapshot[collection])) {
@@ -2355,7 +2507,7 @@
         agent.pathGoalWallBlocked = false;
         agent.wallBreakTargetEdgeKey = "";
         agent.wallBreakTargetWallIndex = -1;
-        agent.wallBreakDamageByEdge = new Map();
+        agent.wallBreakTargetSegmentId = "";
     }
 
     function getActorMazeSectionKey(actor, options = getMazeOptions()) {
@@ -2444,6 +2596,7 @@
         state.generatedMazeWalls = createEmptyWallBuffer();
         state.generatedMazeWallSectionRanges = [];
         state.generatedMazeChunkKeys = new Set();
+        state.generatedMazeSectionLastRequiredAt = new Map();
         state.generatedMazeInstalledChunkKeys = new Set();
         state.generatedMazeSignature = "";
         state.generatedMazePendingSignature = "";
@@ -2823,6 +2976,7 @@
         explorationSystem.reset();
         state.los.lastResult = null;
         state.generatedMazeChunkKeys = new Set();
+        state.generatedMazeSectionLastRequiredAt = new Map();
         state.generatedMazeInstalledChunkKeys = new Set();
         state.generatedMazeSignature = "";
         state.generatedMazePendingSignature = "";
@@ -2897,6 +3051,7 @@
             pathRequestId: 0,
             pathRequestedAt: 0,
             pathRequestedWorldVersion: 0,
+            pathRequestedWallBreakRevision: 0,
             pathRequestedRawStartKey: "",
             pathRequestedStartKey: "",
             pathRequestedGoalKey: "",
@@ -2908,7 +3063,7 @@
             pathGoalWallBlocked: false,
             wallBreakTargetEdgeKey: "",
             wallBreakTargetWallIndex: -1,
-            wallBreakDamageByEdge: new Map(),
+            wallBreakTargetSegmentId: "",
             activated: snapshot.activated === true,
             homeSectionKey: snapshot.homeSectionKey
         };
@@ -3412,6 +3567,7 @@
             pathRequestId: 0,
             pathRequestedAt: 0,
             pathRequestedWorldVersion: 0,
+            pathRequestedWallBreakRevision: 0,
             pathRequestedRawStartKey: "",
             pathRequestedStartKey: "",
             pathRequestedGoalKey: "",
@@ -3423,7 +3579,7 @@
             pathGoalWallBlocked: false,
             wallBreakTargetEdgeKey: "",
             wallBreakTargetWallIndex: -1,
-            wallBreakDamageByEdge: new Map(),
+            wallBreakTargetSegmentId: "",
             activated: !isProceduralMazeScenario()
         };
         if (metadata && typeof metadata === "object") {
@@ -5805,7 +5961,15 @@
                 separationStrength: getSeparationStrength(),
                 speedScale: getSpeedScale(),
                 targetMoved
-            }
+            },
+            wallBreakTargets: state.agents
+                .filter((agent) => agent.pathGoalWallBlocked === true)
+                .map((agent) => {
+                    if (typeof agent.wallBreakTargetSegmentId !== "string" || agent.wallBreakTargetSegmentId.length === 0) {
+                        throw new Error(`Wizard of Flatland enemy ${agent.id} wall attack requires a target segment`);
+                    }
+                    return { agentId: agent.id, segmentId: agent.wallBreakTargetSegmentId };
+                })
         };
         const transfer = [agents.buffer];
         if (includeWalls) {
@@ -5831,6 +5995,11 @@
         }
         if (message.type !== "step_result") return;
         state.waitingForWorker = false;
+        if (Number(message.worldVersion) !== Number(state.worldVersion)) {
+            state.solverWallVersion = 0;
+            setLabelText(labels.workerStatus, "stale result discarded");
+            return;
+        }
         applySolverResult(message.agents);
         resolveTargetNpcContacts(false);
         state.stats = message.stats || null;
@@ -5906,47 +6075,63 @@
         if (stats.wallHitAgentIds.length !== wallHits) {
             throw new Error("Wizard of Flatland enemy wall hit damage count does not match wall hit ids");
         }
+        if (!Array.isArray(stats.wallHitTargets) || stats.wallHitTargets.length !== wallHits) {
+            throw new Error("Wizard of Flatland enemy wall hit damage requires matching target segments");
+        }
         const agentsById = new Map(state.agents.map((agent) => [agent.id, agent]));
-        for (const id of stats.wallHitAgentIds) {
+        const damageBySegmentId = new Map();
+        const representativeBySegmentId = new Map();
+        for (let i = 0; i < stats.wallHitTargets.length; i++) {
+            const id = stats.wallHitAgentIds[i];
+            const hit = stats.wallHitTargets[i];
+            if (!hit || hit.agentId !== id || typeof hit.segmentId !== "string" || hit.segmentId.length === 0) {
+                throw new Error(`Wizard of Flatland enemy wall hit ${i} has inconsistent target identity`);
+            }
             const agent = agentsById.get(id);
             if (!agent) throw new Error(`Wizard of Flatland enemy wall hit damage missing agent ${id}`);
-            recordEnemyWallHit(agent);
+            validateAgentHealth(agent);
+            damageBySegmentId.set(
+                hit.segmentId,
+                Number(damageBySegmentId.get(hit.segmentId) || 0) + getAgentHitDamage(agent)
+            );
+            if (!representativeBySegmentId.has(hit.segmentId)) representativeBySegmentId.set(hit.segmentId, agent);
+        }
+        for (const [segmentId, damage] of damageBySegmentId) {
+            recordEnemyWallHit(representativeBySegmentId.get(segmentId), segmentId, damage);
         }
     }
 
-    function recordEnemyWallHit(agent) {
+    function recordEnemyWallHit(agent, segmentId, damage) {
         validateAgentHealth(agent);
-        if (agent.pathGoalWallBlocked !== true) return;
-        if (typeof agent.wallBreakTargetEdgeKey !== "string" || agent.wallBreakTargetEdgeKey.length === 0) {
-            throw new Error(`Wizard of Flatland enemy ${agent.id} wall hit requires a target edge`);
+        if (!Number.isFinite(damage) || damage <= 0) {
+            throw new Error(`Wizard of Flatland enemy ${agent.id} wall hit requires positive damage`);
         }
-        if (!Number.isInteger(agent.wallBreakTargetWallIndex) || agent.wallBreakTargetWallIndex < 0) {
-            throw new Error(`Wizard of Flatland enemy ${agent.id} wall hit requires a target wall index`);
+        const segment = state.wallBreakSegmentsById.get(segmentId);
+        if (!segment) {
+            throw new Error(`Wizard of Flatland enemy ${agent.id} hit unloaded wall segment ${segmentId}`);
         }
-        if (!(agent.wallBreakDamageByEdge instanceof Map)) agent.wallBreakDamageByEdge = new Map();
-        const previousDamage = Number(agent.wallBreakDamageByEdge.get(agent.wallBreakTargetEdgeKey) || 0);
-        if (!Number.isFinite(previousDamage) || previousDamage < 0) {
-            throw new Error(`Wizard of Flatland enemy ${agent.id} has invalid wall break progress`);
-        }
-        const nextDamage = previousDamage + getAgentHitDamage(agent);
-        if (nextDamage < WALL_BREAK_HITPOINTS) {
-            agent.wallBreakDamageByEdge.set(agent.wallBreakTargetEdgeKey, nextDamage);
+        const nextDamage = segment.damage + damage;
+        if (nextDamage < segment.hitpoints) {
+            segment.damage = nextDamage;
+            state.wallBreakCostRevision += 1;
             return;
         }
-        breakWallSectionForAgent(agent);
+        segment.damage = segment.hitpoints;
+        state.wallBreakCostRevision += 1;
+        breakWallSegmentForAgent(agent, segment);
     }
 
-    function breakWallSectionForAgent(agent) {
-        if (!Number.isInteger(agent.wallBreakTargetWallIndex) || agent.wallBreakTargetWallIndex < 0) {
-            throw new Error(`Wizard of Flatland enemy ${agent.id} wall break requires a target wall index`);
+    function breakWallSegmentForAgent(agent, segment) {
+        if (!segment || typeof segment.id !== "string") {
+            throw new Error(`Wizard of Flatland enemy ${agent.id} wall break requires a target segment`);
         }
-        const wallIndex = agent.wallBreakTargetWallIndex;
+        const wallIndex = segment.wallIndex;
         const wallBase = wallIndex * WALL_STRIDE;
         validateWallBuffer(state.walls, "wall break walls");
         if (wallBase < 0 || wallBase + WALL_STRIDE > state.walls.length) {
             throw new Error(`Wizard of Flatland enemy ${agent.id} wall break target ${wallIndex} is outside active walls`);
         }
-        const gap = createWallBreakGapForAgent(agent, state.walls, wallBase);
+        const gap = createWallBreakGapForSegment(segment, state.walls, wallBase);
         state.brokenWallGaps.push(gap);
         state.wallShatterEffects.push(createWallShatterEffect(gap));
         if (isProceduralMazeScenario()) {
@@ -5955,35 +6140,28 @@
             state.walls = splitWallBufferAtIndexForGap(state.walls, wallIndex, gap);
         }
         markWallsChanged();
-        for (const candidate of state.agents) {
-            candidate.wallBreakDamageByEdge = new Map();
-            candidate.wallBreakTargetEdgeKey = "";
-            candidate.wallBreakTargetWallIndex = -1;
-        }
+        rebuildWallBreakSegmentRegistry();
+        reconcileAgentWallBreakTargets();
         state.worldVersion += 1;
         clearAgentPathRequestsForMapRebuild();
         rebuildPathfindingNodeLayer();
     }
 
-    function createWallBreakGapForAgent(agent, walls, wallBase) {
+    function createWallBreakGapForSegment(segment, walls, wallBase) {
         const ax = walls[wallBase + WALL_X1];
         const ay = walls[wallBase + WALL_Y1];
         const bx = walls[wallBase + WALL_X2];
         const by = walls[wallBase + WALL_Y2];
-        const wallLength = Math.hypot(bx - ax, by - ay);
-        if (!(wallLength > 0)) throw new Error("Wizard of Flatland wall break requires a separated wall segment");
-        const projection = pointProjectionParameter(agent.x, agent.y, ax, ay, bx, by);
-        const centerT = Math.max(0, Math.min(1, projection));
-        const halfGapT = Math.min(0.5, WALL_BREAK_SECTION_LENGTH / wallLength * 0.5);
-        const startT = Math.max(0, centerT - halfGapT);
-        const endT = Math.min(1, centerT + halfGapT);
+        if (segment.wallIndex !== wallBase / WALL_STRIDE || !(segment.startT >= 0) || !(segment.endT <= 1) || !(segment.endT > segment.startT)) {
+            throw new Error(`Wizard of Flatland wall segment ${segment.id} has stale runtime geometry`);
+        }
         return {
             ax,
             ay,
             bx,
             by,
-            startT,
-            endT,
+            startT: segment.startT,
+            endT: segment.endT,
             labelCode: Math.round(walls[wallBase + WALL_LABEL_CODE]),
             sideCode: Math.round(walls[wallBase + WALL_LABEL_SIDE])
         };
@@ -6336,9 +6514,7 @@
                 agent.pathMode = PATH_MODE_DIRECT;
                 agent.pathGoalX = state.target.x;
                 agent.pathGoalY = state.target.y;
-                agent.pathGoalWallBlocked = false;
-                agent.wallBreakTargetEdgeKey = "";
-                agent.wallBreakTargetWallIndex = -1;
+                clearAgentWallBreakTarget(agent);
                 agent.pathNodeKeys = [];
                 agent.pathWaypoints = [];
                 agent.pathCursor = 0;
@@ -6353,13 +6529,13 @@
             if (waypoint) {
                 agent.pathGoalX = waypoint.x;
                 agent.pathGoalY = waypoint.y;
-                agent.pathGoalWallBlocked = waypoint.wallBlockedFromPrevious === true;
-                agent.wallBreakTargetEdgeKey = waypoint.wallBlockedFromPrevious === true ? waypoint.wallBlockedEdgeKey : "";
-                agent.wallBreakTargetWallIndex = waypoint.wallBlockedFromPrevious === true ? waypoint.wallBlockedWallIndex : -1;
+                if (waypoint.wallBlockedFromPrevious === true) {
+                    assignAgentWallBreakTarget(agent, waypoint.wallBlockedWallIndex, waypoint.wallBlockedEdgeKey);
+                } else {
+                    clearAgentWallBreakTarget(agent);
+                }
             } else {
-                agent.pathGoalWallBlocked = false;
-                agent.wallBreakTargetEdgeKey = "";
-                agent.wallBreakTargetWallIndex = -1;
+                clearAgentWallBreakTarget(agent);
             }
             if (agent.pathRequestPending) {
                 metrics.pending += 1;
@@ -6398,9 +6574,10 @@
                 agent.pathRequestedGoalKey !== goalNodeKey ||
                 agent.pathRequestedRawStartKey !== rawStartNodeKey ||
                 agent.pathRequestedStartKey !== startNodeKey;
+            const wallBreakCostsChanged = agent.pathRequestedWallBreakRevision !== state.wallBreakCostRevision;
             const shouldRequest =
                 (currentPathInvalid && (requestedRouteChanged || requestAgeMs >= requestIntervalMs)) ||
-                (requestedRouteChanged && requestAgeMs >= requestIntervalMs);
+                ((requestedRouteChanged || wallBreakCostsChanged) && requestAgeMs >= requestIntervalMs);
             if (!shouldRequest) continue;
             if (requestsSent >= PATH_REQUESTS_PER_FRAME) {
                 metrics.deferredRequests += 1;
@@ -6774,6 +6951,23 @@
         return state.nodeLayer.blockedEdges.length / PATH_SNAPSHOT_EDGE_STRIDE;
     }
 
+    function validatePathfindingWallIndices() {
+        const blockedEdges = state.nodeLayer && state.nodeLayer.blockedEdges;
+        if (!(blockedEdges instanceof Int32Array) || blockedEdges.length % PATH_SNAPSHOT_EDGE_STRIDE !== 0) {
+            throw new Error("Wizard of Flatland pathfinding wall validation requires packed blocked edges");
+        }
+        const wallCount = getWallCount(state.walls);
+        for (let base = 0; base < blockedEdges.length; base += PATH_SNAPSHOT_EDGE_STRIDE) {
+            const wallIndex = blockedEdges[base + 2];
+            if (!Number.isInteger(wallIndex) || wallIndex < 0 || wallIndex >= wallCount) {
+                throw new Error(
+                    `Wizard of Flatland pathfinding edge ${blockedEdges[base + PATH_EDGE_FROM]}->${blockedEdges[base + PATH_EDGE_TO]} `
+                    + `references wall ${wallIndex} outside ${wallCount} active walls`
+                );
+            }
+        }
+    }
+
     function getPathfindingBlockedEdgeWallIndex(fromPathIndex, toPathIndex) {
         if (!isValidPathfindingNodeIndex(fromPathIndex) || !isValidPathfindingNodeIndex(toPathIndex)) {
             throw new Error("Wizard of Flatland blocked path edge lookup requires valid path nodes");
@@ -7043,6 +7237,43 @@
         });
     }
 
+    function getWallBreakConnectionCostOverrides(baseCost) {
+        if (!Number.isFinite(baseCost) || baseCost < 0) {
+            throw new Error("Wizard of Flatland wall break path costs require a non-negative base cost");
+        }
+        const blockedEdges = state.nodeLayer && state.nodeLayer.blockedEdges;
+        if (!(blockedEdges instanceof Int32Array) || blockedEdges.length % PATH_SNAPSHOT_EDGE_STRIDE !== 0) {
+            throw new Error("Wizard of Flatland wall break path costs require packed blocked edges");
+        }
+        const overrides = [];
+        for (let base = 0; base < blockedEdges.length; base += PATH_SNAPSHOT_EDGE_STRIDE) {
+            const wallIndex = blockedEdges[base + 2];
+            if (!Number.isInteger(wallIndex) || wallIndex < 0) {
+                throw new Error("Wizard of Flatland wall break path cost found invalid wall index");
+            }
+            const from = blockedEdges[base + PATH_EDGE_FROM];
+            const to = blockedEdges[base + PATH_EDGE_TO];
+            if (!isValidPathfindingNodeIndex(from) || !isValidPathfindingNodeIndex(to)) {
+                throw new Error("Wizard of Flatland wall break path cost found invalid blocked edge nodes");
+            }
+            const target = wallBreakingSystem.chooseTarget(
+                state.wallBreakSegmentsById,
+                state.wallBreakSegmentIdsByWallIndex,
+                wallIndex,
+                (getPathfindingNodeX(from) + getPathfindingNodeX(to)) * 0.5,
+                (getPathfindingNodeY(from) + getPathfindingNodeY(to)) * 0.5
+            );
+            const progress = target.damage / target.hitpoints;
+            if (!(progress > 0)) continue;
+            overrides.push({
+                from,
+                to,
+                cost: baseCost * Math.max(0.05, 1 - progress)
+            });
+        }
+        return overrides;
+    }
+
     function publishLosWallsIfNeeded() {
         const los = state.los;
         if (los.workerInstalledWallRevision === state.wallVersion) return;
@@ -7150,6 +7381,8 @@
             throw new Error("Wizard of Flatland wall mutation requires an initialized wall revision");
         }
         state.wallVersion++;
+        rebuildWallBreakSegmentRegistry();
+        reconcileAgentWallBreakTargets();
     }
 
     function wallBuffersMatchExactly(left, right) {
@@ -7633,6 +7866,7 @@
         state.nodeLayer.version += 1;
         state.nodeLayer.targetNodeCache = null;
         state.nodeLayer.dirty = true;
+        validatePathfindingWallIndices();
         publishPathfindingSnapshot();
     }
 
@@ -9623,6 +9857,7 @@
 
     function tick(now) {
         const frameStarted = performance.now();
+        const frameIntervalMs = Math.max(0, now - state.lastTime);
         const frameParts = [];
         function framePart(label, fn) {
             const started = performance.now();
@@ -9669,7 +9904,7 @@
         updateDebugFpsCounter(now, dt, drawPart ? drawPart.duration : 0, frameParts);
         const frameDuration = performance.now() - frameStarted;
         frameParts.sort((a, b) => b.duration - a.duration);
-        profiler.noteFrame(frameDuration, frameParts);
+        profiler.noteFrame(frameDuration, frameParts, { frameIntervalMs });
         profiler.noteFirstFrameAfterLoad(frameDuration, frameParts);
         requestAnimationFrame(tick);
     }

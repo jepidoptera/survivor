@@ -138,3 +138,27 @@ test("Wizard of Flatland blocked path edge wall lookup accepts reverse stored di
 
     assert.equal(context.__lookup(6547, 6449), 42);
 });
+
+test("Wizard of Flatland rejects stale solver results before applying movement or hits", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const handler = extractFunction(source, "handleWorkerMessage");
+    const versionCheck = handler.indexOf("message.worldVersion");
+    const applyResult = handler.indexOf("applySolverResult(message.agents)");
+    const applyHits = handler.indexOf("handleEnemyWallHitsFromSolverStats(state.stats)");
+
+    assert.ok(versionCheck >= 0, "worker handler checks the result world version");
+    assert.ok(versionCheck < applyResult, "version check precedes movement application");
+    assert.ok(versionCheck < applyHits, "version check precedes wall-hit application");
+    assert.equal(source.includes("wall hit requires a target edge"), false);
+});
+
+test("Wizard of Flatland installs worker pathfinding after worker applies breach gaps", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const installer = extractFunction(source, "installGeneratedMazeWorkerResult");
+
+    assert.match(installer, /message\.brokenWallGapCount/);
+    assert.match(installer, /installPathfindingNodeLayerFromWorker\(message\.nodeLayer\)/);
+    assert.doesNotMatch(installer, /rebuildPathfindingNodeLayer\(\)/);
+    assert.doesNotMatch(installer, /applyBrokenWallGapsToBuffer/);
+    assert.match(source, /function validatePathfindingWallIndices\(\)/);
+});

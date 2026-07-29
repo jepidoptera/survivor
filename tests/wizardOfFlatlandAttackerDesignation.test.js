@@ -8,7 +8,9 @@ const SOLVER_WORKER_PATH = path.join(__dirname, "../public/wizard-of-flatland/so
 const ORCA_SOLVER_PATH = path.join(__dirname, "../public/wizard-of-flatland/orcaSolver.js");
 
 const PHASE_RECOVERING = 2;
+const PHASE_ATTACKING = 1;
 const PATH_MODE_DIRECT = 0;
+const PATH_MODE_WORKER = 1;
 
 function loadSolverWorkerApi() {
     const context = {
@@ -107,4 +109,47 @@ test("Wizard of Flatland recovering attackers stay designated while backing away
     assert.equal(result.agents[7], PHASE_RECOVERING);
     assert.ok(result.agents[9] < 0, "designated recovery cooldown should keep its negative marker");
     assert.equal(result.stats.retreating, 1);
+});
+
+test("Wizard of Flatland wall hits retain the solver request target segment", () => {
+    const { solveStep } = loadSolverWorkerApi();
+    const result = solveStep({
+        type: "step",
+        requestId: 2,
+        worldVersion: 4,
+        dt: 0.05,
+        agents: createPackedAgent({
+            id: 202,
+            x: 0,
+            y: 0,
+            radius: 0.5,
+            speed: 8,
+            phase: PHASE_ATTACKING,
+            phaseTime: 0,
+            heading: 0,
+            pathMode: PATH_MODE_WORKER,
+            pathGoalX: 0.7,
+            pathGoalY: 0,
+            pathGoalWallBlocked: true
+        }),
+        walls: Float32Array.from([0.7, -2, 0.7, 2, 10, 0, 0, 0]),
+        wallBreakTargets: [{ agentId: 202, segmentId: "0,0|segment" }],
+        params: {
+            targetX: 20,
+            targetY: 0,
+            targetRadius: 0.5,
+            ringRadius: 5,
+            separationStrength: 1,
+            speedScale: 1,
+            targetMoved: false
+        }
+    });
+
+    assert.equal(result.worldVersion, 4);
+    assert.equal(result.stats.wallHits, 1);
+    assert.deepEqual(Array.from(result.stats.wallHitAgentIds), [202]);
+    assert.deepEqual(
+        Array.from(result.stats.wallHitTargets, (entry) => ({ ...entry })),
+        [{ agentId: 202, segmentId: "0,0|segment" }]
+    );
 });

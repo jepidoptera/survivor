@@ -65,6 +65,8 @@ function loadMazeWorkerExports() {
             finishWallBuffer,
             appendWallBuffer,
             normalizeSavedSections,
+            normalizeBrokenWallGaps,
+            applyBrokenWallGapsToBuffer,
             buildMazeSections,
             getHexCornersWorld,
             getMazeSharedHallConnection,
@@ -159,6 +161,39 @@ test("Wizard of Flatland maze worker accepts exact saved wall buffers by section
     const builder = worker.createWallBufferBuilder();
     worker.appendWallBuffer(builder, saved.get("2,-1"));
     assert.deepEqual(Array.from(worker.finishWallBuffer(builder)), Array.from(walls));
+});
+
+test("Wizard of Flatland maze worker applies broken gaps before building pathfinding geometry", () => {
+    const worker = loadMazeWorkerExports();
+    const walls = Float32Array.from([0, 0, 10, 0, 10, 20, 0, 0]);
+    const result = worker.buildMazeSections({
+        requestId: 2,
+        signature: "broken-gap",
+        options: { seed: "broken-gap", chunkSize: 28, roomScale: 0.5, twistiness: 0.5 },
+        keys: ["0,0"],
+        savedSections: [{ sectionKey: "0,0", walls }],
+        brokenWallGaps: [{
+            ax: 0,
+            ay: 0,
+            bx: 10,
+            by: 0,
+            startT: 0.4,
+            endT: 0.6,
+            labelCode: 10,
+            sideCode: 20
+        }],
+        manualWalls: new Float32Array(0),
+        bounds: { minX: -2, minY: -2, maxX: 12, maxY: 2 },
+        targetRadius: 0.42
+    });
+
+    assert.equal(result.brokenWallGapCount, 1);
+    assert.deepEqual(
+        Array.from(result.generatedWalls),
+        [0, 0, 4, 0, 10, 20, 0, 0, 6, 0, 10, 0, 10, 20, 0, 0]
+    );
+    assert.deepEqual(Array.from(result.allWalls), Array.from(result.generatedWalls));
+    assert.equal(result.wallSectionRanges[0].wallCount, 2);
 });
 
 function wallSegments(buffer) {

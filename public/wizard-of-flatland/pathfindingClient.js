@@ -3,7 +3,6 @@
 
     const WALL_BLOCKED_CONNECTION_BASE_PATH_COST = 100;
     const WALL_BLOCKED_CONNECTION_ZONE_COST_DIVISOR = 1.1;
-    const WALL_BREAK_HITPOINTS = 150;
 
     function createPathfindingClientSystem(deps) {
         const state = deps && deps.state;
@@ -23,6 +22,7 @@
             typeof callbacks.isValidPathfindingNodeIndex !== "function" ||
             typeof callbacks.getPathfindingNodeIndexForKey !== "function" ||
             typeof callbacks.getPathfindingBlockedEdgeWallIndex !== "function" ||
+            typeof callbacks.getWallBreakConnectionCostOverrides !== "function" ||
             typeof callbacks.advanceAgentPathCursor !== "function" ||
             typeof callbacks.getAgentPathWaypoint !== "function"
         ) {
@@ -32,7 +32,7 @@
         function requestAgentPath(agent, rawStartNodeIndex, startNodeIndex, goalNodeIndex, now) {
             const requestId = state.pathfindingRequestId++;
             const wallBlockedConnectionCost = getAgentWallBlockedConnectionPathCost(agent);
-            const wallBlockedConnectionCostOverrides = getAgentWallBlockedConnectionPathCostOverrides(agent, wallBlockedConnectionCost);
+            const wallBlockedConnectionCostOverrides = callbacks.getWallBreakConnectionCostOverrides(wallBlockedConnectionCost);
             const rawStartNodeKey = callbacks.getPathfindingNodeKey(rawStartNodeIndex);
             const startNodeKey = callbacks.getPathfindingNodeKey(startNodeIndex);
             const goalNodeKey = callbacks.getPathfindingNodeKey(goalNodeIndex);
@@ -40,6 +40,7 @@
             agent.pathRequestId = requestId;
             agent.pathRequestedAt = now;
             agent.pathRequestedWorldVersion = state.pathfindingSnapshotVersion;
+            agent.pathRequestedWallBreakRevision = state.wallBreakCostRevision;
             agent.pathRequestedRawStartKey = rawStartNodeKey;
             agent.pathRequestedStartKey = startNodeKey;
             agent.pathRequestedGoalKey = goalNodeKey;
@@ -65,25 +66,6 @@
                     includeBlockedPlan: false
                 }
             });
-        }
-
-        function getAgentWallBlockedConnectionPathCostOverrides(agent, baseCost) {
-            if (!agent || !(agent.wallBreakDamageByEdge instanceof Map) || agent.wallBreakDamageByEdge.size === 0) return [];
-            const overrides = [];
-            for (const [edgeKey, damage] of agent.wallBreakDamageByEdge) {
-                const match = /^(\d+)->(\d+)$/.exec(edgeKey);
-                if (!match) throw new Error(`Wizard of Flatland enemy ${agent.id} has malformed wall break edge ${edgeKey}`);
-                if (!Number.isFinite(damage) || damage < 0) {
-                    throw new Error(`Wizard of Flatland enemy ${agent.id} has invalid wall break damage for ${edgeKey}`);
-                }
-                const progress = Math.max(0, Math.min(1, damage / WALL_BREAK_HITPOINTS));
-                overrides.push({
-                    from: Number(match[1]),
-                    to: Number(match[2]),
-                    cost: baseCost * (1 - progress)
-                });
-            }
-            return overrides;
         }
 
         function getAgentWallBlockedConnectionPathCost(agent) {
@@ -112,6 +94,7 @@
                 agent.pathGoalWallBlocked = false;
                 agent.wallBreakTargetEdgeKey = "";
                 agent.wallBreakTargetWallIndex = -1;
+                agent.wallBreakTargetSegmentId = "";
                 return;
             }
             if (!(message.pathNodeIndices instanceof Int32Array) && !Array.isArray(message.pathNodeIndices)) {
@@ -162,6 +145,7 @@
                 agent.pathGoalWallBlocked = waypoint.wallBlockedFromPrevious === true;
                 agent.wallBreakTargetEdgeKey = waypoint.wallBlockedFromPrevious === true ? waypoint.wallBlockedEdgeKey : "";
                 agent.wallBreakTargetWallIndex = waypoint.wallBlockedFromPrevious === true ? waypoint.wallBlockedWallIndex : -1;
+                agent.wallBreakTargetSegmentId = "";
             }
         }
 
