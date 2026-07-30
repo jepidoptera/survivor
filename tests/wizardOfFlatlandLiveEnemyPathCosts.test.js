@@ -234,3 +234,14 @@ test("Wizard of Flatland dynamic path cost publishing queues patches without rep
     assert.doesNotMatch(publishCostModifier, /publishPathfindingSnapshot/);
     assert.match(publishCostModifier, /queuePathfindingNodeCostPatch\(changedNodeKeys\)/);
 });
+
+test("Wizard of Flatland enemy death costs use the bounded local node search", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const addDeathCost = extractFunction(source, "addEnemyDeathPathfindingCost");
+
+    assert.match(addDeathCost, /nearestLocalPassablePathfindingNodes/);
+    assert.match(addDeathCost, /maxRadius:\s*2/);
+    assert.doesNotMatch(addDeathCost, /nearestReachablePathfindingNodes/);
+    assert.doesNotMatch(source, /function nearestReachablePathfindingNodes/);
+    assert.doesNotMatch(source, /function buildCurrentPathfindingAdjacency/);
+});

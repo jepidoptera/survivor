@@ -13,6 +13,11 @@ test("Wizard of Flatland freeze damage lowers enemy temperature by health quarte
     assert.match(source, /const damagePerDrop = agent\.maxHealth \* FREEZE_DAMAGE_FRACTION_PER_TEMPERATURE_DROP/);
     assert.match(source, /agent\.temperature -= dropCount \* FREEZE_TEMPERATURE_DROP_DEGREES/);
     assert.match(source, /damageAgentWithFreezeTemperatureAndMaybeDropCoin\(agent, damage\)/);
+    assert.match(source, /hitchSpan\("apply enemy damage"/);
+    assert.match(source, /hitchSpan\("generate enemy death coin drop"/);
+    assert.match(source, /hitchSpan\("create enemy death path cost"/);
+    assert.match(source, /hitchSpan\("create enemy death blocker"/);
+    assert.match(source, /killedAgents: Math\.max\(0, agentsBeforeCasting - state\.agents\.length\)/);
 });
 
 test("Wizard of Flatland enemy speed follows temperature and recovers one degree per second", () => {

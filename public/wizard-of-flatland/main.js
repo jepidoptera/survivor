@@ -524,6 +524,13 @@
             candidateDistances: [],
             resultIndices: []
         },
+        enemyDeathPathChangedNodeKeysScratch: new Set(),
+        enemyDeathPathNodeSearchScratch: {
+            seen: new Set(),
+            candidateIndices: [],
+            candidateDistances: [],
+            resultIndices: []
+        },
         temporaryDeathBlockersByKey: new Map(),
         lastTime: performance.now(),
         agents: [],
@@ -5383,25 +5390,46 @@
         if (!(state.temporaryPathCostsByNodeKey instanceof Map)) {
             throw new Error("Wizard of Flatland enemy death path cost requires temporary path cost tracking");
         }
-        const pathIndices = nearestReachablePathfindingNodes(agent.x, agent.y, ENEMY_DEATH_PATH_COST_TILE_COUNT);
+        const pathIndices = profiler.hitchSpan(
+            "find enemy death path cost nodes",
+            () => nearestLocalPassablePathfindingNodes(
+                agent.x,
+                agent.y,
+                ENEMY_DEATH_PATH_COST_TILE_COUNT,
+                {
+                    allowFewer: true,
+                    maxRadius: 2,
+                    scratch: state.enemyDeathPathNodeSearchScratch
+                }
+            )
+        );
         if (pathIndices.length !== ENEMY_DEATH_PATH_COST_TILE_COUNT) {
-            throw new Error(`Wizard of Flatland enemy ${agent.id} death path cost could not find ${ENEMY_DEATH_PATH_COST_TILE_COUNT} reachable path nodes`);
+            throw new Error(`Wizard of Flatland enemy ${agent.id} death path cost could not find ${ENEMY_DEATH_PATH_COST_TILE_COUNT} local passable path nodes`);
         }
         const expiresAt = performance.now() / 1000 + ENEMY_DEATH_PATH_COST_SECONDS;
-        const changedNodeKeys = new Set();
-        for (const pathIndex of pathIndices) {
-            const nodeKey = getPathfindingNodeKey(pathIndex);
-            addTemporaryPathCostPenalty(
-                nodeKey,
-                getPathfindingNodeX(pathIndex),
-                getPathfindingNodeY(pathIndex),
-                ENEMY_DEATH_PATH_COST,
-                expiresAt
-            );
-            changedNodeKeys.add(nodeKey);
+        const changedNodeKeys = state.enemyDeathPathChangedNodeKeysScratch;
+        if (!(changedNodeKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland enemy death path cost requires changed-node scratch storage");
         }
-        addEnemyDeathBlocker(agent);
-        publishTemporaryPathCostChange(changedNodeKeys);
+        changedNodeKeys.clear();
+        profiler.hitchSpan("apply enemy death path cost penalties", () => {
+            for (const pathIndex of pathIndices) {
+                const nodeKey = getPathfindingNodeKey(pathIndex);
+                addTemporaryPathCostPenalty(
+                    nodeKey,
+                    getPathfindingNodeX(pathIndex),
+                    getPathfindingNodeY(pathIndex),
+                    ENEMY_DEATH_PATH_COST,
+                    expiresAt
+                );
+                changedNodeKeys.add(nodeKey);
+            }
+        });
+        profiler.hitchSpan("create enemy death blocker", () => addEnemyDeathBlocker(agent));
+        profiler.hitchSpan(
+            "queue enemy death path cost patch",
+            () => publishTemporaryPathCostChange(changedNodeKeys)
+        );
     }
 
     function addTemporaryPathCostPenalty(nodeKey, x, y, cost, expiresAt) {
@@ -7307,29 +7335,6 @@
         return candidates.slice(0, count).map((candidate) => candidate.pathIndex);
     }
 
-    function nearestReachablePathfindingNodes(worldX, worldY, count) {
-        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) {
-            throw new Error("Wizard of Flatland nearest reachable path nodes require finite world coordinates");
-        }
-        if (!Number.isInteger(count) || count <= 0) {
-            throw new Error("Wizard of Flatland nearest reachable path nodes require a positive integer count");
-        }
-        const startIndex = nearestPassablePathfindingNode(worldX, worldY);
-        if (!Number.isInteger(startIndex)) {
-            throw new Error("Wizard of Flatland nearest reachable path nodes require a reachable start node");
-        }
-        const reachable = collectReachablePathfindingNodes(startIndex);
-        const candidates = [];
-        for (const pathIndex of reachable) {
-            candidates.push({
-                pathIndex,
-                distSq: squareDistance(worldX, worldY, getPathfindingNodeX(pathIndex), getPathfindingNodeY(pathIndex))
-            });
-        }
-        candidates.sort((a, b) => a.distSq - b.distSq);
-        return candidates.slice(0, count).map((candidate) => candidate.pathIndex);
-    }
-
     function nearestLocalPassablePathfindingNodes(worldX, worldY, count, options) {
         if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) {
             throw new Error("Wizard of Flatland nearest local path nodes require finite world coordinates");
@@ -7416,55 +7421,6 @@
         const resultCount = Math.min(count, candidateIndices.length);
         for (let i = 0; i < resultCount; i++) resultIndices.push(candidateIndices[i]);
         return resultIndices;
-    }
-
-    function collectReachablePathfindingNodes(startIndex) {
-        if (!isPathfindingNodePassable(startIndex)) {
-            throw new Error(`Wizard of Flatland reachable path node collection requires a passable start node, got ${startIndex}`);
-        }
-        const nodeCount = getPathfindingNodeCount();
-        const adjacency = buildCurrentPathfindingAdjacency(nodeCount);
-        const visited = new Uint8Array(nodeCount);
-        const queue = [startIndex];
-        const reachable = [];
-        visited[startIndex] = 1;
-        for (let cursor = 0; cursor < queue.length; cursor++) {
-            const pathIndex = queue[cursor];
-            reachable.push(pathIndex);
-            const neighbors = adjacency[pathIndex];
-            if (!neighbors) continue;
-            for (const neighborIndex of neighbors) {
-                if (visited[neighborIndex] === 1) continue;
-                visited[neighborIndex] = 1;
-                queue.push(neighborIndex);
-            }
-        }
-        return reachable;
-    }
-
-    function buildCurrentPathfindingAdjacency(nodeCount) {
-        if (!Number.isInteger(nodeCount) || nodeCount <= 0) {
-            throw new Error("Wizard of Flatland pathfinding adjacency requires a positive node count");
-        }
-        const edges = state.nodeLayer && state.nodeLayer.edges;
-        if (!(edges instanceof Int32Array) || edges.length % PATH_SNAPSHOT_EDGE_STRIDE !== 0) {
-            throw new Error("Wizard of Flatland pathfinding adjacency requires packed pathfinding edges");
-        }
-        const adjacency = new Array(nodeCount);
-        for (let edgeBase = 0; edgeBase < edges.length; edgeBase += PATH_SNAPSHOT_EDGE_STRIDE) {
-            const fromIndex = edges[edgeBase + PATH_EDGE_FROM];
-            const toIndex = edges[edgeBase + PATH_EDGE_TO];
-            if (!Number.isInteger(fromIndex) || fromIndex < 0 || fromIndex >= nodeCount) {
-                throw new Error(`Wizard of Flatland pathfinding adjacency found invalid from node ${fromIndex}`);
-            }
-            if (!Number.isInteger(toIndex) || toIndex < 0 || toIndex >= nodeCount) {
-                throw new Error(`Wizard of Flatland pathfinding adjacency found invalid to node ${toIndex}`);
-            }
-            if (isPathfindingNodeBlocked(fromIndex) || isPathfindingNodeBlocked(toIndex)) continue;
-            if (!adjacency[fromIndex]) adjacency[fromIndex] = [];
-            adjacency[fromIndex].push(toIndex);
-        }
-        return adjacency;
     }
 
     function findNearestPathfindingNode(worldX, worldY, options) {
