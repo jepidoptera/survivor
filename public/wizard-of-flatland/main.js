@@ -587,6 +587,10 @@
             workerError: null,
             lastMetrics: null,
             lastResult: null,
+            lastResultClearedReason: "initialization",
+            lastResultClearedAt: performance.now(),
+            lastCompletedRequestId: 0,
+            lastCompletedWallRevision: 0,
             enemyVisibilityById: new Map()
         },
         exploredWallRenderCache: {
@@ -2642,6 +2646,7 @@
         state.spikeShatterEffects = [];
         state.wallShatterEffects = [];
         state.brokenWallGaps = [];
+        state.spaceHeld = false;
         state.spellCooldownRemaining = 0;
         state.spellCooldownDuration = 0;
         resetWizardVitals();
@@ -2655,7 +2660,7 @@
         state.homeBaseTalismanSectionKey = "";
         state.visitedMazeSectionKeys = new Set();
         explorationSystem.reset();
-        state.los.lastResult = null;
+        clearCompletedLosSnapshot("createScenario");
         state.los.enemyVisibilityById = new Map();
         state.walls = createEmptyWallBuffer();
         markWallsChanged();
@@ -2996,6 +3001,7 @@
         state.spikeShatterEffects = [];
         state.wallShatterEffects = [];
         state.brokenWallGaps = [];
+        state.spaceHeld = false;
         state.spellCooldownRemaining = 0;
         state.spellCooldownDuration = 0;
         state.coins = [];
@@ -3040,7 +3046,7 @@
         markWallsChanged();
         state.manualWalls = createEmptyWallBuffer();
         explorationSystem.reset();
-        state.los.lastResult = null;
+        clearCompletedLosSnapshot("applyWizardCheckpointSnapshot");
         state.los.enemyVisibilityById = new Map();
         state.generatedMazeChunkKeys = new Set();
         state.generatedMazeSectionLastRequiredAt = new Map();
@@ -4232,6 +4238,8 @@
         const dy = cursorPoint.y - state.target.y;
         const length = Math.hypot(dx, dy);
         if (!(length > 0.000001)) return;
+        const losSnapshot = getCompletedSpellLosSnapshot("fireball launch");
+        if (!losSnapshot) return;
         const fireballStats = getActiveFireballStats();
         if (!spendWizardMagic(fireballStats.manaCost)) return;
         const dirX = dx / length;
@@ -4251,7 +4259,8 @@
             maxAge: fireballStats.maxAge,
             damage: fireballStats.damage,
             explosionRadius: fireballStats.explosionRadius,
-            projectileRadius: fireballStats.projectileRadius
+            projectileRadius: fireballStats.projectileRadius,
+            losSnapshot
         });
     }
 
@@ -4302,6 +4311,8 @@
 
     function updateFreezeSpell(dt) {
         if (!Number.isFinite(dt) || dt <= 0) return;
+        const losSnapshot = getCompletedSpellLosSnapshot("freeze damage");
+        if (!losSnapshot) return;
         const stats = getActiveFreezeStats();
         const freezeTickCost = stats.costPerSecond * dt;
         if (!spendWizardMagic(freezeTickCost)) {
@@ -4323,7 +4334,14 @@
                 const lateralDistance = Math.abs(dx * -dirY + dy * dirX);
                 const halfWidth = startHalfWidth + Math.max(0, forwardDistance) * coneSlope;
                 if (lateralDistance > halfWidth + agent.radius) return true;
-                return !damageAgentWithFreezeTemperatureAndMaybeDropCoin(agent, damage);
+                const visibilityScale = getCircularTargetLosVisibilityScale(
+                    losSnapshot,
+                    agent.x,
+                    agent.y,
+                    agent.radius
+                );
+                if (visibilityScale <= 0) return true;
+                return !damageAgentWithFreezeTemperatureAndMaybeDropCoin(agent, damage * visibilityScale);
             });
         });
         profiler.hitchSpan("emit freeze particles", () => emitFreezeParticles(dt, stats, dirX, dirY, halfAngle));
@@ -4643,6 +4661,9 @@
         }
         if (projectile.spellId === "fireball" && !(projectile.explosionRadius > 0)) {
             throw new Error("Wizard of Flatland fireball update requires a positive explosion radius");
+        }
+        if (projectile.spellId === "fireball") {
+            validateSpellLosSnapshot(projectile.losSnapshot, "fireball projectile");
         }
     }
 
@@ -5179,7 +5200,13 @@
         }
         if (fireball.impactActive) return;
         fireball.impactActive = true;
-        damageAgentsIntersectingCircle(fireball.x, fireball.y, fireball.explosionRadius, fireball.damage);
+        damageAgentsIntersectingCircle(
+            fireball.x,
+            fireball.y,
+            fireball.explosionRadius,
+            fireball.damage,
+            fireball.losSnapshot
+        );
         damageWizardIntersectingFireballBlast(fireball.x, fireball.y, fireball.explosionRadius, fireball.damage);
         state.fireballExplosions.push({
             x: fireball.x,
@@ -5393,19 +5420,122 @@
         if (!Array.isArray(effect.fragments)) throw new Error("Wizard of Flatland wall shatter effect requires fragments");
     }
 
-    function damageAgentsIntersectingCircle(circleX, circleY, radius, damage) {
+    function damageAgentsIntersectingCircle(circleX, circleY, radius, damage, losSnapshot) {
         if (!Number.isFinite(circleX) || !Number.isFinite(circleY) || !Number.isFinite(radius)) {
             throw new Error("Wizard of Flatland fireball explosion requires a finite damage circle");
         }
         if (!(damage > 0)) throw new Error("Wizard of Flatland fireball damage requires a positive amount");
+        validateSpellLosSnapshot(losSnapshot, "fireball explosion");
         state.agents = state.agents.filter((agent) => {
             const distance = Math.hypot(agent.x - circleX, agent.y - circleY);
             if (distance > radius + FIREBALL_HALF_DAMAGE_OUTER_RADIUS + agent.radius) return true;
+            const visibilityScale = getCircularTargetLosVisibilityScale(
+                losSnapshot,
+                agent.x,
+                agent.y,
+                agent.radius
+            );
+            if (visibilityScale <= 0) return true;
             const damageScale = distance <= radius + agent.radius ? 1 : 0.5;
-            const killed = damageAgentAndMaybeDropCoin(agent, damage * damageScale);
+            const killed = damageAgentAndMaybeDropCoin(agent, damage * damageScale * visibilityScale);
             if (killed) state.fireDeathEffects.push(createFireDeathEffect(agent));
             return !killed;
         });
+    }
+
+    function getCompletedSpellLosSnapshot(context) {
+        const snapshot = state.los && state.los.lastResult;
+        if (!snapshot) return null;
+        validateSpellLosSnapshot(snapshot, context);
+        return snapshot;
+    }
+
+    function validateSpellLosSnapshot(snapshot, context) {
+        const los = state.los;
+        const liveState = [
+            `enabled=${los && los.enabled}`,
+            `inFlightRequestId=${los && los.inFlightRequestId}`,
+            `inFlightWallRevision=${los && los.inFlightWallRevision}`,
+            `workerInstalledWallRevision=${los && los.workerInstalledWallRevision}`,
+            `wallVersion=${state.wallVersion}`,
+            `staleResultCount=${los && los.staleResultCount}`,
+            `lastCompletedRequestId=${los && los.lastCompletedRequestId}`,
+            `lastCompletedWallRevision=${los && los.lastCompletedWallRevision}`,
+            `lastResultClearedReason=${los && los.lastResultClearedReason}`,
+            `lastResultClearedAt=${los && los.lastResultClearedAt}`,
+            `workerError=${los && los.workerError ? los.workerError.message : "none"}`
+        ].join(", ");
+        if (!snapshot) {
+            throw new Error(
+                `Wizard of Flatland ${context} has no completed LOS snapshot (${liveState})`
+            );
+        }
+        if (!Number.isFinite(snapshot.originX) || !Number.isFinite(snapshot.originY)) {
+            throw new Error(
+                `Wizard of Flatland ${context} LOS snapshot has invalid origin ` +
+                `(${snapshot.originX}, ${snapshot.originY}; ${liveState})`
+            );
+        }
+        if (!Number.isInteger(snapshot.bins) || snapshot.bins < 1) {
+            throw new Error(
+                `Wizard of Flatland ${context} LOS snapshot has invalid bin count ` +
+                `${snapshot.bins} (${liveState})`
+            );
+        }
+        if (!(snapshot.depths instanceof Float32Array)) {
+            const depthType = snapshot.depths === null
+                ? "null"
+                : snapshot.depths === undefined
+                    ? "undefined"
+                    : snapshot.depths.constructor && snapshot.depths.constructor.name || typeof snapshot.depths;
+            throw new Error(
+                `Wizard of Flatland ${context} LOS snapshot depths are ${depthType}, expected Float32Array ` +
+                `(bins=${snapshot.bins}; ${liveState})`
+            );
+        }
+        if (snapshot.depths.length !== snapshot.bins) {
+            const detached = snapshot.depths.buffer.byteLength === 0 && snapshot.bins > 0;
+            throw new Error(
+                `Wizard of Flatland ${context} LOS snapshot depth length ${snapshot.depths.length} ` +
+                `does not match ${snapshot.bins} bins (bufferBytes=${snapshot.depths.buffer.byteLength}, ` +
+                `detached=${detached}; ${liveState})`
+            );
+        }
+        if (!(snapshot.maxDistance > 0)) {
+            throw new Error(
+                `Wizard of Flatland ${context} LOS snapshot has invalid max distance ` +
+                `${snapshot.maxDistance} (${liveState})`
+            );
+        }
+    }
+
+    function getCircularTargetLosVisibilityScale(snapshot, targetX, targetY, targetRadius) {
+        validateSpellLosSnapshot(snapshot, "spell target visibility");
+        if (!Number.isFinite(targetX) || !Number.isFinite(targetY) || !(targetRadius > 0)) {
+            throw new Error("Wizard of Flatland spell target visibility requires finite target geometry");
+        }
+        const dx = targetX - snapshot.originX;
+        const dy = targetY - snapshot.originY;
+        const distanceSquared = dx * dx + dy * dy;
+        if (distanceSquared <= targetRadius * targetRadius) return 1;
+        const distance = Math.sqrt(distanceSquared);
+        if (distance > snapshot.maxDistance) return 0;
+        const centerAngle = Math.atan2(dy, dx);
+        const angularRadius = Math.asin(Math.min(1, targetRadius / distance));
+        let visibleSamples = 0;
+        for (let sampleIndex = 0; sampleIndex < 5; sampleIndex++) {
+            const profileOffset = sampleIndex * 0.5 - 1;
+            const bin = getLosDepthBinIndex(
+                centerAngle + angularRadius * profileOffset,
+                snapshot.bins
+            );
+            const depth = snapshot.depths[bin];
+            if (!Number.isFinite(depth) || depth < 0) {
+                throw new Error(`Wizard of Flatland spell target LOS bin ${bin} has invalid depth`);
+            }
+            if (depth >= distance) visibleSamples++;
+        }
+        return visibleSamples / 5;
     }
 
     function damageAgentAndMaybeDropCoin(agent, damage) {
@@ -8057,7 +8187,19 @@
         };
         los.enemyVisibilityById = buildEnemyVisibilityMap(message.enemyTargets, message.enemyVisibility);
         los.lastResult = message;
+        los.lastCompletedRequestId = message.requestId;
+        los.lastCompletedWallRevision = message.wallRevision;
         explorationSystem.applyVisibility(message.hitWallIndices, message.hitWallTs);
+    }
+
+    function clearCompletedLosSnapshot(reason) {
+        const los = state.los;
+        if (!los || typeof reason !== "string" || reason.length === 0) {
+            throw new Error("Wizard of Flatland LOS snapshot clearing requires state and a reason");
+        }
+        los.lastResult = null;
+        los.lastResultClearedReason = reason;
+        los.lastResultClearedAt = performance.now();
     }
 
     function validateLosWorkerResult(result) {

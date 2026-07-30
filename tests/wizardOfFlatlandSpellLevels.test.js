@@ -46,7 +46,9 @@ test("Wizard of Flatland fireball gameplay resolves level stats", () => {
     assert.match(source, /fireball\.dirX \* fireball\.speed \* dt/);
     assert.match(source, /fireballStats\.projectileRadius/);
     assert.match(source, /findEarliestFireballWallHit\(previousX, previousY, nextX, nextY, fireball\.projectileRadius \* FIREBALL_WALL_HIT_RADIUS_SCALE\)/);
-    assert.match(source, /damageAgentsIntersectingCircle\(fireball\.x, fireball\.y, fireball\.explosionRadius, fireball\.damage\)/);
+    assert.match(source, /damageAgentsIntersectingCircle\([\s\S]*?fireball\.x,[\s\S]*?fireball\.losSnapshot[\s\S]*?\)/);
+    assert.match(source, /const losSnapshot = getCompletedSpellLosSnapshot\("fireball launch"\)/);
+    assert.match(source, /projectileRadius: fireballStats\.projectileRadius,\s*losSnapshot/);
 });
 
 test("Wizard of Flatland spell hotkeys cannot select unlearned spells", () => {
