@@ -942,7 +942,7 @@
         setLabelText(labels.workerStatus, event.message || "pathfinding failed");
     });
 
-    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-31");
+    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-32");
     const losWorker = new Worker("/wizard-of-flatland/losWorker.js?v=wizard-of-flatland-2");
     losWorker.addEventListener("message", (event) => {
         profiler.task("LOS worker message", () => handleLosWorkerMessage(event));
@@ -1909,6 +1909,7 @@
         const snapshotNodes = workerLayer.snapshotNodes;
         const packedEdges = workerLayer.edges;
         const packedBlockedEdges = workerLayer.blockedEdges;
+        const packedWallIndexByEdge = workerLayer.wallIndexByEdge;
         if (!(packedNodes instanceof Float32Array) || packedNodes.length % PATH_SNAPSHOT_NODE_STRIDE !== 0) {
             throw new Error("Wizard of Flatland maze worker nodes are malformed");
         }
@@ -1921,6 +1922,9 @@
         if (!(packedBlockedEdges instanceof Int32Array) || packedBlockedEdges.length % PATH_SNAPSHOT_EDGE_STRIDE !== 0) {
             throw new Error("Wizard of Flatland maze worker blocked edges are malformed");
         }
+        if (!(packedWallIndexByEdge instanceof Int32Array) || packedWallIndexByEdge.length !== packedEdges.length / PATH_SNAPSHOT_EDGE_STRIDE) {
+            throw new Error("Wizard of Flatland maze worker edge wall indices are malformed");
+        }
 
         state.nodeLayer.pathCenterX = Number(workerLayer.pathCenterX);
         state.nodeLayer.pathCenterY = Number(workerLayer.pathCenterY);
@@ -1932,7 +1936,7 @@
             state.nodeLayer.snapshotNodes = snapshotNodes;
             state.nodeLayer.edges = packedEdges;
             state.nodeLayer.blockedEdges = packedBlockedEdges;
-            state.nodeLayer.wallIndexByEdge = buildPathfindingEdgeWallIndices(packedEdges, packedBlockedEdges);
+            state.nodeLayer.wallIndexByEdge = packedWallIndexByEdge;
         });
         profiler.span("build path node key index", () => {
             state.nodeLayer.indexByKey = buildPathfindingNodeIndexByKey(packedNodes);

@@ -74,7 +74,8 @@ self.addEventListener("message", (event) => {
             result.nodeLayer.nodes.buffer,
             result.nodeLayer.snapshotNodes.buffer,
             result.nodeLayer.edges.buffer,
-            result.nodeLayer.blockedEdges.buffer
+            result.nodeLayer.blockedEdges.buffer,
+            result.nodeLayer.wallIndexByEdge.buffer
         ]);
     } catch (error) {
         self.postMessage({
@@ -2402,14 +2403,19 @@ function buildPathfindingNodeLayer(walls, bounds, targetRadius) {
                 }
                 blockedKeys.add(edgeKey);
                 node.blockedNeighbors.add(dir);
+                node.blockedNeighborWallIndices[dir] = w / WALL_STRIDE;
                 const reverseDir = neighbor.neighbors.indexOf(node);
-                if (reverseDir >= 0) neighbor.blockedNeighbors.add(reverseDir);
+                if (reverseDir >= 0) {
+                    neighbor.blockedNeighbors.add(reverseDir);
+                    neighbor.blockedNeighborWallIndices[reverseDir] = w / WALL_STRIDE;
+                }
                 blockedEdges.push(node.index, neighbor.index, w / WALL_STRIDE, 0);
             }
         }
     }
 
     const edgeValues = [];
+    const wallIndexByEdge = [];
     for (const node of nodes) {
         for (let dir = 0; dir < node.neighbors.length; dir++) {
             const neighbor = node.neighbors[dir];
@@ -2420,6 +2426,7 @@ function buildPathfindingNodeLayer(walls, bounds, targetRadius) {
                 dir,
                 node.blockedNeighbors.has(dir) ? 1 : 0
             );
+            wallIndexByEdge.push(node.blockedNeighborWallIndices[dir]);
         }
     }
 
@@ -2448,7 +2455,8 @@ function buildPathfindingNodeLayer(walls, bounds, targetRadius) {
         nodes: packedNodes,
         snapshotNodes: packedNodes.slice(),
         edges: packedEdges,
-        blockedEdges: new Int32Array(blockedEdges)
+        blockedEdges: new Int32Array(blockedEdges),
+        wallIndexByEdge: new Int32Array(wallIndexByEdge)
     };
 }
 
@@ -2469,7 +2477,8 @@ function createPathfindingNode(xindex, yindex, index) {
         index,
         key: pathfindingNodeKey(xindex, yindex),
         neighbors: new Array(12).fill(null),
-        blockedNeighbors: new Set()
+        blockedNeighbors: new Set(),
+        blockedNeighborWallIndices: new Int32Array(12).fill(-1)
     };
 }
 

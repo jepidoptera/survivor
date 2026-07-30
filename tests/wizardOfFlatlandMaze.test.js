@@ -4,7 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-function loadMazeWorkerExports() {
+function loadMazeWorkerExports(connectionCrossesWallFaces = () => false) {
     const workerPath = path.join(__dirname, "../public/wizard-of-flatland/mazeSectionWorker.js");
     const source = fs.readFileSync(workerPath, "utf8");
     const context = {
@@ -18,9 +18,7 @@ function loadMazeWorkerExports() {
         importScripts() {},
         self: {
             WallGeometry: {
-                connectionCrossesWallFaces() {
-                    return false;
-                }
+                connectionCrossesWallFaces
             },
             postMessage() {},
             addEventListener() {}
@@ -68,6 +66,7 @@ function loadMazeWorkerExports() {
             normalizeBrokenWallGaps,
             applyBrokenWallGapsToBuffer,
             buildMazeSections,
+            buildPathfindingNodeLayer,
             getHexCornersWorld,
             getMazeSharedHallConnection,
             canMazeSharedHallwayUseFullWall,
@@ -112,6 +111,30 @@ function loadMazeWorkerExports() {
     `, context);
     return context.self.__mazeWorkerTestExports;
 }
+
+test("Wizard of Flatland maze worker emits edge-aligned wall indices", () => {
+    const worker = loadMazeWorkerExports(() => true);
+    const walls = Float32Array.from([0, -2, 0, 2, 1, 0, 0, 0]);
+    const result = worker.buildPathfindingNodeLayer(
+        walls,
+        { minX: -2, minY: -2, maxX: 2, maxY: 2 },
+        0.42
+    );
+
+    assert.equal(result.wallIndexByEdge.length, result.edges.length / 4);
+    let blockedEdgeCount = 0;
+    for (let edgeIndex = 0; edgeIndex < result.wallIndexByEdge.length; edgeIndex++) {
+        const blocked = result.edges[edgeIndex * 4 + 3];
+        const wallIndex = result.wallIndexByEdge[edgeIndex];
+        if (blocked === 1) {
+            blockedEdgeCount += 1;
+            assert.equal(wallIndex, 0);
+        } else {
+            assert.equal(wallIndex, -1);
+        }
+    }
+    assert.ok(blockedEdgeCount > 0);
+});
 
 test("Wizard of Flatland maze worker reports contiguous wall ranges for each section", () => {
     const api = loadMazeWorkerExports();
