@@ -20,6 +20,10 @@
         let mainThreadProfile = null;
         let mainThreadProfileTimer = null;
         let lastMainThreadProfile = null;
+        let hitchProfile = null;
+        let hitchProfileTimer = null;
+        let currentHitchEvent = null;
+        let lastHitchProfile = null;
 
         const api = {
             enabled: true,
@@ -36,10 +40,16 @@
             notePathing,
             noteFirstFrameAfterLoad,
             task,
+            hitchTask,
+            hitchSpan,
             startMainThreadProfile,
             stopMainThreadProfile,
+            startHitchProfile,
+            stopHitchProfile,
             getMainThreadProfile: () => mainThreadProfile,
             getLastMainThreadProfile: () => lastMainThreadProfile,
+            getHitchProfile: () => hitchProfile,
+            getLastHitchProfile: () => lastHitchProfile,
             getCurrentLoad: () => currentLoad,
             getLastCompletedLoad: () => lastCompletedLoad,
             printLastLoad: () => {
@@ -105,14 +115,40 @@
         }
 
         function span(label, fn) {
-            if (!api.enabled || !currentLoad) return fn();
+            if (!api.enabled || (!currentLoad && !currentHitchEvent)) return fn();
             const started = performance.now();
             try {
                 return fn();
             } finally {
                 const duration = performance.now() - started;
-                currentLoad.spans.push({ label, duration, at: started });
+                if (currentLoad) currentLoad.spans.push({ label, duration, at: started });
+                recordCurrentHitchSpan(label, duration, started);
             }
+        }
+
+        function hitchSpan(label, fn) {
+            if (typeof label !== "string" || label.length === 0) {
+                throw new Error("Wizard of Flatland hitch profiler span requires a label");
+            }
+            if (typeof fn !== "function") {
+                throw new Error(`Wizard of Flatland hitch profiler span "${label}" requires a function`);
+            }
+            if (!hitchProfile || !currentHitchEvent) return fn();
+            const startedAt = performance.now();
+            try {
+                return fn();
+            } finally {
+                recordCurrentHitchSpan(label, performance.now() - startedAt, startedAt);
+            }
+        }
+
+        function recordCurrentHitchSpan(label, durationMs, startedAt) {
+            if (!hitchProfile || !currentHitchEvent) return;
+            currentHitchEvent.spans.push({
+                section: String(label),
+                durationMs,
+                startedAt
+            });
         }
 
         function completeLoad(counts) {
@@ -204,6 +240,184 @@
                     });
                 }
             }
+        }
+
+        function hitchTask(label, fn, details) {
+            if (typeof label !== "string" || label.length === 0) {
+                throw new Error("Wizard of Flatland hitch profiler task requires a label");
+            }
+            if (typeof fn !== "function") {
+                throw new Error(`Wizard of Flatland hitch profiler task "${label}" requires a function`);
+            }
+            if (!hitchProfile) return fn();
+            const profile = hitchProfile;
+            const startedAt = performance.now();
+            const parentEvent = currentHitchEvent;
+            const eventRecord = {
+                task: label,
+                startedAt,
+                spans: [],
+                details: null
+            };
+            currentHitchEvent = eventRecord;
+            try {
+                return fn();
+            } finally {
+                const durationMs = performance.now() - startedAt;
+                currentHitchEvent = parentEvent;
+                if (profile !== hitchProfile) return;
+                eventRecord.durationMs = durationMs;
+                eventRecord.atSeconds = (startedAt - profile.startedAt) / 1000;
+                eventRecord.uninstrumentedMs = getHitchEventUninstrumentedMs(eventRecord);
+                eventRecord.details = typeof details === "function" ? details() : (details || null);
+                let taskAggregate = profile.tasks.get(label);
+                if (!taskAggregate) {
+                    taskAggregate = { calls: 0, totalMs: 0, maxMs: 0, hitchCount: 0 };
+                    profile.tasks.set(label, taskAggregate);
+                }
+                taskAggregate.calls += 1;
+                taskAggregate.totalMs += durationMs;
+                taskAggregate.maxMs = Math.max(taskAggregate.maxMs, durationMs);
+                for (const spanRecord of eventRecord.spans) {
+                    const key = `${label} > ${spanRecord.section}`;
+                    let spanAggregate = profile.spans.get(key);
+                    if (!spanAggregate) {
+                        spanAggregate = { calls: 0, totalMs: 0, maxMs: 0 };
+                        profile.spans.set(key, spanAggregate);
+                    }
+                    spanAggregate.calls += 1;
+                    spanAggregate.totalMs += spanRecord.durationMs;
+                    spanAggregate.maxMs = Math.max(spanAggregate.maxMs, spanRecord.durationMs);
+                }
+                if (durationMs >= profile.thresholdMs) {
+                    taskAggregate.hitchCount += 1;
+                    profile.hitches.push(eventRecord);
+                    while (profile.hitches.length > profile.maxHitches) profile.hitches.shift();
+                }
+            }
+        }
+
+        function getHitchEventUninstrumentedMs(eventRecord) {
+            if (!eventRecord || !Number.isFinite(eventRecord.startedAt) || !Number.isFinite(eventRecord.durationMs)) {
+                throw new Error("Wizard of Flatland hitch profiler requires a timed event");
+            }
+            const eventEnd = eventRecord.startedAt + eventRecord.durationMs;
+            const intervals = eventRecord.spans
+                .map((spanRecord) => ({
+                    start: Math.max(eventRecord.startedAt, spanRecord.startedAt),
+                    end: Math.min(eventEnd, spanRecord.startedAt + spanRecord.durationMs)
+                }))
+                .filter((interval) => interval.end > interval.start)
+                .sort((left, right) => left.start - right.start);
+            let coveredMs = 0;
+            let coveredStart = null;
+            let coveredEnd = null;
+            for (const interval of intervals) {
+                if (coveredStart === null || interval.start > coveredEnd) {
+                    if (coveredStart !== null) coveredMs += coveredEnd - coveredStart;
+                    coveredStart = interval.start;
+                    coveredEnd = interval.end;
+                } else {
+                    coveredEnd = Math.max(coveredEnd, interval.end);
+                }
+            }
+            if (coveredStart !== null) coveredMs += coveredEnd - coveredStart;
+            return Math.max(0, eventRecord.durationMs - coveredMs);
+        }
+
+        function startHitchProfile(durationSeconds = 30, thresholdMs = 16) {
+            const seconds = Number(durationSeconds);
+            const threshold = Number(thresholdMs);
+            if (!Number.isFinite(seconds) || seconds <= 0) {
+                throw new Error("Wizard of Flatland hitch profile duration must be a positive number of seconds");
+            }
+            if (!Number.isFinite(threshold) || threshold <= 0) {
+                throw new Error("Wizard of Flatland hitch profile threshold must be a positive number of milliseconds");
+            }
+            if (hitchProfile) {
+                throw new Error("Wizard of Flatland hitch profiler is already running");
+            }
+            hitchProfile = {
+                startedAt: performance.now(),
+                requestedDurationMs: seconds * 1000,
+                thresholdMs: threshold,
+                maxHitches: 100,
+                tasks: new Map(),
+                spans: new Map(),
+                hitches: []
+            };
+            hitchProfileTimer = setTimeout(() => {
+                hitchProfileTimer = null;
+                stopHitchProfile();
+            }, hitchProfile.requestedDurationMs);
+            console.log(
+                `[Wizard of Flatland hitch profiler] Recording for ${seconds.toFixed(1)} seconds `
+                + `with a ${threshold.toFixed(1)} ms threshold.`
+            );
+            return hitchProfile;
+        }
+
+        function stopHitchProfile() {
+            if (!hitchProfile) {
+                throw new Error("Wizard of Flatland hitch profiler is not currently running");
+            }
+            if (hitchProfileTimer !== null) {
+                clearTimeout(hitchProfileTimer);
+                hitchProfileTimer = null;
+            }
+            const profile = hitchProfile;
+            hitchProfile = null;
+            currentHitchEvent = null;
+            const taskRows = Array.from(profile.tasks, ([taskName, values]) => ({
+                task: taskName,
+                calls: values.calls,
+                totalMs: Number(values.totalMs.toFixed(3)),
+                averageMs: Number((values.totalMs / Math.max(1, values.calls)).toFixed(4)),
+                maxMs: Number(values.maxMs.toFixed(3)),
+                hitches: values.hitchCount
+            })).sort((left, right) => right.maxMs - left.maxMs);
+            const spanRows = Array.from(profile.spans, ([section, values]) => ({
+                section,
+                calls: values.calls,
+                totalMs: Number(values.totalMs.toFixed(3)),
+                averageMs: Number((values.totalMs / Math.max(1, values.calls)).toFixed(4)),
+                maxMs: Number(values.maxMs.toFixed(3))
+            })).sort((left, right) => right.maxMs - left.maxMs);
+            const hitches = profile.hitches
+                .slice()
+                .sort((left, right) => right.durationMs - left.durationMs)
+                .map((eventRecord) => ({
+                    task: eventRecord.task,
+                    atSeconds: Number(eventRecord.atSeconds.toFixed(3)),
+                    durationMs: Number(eventRecord.durationMs.toFixed(3)),
+                    uninstrumentedMs: Number(eventRecord.uninstrumentedMs.toFixed(3)),
+                    details: eventRecord.details,
+                    topSpans: eventRecord.spans
+                        .slice()
+                        .sort((left, right) => right.durationMs - left.durationMs)
+                        .slice(0, 8)
+                        .map((spanRecord) => `${spanRecord.section} ${spanRecord.durationMs.toFixed(3)}ms`)
+                        .join(", ")
+                }));
+            lastHitchProfile = {
+                elapsedMs: performance.now() - profile.startedAt,
+                thresholdMs: profile.thresholdMs,
+                taskRows,
+                spanRows,
+                hitches
+            };
+            console.groupCollapsed(
+                `[Wizard of Flatland hitch profiler] ${hitches.length} hitches over `
+                + `${(lastHitchProfile.elapsedMs / 1000).toFixed(1)} seconds`
+            );
+            console.log("Instrumented tasks");
+            console.table(taskRows);
+            console.log("Instrumented sections");
+            console.table(spanRows);
+            console.log("Worst hitches");
+            console.table(hitches);
+            console.groupEnd();
+            return lastHitchProfile;
         }
 
         function recordMainThreadFrame(duration, parts, timing) {

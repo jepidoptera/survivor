@@ -897,7 +897,21 @@
 
     const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-90");
     worker.addEventListener("message", (event) => {
-        profiler.task("solver worker message", () => handleWorkerMessage(event));
+        profiler.task("solver worker message", () => profiler.hitchTask(
+            "solver worker message",
+            () => handleWorkerMessage(event),
+            () => {
+                const message = event && event.data;
+                const packed = message && message.agents;
+                return {
+                    messageType: message && message.type || null,
+                    packedAgents: packed instanceof Float32Array ? packed.length / OUT_STRIDE : 0,
+                    liveAgents: state.agents.length,
+                    hits: Number(message && message.stats && message.stats.hits || 0),
+                    wallHits: Number(message && message.stats && message.stats.wallHits || 0)
+                };
+            }
+        ));
     });
     worker.addEventListener("error", (event) => {
         setLabelText(labels.workerStatus, event.message || "failed");
@@ -968,7 +982,27 @@
     const refreshGeneratedMazeIfNeeded = mazeStreamingSystem.refreshGeneratedMazeIfNeeded;
     const requestGeneratedMazeRefresh = mazeStreamingSystem.requestGeneratedMazeRefresh;
     mazeWorker.addEventListener("message", (event) => {
-        profiler.task("maze worker message", () => mazeStreamingSystem.handleMazeWorkerMessage(event));
+        profiler.task("maze worker message", () => profiler.hitchTask(
+            "maze worker message",
+            () => mazeStreamingSystem.handleMazeWorkerMessage(event),
+            () => {
+                const message = event && event.data;
+                const nodeLayer = message && message.nodeLayer;
+                return {
+                    messageType: message && message.type || null,
+                    walls: message && message.allWalls instanceof Float32Array
+                        ? message.allWalls.length / WALL_STRIDE
+                        : 0,
+                    nodes: nodeLayer && nodeLayer.nodes instanceof Float32Array
+                        ? nodeLayer.nodes.length / PATH_SNAPSHOT_NODE_STRIDE
+                        : 0,
+                    edges: nodeLayer && nodeLayer.edges instanceof Int32Array
+                        ? nodeLayer.edges.length / PATH_SNAPSHOT_EDGE_STRIDE
+                        : 0,
+                    liveAgents: state.agents.length
+                };
+            }
+        ));
     });
     mazeWorker.addEventListener("error", mazeStreamingSystem.handleMazeWorkerError);
 
@@ -4247,10 +4281,10 @@
     function updateHeldSpellCasting(dt) {
         if (!state.spaceHeld) return;
         if (state.selectedSpell === "freeze") {
-            updateFreezeSpell(dt);
+            profiler.hitchSpan("update freeze spell", () => updateFreezeSpell(dt));
             return;
         }
-        shootSelectedSpell();
+        profiler.hitchSpan("shoot selected spell", () => shootSelectedSpell());
     }
 
     function updateFreezeSpell(dt) {
@@ -4267,17 +4301,19 @@
         const startHalfWidth = FREEZE_CONE_START_WIDTH * 0.5;
         const coneSlope = Math.tan(halfAngle);
         const damage = stats.damagePerSecond * dt;
-        state.agents = state.agents.filter((agent) => {
-            const dx = agent.x - state.target.x;
-            const dy = agent.y - state.target.y;
-            const forwardDistance = dx * dirX + dy * dirY;
-            if (forwardDistance < -agent.radius || forwardDistance > stats.range + agent.radius) return true;
-            const lateralDistance = Math.abs(dx * -dirY + dy * dirX);
-            const halfWidth = startHalfWidth + Math.max(0, forwardDistance) * coneSlope;
-            if (lateralDistance > halfWidth + agent.radius) return true;
-            return !damageAgentWithFreezeTemperatureAndMaybeDropCoin(agent, damage);
+        profiler.hitchSpan("freeze enemy filtering and damage", () => {
+            state.agents = state.agents.filter((agent) => {
+                const dx = agent.x - state.target.x;
+                const dy = agent.y - state.target.y;
+                const forwardDistance = dx * dirX + dy * dirY;
+                if (forwardDistance < -agent.radius || forwardDistance > stats.range + agent.radius) return true;
+                const lateralDistance = Math.abs(dx * -dirY + dy * dirX);
+                const halfWidth = startHalfWidth + Math.max(0, forwardDistance) * coneSlope;
+                if (lateralDistance > halfWidth + agent.radius) return true;
+                return !damageAgentWithFreezeTemperatureAndMaybeDropCoin(agent, damage);
+            });
         });
-        emitFreezeParticles(dt, stats, dirX, dirY, halfAngle);
+        profiler.hitchSpan("emit freeze particles", () => emitFreezeParticles(dt, stats, dirX, dirY, halfAngle));
     }
 
     function damageAgentWithFreezeTemperatureAndMaybeDropCoin(agent, damage) {
@@ -5327,9 +5363,10 @@
     }
 
     function damageAgentAndMaybeDropCoin(agent, damage) {
-        if (damageAgent(agent, damage)) {
-            maybeDropCoinForKilledEnemy(agent);
-            addEnemyDeathPathfindingCost(agent);
+        const killed = profiler.hitchSpan("apply enemy damage", () => damageAgent(agent, damage));
+        if (killed) {
+            profiler.hitchSpan("generate enemy death coin drop", () => maybeDropCoinForKilledEnemy(agent));
+            profiler.hitchSpan("create enemy death path cost", () => addEnemyDeathPathfindingCost(agent));
             return true;
         }
         return false;
@@ -6427,16 +6464,20 @@
             setLabelText(labels.workerStatus, "stale result discarded");
             return;
         }
-        applySolverResult(message.agents);
-        resolveTargetNpcContacts(false);
+        profiler.hitchSpan("apply solver result", () => applySolverResult(message.agents));
+        profiler.hitchSpan("resolve target npc contacts", () => resolveTargetNpcContacts(false));
         state.stats = message.stats || null;
-        if ((state.stats.hits || 0) > 0) {
-            damageWizard(getEnemyHitDamageFromSolverStats(state.stats));
-            state.targetFlashTime = 0.18;
-        }
-        handleEnemyWallHitsFromSolverStats(state.stats);
-        setLabelText(labels.workerStatus, "ready");
-        updateStats();
+        profiler.hitchSpan("apply solver hits", () => {
+            if ((state.stats.hits || 0) > 0) {
+                damageWizard(getEnemyHitDamageFromSolverStats(state.stats));
+                state.targetFlashTime = 0.18;
+            }
+        });
+        profiler.hitchSpan("handle enemy wall hits", () => handleEnemyWallHitsFromSolverStats(state.stats));
+        profiler.hitchSpan("update solver status UI", () => {
+            setLabelText(labels.workerStatus, "ready");
+            updateStats();
+        });
     }
 
     function applySolverResult(packed) {
@@ -10691,7 +10732,21 @@
         framePart("refresh path bounds", () => refreshMazePathBoundsIfNeeded());
         framePart("line of sight", () => updateLosAndExploration());
         framePart("spell cooldowns", () => updateSpellCooldowns(dt));
-        framePart("held spell casting", () => updateHeldSpellCasting(dt));
+        framePart("held spell casting", () => {
+            const agentsBeforeCasting = state.agents.length;
+            return profiler.hitchTask(
+                "held spell casting",
+                () => updateHeldSpellCasting(dt),
+                () => ({
+                    selectedSpell: state.selectedSpell,
+                    spaceHeld: state.spaceHeld,
+                    liveAgents: state.agents.length,
+                    killedAgents: Math.max(0, agentsBeforeCasting - state.agents.length),
+                    fireballs: state.fireballs.length,
+                    freezeParticles: state.freezeParticles.length
+                })
+            );
+        });
         framePart("freeze particles", () => updateFreezeParticles(dt));
         framePart("enemy temperatures", () => updateEnemyTemperatures(dt));
         framePart("fireballs", () => updateFireballs(dt));

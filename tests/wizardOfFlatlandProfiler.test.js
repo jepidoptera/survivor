@@ -113,3 +113,36 @@ test("main-thread profiler attributes work outside animation frames", () => {
     assert.equal(result.slowExternalTasks.length, 1);
     assert.equal(result.slowExternalTasks[0].durationMs, 205);
 });
+
+test("hitch profiler records nested sections and workload details", () => {
+    const harness = loadProfiler();
+    harness.profiler.startHitchProfile(30, 16);
+    harness.profiler.hitchTask("solver worker message", () => {
+        harness.profiler.hitchSpan("apply solver result", () => {
+            harness.advance(28);
+        });
+        harness.profiler.hitchSpan("resolve target npc contacts", () => {
+            harness.advance(4);
+        });
+    }, () => ({ packedAgents: 120 }));
+
+    const result = harness.profiler.stopHitchProfile();
+    assert.equal(result.hitches.length, 1);
+    assert.equal(result.hitches[0].task, "solver worker message");
+    assert.equal(result.hitches[0].durationMs, 32);
+    assert.equal(result.hitches[0].details.packedAgents, 120);
+    assert.match(result.hitches[0].topSpans, /apply solver result 28\.000ms/);
+    assert.equal(result.taskRows[0].hitches, 1);
+    assert.equal(result.spanRows[0].section, "solver worker message > apply solver result");
+    assert.equal(harness.profiler.getHitchProfile(), null);
+});
+
+test("hitch profiler rejects overlapping recordings", () => {
+    const harness = loadProfiler();
+    harness.profiler.startHitchProfile(30);
+    assert.throws(
+        () => harness.profiler.startHitchProfile(30),
+        /already running/
+    );
+    harness.profiler.stopHitchProfile();
+});
