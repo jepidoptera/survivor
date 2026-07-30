@@ -2295,10 +2295,12 @@
         if (state.collectedCoinKeys instanceof Set && state.collectedCoinKeys.has(coin.key)) {
             throw new Error(`Wizard of Flatland ${context} tried to show collected coin ${coin.key}`);
         }
-        for (const visibleCoin of state.coins) {
-            validateCoin(visibleCoin);
-            if (visibleCoin.key === coin.key) {
-                throw new Error(`Wizard of Flatland ${context} duplicated visible coin ${coin.key}`);
+        if (coin.source === "enemy-drop") {
+            if (!(state.droppedCoinsByKey instanceof Map)) {
+                throw new Error(`Wizard of Flatland ${context} requires dropped coin tracking`);
+            }
+            if (state.droppedCoinsByKey.get(coin.key) !== coin) {
+                throw new Error(`Wizard of Flatland ${context} visible drop ${coin.key} is not its tracked coin`);
             }
         }
         state.coins.push(coin);
@@ -4967,21 +4969,37 @@
         if (!(state.droppedCoinsByKey instanceof Map)) {
             throw new Error("Wizard of Flatland dropped coin creation requires dropped coin tracking");
         }
-        state.nextDroppedCoinId = getNextAvailableDroppedCoinId();
+        const coinId = profiler.hitchSpan("allocate dropped coin id", () => allocateDroppedCoinId());
         const landingAngle = Math.random() * Math.PI * 2;
         const landingDistance = Math.sqrt(Math.random()) * ENEMY_COIN_DROP_MAX_LANDING_RADIUS;
         const desiredLandingX = x + Math.cos(landingAngle) * landingDistance;
         const desiredLandingY = y + Math.sin(landingAngle) * landingDistance;
-        const landing = constrainMovementToSegmentWalls(
-            x,
-            y,
-            desiredLandingX,
-            desiredLandingY,
-            MAZE_COIN_RADIUS
+        const landing = profiler.hitchSpan(
+            "constrain dropped coin landing",
+            () => {
+                const wallRanges = getNearbyMovementWallRanges(
+                    x,
+                    y,
+                    desiredLandingX,
+                    desiredLandingY,
+                    MAZE_COIN_RADIUS
+                );
+                return constrainMovementToSegmentWalls(
+                    x,
+                    y,
+                    desiredLandingX,
+                    desiredLandingY,
+                    MAZE_COIN_RADIUS,
+                    wallRanges
+                );
+            }
         );
-        const coord = worldToMazeSectionCoord(landing.x, landing.y, getMazeOptions());
+        const coord = profiler.hitchSpan(
+            "locate dropped coin section",
+            () => worldToMazeSectionCoord(landing.x, landing.y, getMazeOptions())
+        );
         const coin = {
-            key: `drop|${state.nextDroppedCoinId}`,
+            key: `drop|${coinId}`,
             sectionKey: mazeSectionKey(coord.q, coord.r),
             q: coord.q,
             r: coord.r,
@@ -5003,19 +5021,36 @@
                 startY: y
             }
         };
-        state.nextDroppedCoinId += 1;
-        validateCoin(coin);
-        if (state.droppedCoinsByKey.has(coin.key)) {
-            throw new Error(`Wizard of Flatland dropped coin key was reused: ${coin.key}`);
-        }
-        if (state.collectedCoinKeys instanceof Set && state.collectedCoinKeys.has(coin.key)) {
-            throw new Error(`Wizard of Flatland dropped coin key was already collected: ${coin.key}`);
-        }
-        state.droppedCoinsByKey.set(coin.key, coin);
+        profiler.hitchSpan("validate and track dropped coin", () => {
+            validateCoin(coin);
+            if (state.droppedCoinsByKey.has(coin.key)) {
+                throw new Error(`Wizard of Flatland dropped coin key was reused: ${coin.key}`);
+            }
+            if (state.collectedCoinKeys instanceof Set && state.collectedCoinKeys.has(coin.key)) {
+                throw new Error(`Wizard of Flatland dropped coin key was already collected: ${coin.key}`);
+            }
+            state.droppedCoinsByKey.set(coin.key, coin);
+        });
         if (!isProceduralMazeScenario() || isDroppedCoinInInstalledMazeSection(coin, getMazeOptions())) {
-            addVisibleMazeCoin(coin, "enemy coin drop");
+            profiler.hitchSpan("show dropped coin", () => addVisibleMazeCoin(coin, "enemy coin drop"));
         }
         return coin;
+    }
+
+    function allocateDroppedCoinId() {
+        if (!Number.isInteger(state.nextDroppedCoinId) || state.nextDroppedCoinId < 1) {
+            throw new Error("Wizard of Flatland dropped coin allocation requires a positive next id");
+        }
+        if (!(state.collectedCoinKeys instanceof Set) || !(state.droppedCoinsByKey instanceof Map)) {
+            throw new Error("Wizard of Flatland dropped coin allocation requires coin identity tracking");
+        }
+        const coinId = state.nextDroppedCoinId;
+        const coinKey = `drop|${coinId}`;
+        if (state.collectedCoinKeys.has(coinKey) || state.droppedCoinsByKey.has(coinKey)) {
+            throw new Error(`Wizard of Flatland next dropped coin id ${coinId} is already in use`);
+        }
+        state.nextDroppedCoinId = coinId + 1;
+        return coinId;
     }
 
     function collectMazeCoin(coin) {
@@ -10557,7 +10592,7 @@
         state.wallTool.hoverNode = null;
     }
 
-    function constrainMovementToSegmentWalls(previousX, previousY, x, y, radius) {
+    function constrainMovementToSegmentWalls(previousX, previousY, x, y, radius, wallRanges = null) {
         let currentX = previousX;
         let currentY = previousY;
         let remainingX = x - previousX;
@@ -10567,7 +10602,7 @@
             if (Math.hypot(remainingX, remainingY) <= 0.000001) break;
             const intendedX = currentX + remainingX;
             const intendedY = currentY + remainingY;
-            const hit = findEarliestSegmentWallHit(currentX, currentY, intendedX, intendedY, radius);
+            const hit = findEarliestSegmentWallHit(currentX, currentY, intendedX, intendedY, radius, wallRanges);
             if (!hit) {
                 currentX = intendedX;
                 currentY = intendedY;
@@ -10593,23 +10628,61 @@
         return { x: currentX, y: currentY };
     }
 
-    function findEarliestSegmentWallHit(fromX, fromY, toX, toY, radius) {
+    function findEarliestSegmentWallHit(fromX, fromY, toX, toY, radius, wallRanges = null) {
         let best = null;
-        for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
-            const hit = sweptCircleSegmentHit(
-                fromX,
-                fromY,
-                toX,
-                toY,
-                state.walls[i + WALL_X1],
-                state.walls[i + WALL_Y1],
-                state.walls[i + WALL_X2],
-                state.walls[i + WALL_Y2],
-                radius + WALL_WORLD_HALF_THICKNESS
-            );
-            if (hit && (!best || hit.t < best.t)) best = hit;
+        const ranges = wallRanges || [{ startWallIndex: 0, wallCount: getWallCount(state.walls) }];
+        for (const range of ranges) {
+            const endWallIndex = range.startWallIndex + range.wallCount;
+            for (let wallIndex = range.startWallIndex; wallIndex < endWallIndex; wallIndex++) {
+                const i = wallIndex * WALL_STRIDE;
+                const hit = sweptCircleSegmentHit(
+                    fromX,
+                    fromY,
+                    toX,
+                    toY,
+                    state.walls[i + WALL_X1],
+                    state.walls[i + WALL_Y1],
+                    state.walls[i + WALL_X2],
+                    state.walls[i + WALL_Y2],
+                    radius + WALL_WORLD_HALF_THICKNESS
+                );
+                if (hit && (!best || hit.t < best.t)) best = hit;
+            }
         }
         return best;
+    }
+
+    function getNearbyMovementWallRanges(fromX, fromY, toX, toY, radius) {
+        if (!isProceduralMazeScenario()) {
+            return [{ startWallIndex: 0, wallCount: getWallCount(state.walls) }];
+        }
+        const generatedWallCount = getWallCount(state.generatedMazeWalls);
+        const sectionRanges = validateMazeWallSectionRanges(
+            state.generatedMazeWallSectionRanges,
+            generatedWallCount,
+            "movement wall filtering"
+        );
+        const padding = radius + WALL_WORLD_HALF_THICKNESS;
+        const minX = Math.min(fromX, toX) - padding;
+        const maxX = Math.max(fromX, toX) + padding;
+        const minY = Math.min(fromY, toY) - padding;
+        const maxY = Math.max(fromY, toY) + padding;
+        const ranges = [];
+        for (const range of sectionRanges) {
+            if (range.maxX < minX || range.minX > maxX || range.maxY < minY || range.minY > maxY) continue;
+            ranges.push({
+                startWallIndex: range.startWallIndex,
+                wallCount: range.wallCount
+            });
+        }
+        const manualWallCount = getWallCount(state.manualWalls);
+        if (manualWallCount > 0) {
+            ranges.push({
+                startWallIndex: generatedWallCount,
+                wallCount: manualWallCount
+            });
+        }
+        return ranges;
     }
 
     function sweptCircleSegmentHit(fromX, fromY, toX, toY, ax, ay, bx, by, radius) {
@@ -10700,6 +10773,7 @@
         framePart("spell cooldowns", () => updateSpellCooldowns(dt));
         framePart("held spell casting", () => {
             const agentsBeforeCasting = state.agents.length;
+            const droppedCoinsBeforeCasting = state.droppedCoinsByKey.size;
             return profiler.hitchTask(
                 "held spell casting",
                 () => updateHeldSpellCasting(dt),
@@ -10708,6 +10782,7 @@
                     spaceHeld: state.spaceHeld,
                     liveAgents: state.agents.length,
                     killedAgents: Math.max(0, agentsBeforeCasting - state.agents.length),
+                    coinsDropped: Math.max(0, state.droppedCoinsByKey.size - droppedCoinsBeforeCasting),
                     fireballs: state.fireballs.length,
                     freezeParticles: state.freezeParticles.length
                 })

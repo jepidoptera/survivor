@@ -18,6 +18,11 @@ test("Wizard of Flatland freeze damage lowers enemy temperature by health quarte
     assert.match(source, /hitchSpan\("create enemy death path cost"/);
     assert.match(source, /hitchSpan\("create enemy death blocker"/);
     assert.match(source, /killedAgents: Math\.max\(0, agentsBeforeCasting - state\.agents\.length\)/);
+    assert.match(source, /coinsDropped: Math\.max\(0, state\.droppedCoinsByKey\.size - droppedCoinsBeforeCasting\)/);
+    assert.match(source, /hitchSpan\("allocate dropped coin id"/);
+    assert.match(source, /hitchSpan\(\s*"constrain dropped coin landing"/);
+    assert.match(source, /function allocateDroppedCoinId\(\)/);
+    assert.match(source, /function getNearbyMovementWallRanges\(/);
 });
 
 test("Wizard of Flatland enemy speed follows temperature and recovers one degree per second", () => {
