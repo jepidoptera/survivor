@@ -797,6 +797,37 @@ test("Wizard of Flatland deletes unused corner pockets", () => {
     assert.equal(segments.length, 0);
 });
 
+test("Wizard of Flatland deletes adjacent unincorporated corner pockets crossed by hallways", () => {
+    const api = loadMazeWorkerExports();
+    const center = { x: 0, y: 0 };
+    const hexRoomCorners = api.getHexCornersWorld(center.x, center.y, 20);
+    const room = {
+        q: 0,
+        r: 0,
+        key: "0,0",
+        center,
+        radius: 20,
+        squareSideCorners: [0],
+        sectionCorners: api.getHexCornersWorld(center.x, center.y, 22),
+        corners: api.getSquaredMazeRoomCorners(hexRoomCorners, [0])
+    };
+    const walls = api.createWallBufferBuilder();
+
+    api.appendMazeSquareSideWalls(walls, room, new Map([
+        [5, {}],
+        [0, {}]
+    ]), {
+        seed: "double-hallway-crossed-pocket-pair",
+        chunkSize: 44,
+        roomScale: 0.56,
+        twistiness: 0.62,
+        squarePocketIncorporateChance: 0
+    });
+    const segments = wallSegments(api.finishWallBuffer(walls));
+
+    assert.equal(segments.length, 0);
+});
+
 test("Wizard of Flatland corner pocket back wall stops at hallway corridor when not incorporated", () => {
     const api = loadMazeWorkerExports();
     const options = {

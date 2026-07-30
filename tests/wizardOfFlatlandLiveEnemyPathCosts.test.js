@@ -33,6 +33,7 @@ function loadLiveEnemyPathCostExports() {
         extractConst(source, "PATH_NODE_TEMPORARY_COST"),
         extractConst(source, "LIVE_ENEMY_PATH_COST"),
         extractConst(source, "LIVE_ENEMY_PATH_COST_TILE_COUNT"),
+        extractConst(source, "LIVE_ENEMY_PATH_COST_FRAME_FRACTION"),
         "const state = globalThis.state;",
         "function isAgentInInstalledMazeSection(agent) { return agent.installed !== false; }",
         "function isEvenGridColumn(xindex) { return xindex % 2 === 0; }",
@@ -48,16 +49,26 @@ function loadLiveEnemyPathCostExports() {
         "function getPathfindingNodeBase(pathIndex) { return pathIndex * PATH_SNAPSHOT_NODE_STRIDE; }",
         "const PATH_NODE_FAST_SEARCH_RADIUS = 8;",
         extractFunction(source, "buildLiveEnemyPathfindingCosts"),
+        extractFunction(source, "updateLiveEnemyPathfindingCosts"),
+        extractFunction(source, "updateLiveEnemyPathCostContribution"),
+        extractFunction(source, "removeLiveEnemyPathCostContribution"),
+        extractFunction(source, "isLiveEnemyPathCostEligible"),
+        extractFunction(source, "validateLiveEnemyPathCostAgent"),
+        extractFunction(source, "areLiveEnemyPathCostNodeKeysEqual"),
+        extractFunction(source, "resetLiveEnemyPathfindingCosts"),
         extractFunction(source, "nearestLocalPassablePathfindingNodes"),
         extractFunction(source, "getLiveEnemyPathCostSignature"),
         extractFunction(source, "validateLiveEnemyPathCostPenalty"),
+        extractFunction(source, "applyPathfindingModifiersToChangedNodes"),
         extractFunction(source, "applyTemporaryPathfindingModifiersToNodes"),
         extractFunction(source, "validateTemporaryPathCostPenalty"),
         extractFunction(source, "getTemporaryPathCostEntryTotal"),
-        "globalThis.__testExports = { buildLiveEnemyPathfindingCosts, getLiveEnemyPathCostSignature, applyTemporaryPathfindingModifiersToNodes };"
+        "function publishPathfindingCostModifierChange(changedNodeKeys) { globalThis.publishedChanges.push([...changedNodeKeys]); }",
+        "globalThis.__testExports = { buildLiveEnemyPathfindingCosts, updateLiveEnemyPathfindingCosts, getLiveEnemyPathCostSignature, applyPathfindingModifiersToChangedNodes, applyTemporaryPathfindingModifiersToNodes };"
     ];
     const context = {
         Map,
+        Set,
         Number,
         Float32Array,
         RegExp,
@@ -65,12 +76,17 @@ function loadLiveEnemyPathCostExports() {
             agents: [],
             temporaryPathCostsByNodeKey: new Map(),
             liveEnemyPathCostsByNodeKey: new Map(),
+            liveEnemyPathNodeKeysByAgentId: new Map(),
+            liveEnemyPathCostRoundRobinCursor: 0,
+            liveEnemyPathCostNodeLayerVersion: 0,
             debug: {},
             nodeLayer: {
                 nodes: new Float32Array(0),
-                snapshotNodes: new Float32Array(0)
+                snapshotNodes: new Float32Array(0),
+                version: 0
             }
         },
+        publishedChanges: [],
         nodesByIndex: new Map(),
         indexByGrid: new Map()
     };
@@ -82,8 +98,8 @@ function loadLiveEnemyPathCostExports() {
 test("Wizard of Flatland live enemy path costs stack on overlapping nearest tiles", () => {
     const { api, state, nodesByIndex, indexByGrid } = loadLiveEnemyPathCostExports();
     state.agents = [
-        { id: 1, x: 0, y: 0, health: 10 },
-        { id: 2, x: 1, y: 0, health: 10 }
+        { id: 1, x: 0, y: 0, health: 10, activated: true },
+        { id: 2, x: 1, y: 0, health: 10, activated: true }
     ];
     let nextIndex = 1;
     for (let x = -2; x <= 3; x++) {
@@ -106,13 +122,61 @@ test("Wizard of Flatland live enemy path costs stack on overlapping nearest tile
 test("Wizard of Flatland live enemy path costs skip enemies outside the local path node window", () => {
     const { api, state } = loadLiveEnemyPathCostExports();
     state.agents = [
-        { id: 99, x: 250, y: -250, health: 10 }
+        { id: 99, x: 250, y: -250, health: 10, activated: true }
     ];
 
     const costs = api.buildLiveEnemyPathfindingCosts();
 
     assert.equal(costs.size, 0);
     assert.equal(state.debug.liveEnemyPathCostSkippedAgents, 1);
+});
+
+test("Wizard of Flatland live enemy path costs process one tenth of enemies per frame", () => {
+    const { api, state, nodesByIndex, indexByGrid } = loadLiveEnemyPathCostExports();
+    state.agents = Array.from({ length: 20 }, (_, index) => ({
+        id: index + 1,
+        x: index * 20,
+        y: 0,
+        health: 10,
+        activated: true
+    }));
+    for (let index = 0; index < 20; index++) {
+        const pathIndex = index + 1;
+        const x = index * 20;
+        nodesByIndex.set(pathIndex, { x, y: 0, passable: true });
+        indexByGrid.set(`${x},0`, pathIndex);
+    }
+
+    api.updateLiveEnemyPathfindingCosts();
+
+    assert.equal(state.liveEnemyPathNodeKeysByAgentId.size, 2);
+    assert.deepEqual([...state.liveEnemyPathNodeKeysByAgentId.keys()], [1, 2]);
+    assert.equal(state.liveEnemyPathCostRoundRobinCursor, 2);
+});
+
+test("Wizard of Flatland live enemy path costs immediately remove dead enemy contributions", () => {
+    const { api, state, nodesByIndex, indexByGrid } = loadLiveEnemyPathCostExports();
+    state.agents = Array.from({ length: 10 }, (_, index) => ({
+        id: index + 1,
+        x: index * 20,
+        y: 0,
+        health: 10,
+        activated: true
+    }));
+    for (let index = 0; index < 10; index++) {
+        const pathIndex = index + 1;
+        const x = index * 20;
+        nodesByIndex.set(pathIndex, { x, y: 0, passable: true });
+        indexByGrid.set(`${x},0`, pathIndex);
+    }
+    api.updateLiveEnemyPathfindingCosts();
+    assert.equal(state.liveEnemyPathNodeKeysByAgentId.has(1), true);
+
+    state.agents[0].health = 0;
+    api.updateLiveEnemyPathfindingCosts();
+
+    assert.equal(state.liveEnemyPathNodeKeysByAgentId.has(1), false);
+    assert.equal(state.liveEnemyPathCostsByNodeKey.has("node-1"), false);
 });
 
 test("Wizard of Flatland path node modifier application combines temporary and live costs", () => {
@@ -136,6 +200,21 @@ test("Wizard of Flatland path node modifier application combines temporary and l
 
     assert.equal(state.nodeLayer.nodes[5 * 9 + 8], 16);
     assert.equal(state.nodeLayer.nodes[6 * 9 + 8], 3);
+});
+
+test("Wizard of Flatland incremental modifier application touches only changed nodes", () => {
+    const { api, state } = loadLiveEnemyPathCostExports();
+    state.nodeLayer.nodes = new Float32Array(12 * 9);
+    state.nodeLayer.snapshotNodes = new Float32Array(12 * 9);
+    state.nodeLayer.nodes[6 * 9 + 8] = 77;
+    state.liveEnemyPathCostsByNodeKey = new Map([
+        ["node-5", { x: 50, y: -50, cost: 6 }]
+    ]);
+
+    api.applyPathfindingModifiersToChangedNodes(new Set(["node-5"]));
+
+    assert.equal(state.nodeLayer.nodes[5 * 9 + 8], 6);
+    assert.equal(state.nodeLayer.nodes[6 * 9 + 8], 77);
 });
 
 test("Wizard of Flatland path cost publishing preserves active path versions", () => {

@@ -35,3 +35,34 @@ test("Wizard of Flatland section snapshots supersede matching live dropped coins
 
     assert.deepEqual(result.map((coin) => coin.key), ["drop|2"]);
 });
+
+test("Wizard of Flatland rushing dropped coin follows its landing position across a section border", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const context = {
+        getMazeOptions: () => ({}),
+        validateCoin() {},
+        worldToMazeSectionCoord: (x) => ({ q: x < 10 ? 0 : 1, r: 0 }),
+        mazeSectionKey: (q, r) => `${q},${r}`
+    };
+    vm.createContext(context);
+    vm.runInContext(
+        `${extractFunction(source, "updateDroppedCoinSectionFromHomePosition")}
+        this.updateSection = updateDroppedCoinSectionFromHomePosition;`,
+        context
+    );
+
+    const coin = {
+        key: "drop|9831",
+        source: "enemy-drop",
+        homeX: 10.01,
+        homeY: 4,
+        q: 0,
+        r: 0,
+        sectionKey: "0,0"
+    };
+    context.updateSection(coin);
+
+    assert.equal(coin.q, 1);
+    assert.equal(coin.r, 0);
+    assert.equal(coin.sectionKey, "1,0");
+});

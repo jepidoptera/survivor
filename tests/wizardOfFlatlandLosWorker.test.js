@@ -12,7 +12,9 @@ function loadWorker() {
     let messageHandler = null;
     const context = {
         Float32Array,
+        Float64Array,
         Int32Array,
+        Uint8Array,
         Math,
         Number,
         Object,
@@ -29,7 +31,13 @@ function loadWorker() {
     };
     context.globalThis = context.self;
     vm.createContext(context);
-    context.importScripts = () => {
+    context.importScripts = (scriptPath) => {
+        if (scriptPath.includes("wallGeometry.js")) {
+            const wallGeometryPath = path.join(__dirname, "../public/wizard-of-flatland/wallGeometry.js");
+            vm.runInContext(fs.readFileSync(wallGeometryPath, "utf8"), context, { filename: wallGeometryPath });
+            return;
+        }
+        if (!scriptPath.includes("los.js")) throw new Error(`Unexpected LOS worker import ${scriptPath}`);
         vm.runInContext(fs.readFileSync(LOS_PATH, "utf8"), context, { filename: LOS_PATH });
     };
     vm.runInContext(fs.readFileSync(WORKER_PATH, "utf8"), context, { filename: WORKER_PATH });
@@ -58,7 +66,10 @@ test("Wizard of Flatland LOS worker installs walls and returns packed transferab
             y: 0,
             wallStride: 8,
             bins: 64,
-            maxDistance: 20
+            maxDistance: 20,
+            enemyTargets: Float64Array.from([101, 4, 0, 0.5, 102, 8, 0, 0.5]),
+            enemyWallThickness: 0.3,
+            enemyWallFaceExtend: 0
         }
     });
 
@@ -72,6 +83,8 @@ test("Wizard of Flatland LOS worker installs walls and returns packed transferab
     assert.equal(result.depths.length, 64);
     assert.equal(result.hitWallIndices.length, 64);
     assert.equal(result.hitWallTs.length, 64);
+    assert.deepEqual(Array.from(result.enemyVisibility), [1, 0]);
+    assert.deepEqual(Array.from(result.enemyTargets), [101, 4, 0, 0.5, 102, 8, 0, 0.5]);
 });
 
 test("Wizard of Flatland LOS worker reports wall revision mismatches explicitly", () => {

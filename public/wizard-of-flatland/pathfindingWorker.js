@@ -3,6 +3,8 @@
 let activeSnapshot = null;
 let adjacencyOffsets = new Int32Array(0);
 let adjacencyEdges = new Int32Array(0);
+let wallIndexByEdge = new Int32Array(0);
+let wallCostScales = new Float32Array(0);
 
 const SNAPSHOT_FORMAT = "wizard-flatland-packed-v1";
 const NODE_X = 0;
@@ -75,10 +77,61 @@ function installSnapshot(snapshot) {
     if (!(snapshot.edges instanceof Int32Array) || snapshot.edges.length % edgeStride !== 0) {
         throw new Error("Wizard of Flatland packed pathfinding snapshot edges are malformed");
     }
+    const edgeCount = snapshot.edges.length / edgeStride;
+    if (!(snapshot.wallIndexByEdge instanceof Int32Array) || snapshot.wallIndexByEdge.length !== edgeCount) {
+        throw new Error("Wizard of Flatland packed pathfinding snapshot edge wall indices are malformed");
+    }
+    if (!(snapshot.wallCostScales instanceof Float32Array)) {
+        throw new Error("Wizard of Flatland packed pathfinding snapshot wall cost scales are malformed");
+    }
 
     activeSnapshot = snapshot;
+    wallIndexByEdge = snapshot.wallIndexByEdge;
+    wallCostScales = snapshot.wallCostScales;
+    validateWallCostState(snapshot.edges, edgeStride);
     rebuildAdjacency(snapshot);
     self.postMessage({ type: "ready", version: snapshot.version });
+}
+
+function validateWallCostState(edges, edgeStride) {
+    for (let edgeIndex = 0; edgeIndex < wallIndexByEdge.length; edgeIndex++) {
+        const edgeBase = edgeIndex * edgeStride;
+        const wallIndex = wallIndexByEdge[edgeIndex];
+        if (edgeIsWallBlocked(edges, edgeStride, edgeBase)) {
+            if (!Number.isInteger(wallIndex) || wallIndex < 0 || wallIndex >= wallCostScales.length) {
+                throw new Error(`Wizard of Flatland wall-blocked pathfinding edge ${edgeIndex} has invalid wall index ${wallIndex}`);
+            }
+        } else if (wallIndex !== -1) {
+            throw new Error(`Wizard of Flatland open pathfinding edge ${edgeIndex} unexpectedly references wall ${wallIndex}`);
+        }
+    }
+    for (let wallIndex = 0; wallIndex < wallCostScales.length; wallIndex++) {
+        validateWallCostScale(wallCostScales[wallIndex], wallIndex);
+    }
+}
+
+function validateWallCostScale(value, wallIndex) {
+    if (!Number.isFinite(value) || value < 0.05 || value > 1) {
+        throw new Error(`Wizard of Flatland pathfinding wall ${wallIndex} has invalid cost scale ${value}`);
+    }
+}
+
+function applyWallCostPatch(message) {
+    if (!activeSnapshot) throw new Error("Wizard of Flatland pathfinding wall cost patch requires an active snapshot");
+    if (Number(message.mapVersion) !== Number(activeSnapshot.version)) return;
+    const wallIndices = message.wallIndices;
+    const costScales = message.costScales;
+    if (!(wallIndices instanceof Int32Array) || !(costScales instanceof Float32Array) || wallIndices.length !== costScales.length) {
+        throw new Error("Wizard of Flatland pathfinding wall cost patch is malformed");
+    }
+    for (let i = 0; i < wallIndices.length; i++) {
+        const wallIndex = wallIndices[i];
+        if (!Number.isInteger(wallIndex) || wallIndex < 0 || wallIndex >= wallCostScales.length) {
+            throw new Error(`Wizard of Flatland pathfinding wall cost patch references invalid wall ${wallIndex}`);
+        }
+        validateWallCostScale(costScales[i], wallIndex);
+        wallCostScales[wallIndex] = costScales[i];
+    }
 }
 
 function rebuildAdjacency(snapshot) {
@@ -168,7 +221,6 @@ function handleRequestPath(message) {
     const wallAvoidance = Number.isFinite(options.wallAvoidance) ? Math.max(0, options.wallAvoidance) : 0;
     const blockedNeighborAvoidance = Number.isFinite(options.blockedNeighborAvoidance) ? Math.max(0, options.blockedNeighborAvoidance) : 0;
     const wallBlockedConnectionCost = Number(options.wallBlockedConnectionCost);
-    const wallBlockedConnectionCostOverrides = buildWallBlockedConnectionCostOverrides(options.wallBlockedConnectionCostOverrides);
     const maxPathLength = Number.isFinite(options.maxPathLength) ? Math.max(0, options.maxPathLength) : Infinity;
 
     if (!Number.isInteger(startIndex) || !Number.isInteger(goalIndex) || startIndex < 0 || startIndex >= nodeCount || goalIndex < 0 || goalIndex >= nodeCount) {
@@ -271,9 +323,7 @@ function handleRequestPath(message) {
             if (edgeIsWallBlocked(edges, edgeStride, edgeBase)) {
                 stepCost += getWallBlockedConnectionCost(
                     wallBlockedConnectionCost,
-                    wallBlockedConnectionCostOverrides,
-                    currentIndex,
-                    toIndex
+                    edgeIndex
                 );
             }
             stepCost += getNodeTemporaryCost(nodes, nodeStride, toIndex);
@@ -306,44 +356,19 @@ function handleRequestPath(message) {
     }, [empty.buffer, emptyWallBlockedEdges.buffer]);
 }
 
-function buildWallBlockedConnectionCostOverrides(overrides) {
-    if (overrides === undefined || overrides === null) return new Map();
-    if (!Array.isArray(overrides)) {
-        throw new Error("pathfinding wall-blocked edge cost overrides must be an array");
+function getWallBlockedConnectionCost(defaultCost, edgeIndex) {
+    if (!Number.isInteger(edgeIndex) || edgeIndex < 0 || edgeIndex >= wallIndexByEdge.length) {
+        throw new Error(`pathfinding wall-blocked edge cost lookup received invalid edge ${edgeIndex}`);
     }
-    const byEdgeKey = new Map();
-    for (const override of overrides) {
-        if (!override || typeof override !== "object") {
-            throw new Error("pathfinding wall-blocked edge cost override is missing");
-        }
-        const from = Number(override.from);
-        const to = Number(override.to);
-        const cost = Number(override.cost);
-        if (!Number.isInteger(from) || from < 0 || !Number.isInteger(to) || to < 0) {
-            throw new Error("pathfinding wall-blocked edge cost override requires non-negative node indices");
-        }
-        if (!Number.isFinite(cost) || cost < 0) {
-            throw new Error("pathfinding wall-blocked edge cost override requires a finite non-negative cost");
-        }
-        byEdgeKey.set(pathEdgeKey(from, to), cost);
+    const wallIndex = wallIndexByEdge[edgeIndex];
+    if (!Number.isInteger(wallIndex) || wallIndex < 0 || wallIndex >= wallCostScales.length) {
+        throw new Error(`pathfinding wall-blocked edge ${edgeIndex} is missing its wall cost scale`);
     }
-    return byEdgeKey;
-}
-
-function getWallBlockedConnectionCost(defaultCost, overrides, from, to) {
-    if (!(overrides instanceof Map)) {
-        throw new Error("pathfinding wall-blocked edge cost lookup requires override tracking");
-    }
-    const override = overrides.get(pathEdgeKey(from, to));
-    const cost = override === undefined ? Number(defaultCost) : override;
+    const cost = Number(defaultCost) * wallCostScales[wallIndex];
     if (!Number.isFinite(cost) || cost < 0) {
         throw new Error("pathfinding wall-blocked edge requires a finite non-negative wallBlockedConnectionCost");
     }
     return cost;
-}
-
-function pathEdgeKey(from, to) {
-    return `${from}->${to}`;
 }
 
 function popCurrent(openQueue, openSet, fScore) {
@@ -446,8 +471,20 @@ self.addEventListener("message", (event) => {
         }
         if (message.type === "request_path") {
             handleRequestPath(message);
+            return;
+        }
+        if (message.type === "wall_cost_patch") {
+            applyWallCostPatch(message);
         }
     } catch (error) {
+        if (message.type !== "request_path") {
+            self.postMessage({
+                type: "error",
+                mapVersion: activeSnapshot ? activeSnapshot.version : message.mapVersion,
+                message: error && error.message ? error.message : String(error)
+            });
+            return;
+        }
         self.postMessage({
             type: "path_result",
             requestId: message.requestId,

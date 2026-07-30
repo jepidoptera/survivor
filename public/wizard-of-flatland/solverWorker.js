@@ -2,7 +2,7 @@
 
 importScripts("/wizard-of-flatland/orcaSolver.js?v=wizard-of-flatland-1");
 
-const STRIDE = 18;
+const STRIDE = 19;
 const OUT_STRIDE = 15;
 const WALL_STRIDE = 8;
 const STATE_MILLING = 1;
@@ -85,6 +85,7 @@ const CROWD_THROTTLE_RADIUS_SCALE = 3.5;
 const CROWD_THROTTLE_PRESSURE_THRESHOLD = 3.5;
 const CROWD_THROTTLE_MIN_ROUTE_SCALE = 0.16;
 const CROWD_THROTTLE_INWARD_DOT_MIN = 0.15;
+const AGENT_SPATIAL_CELL_RADIUS_SCALE = 4;
 const PATH_MODE_DIRECT = 0;
 const PATH_MODE_WORKER = 1;
 
@@ -137,6 +138,7 @@ function solveStep(message) {
     const speedScale = Math.max(0, finiteNumber(params.speedScale, "speedScale"));
     const targetMoved = params.targetMoved === true;
     const wallBreakTargets = normalizeWallBreakTargets(message.wallBreakTargets);
+    const agentSpatialIndex = buildPackedAgentSpatialIndex(agents, count);
 
     const slotChoices = buildSlotChoices(agents, count, targetX, targetY, ringRadius, walls);
     const attackSlots = selectAttackingNpcs(agents, count, targetX, targetY, ringRadius, walls, targetMoved);
@@ -151,6 +153,7 @@ function solveStep(message) {
     let blocked = 0;
     let hits = 0;
     const hitAgentIds = [];
+    const hitDamages = [];
     let wallHits = 0;
     const wallHitAgentIds = [];
     const wallHitTargets = [];
@@ -165,6 +168,8 @@ function solveStep(message) {
         const y = agents[base + 2];
         const radius = agents[base + 3];
         const baseSpeed = agents[base + 4];
+        const hitDamage = finiteNumber(agents[base + 18], `agent ${id} hit damage`);
+        if (!(hitDamage > 0)) throw new Error(`agent ${id} hit damage must be positive`);
         const speed = baseSpeed * speedScale;
         const attackSpeed = getAttackLungeSpeed(baseSpeed, speedScale);
         const priority = agents[base + 5];
@@ -506,7 +511,8 @@ function solveStep(message) {
                 overlapOnly: false,
                 activationScale: state === STATE_MILLING
                     ? MILLING_SEPARATION_ACTIVATION_SCALE
-                    : (isSeekingLike ? SEEKING_SEPARATION_ACTIVATION_SCALE : undefined)
+                    : (isSeekingLike ? SEEKING_SEPARATION_ACTIVATION_SCALE : undefined),
+                agentSpatialIndex
             });
             pairChecks += separation.checks;
             if (separation.pressure > 0 && (state === STATE_MILLING || (isSeekingLike && !ownsRingSlot))) {
@@ -548,7 +554,19 @@ function solveStep(message) {
         }
 
         if (state !== STATE_ATTACKING && state !== STATE_RECOVERING && state !== STATE_VACATING) {
-            const crowdThrottle = computeCrowdRouteThrottle(agents, count, i, x, y, radius, targetX, targetY, desiredX, desiredY);
+            const crowdThrottle = computeCrowdRouteThrottle(
+                agents,
+                count,
+                i,
+                x,
+                y,
+                radius,
+                targetX,
+                targetY,
+                desiredX,
+                desiredY,
+                agentSpatialIndex
+            );
             if (crowdThrottle.pressure > 0) {
                 desiredX *= crowdThrottle.routeScale;
                 desiredY *= crowdThrottle.routeScale;
@@ -582,7 +600,8 @@ function solveStep(message) {
                     ringRadius,
                     baseSpeed,
                     speedScale,
-                    dt
+                    dt,
+                    agentSpatialIndex
                 );
                 vx = orcaVelocity.vx;
                 vy = orcaVelocity.vy;
@@ -661,6 +680,7 @@ function solveStep(message) {
                     nextCooldown = isDesignatedAttacker ? -(resetCooldown + 1) : resetCooldown;
                     hits += 1;
                     hitAgentIds.push(id);
+                    hitDamages.push(hitDamage);
                 }
             }
         } else if (!followingWorkerPath && (state === STATE_HOLDING || state === STATE_SEEKING || state === STATE_RECOVERING || state === STATE_VACATING)) {
@@ -744,6 +764,7 @@ function solveStep(message) {
             attacking,
             hits,
             hitAgentIds,
+            hitDamages,
             wallHits,
             wallHitAgentIds,
             wallHitTargets,
@@ -756,6 +777,78 @@ function solveStep(message) {
             crowdThrottlePressure
         }
     };
+}
+
+function buildPackedAgentSpatialIndex(agents, count) {
+    validatePackedLength(agents, STRIDE, "agent spatial index agents");
+    if (!Number.isInteger(count) || count < 0 || count !== agents.length / STRIDE) {
+        throw new Error("agent spatial index requires the packed agent count");
+    }
+    let maxRadius = 0;
+    for (let i = 0; i < count; i++) {
+        const base = i * STRIDE;
+        const x = agents[base + 1];
+        const y = agents[base + 2];
+        const radius = agents[base + 3];
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error(`agent spatial index requires finite position for enemy ${agents[base]}`);
+        }
+        if (!Number.isFinite(radius) || !(radius > 0)) {
+            throw new Error(`agent spatial index requires positive radius for enemy ${agents[base]}`);
+        }
+        maxRadius = Math.max(maxRadius, radius);
+    }
+    const cellSize = Math.max(1, maxRadius * AGENT_SPATIAL_CELL_RADIUS_SCALE);
+    const cells = new Map();
+    for (let i = 0; i < count; i++) {
+        const base = i * STRIDE;
+        const cellX = Math.floor(agents[base + 1] / cellSize);
+        const cellY = Math.floor(agents[base + 2] / cellSize);
+        const key = getPackedAgentSpatialCellKey(cellX, cellY);
+        let indices = cells.get(key);
+        if (!indices) {
+            indices = [];
+            cells.set(key, indices);
+        }
+        indices.push(i);
+    }
+    return { cells, cellSize, count };
+}
+
+function queryPackedAgentSpatialIndex(index, x, y, radius) {
+    if (
+        !index
+        || !(index.cells instanceof Map)
+        || !Number.isFinite(index.cellSize)
+        || !(index.cellSize > 0)
+        || !Number.isInteger(index.count)
+        || index.count < 0
+    ) {
+        throw new Error("agent spatial query requires a valid per-step index");
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(radius) || radius < 0) {
+        throw new Error("agent spatial query requires finite coordinates and a non-negative radius");
+    }
+    const minCellX = Math.floor((x - radius) / index.cellSize);
+    const maxCellX = Math.floor((x + radius) / index.cellSize);
+    const minCellY = Math.floor((y - radius) / index.cellSize);
+    const maxCellY = Math.floor((y + radius) / index.cellSize);
+    const candidates = [];
+    for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
+        for (let cellY = minCellY; cellY <= maxCellY; cellY++) {
+            const indices = index.cells.get(getPackedAgentSpatialCellKey(cellX, cellY));
+            if (indices) candidates.push(...indices);
+        }
+    }
+    candidates.sort((left, right) => left - right);
+    return candidates;
+}
+
+function getPackedAgentSpatialCellKey(x, y) {
+    if (!Number.isInteger(x) || !Number.isInteger(y)) {
+        throw new Error("agent spatial cell key requires integer coordinates");
+    }
+    return `${x},${y}`;
 }
 
 function normalizeWallBreakTargets(entries) {
@@ -1677,7 +1770,7 @@ function computeVacatingLaneYield(agents, count, selfIndex, x, y, radius, target
     };
 }
 
-function computeMillingOrcaVelocity(agents, count, selfIndex, desiredX, desiredY, targetX, targetY, ringRadius, baseSpeed, speedScale, dt) {
+function computeMillingOrcaVelocity(agents, count, selfIndex, desiredX, desiredY, targetX, targetY, ringRadius, baseSpeed, speedScale, dt, agentSpatialIndex) {
     const orca = self.NpcMovementOrca;
     if (!orca || typeof orca.computeAgentVelocity !== "function") {
         throw new Error("Wizard of Flatland milling ORCA requires NpcMovementOrca.computeAgentVelocity");
@@ -1689,19 +1782,26 @@ function computeMillingOrcaVelocity(agents, count, selfIndex, desiredX, desiredY
     const maxSpeed = Math.max(EPSILON, baseSpeed * speedScale);
     const preferredVx = desiredX / preferredLength * maxSpeed;
     const preferredVy = desiredY / preferredLength * maxSpeed;
-    const orcaAgents = new Array(count);
     const selfNeighborDist = Math.max(agents[selfBase + 3] * MILLING_ORCA_NEIGHBOR_DIST_SCALE, 2.5);
+    const candidateIndices = queryPackedAgentSpatialIndex(agentSpatialIndex, agents[selfBase + 1], agents[selfBase + 2], selfNeighborDist);
+    if (!candidateIndices.includes(selfIndex)) {
+        throw new Error(`agent spatial index query omitted milling enemy ${agents[selfBase]}`);
+    }
+    const orcaAgents = new Array(candidateIndices.length);
+    let orcaSelfIndex = -1;
 
-    for (let i = 0; i < count; i++) {
+    for (let candidate = 0; candidate < candidateIndices.length; candidate++) {
+        const i = candidateIndices[candidate];
         const base = i * STRIDE;
         const isSelf = i === selfIndex;
+        if (isSelf) orcaSelfIndex = candidate;
         const agentMaxSpeed = Math.max(EPSILON, agents[base + 4] * speedScale);
         const preferred = isSelf
             ? { vx: preferredVx, vy: preferredVy }
             : getPackedAgentMillingPreferredVelocity(agents, i, targetX, targetY, ringRadius, speedScale);
         const vx = isSelf || preferred.active ? preferred.vx : 0;
         const vy = isSelf || preferred.active ? preferred.vy : 0;
-        orcaAgents[i] = {
+        orcaAgents[candidate] = {
             id: agents[base],
             x: agents[base + 1],
             y: agents[base + 2],
@@ -1715,8 +1815,11 @@ function computeMillingOrcaVelocity(agents, count, selfIndex, desiredX, desiredY
             maxNeighbors: MILLING_ORCA_MAX_NEIGHBORS
         };
     }
+    if (orcaSelfIndex < 0) {
+        throw new Error(`agent spatial index could not resolve milling enemy ${agents[selfBase]}`);
+    }
 
-    return orca.computeAgentVelocity(orcaAgents[selfIndex], orcaAgents, {
+    return orca.computeAgentVelocity(orcaAgents[orcaSelfIndex], orcaAgents, {
         timeStep: dt,
         timeHorizon: MILLING_ORCA_TIME_HORIZON,
         neighborDist: selfNeighborDist,
@@ -1780,7 +1883,8 @@ function computeSeparation(agents, count, selfIndex, x, y, radius, priority, opt
         : (overlapOnly ? 1.02 : 1.35);
     const maxRange = radius * Math.max(4.5, activationScale * 3);
     const maxRangeSq = maxRange * maxRange;
-    for (let i = 0; i < count; i++) {
+    const candidateIndices = queryPackedAgentSpatialIndex(options.agentSpatialIndex, x, y, maxRange);
+    for (const i of candidateIndices) {
         if (i === selfIndex) continue;
         const base = i * STRIDE;
         const ox = agents[base + 1];
@@ -1807,7 +1911,7 @@ function computeSeparation(agents, count, selfIndex, x, y, radius, priority, opt
     return { x: sx, y: sy, checks, pressure };
 }
 
-function computeCrowdRouteThrottle(agents, count, selfIndex, x, y, radius, targetX, targetY, desiredX, desiredY) {
+function computeCrowdRouteThrottle(agents, count, selfIndex, x, y, radius, targetX, targetY, desiredX, desiredY, agentSpatialIndex) {
     const desiredLength = Math.hypot(desiredX, desiredY);
     if (desiredLength <= EPSILON) return { pressure: 0, routeScale: 1 };
     const toTargetX = targetX - x;
@@ -1821,7 +1925,8 @@ function computeCrowdRouteThrottle(agents, count, selfIndex, x, y, radius, targe
     const activationDistance = radius * CROWD_THROTTLE_RADIUS_SCALE;
     const activationDistanceSq = activationDistance * activationDistance;
     let pressure = 0;
-    for (let i = 0; i < count; i++) {
+    const candidateIndices = queryPackedAgentSpatialIndex(agentSpatialIndex, x, y, activationDistance);
+    for (const i of candidateIndices) {
         if (i === selfIndex) continue;
         const base = i * STRIDE;
         const dx = x - agents[base + 1];

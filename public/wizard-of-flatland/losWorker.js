@@ -1,6 +1,7 @@
 "use strict";
 
-importScripts("/wizard-of-flatland/los.js?v=wizard-of-flatland-4");
+importScripts("/wizard-of-flatland/wallGeometry.js?v=wizard-of-flatland-1");
+importScripts("/wizard-of-flatland/los.js?v=wizard-of-flatland-5");
 
 const computeVisibilityPolygon = self.getWizardFlatlandLosApi().computeVisibilityPolygon;
 let walls = null;
@@ -70,14 +71,21 @@ function computeLos(message) {
         depths: result.depths,
         hitWallIndices: result.hitWallIndices,
         hitWallTs: result.hitWallTs,
+        enemyTargets: result.enemyTargets,
+        enemyVisibility: result.enemyVisibility,
         scannedWallCount: result.scannedWallCount,
         candidateWallCount: result.candidateWallCount,
         raySegmentTests: result.raySegmentTests,
+        enemyScannedWallCount: result.enemyScannedWallCount,
+        enemyCandidateWallCount: result.enemyCandidateWallCount,
+        enemySegmentTests: result.enemySegmentTests,
         elapsedMs: result.elapsedMs
     }, [
         result.points.buffer,
         result.depths.buffer,
         result.hitWallIndices.buffer,
-        result.hitWallTs.buffer
+        result.hitWallTs.buffer,
+        result.enemyTargets.buffer,
+        result.enemyVisibility.buffer
     ]);
 }

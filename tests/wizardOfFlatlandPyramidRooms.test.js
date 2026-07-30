@@ -96,13 +96,15 @@ function countPyramidsOnRing(api, ring) {
     return count;
 }
 
-test("Wizard of Flatland base floor-zone colors are darkened by twenty-five percent", () => {
+test("Wizard of Flatland floor zones follow a dark, perceptually even rainbow", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
     assert.match(source, /const FLOOR_CENTER_COLOR = "#303030";/);
-    assert.match(source, /const FLOOR_EDGE_COLOR = "#4c2424";/);
-    assert.match(source, /const FLOOR_MID_OUTER_COLOR = "#193524";/);
-    assert.match(source, /const FLOOR_FAR_OUTER_COLOR = "#352951";/);
-    assert.match(source, /const FLOOR_OUTER_COLOR = "#3d2e00";/);
+    assert.match(source, /const FLOOR_RED_COLOR = "#5e0906";/);
+    assert.match(source, /const FLOOR_ORANGE_COLOR = "#482706";/);
+    assert.match(source, /const FLOOR_YELLOW_COLOR = "#373006";/);
+    assert.match(source, /const FLOOR_GREEN_COLOR = "#073b0f";/);
+    assert.match(source, /const FLOOR_BLUE_COLOR = "#052b69";/);
+    assert.match(source, /const FLOOR_PURPLE_COLOR = "#3e0b6f";/);
 });
 
 test("Wizard of Flatland pyramid light increases floor saturation with its brightness", () => {

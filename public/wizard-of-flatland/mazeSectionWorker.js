@@ -1653,6 +1653,11 @@ function appendMazeSquareSideWalls(walls, room, hallConnections, options) {
         const rightPocketIncorporated = isMazeSquarePocketIncorporatedByNeighbor(room, cornerIndex, pocketSides[1], options);
         const leftPocketIntersectsHallway = doesMazeSquarePocketIntersectHallway(pocketSides[0], hallConnections);
         const rightPocketIntersectsHallway = doesMazeSquarePocketIntersectHallway(pocketSides[1], hallConnections);
+        const bothUnincorporatedPocketsCrossHallways = !leftPocketIncorporated
+            && !rightPocketIncorporated
+            && leftPocketIntersectsHallway
+            && rightPocketIntersectsHallway;
+        if (bothUnincorporatedPocketsCrossHallways) continue;
         const keepLeftPocket = leftPocketIncorporated || leftPocketIntersectsHallway;
         const keepRightPocket = rightPocketIncorporated || rightPocketIntersectsHallway;
         if (!keepLeftPocket && !keepRightPocket) continue;

@@ -22,7 +22,6 @@
             typeof callbacks.isValidPathfindingNodeIndex !== "function" ||
             typeof callbacks.getPathfindingNodeIndexForKey !== "function" ||
             typeof callbacks.getPathfindingBlockedEdgeWallIndex !== "function" ||
-            typeof callbacks.getWallBreakConnectionCostOverrides !== "function" ||
             typeof callbacks.advanceAgentPathCursor !== "function" ||
             typeof callbacks.getAgentPathWaypoint !== "function"
         ) {
@@ -32,7 +31,6 @@
         function requestAgentPath(agent, rawStartNodeIndex, startNodeIndex, goalNodeIndex, now) {
             const requestId = state.pathfindingRequestId++;
             const wallBlockedConnectionCost = getAgentWallBlockedConnectionPathCost(agent);
-            const wallBlockedConnectionCostOverrides = callbacks.getWallBreakConnectionCostOverrides(wallBlockedConnectionCost);
             const rawStartNodeKey = callbacks.getPathfindingNodeKey(rawStartNodeIndex);
             const startNodeKey = callbacks.getPathfindingNodeKey(startNodeIndex);
             const goalNodeKey = callbacks.getPathfindingNodeKey(goalNodeIndex);
@@ -40,7 +38,6 @@
             agent.pathRequestId = requestId;
             agent.pathRequestedAt = now;
             agent.pathRequestedWorldVersion = state.pathfindingSnapshotVersion;
-            agent.pathRequestedWallBreakRevision = state.wallBreakCostRevision;
             agent.pathRequestedRawStartKey = rawStartNodeKey;
             agent.pathRequestedStartKey = startNodeKey;
             agent.pathRequestedGoalKey = goalNodeKey;
@@ -62,7 +59,6 @@
                     wallAvoidance: 0.4,
                     blockedNeighborAvoidance: 0.12,
                     wallBlockedConnectionCost,
-                    wallBlockedConnectionCostOverrides,
                     includeBlockedPlan: false
                 }
             });
@@ -80,6 +76,9 @@
             const message = event && event.data ? event.data : null;
             if (!message || typeof message.type !== "string") return;
             if (message.type === "ready") return;
+            if (message.type === "error") {
+                throw new Error(`Wizard of Flatland pathfinding worker error: ${message.message || "unknown error"}`);
+            }
             if (message.type !== "path_result") return;
             const agent = state.agents.find((candidate) => candidate.pathRequestId === message.requestId);
             if (!agent) return;
@@ -161,6 +160,7 @@
                 x: callbacks.getPathfindingNodeX(pathIndex),
                 y: callbacks.getPathfindingNodeY(pathIndex),
                 wallBlockedFromPrevious: wallBlockedFromPrevious === true,
+                wallBlockedFromKey: "",
                 wallBlockedEdgeKey: "",
                 wallBlockedWallIndex: -1
             };
@@ -169,6 +169,7 @@
                     throw new Error("Wizard of Flatland wall-blocked waypoint requires a previous path node");
                 }
                 const wallIndex = callbacks.getPathfindingBlockedEdgeWallIndex(previousPathIndex, pathIndex);
+                waypoint.wallBlockedFromKey = callbacks.getPathfindingNodeKey(previousPathIndex);
                 waypoint.wallBlockedEdgeKey = `${previousPathIndex}->${pathIndex}`;
                 waypoint.wallBlockedWallIndex = wallIndex;
             }

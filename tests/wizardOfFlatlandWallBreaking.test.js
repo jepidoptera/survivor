@@ -7,6 +7,31 @@ const vm = require("node:vm");
 const PATHFINDING_WORKER_PATH = path.join(__dirname, "../public/wizard-of-flatland/pathfindingWorker.js");
 const MAIN_PATH = path.join(__dirname, "../public/wizard-of-flatland/main.js");
 
+test("Wizard of Flatland wall damage revisions do not invalidate valid enemy routes", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const updateStart = source.indexOf("function updateAgentPathing(");
+    const updateEnd = source.indexOf("function stopAgentForMissingPathNode(", updateStart);
+    assert.notEqual(updateStart, -1, "updateAgentPathing exists");
+    assert.notEqual(updateEnd, -1, "updateAgentPathing boundary exists");
+    const updateSource = source.slice(updateStart, updateEnd);
+
+    assert.doesNotMatch(updateSource, /wallBreakCostsChanged/);
+    assert.doesNotMatch(updateSource, /pathRequestedWallBreakRevision\s*!==\s*state\.wallBreakCostRevision/);
+});
+
+test("Wizard of Flatland sends coalesced worker wall-cost patches instead of per-request overrides", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const clientSource = fs.readFileSync(
+        path.join(__dirname, "../public/wizard-of-flatland/pathfindingClient.js"),
+        "utf8"
+    );
+    assert.match(source, /const WALL_COST_PATCH_INTERVAL_MS = 200/);
+    assert.match(source, /type: "wall_cost_patch"/);
+    assert.match(source, /queueWallCostScalePatch\(segment\.wallIndex\)/);
+    assert.doesNotMatch(source, /function getWallBreakConnectionCostOverrides/);
+    assert.doesNotMatch(clientSource, /wallBlockedConnectionCostOverrides/);
+});
+
 function extractFunction(source, name) {
     const start = source.indexOf(`function ${name}(`);
     assert.notEqual(start, -1, `${name} exists in main.js`);
@@ -67,7 +92,9 @@ function createSnapshot() {
             0, 1, 0, 1,
             0, 2, 0, 0,
             2, 1, 0, 0
-        ])
+        ]),
+        wallIndexByEdge: Int32Array.from([0, -1, -1]),
+        wallCostScales: Float32Array.from([1])
     };
 }
 
@@ -93,7 +120,7 @@ function requestPath(worker, requestId, options) {
     return worker.messages.at(-1);
 }
 
-test("Wizard of Flatland damaged wall override lowers only that blocked path edge", () => {
+test("Wizard of Flatland worker wall-cost patch lowers only that wall's blocked edge", () => {
     const worker = loadPathfindingWorker();
     worker.send({ type: "replace_snapshot", snapshot: createSnapshot() });
 
@@ -102,10 +129,13 @@ test("Wizard of Flatland damaged wall override lowers only that blocked path edg
     assert.deepEqual(Array.from(detour.pathNodeIndices), [2, 1]);
     assert.deepEqual(Array.from(detour.wallBlockedPathEdges), [0, 0]);
 
-    const throughWall = requestPath(worker, 2, {
-        wallBlockedConnectionCost: 100,
-        wallBlockedConnectionCostOverrides: [{ from: 0, to: 1, cost: 0 }]
+    worker.send({
+        type: "wall_cost_patch",
+        mapVersion: 7,
+        wallIndices: Int32Array.from([0]),
+        costScales: Float32Array.from([0.05])
     });
+    const throughWall = requestPath(worker, 2, { wallBlockedConnectionCost: 100 });
     assert.equal(throughWall.ok, true);
     assert.deepEqual(Array.from(throughWall.pathNodeIndices), [1]);
     assert.deepEqual(Array.from(throughWall.wallBlockedPathEdges), [1]);
@@ -152,13 +182,50 @@ test("Wizard of Flatland rejects stale solver results before applying movement o
     assert.equal(source.includes("wall hit requires a target edge"), false);
 });
 
+test("Wizard of Flatland enemy hit damage survives removal of the attacking enemy", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const context = { Number };
+    vm.createContext(context);
+    vm.runInContext([
+        extractFunction(source, "getEnemyHitDamageFromSolverStats"),
+        "globalThis.__getDamage = getEnemyHitDamageFromSolverStats;"
+    ].join("\n"), context, { filename: "wizard-of-flatland-enemy-hit-damage.js" });
+
+    assert.equal(context.__getDamage({
+        hits: 2,
+        hitAgentIds: [2501, 2502],
+        hitDamages: [7.5, 12]
+    }), 19.5);
+    assert.throws(
+        () => context.__getDamage({ hits: 1, hitAgentIds: [2501], hitDamages: [] }),
+        /requires matching damage values/
+    );
+});
+
 test("Wizard of Flatland installs worker pathfinding after worker applies breach gaps", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
     const installer = extractFunction(source, "installGeneratedMazeWorkerResult");
 
     assert.match(installer, /message\.brokenWallGapCount/);
     assert.match(installer, /installPathfindingNodeLayerFromWorker\(message\.nodeLayer\)/);
+    assert.doesNotMatch(installer, /clearAgentPathRequestsForMapRebuild\(\)/);
     assert.doesNotMatch(installer, /rebuildPathfindingNodeLayer\(\)/);
     assert.doesNotMatch(installer, /applyBrokenWallGapsToBuffer/);
     assert.match(source, /function validatePathfindingWallIndices\(\)/);
+});
+
+test("Wizard of Flatland remaps preserved wall-blocked paths by stable node key", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const waypointLookup = extractFunction(source, "getAgentPathWaypoint");
+    const updatePathing = extractFunction(source, "updateAgentPathing");
+    const clientSource = fs.readFileSync(
+        path.join(__dirname, "../public/wizard-of-flatland/pathfindingClient.js"),
+        "utf8"
+    );
+
+    assert.match(clientSource, /wallBlockedFromKey = callbacks\.getPathfindingNodeKey\(previousPathIndex\)/);
+    assert.match(waypointLookup, /getPathfindingNodeIndexForKey\(fromKey\)/);
+    assert.match(waypointLookup, /wallBlockedEdgeKey = `\$\{fromIndex\}->\$\{currentPathIndex\}`/);
+    assert.match(waypointLookup, /wallBlockedResolvedNodeLayerVersion === state\.nodeLayer\.version/);
+    assert.match(updatePathing, /waypoint\.wallBlockedFromPrevious === true && waypoint\.stale !== true/);
 });

@@ -205,6 +205,15 @@
             points[i * 2] = originX + dirX * best;
             points[i * 2 + 1] = originY + dirY * best;
         }
+        const enemyResult = computeEnemyVisibility(input, walls, {
+            wallStride,
+            wallX1,
+            wallY1,
+            wallX2,
+            wallY2,
+            originX,
+            originY
+        });
 
         return {
             bins,
@@ -213,10 +222,79 @@
             depths,
             hitWallIndices,
             hitWallTs,
+            enemyTargets: enemyResult.targets,
+            enemyVisibility: enemyResult.visibility,
             scannedWallCount: collected.scannedWallCount,
             candidateWallCount: candidates.length,
             raySegmentTests,
+            enemyScannedWallCount: enemyResult.scannedWallCount,
+            enemyCandidateWallCount: enemyResult.candidateWallCount,
+            enemySegmentTests: enemyResult.segmentTests,
             elapsedMs: performance.now() - startedAt
+        };
+    }
+
+    function computeEnemyVisibility(input, walls, wallOptions) {
+        const targets = input.enemyTargets === undefined ? new Float64Array(0) : input.enemyTargets;
+        if (!(targets instanceof Float64Array) || targets.length % 4 !== 0) {
+            throw new Error("Wizard of Flatland LOS enemy targets require packed id, position, and radius data");
+        }
+        const targetCount = targets.length / 4;
+        const visibility = new Uint8Array(targetCount);
+        if (targetCount === 0) {
+            return { targets, visibility, scannedWallCount: 0, candidateWallCount: 0, segmentTests: 0 };
+        }
+        let maxTargetDistance = 0;
+        for (let i = 0; i < targetCount; i++) {
+            const base = i * 4;
+            finiteNumber(targets[base], `enemy target ${i} id`);
+            const x = finiteNumber(targets[base + 1], `enemy target ${i} x`);
+            const y = finiteNumber(targets[base + 2], `enemy target ${i} y`);
+            const radius = finiteNumber(targets[base + 3], `enemy target ${i} radius`);
+            if (!(radius > 0)) throw new Error(`Wizard of Flatland LOS enemy target ${i} requires a positive radius`);
+            maxTargetDistance = Math.max(
+                maxTargetDistance,
+                Math.hypot(x - wallOptions.originX, y - wallOptions.originY)
+            );
+        }
+        const collected = collectCandidateWalls(walls, {
+            ...wallOptions,
+            maxDistance: Math.max(DEFAULT_MIN_DISTANCE, maxTargetDistance),
+            wallRanges: input.enemyWallRanges
+        });
+        const wallGeometry = globalScope.WallGeometry;
+        if (!wallGeometry || typeof wallGeometry.connectionCrossesWallFaces !== "function") {
+            throw new Error("Wizard of Flatland LOS enemy visibility requires WallGeometry.connectionCrossesWallFaces");
+        }
+        let segmentTests = 0;
+        for (let i = 0; i < targetCount; i++) {
+            const base = i * 4;
+            const target = { x: targets[base + 1], y: targets[base + 2] };
+            let visible = true;
+            for (const wall of collected.candidates) {
+                segmentTests++;
+                if (wallGeometry.connectionCrossesWallFaces(
+                    { x: wallOptions.originX, y: wallOptions.originY },
+                    target,
+                    { x: wall.ax, y: wall.ay },
+                    { x: wall.bx, y: wall.by },
+                    {
+                        thickness: finiteNumber(input.enemyWallThickness, "enemy wall thickness"),
+                        extend: finiteNumber(input.enemyWallFaceExtend, "enemy wall face extension")
+                    }
+                )) {
+                    visible = false;
+                    break;
+                }
+            }
+            visibility[i] = visible ? 1 : 0;
+        }
+        return {
+            targets,
+            visibility,
+            scannedWallCount: collected.scannedWallCount,
+            candidateWallCount: collected.candidates.length,
+            segmentTests
         };
     }
 

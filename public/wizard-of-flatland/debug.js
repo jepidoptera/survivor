@@ -15,6 +15,8 @@
             headingGlitchFrame: 0,
             headingGlitchLogged: false,
             lastPathingMetrics: null,
+            solverProfile: null,
+            lastSolverProfile: null,
             showFpsCounter: false,
             fpsCounterElement: null,
             lastFpsCounterUpdateAt: 0

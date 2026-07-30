@@ -35,12 +35,47 @@ function loadSolverWorkerApi() {
     vm.createContext(context);
     vm.runInContext(
         `${fs.readFileSync(SOLVER_WORKER_PATH, "utf8")}
-globalThis.__testExports = { solveStep };`,
+globalThis.__testExports = { solveStep, buildPackedAgentSpatialIndex, queryPackedAgentSpatialIndex };`,
         context,
         { filename: SOLVER_WORKER_PATH }
     );
     return context.__testExports;
 }
+
+function combinePackedAgents(agents) {
+    const packed = new Float32Array(agents.reduce((total, agent) => total + agent.length, 0));
+    let offset = 0;
+    for (const agent of agents) {
+        packed.set(agent, offset);
+        offset += agent.length;
+    }
+    return packed;
+}
+
+test("Wizard of Flatland per-step enemy index returns stable local candidates", () => {
+    const { buildPackedAgentSpatialIndex, queryPackedAgentSpatialIndex } = loadSolverWorkerApi();
+    const agents = combinePackedAgents([
+        createPackedAgent({ id: 1, x: 0, y: 0 }),
+        createPackedAgent({ id: 2, x: 1.5, y: 0 }),
+        createPackedAgent({ id: 3, x: 80, y: 80 }),
+        createPackedAgent({ id: 4, x: -1.5, y: 0 })
+    ]);
+    const index = buildPackedAgentSpatialIndex(agents, 4);
+
+    assert.deepEqual(Array.from(queryPackedAgentSpatialIndex(index, 0, 0, 2)), [0, 1, 3]);
+    assert.deepEqual(Array.from(queryPackedAgentSpatialIndex(index, 80, 80, 2)), [2]);
+});
+
+test("Wizard of Flatland per-step enemy index rejects malformed packed positions", () => {
+    const { buildPackedAgentSpatialIndex } = loadSolverWorkerApi();
+    const agent = createPackedAgent();
+    agent[1] = Number.NaN;
+
+    assert.throws(
+        () => buildPackedAgentSpatialIndex(agent, 1),
+        /finite position for enemy 101/
+    );
+});
 
 function createPackedAgent(overrides = {}) {
     const values = Object.assign({
@@ -61,7 +96,8 @@ function createPackedAgent(overrides = {}) {
         pathMode: PATH_MODE_DIRECT,
         pathGoalX: 5,
         pathGoalY: 0,
-        pathGoalWallBlocked: false
+        pathGoalWallBlocked: false,
+        hitDamage: 10
     }, overrides);
     return Float32Array.from([
         values.id,
@@ -81,7 +117,8 @@ function createPackedAgent(overrides = {}) {
         values.pathMode,
         values.pathGoalX,
         values.pathGoalY,
-        values.pathGoalWallBlocked ? 1 : 0
+        values.pathGoalWallBlocked ? 1 : 0,
+        values.hitDamage
     ]);
 }
 
