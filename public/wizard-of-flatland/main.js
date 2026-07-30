@@ -6697,7 +6697,13 @@
         reconcileAgentWallBreakTargets();
         state.worldVersion += 1;
         clearAgentPathRequestsForMapRebuild();
-        rebuildPathfindingNodeLayer();
+        if (isProceduralMazeScenario()) {
+            if (!refreshGeneratedMazeIfNeeded(true)) {
+                throw new Error("Wizard of Flatland procedural wall break failed to request an asynchronous pathfinding rebuild");
+            }
+        } else {
+            rebuildPathfindingNodeLayer();
+        }
     }
 
     function createWallBreakGapForSegment(segment, walls, wallBase) {

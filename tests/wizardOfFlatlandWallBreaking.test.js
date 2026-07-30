@@ -237,6 +237,21 @@ test("Wizard of Flatland installs worker pathfinding after worker applies breach
     assert.match(source, /function validatePathfindingWallIndices\(\)/);
 });
 
+test("Wizard of Flatland procedural wall breaks rebuild pathfinding asynchronously", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const breakWall = extractFunction(source, "breakWallSegmentForAgent");
+
+    assert.match(
+        breakWall,
+        /if \(isProceduralMazeScenario\(\)\) \{\s*if \(!refreshGeneratedMazeIfNeeded\(true\)\)/
+    );
+    assert.match(breakWall, /else \{\s*rebuildPathfindingNodeLayer\(\)/);
+    assert.ok(
+        breakWall.indexOf("clearAgentPathRequestsForMapRebuild()")
+            < breakWall.indexOf("refreshGeneratedMazeIfNeeded(true)")
+    );
+});
+
 test("Wizard of Flatland remaps preserved wall-blocked paths by stable node key", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
     const waypointLookup = extractFunction(source, "getAgentPathWaypoint");
