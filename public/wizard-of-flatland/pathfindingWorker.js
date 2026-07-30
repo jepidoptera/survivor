@@ -116,21 +116,39 @@ function validateWallCostScale(value, wallIndex) {
     }
 }
 
-function applyWallCostPatch(message) {
-    if (!activeSnapshot) throw new Error("Wizard of Flatland pathfinding wall cost patch requires an active snapshot");
+function applyDynamicCostPatch(message) {
+    if (!activeSnapshot) throw new Error("Wizard of Flatland pathfinding dynamic cost patch requires an active snapshot");
     if (Number(message.mapVersion) !== Number(activeSnapshot.version)) return;
     const wallIndices = message.wallIndices;
-    const costScales = message.costScales;
-    if (!(wallIndices instanceof Int32Array) || !(costScales instanceof Float32Array) || wallIndices.length !== costScales.length) {
-        throw new Error("Wizard of Flatland pathfinding wall cost patch is malformed");
+    const wallCostScalesPatch = message.wallCostScales;
+    const nodeIndices = message.nodeIndices;
+    const nodeCosts = message.nodeCosts;
+    if (!(wallIndices instanceof Int32Array) || !(wallCostScalesPatch instanceof Float32Array) || wallIndices.length !== wallCostScalesPatch.length) {
+        throw new Error("Wizard of Flatland pathfinding dynamic wall cost patch is malformed");
+    }
+    if (!(nodeIndices instanceof Int32Array) || !(nodeCosts instanceof Float32Array) || nodeIndices.length !== nodeCosts.length) {
+        throw new Error("Wizard of Flatland pathfinding dynamic node cost patch is malformed");
     }
     for (let i = 0; i < wallIndices.length; i++) {
         const wallIndex = wallIndices[i];
         if (!Number.isInteger(wallIndex) || wallIndex < 0 || wallIndex >= wallCostScales.length) {
             throw new Error(`Wizard of Flatland pathfinding wall cost patch references invalid wall ${wallIndex}`);
         }
-        validateWallCostScale(costScales[i], wallIndex);
-        wallCostScales[wallIndex] = costScales[i];
+        validateWallCostScale(wallCostScalesPatch[i], wallIndex);
+        wallCostScales[wallIndex] = wallCostScalesPatch[i];
+    }
+    const nodeStride = getNodeStride(activeSnapshot);
+    const nodeCount = activeSnapshot.nodes.length / nodeStride;
+    for (let i = 0; i < nodeIndices.length; i++) {
+        const nodeIndex = nodeIndices[i];
+        const cost = nodeCosts[i];
+        if (!Number.isInteger(nodeIndex) || nodeIndex < 0 || nodeIndex >= nodeCount) {
+            throw new Error(`Wizard of Flatland pathfinding node cost patch references invalid node ${nodeIndex}`);
+        }
+        if (!Number.isFinite(cost) || cost < 0) {
+            throw new Error(`Wizard of Flatland pathfinding node cost patch has invalid cost ${cost} for node ${nodeIndex}`);
+        }
+        activeSnapshot.nodes[nodeIndex * nodeStride + NODE_TEMPORARY_COST] = cost;
     }
 }
 
@@ -473,8 +491,8 @@ self.addEventListener("message", (event) => {
             handleRequestPath(message);
             return;
         }
-        if (message.type === "wall_cost_patch") {
-            applyWallCostPatch(message);
+        if (message.type === "dynamic_cost_patch") {
+            applyDynamicCostPatch(message);
         }
     } catch (error) {
         if (message.type !== "request_path") {

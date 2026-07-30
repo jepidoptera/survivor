@@ -57,6 +57,7 @@ function loadLiveEnemyPathCostExports() {
         extractFunction(source, "areLiveEnemyPathCostNodeKeysEqual"),
         extractFunction(source, "resetLiveEnemyPathfindingCosts"),
         extractFunction(source, "nearestLocalPassablePathfindingNodes"),
+        extractFunction(source, "selectNearestLocalPathfindingNodeIndices"),
         extractFunction(source, "getLiveEnemyPathCostSignature"),
         extractFunction(source, "validateLiveEnemyPathCostPenalty"),
         extractFunction(source, "applyPathfindingModifiersToChangedNodes"),
@@ -79,6 +80,14 @@ function loadLiveEnemyPathCostExports() {
             liveEnemyPathNodeKeysByAgentId: new Map(),
             liveEnemyPathCostRoundRobinCursor: 0,
             liveEnemyPathCostNodeLayerVersion: 0,
+            liveEnemyPathCostAgentsByIdScratch: new Map(),
+            liveEnemyPathCostChangedNodeKeysScratch: new Set(),
+            liveEnemyPathNodeSearchScratch: {
+                seen: new Set(),
+                candidateIndices: [],
+                candidateDistances: [],
+                resultIndices: []
+            },
             debug: {},
             nodeLayer: {
                 nodes: new Float32Array(0),
@@ -217,10 +226,11 @@ test("Wizard of Flatland incremental modifier application touches only changed n
     assert.equal(state.nodeLayer.nodes[6 * 9 + 8], 77);
 });
 
-test("Wizard of Flatland path cost publishing preserves active path versions", () => {
+test("Wizard of Flatland dynamic path cost publishing queues patches without replacing snapshots", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
     const publishCostModifier = extractFunction(source, "publishPathfindingCostModifierChange");
     assert.doesNotMatch(publishCostModifier, /clearAgentPathRequestsForMapRebuild/);
     assert.doesNotMatch(publishCostModifier, /worldVersion\s*\+=/);
-    assert.match(publishCostModifier, /publishPathfindingSnapshot\(\{\s*preserveVersion:\s*true\s*\}\)/);
+    assert.doesNotMatch(publishCostModifier, /publishPathfindingSnapshot/);
+    assert.match(publishCostModifier, /queuePathfindingNodeCostPatch\(changedNodeKeys\)/);
 });

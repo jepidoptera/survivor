@@ -19,14 +19,14 @@ test("Wizard of Flatland wall damage revisions do not invalidate valid enemy rou
     assert.doesNotMatch(updateSource, /pathRequestedWallBreakRevision\s*!==\s*state\.wallBreakCostRevision/);
 });
 
-test("Wizard of Flatland sends coalesced worker wall-cost patches instead of per-request overrides", () => {
+test("Wizard of Flatland sends coalesced dynamic cost patches at 10 Hz instead of per-request overrides", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
     const clientSource = fs.readFileSync(
         path.join(__dirname, "../public/wizard-of-flatland/pathfindingClient.js"),
         "utf8"
     );
-    assert.match(source, /const WALL_COST_PATCH_INTERVAL_MS = 200/);
-    assert.match(source, /type: "wall_cost_patch"/);
+    assert.match(source, /const DYNAMIC_PATH_COST_PATCH_INTERVAL_MS = 100/);
+    assert.match(source, /type: "dynamic_cost_patch"/);
     assert.match(source, /queueWallCostScalePatch\(segment\.wallIndex\)/);
     assert.doesNotMatch(source, /function getWallBreakConnectionCostOverrides/);
     assert.doesNotMatch(clientSource, /wallBlockedConnectionCostOverrides/);
@@ -120,7 +120,7 @@ function requestPath(worker, requestId, options) {
     return worker.messages.at(-1);
 }
 
-test("Wizard of Flatland worker wall-cost patch lowers only that wall's blocked edge", () => {
+test("Wizard of Flatland worker dynamic cost patch lowers only that wall's blocked edge", () => {
     const worker = loadPathfindingWorker();
     worker.send({ type: "replace_snapshot", snapshot: createSnapshot() });
 
@@ -130,15 +130,38 @@ test("Wizard of Flatland worker wall-cost patch lowers only that wall's blocked 
     assert.deepEqual(Array.from(detour.wallBlockedPathEdges), [0, 0]);
 
     worker.send({
-        type: "wall_cost_patch",
+        type: "dynamic_cost_patch",
         mapVersion: 7,
         wallIndices: Int32Array.from([0]),
-        costScales: Float32Array.from([0.05])
+        wallCostScales: Float32Array.from([0.05]),
+        nodeIndices: new Int32Array(0),
+        nodeCosts: new Float32Array(0)
     });
     const throughWall = requestPath(worker, 2, { wallBlockedConnectionCost: 100 });
     assert.equal(throughWall.ok, true);
     assert.deepEqual(Array.from(throughWall.pathNodeIndices), [1]);
     assert.deepEqual(Array.from(throughWall.wallBlockedPathEdges), [1]);
+});
+
+test("Wizard of Flatland worker dynamic cost patch updates node routing without replacing the snapshot", () => {
+    const worker = loadPathfindingWorker();
+    worker.send({ type: "replace_snapshot", snapshot: createSnapshot() });
+
+    const detour = requestPath(worker, 1, { wallBlockedConnectionCost: 100 });
+    assert.equal(detour.ok, true);
+    assert.deepEqual(Array.from(detour.pathNodeIndices), [2, 1]);
+
+    worker.send({
+        type: "dynamic_cost_patch",
+        mapVersion: 7,
+        wallIndices: new Int32Array(0),
+        wallCostScales: new Float32Array(0),
+        nodeIndices: Int32Array.from([2]),
+        nodeCosts: Float32Array.from([200])
+    });
+    const throughWall = requestPath(worker, 2, { wallBlockedConnectionCost: 100 });
+    assert.equal(throughWall.ok, true);
+    assert.deepEqual(Array.from(throughWall.pathNodeIndices), [1]);
 });
 
 test("Wizard of Flatland blocked path edge wall lookup accepts reverse stored direction", () => {
