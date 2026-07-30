@@ -1800,7 +1800,7 @@
                 }
             }
         });
-        profiler.span("resolve target npc contacts", () => resolveTargetNpcContacts());
+        profiler.span("resolve target npc contacts", () => resolveTargetNpcContacts(false));
         setLabelText(labels.workerStatus, "ready");
         profiler.completeLoad({
             sections: state.generatedMazeInstalledChunkKeys.size,
