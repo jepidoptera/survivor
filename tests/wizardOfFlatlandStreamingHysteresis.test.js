@@ -5,6 +5,48 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const MODULE_PATH = path.join(__dirname, "../public/wizard-of-flatland/mazeStreaming.js");
+const MAIN_PATH = path.join(__dirname, "../public/wizard-of-flatland/main.js");
+
+function extractFunction(source, name) {
+    const start = source.indexOf(`function ${name}(`);
+    assert.notEqual(start, -1, `${name} exists in main.js`);
+    const bodyStart = source.indexOf("{", start);
+    let depth = 0;
+    for (let i = bodyStart; i < source.length; i++) {
+        if (source[i] === "{") depth++;
+        if (source[i] === "}") depth--;
+        if (depth === 0) return source.slice(start, i + 1);
+    }
+    throw new Error(`Unterminated function ${name}`);
+}
+
+function loadEvictionFunction(state, calls) {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const context = {
+        state,
+        Set,
+        Number,
+        Error,
+        Math,
+        MAZE_SECTION_UNLOAD_HYSTERESIS_MS: 3000,
+        isMazeSectionAnActiveWallBreakTarget: () => false,
+        parseMazeSectionKey(key) {
+            const [q, r] = key.split(",").map(Number);
+            return { q, r };
+        },
+        mazeSectionCenter: (q, r) => ({ x: q, y: r }),
+        captureMazeSectionSnapshot: (key) => calls.snapshots.push(key),
+        freezeAgentsInMazeSection: (key) => calls.frozen.push(key)
+    };
+    vm.createContext(context);
+    vm.runInContext(
+        `${extractFunction(source, "removeFurthestGeneratedMazeSection")}
+globalThis.__testExport = removeFurthestGeneratedMazeSection;`,
+        context,
+        { filename: "wizard-of-flatland-section-eviction.js" }
+    );
+    return context.__testExport;
+}
 
 function loadSystem(state, clock, getRequiredKeys) {
     const posted = [];
@@ -108,4 +150,41 @@ test("Wizard of Flatland section cache bounds hysteresis overflow", () => {
     system.refreshGeneratedMazeIfNeeded();
     assert.equal(state.generatedMazeChunkKeys.size, 18);
     assert.equal(state.generatedMazeChunkKeys.has("new"), true);
+});
+
+test("Wizard of Flatland evicts an obsolete pending section without snapshotting unloaded state", () => {
+    const state = {
+        generatedMazeChunkKeys: new Set(["2,-44"]),
+        generatedMazeInstalledChunkKeys: new Set(),
+        generatedMazeSectionLastRequiredAt: new Map([["2,-44", 1000]]),
+        target: { x: 0, y: 0 }
+    };
+    const calls = { snapshots: [], frozen: [] };
+    const removeFurthestGeneratedMazeSection = loadEvictionFunction(state, calls);
+
+    assert.equal(
+        removeFurthestGeneratedMazeSection({}, new Set(), 5000),
+        true
+    );
+    assert.equal(state.generatedMazeChunkKeys.has("2,-44"), false);
+    assert.deepEqual(calls.snapshots, []);
+    assert.deepEqual(calls.frozen, []);
+});
+
+test("Wizard of Flatland snapshots and freezes an installed section before eviction", () => {
+    const state = {
+        generatedMazeChunkKeys: new Set(["2,-44"]),
+        generatedMazeInstalledChunkKeys: new Set(["2,-44"]),
+        generatedMazeSectionLastRequiredAt: new Map([["2,-44", 1000]]),
+        target: { x: 0, y: 0 }
+    };
+    const calls = { snapshots: [], frozen: [] };
+    const removeFurthestGeneratedMazeSection = loadEvictionFunction(state, calls);
+
+    assert.equal(
+        removeFurthestGeneratedMazeSection({}, new Set(), 5000),
+        true
+    );
+    assert.deepEqual(calls.snapshots, ["2,-44"]);
+    assert.deepEqual(calls.frozen, ["2,-44"]);
 });

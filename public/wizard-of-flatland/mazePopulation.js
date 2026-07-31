@@ -179,6 +179,33 @@
             };
         }
 
+        function createMazeFountainForSection(sectionKey, options, activatedSectionKeys) {
+            validateMazeRoomEnemyBudgetSectionKey(sectionKey);
+            if (!(activatedSectionKeys instanceof Set)) {
+                throw new Error("Wizard of Flatland fountain creation requires activated fountain tracking");
+            }
+            if (mazeSections.isMazePyramidRoomSectionKey(sectionKey)) return null;
+            const random = math.seededRandom(math.hashString(`${options.seed}|fountain|${sectionKey}`));
+            if (random() >= 1 / constants.MAZE_FOUNTAIN_ROOM_FREQUENCY) return null;
+            const coord = mazeSections.parseMazeSectionKey(sectionKey);
+            const center = mazeSections.mazeSectionCenter(coord.q, coord.r, options);
+            return {
+                key: `fountain|${options.seed}|${sectionKey}`,
+                sectionKey,
+                q: coord.q,
+                r: coord.r,
+                x: center.x,
+                y: center.y,
+                radius: constants.MAZE_FOUNTAIN_RADIUS,
+                activated: activatedSectionKeys.has(sectionKey),
+                touching: false,
+                particleAccumulator: 0,
+                coinSprayRemaining: 0,
+                coinSprayAccumulator: 0,
+                phase: random() * Math.PI * 2
+            };
+        }
+
         function getMazeCoinSpanSelectionForSection(sectionKey) {
             if (typeof sectionKey !== "string" || sectionKey.length === 0) {
                 throw new Error("Wizard of Flatland coin span lookup requires a section key");
@@ -284,7 +311,8 @@
             createMazeCoinsForSection,
             getMazeCoinCount,
             getMazeCoinKey,
-            createMazeTalismanForSection
+            createMazeTalismanForSection,
+            createMazeFountainForSection
         });
     }
 

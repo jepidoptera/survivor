@@ -71,10 +71,33 @@
             };
         }
 
+        function renderSpellLevelHeader() {
+            const playerName = typeof state.playerName === "string" ? state.playerName.trim() : "";
+            if (!playerName) throw new Error("Wizard of Flatland spell level header requires a player name");
+            const spellLevels = api.normalizeWizardSpellLevels();
+            const totalLevel = Object.values(spellLevels).reduce((total, level) => total + level, state.levelPoints);
+            if (!Number.isInteger(totalLevel) || totalLevel < 0) {
+                throw new Error("Wizard of Flatland spell level header requires a non-negative integer total level");
+            }
+            const highestZone = api.getHighestVisitedMazeZone();
+            if (!Number.isInteger(highestZone) || highestZone < 1) {
+                throw new Error("Wizard of Flatland spell level header requires a positive integer highest zone");
+            }
+            elements.spellLevelPlayerName.textContent = playerName;
+            elements.spellLevelTotalLevel.textContent = String(totalLevel);
+            elements.spellLevelHighestZone.textContent = String(highestZone);
+            elements.spellLevelPointCount.textContent = String(state.levelPoints);
+            elements.spellLevelPointCoin.classList.toggle("unavailable", state.levelPoints === 0);
+            elements.spellLevelPointCoin.setAttribute(
+                "aria-label",
+                `${state.levelPoints} spell ${state.levelPoints === 1 ? "level" : "levels"} available to spend`
+            );
+        }
+
         function renderSpellLevelLoading(message) {
             validatePanelDom();
             api.validateWizardLevelPoints();
-            elements.spellLevelHeader.textContent = `level points ${state.levelPoints}`;
+            renderSpellLevelHeader();
             elements.spellLevelList.replaceChildren();
             const loading = document.createElement("div");
             loading.className = "spellLevelMastered";
@@ -87,7 +110,7 @@
             validatePanelDom();
             api.validateWizardLevelPoints();
             api.normalizeWizardSpellLevels();
-            elements.spellLevelHeader.textContent = `level points ${state.levelPoints}`;
+            renderSpellLevelHeader();
             const definitions = api.getSpellLevelDefinitions();
             if (!Array.isArray(definitions)) {
                 renderSpellLevelLoading("Loading spell levels...");
@@ -196,7 +219,17 @@
         }
 
         function validatePanelDom() {
-            if (!elements.spellLevelPanel || !elements.spellLevelHeader || !elements.spellLevelList || !elements.spellLevelDetails) {
+            if (
+                !elements.spellLevelPanel ||
+                !elements.spellLevelHeader ||
+                !elements.spellLevelPlayerName ||
+                !elements.spellLevelTotalLevel ||
+                !elements.spellLevelHighestZone ||
+                !elements.spellLevelPointCoin ||
+                !elements.spellLevelPointCount ||
+                !elements.spellLevelList ||
+                !elements.spellLevelDetails
+            ) {
                 throw new Error("Wizard of Flatland spell level panel DOM is missing");
             }
         }

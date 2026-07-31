@@ -225,6 +225,22 @@
     const ENEMY_COIN_DROP_MAX_LANDING_RADIUS = 0.33 * 1.5;
     const ENEMY_COIN_DROP_POP_SECONDS = 0.38 * Math.sqrt(1.5);
     const ENEMY_COIN_DROP_POP_HEIGHT = 0.22 * 1.5;
+    const MAZE_FOUNTAIN_ROOM_FREQUENCY = 77;
+    const MAZE_FOUNTAIN_RADIUS = 1.25;
+    const MAZE_FOUNTAIN_HEAL_RADIUS = 7;
+    const MAZE_FOUNTAIN_CONTACT_HEAL_SECONDS = 20;
+    const MAZE_FOUNTAIN_REGULAR_HEAL_FRACTION = 0.25;
+    const MAZE_FOUNTAIN_COIN_MIN_PER_ZONE = 10;
+    const MAZE_FOUNTAIN_COIN_MAX_PER_ZONE = 20;
+    const MAZE_FOUNTAIN_COIN_SCATTER_DISTANCE = 0.5;
+    const MAZE_FOUNTAIN_COINS_PER_SECOND = 15;
+    const MAZE_FOUNTAIN_COIN_MAX_ARC_HEIGHT = 3;
+    const MAZE_FOUNTAIN_PARTICLES_PER_SECOND = 75;
+    const MAZE_FOUNTAIN_PARTICLE_LIFETIME = 3;
+    const MAZE_FOUNTAIN_PARTICLE_GRAVITY = 9.8;
+    const MAZE_FOUNTAIN_PARTICLE_SPREAD_RADIANS = 5 * Math.PI / 180;
+    const MAZE_FOUNTAIN_PARTICLE_START_WIDTH_RATIO = 0.75;
+    const MAZE_FOUNTAIN_PARTICLE_DESCENT_CUTOFF_RATIO = 0.45;
     const ENEMY_COIN_BASE_AVERAGE = 0.5;
     const ENEMY_COIN_ZONE_MULTIPLIER = 1.37;
     const ENEMY_COIN_DROP_PROBABILITIES_BY_ZONE = [
@@ -349,6 +365,11 @@
     const levelUpAnnouncement = document.getElementById("levelUpAnnouncement");
     const spellLevelPanel = document.getElementById("spellLevelPanel");
     const spellLevelHeader = document.getElementById("spellLevelHeader");
+    const spellLevelPlayerName = document.getElementById("spellLevelPlayerName");
+    const spellLevelTotalLevel = document.getElementById("spellLevelTotalLevel");
+    const spellLevelHighestZone = document.getElementById("spellLevelHighestZone");
+    const spellLevelPointCoin = document.getElementById("spellLevelPointCoin");
+    const spellLevelPointCount = document.getElementById("spellLevelPointCount");
     const spellLevelCloseButton = document.getElementById("spellLevelCloseButton");
     const spellLevelList = document.getElementById("spellLevelList");
     const spellLevelDetails = document.getElementById("spellLevelDetails");
@@ -556,6 +577,9 @@
         pendingWallCostScales: new Map(),
         pendingNodeCostsByPathIndex: new Map(),
         lastDynamicPathCostPatchAt: 0,
+        fountains: [],
+        activatedFountainSectionKeys: new Set(),
+        fountainParticles: [],
         coins: [],
         collectedCoinKeys: new Set(),
         collectedCoinSectionKeysByCoinKey: new Map(),
@@ -750,7 +774,9 @@
             MAZE_COIN_SECTION_EDGE_EPSILON,
             MAZE_COIN_PLACEMENT_ATTEMPTS_PER_COIN,
             MAZE_COIN_WALL_ENDPOINT_MARGIN,
-            TALISMAN_RADIUS
+            TALISMAN_RADIUS,
+            MAZE_FOUNTAIN_ROOM_FREQUENCY,
+            MAZE_FOUNTAIN_RADIUS
         },
         math: {
             hashString,
@@ -777,6 +803,7 @@
     const getEnemyDamageScaleForMazeSectionKey = mazePopulationSystem.getEnemyDamageScaleForMazeSectionKey;
     const createMazeCoinsForSection = mazePopulationSystem.createMazeCoinsForSection;
     const createMazeTalismanForSection = mazePopulationSystem.createMazeTalismanForSection;
+    const createMazeFountainForSection = mazePopulationSystem.createMazeFountainForSection;
     const spellDataSystem = getWizardFlatlandSpellDataApi().createSpellDataSystem({
         state,
         constants: {
@@ -868,6 +895,11 @@
         elements: {
             spellLevelPanel,
             spellLevelHeader,
+            spellLevelPlayerName,
+            spellLevelTotalLevel,
+            spellLevelHighestZone,
+            spellLevelPointCoin,
+            spellLevelPointCount,
             spellLevelList,
             spellLevelDetails
         },
@@ -882,6 +914,7 @@
             getWizardSpellLevel,
             normalizeWizardSpellLevels,
             validateWizardLevelPoints,
+            getHighestVisitedMazeZone,
             levelUpWizardSpell
         }
     });
@@ -1820,6 +1853,7 @@
         });
         profiler.span("populate maze coins", () => populateGeneratedMazeCoins(getMazeOptions()));
         profiler.span("populate maze talismans", () => populateGeneratedMazeTalismans(getMazeOptions()));
+        profiler.span("populate maze fountains", () => populateGeneratedMazeFountains(getMazeOptions()));
         profiler.span("populate maze rooms", () => populateGeneratedMazeRooms(getMazeOptions()));
         profiler.span("install pathfinding node layer", () => {
             installPathfindingNodeLayerFromWorker(message.nodeLayer);
@@ -1865,6 +1899,19 @@
             agent.wallBreakTargetWallIndex = -1;
             agent.wallBreakTargetSegmentId = "";
         }
+    }
+
+    function getHighestVisitedMazeZone() {
+        if (!(state.visitedMazeSectionKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland highest visited zone requires visited section tracking");
+        }
+        let highestZone = 1;
+        for (const sectionKey of state.visitedMazeSectionKeys) {
+            const coord = parseMazeSectionKey(sectionKey);
+            const zone = Math.floor(getMazeSectionRing(coord.q, coord.r) / MAZE_RING_BOUNDARY_INTERVAL) + 1;
+            highestZone = Math.max(highestZone, zone);
+        }
+        return highestZone;
     }
 
     function rebuildWallBreakSegmentRegistry() {
@@ -2052,6 +2099,9 @@
     }
 
     function removeFurthestGeneratedMazeSection(options, protectedKeys, now, force = false) {
+        if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland maze eviction requires installed section tracking");
+        }
         let furthest = null;
         for (const key of state.generatedMazeChunkKeys) {
             if (protectedKeys.has(key)) continue;
@@ -2064,10 +2114,11 @@
             if (!furthest || distance > furthest.distance) furthest = { key, distance };
         }
         if (!furthest) return false;
-        captureMazeSectionSnapshot(furthest.key);
+        const wasInstalled = state.generatedMazeInstalledChunkKeys.has(furthest.key);
+        if (wasInstalled) captureMazeSectionSnapshot(furthest.key);
         state.generatedMazeChunkKeys.delete(furthest.key);
         state.generatedMazeSectionLastRequiredAt.delete(furthest.key);
-        freezeAgentsInMazeSection(furthest.key, options);
+        if (wasInstalled) freezeAgentsInMazeSection(furthest.key, options);
         return true;
     }
 
@@ -2222,7 +2273,7 @@
             const snapshot = state.sectionSnapshotsByKey.get(sectionKey);
             if (snapshot) {
                 validateMazeSectionSnapshot(snapshot, sectionKey);
-                placedCoins.push(...snapshot.coins.map((coin) => ({ ...coin })));
+                placedCoins.push(...snapshot.coins.map((coin) => migrateMazeCoinSnapshot(coin)));
             } else {
                 placedCoins.push(...createMazeCoinsForSection(sectionKey, options, placedCoins));
             }
@@ -2635,6 +2686,46 @@
         state.talismans = talismans;
     }
 
+    function migrateMazeCoinSnapshot(coin) {
+        if (!coin || typeof coin !== "object") {
+            throw new Error("Wizard of Flatland saved section contains a malformed coin");
+        }
+        const migrated = { ...coin };
+        if (coin.dropPop) {
+            migrated.dropPop = { ...coin.dropPop };
+            if (migrated.dropPop.peakHeight === undefined) {
+                migrated.dropPop.peakHeight = ENEMY_COIN_DROP_POP_HEIGHT;
+            }
+        }
+        return migrated;
+    }
+
+    function populateGeneratedMazeFountains(options) {
+        if (!isProceduralMazeScenario()) {
+            state.fountains = [];
+            return;
+        }
+        if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland fountain population requires installed section tracking");
+        }
+        if (!(state.activatedFountainSectionKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland fountain population requires activated fountain tracking");
+        }
+        const previousByKey = new Map(state.fountains.map((fountain) => [fountain.key, fountain]));
+        state.fountains = Array.from(state.generatedMazeInstalledChunkKeys).sort().flatMap((sectionKey) => {
+            const fountain = createMazeFountainForSection(sectionKey, options, state.activatedFountainSectionKeys);
+            if (!fountain) return [];
+            const previous = previousByKey.get(fountain.key);
+            if (previous) {
+                fountain.touching = previous.touching === true;
+                fountain.particleAccumulator = previous.particleAccumulator;
+                fountain.coinSprayRemaining = previous.coinSprayRemaining;
+                fountain.coinSprayAccumulator = previous.coinSprayAccumulator;
+            }
+            return [fountain];
+        });
+    }
+
     function isPointInAnyInstalledMazeSection(x, y, options) {
         if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
             throw new Error("Wizard of Flatland coin section validation requires installed section tracking");
@@ -2672,6 +2763,9 @@
     function resetGeneratedMazeTalismanState() {
         state.talismans = [];
         state.activatedTalismanSectionKeys = new Set();
+        state.fountains = [];
+        state.activatedFountainSectionKeys = new Set();
+        state.fountainParticles = [];
         state.homeBaseTalismanSectionKey = "";
         state.visitedMazeSectionKeys = new Set();
     }
@@ -2769,6 +2863,9 @@
         state.spaceHeld = false;
         state.spellCooldownRemaining = 0;
         state.spellCooldownDuration = 0;
+        state.fountains = [];
+        state.activatedFountainSectionKeys = new Set();
+        state.fountainParticles = [];
         resetWizardVitals();
         state.coins = [];
         state.collectedCoinKeys = new Set();
@@ -2921,6 +3018,7 @@
                 maxExp: state.wizardVitals.maxExp
             },
             activatedTalismanSectionKeys: Array.from(state.activatedTalismanSectionKeys).sort(),
+            activatedFountainSectionKeys: Array.from(state.activatedFountainSectionKeys).sort(),
             homeBaseTalismanSectionKey: getHomeBaseTalismanSectionKey()
         };
     }
@@ -3100,6 +3198,15 @@
         if (snapshot.homeBaseTalismanSectionKey !== undefined && typeof snapshot.homeBaseTalismanSectionKey !== "string") {
             throw new Error("Wizard of Flatland saved checkpoint home base talisman key must be a string");
         }
+        if (
+            snapshot.activatedFountainSectionKeys !== undefined &&
+            (
+                !Array.isArray(snapshot.activatedFountainSectionKeys) ||
+                snapshot.activatedFountainSectionKeys.some((sectionKey) => typeof sectionKey !== "string" || sectionKey.length === 0)
+            )
+        ) {
+            throw new Error("Wizard of Flatland saved checkpoint activated fountain keys are malformed");
+        }
     }
 
     function applyWizardCheckpointSnapshot(snapshot) {
@@ -3140,6 +3247,9 @@
         state.nextDroppedCoinId = getNextAvailableDroppedCoinId(snapshot.nextDroppedCoinId || 1);
         state.talismans = [];
         state.activatedTalismanSectionKeys = new Set(snapshot.activatedTalismanSectionKeys || []);
+        state.fountains = [];
+        state.fountainParticles = [];
+        state.activatedFountainSectionKeys = new Set(snapshot.activatedFountainSectionKeys || []);
         state.homeBaseTalismanSectionKey = getHomeBaseTalismanSectionKeyFromCheckpointSnapshot(snapshot);
         state.visitedMazeSectionKeys = new Set(snapshot.visitedSectionKeys);
         state.generatedMazeInitialEnemySpawnBudgetsBySectionKey = new Map(snapshot.spawnBudgets.map((entry) => {
@@ -4815,6 +4925,11 @@
                     coin.y = coin.homeY;
                     coin.dropPop = null;
                 }
+                if (coin.dropPop) {
+                    coin.rushing = false;
+                    survivors.push(coin);
+                    continue;
+                }
             }
             const dx = state.target.x - coin.x;
             const dy = state.target.y - coin.y;
@@ -4855,8 +4970,8 @@
 
     function updateDroppedCoinSectionFromHomePosition(coin, options = getMazeOptions()) {
         validateCoin(coin);
-        if (coin.source !== "enemy-drop") {
-            throw new Error(`Wizard of Flatland coin ${coin.key} section update requires an enemy drop`);
+        if (coin.source !== "enemy-drop" && coin.source !== "fountain-drop") {
+            throw new Error(`Wizard of Flatland coin ${coin.key} section update requires a dropped coin`);
         }
         const coord = worldToMazeSectionCoord(coin.homeX, coin.homeY, options);
         coin.q = coord.q;
@@ -4919,6 +5034,131 @@
                 console.error("[wizard of flatland checkpoint]", error);
             });
         return true;
+    }
+
+    function updateFountains(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        if (!Array.isArray(state.fountains) || !(state.activatedFountainSectionKeys instanceof Set)) {
+            throw new Error("Wizard of Flatland fountain update requires fountain state");
+        }
+        state.fountainParticles = state.fountainParticles.filter((particle) => {
+            particle.age += dt;
+            particle.x += particle.vx * dt;
+            particle.y += particle.vy * dt;
+            particle.vy += MAZE_FOUNTAIN_PARTICLE_GRAVITY * dt;
+            const descentCutoffY = particle.apexY +
+                (particle.startY - particle.apexY) * MAZE_FOUNTAIN_PARTICLE_DESCENT_CUTOFF_RATIO;
+            return particle.age < particle.lifetime &&
+                !(particle.vy > 0 && particle.y >= descentCutoffY);
+        });
+        for (const fountain of state.fountains) {
+            validateFountain(fountain);
+            const distance = Math.hypot(state.target.x - fountain.x, state.target.y - fountain.y);
+            const contactDistance = TARGET_RADIUS + fountain.radius;
+            const touching = distance <= contactDistance;
+            if (touching && !fountain.touching && !fountain.activated) activateFountain(fountain);
+            fountain.touching = touching;
+            if (!fountain.activated) continue;
+
+            if (fountain.coinSprayRemaining > 0) {
+                fountain.coinSprayAccumulator += MAZE_FOUNTAIN_COINS_PER_SECOND * dt;
+                while (fountain.coinSprayAccumulator >= 1 && fountain.coinSprayRemaining > 0) {
+                    fountain.coinSprayAccumulator -= 1;
+                    fountain.coinSprayRemaining -= 1;
+                    createDroppedMazeCoin(fountain.x, fountain.y, {
+                        source: "fountain-drop",
+                        minimumLandingRadius: fountain.radius + MAZE_COIN_RADIUS,
+                        maximumLandingRadius: fountain.radius + MAZE_COIN_RADIUS + MAZE_FOUNTAIN_COIN_SCATTER_DISTANCE,
+                        peakHeight: MAZE_FOUNTAIN_COIN_MAX_ARC_HEIGHT * (0.65 + Math.random() * 0.35)
+                    });
+                }
+                if (fountain.coinSprayRemaining === 0) fountain.coinSprayAccumulator = 0;
+            }
+
+            fountain.particleAccumulator += MAZE_FOUNTAIN_PARTICLES_PER_SECOND * dt;
+            while (fountain.particleAccumulator >= 1) {
+                fountain.particleAccumulator -= 1;
+                const angle = (Math.random() - 0.5) * MAZE_FOUNTAIN_PARTICLE_SPREAD_RADIANS;
+                const speed = 5.5 + Math.random() * 1.8;
+                const startX = fountain.x +
+                    (Math.random() * 2 - 1) *
+                    fountain.radius *
+                    MAZE_FOUNTAIN_PARTICLE_START_WIDTH_RATIO;
+                const startY = fountain.y;
+                const vx = Math.sin(angle) * speed;
+                const vy = -Math.cos(angle) * speed;
+                state.fountainParticles.push({
+                    x: startX,
+                    y: startY,
+                    startY,
+                    apexY: startY - vy * vy / (2 * MAZE_FOUNTAIN_PARTICLE_GRAVITY),
+                    vx,
+                    vy,
+                    age: 0,
+                    lifetime: MAZE_FOUNTAIN_PARTICLE_LIFETIME,
+                    radius: 0.07 + Math.random() * 0.09
+                });
+            }
+
+            if (distance >= MAZE_FOUNTAIN_HEAL_RADIUS) continue;
+            const rampSpan = MAZE_FOUNTAIN_HEAL_RADIUS - contactDistance;
+            if (!(rampSpan > 0)) throw new Error("Wizard of Flatland fountain healing radius must exceed its contact ring");
+            const strength = Math.max(0, Math.min(1, (MAZE_FOUNTAIN_HEAL_RADIUS - distance) / rampSpan));
+            let secondsToFull = MAZE_FOUNTAIN_CONTACT_HEAL_SECONDS;
+            let regularHealingPerSecond = 0;
+            if (getWizardSpellLevel("healing") >= 1 && Array.isArray(getSpellLevelDefinitions())) {
+                regularHealingPerSecond =
+                    state.wizardVitals.maxHealth / getActiveHealingStats().secondsToFullHealth;
+                secondsToFull = Math.min(
+                    MAZE_FOUNTAIN_CONTACT_HEAL_SECONDS,
+                    getActiveHealingStats().secondsToFullHealth * MAZE_FOUNTAIN_REGULAR_HEAL_FRACTION
+                );
+            }
+            const contactHealingPerSecond = state.wizardVitals.maxHealth / secondsToFull;
+            healWizard(Math.max(0, contactHealingPerSecond - regularHealingPerSecond) * strength * dt);
+        }
+    }
+
+    function activateFountain(fountain) {
+        validateFountain(fountain);
+        fountain.activated = true;
+        state.activatedFountainSectionKeys.add(fountain.sectionKey);
+        const coord = parseMazeSectionKey(fountain.sectionKey);
+        const zoneNumber = Math.floor(getMazeSectionRing(coord.q, coord.r) / MAZE_RING_BOUNDARY_INTERVAL) + 1;
+        const minimum = MAZE_FOUNTAIN_COIN_MIN_PER_ZONE * zoneNumber;
+        const maximum = MAZE_FOUNTAIN_COIN_MAX_PER_ZONE * zoneNumber;
+        const count = minimum + Math.floor(Math.random() * (maximum - minimum + 1));
+        fountain.coinSprayRemaining = count;
+        fountain.coinSprayAccumulator = 0;
+    }
+
+    function validateFountain(fountain) {
+        if (!fountain || typeof fountain.key !== "string" || typeof fountain.sectionKey !== "string") {
+            throw new Error("Wizard of Flatland fountain requires identity");
+        }
+        for (const field of [
+            "x",
+            "y",
+            "radius",
+            "particleAccumulator",
+            "coinSprayRemaining",
+            "coinSprayAccumulator",
+            "phase"
+        ]) {
+            if (!Number.isFinite(fountain[field])) {
+                throw new Error(`Wizard of Flatland fountain ${fountain.key} requires finite ${field}`);
+            }
+        }
+        if (
+            !(fountain.radius > 0) ||
+            fountain.particleAccumulator < 0 ||
+            !Number.isInteger(fountain.coinSprayRemaining) ||
+            fountain.coinSprayRemaining < 0 ||
+            fountain.coinSprayAccumulator < 0 ||
+            fountain.coinSprayAccumulator >= 1
+        ) {
+            throw new Error(`Wizard of Flatland fountain ${fountain.key} has invalid render state`);
+        }
     }
 
     function flashTalismanRestoredBar(bar) {
@@ -5111,7 +5351,7 @@
         return weightedCoinTotal / weightTotal;
     }
 
-    function createDroppedMazeCoin(x, y) {
+    function createDroppedMazeCoin(x, y, dropOptions = null) {
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
             throw new Error("Wizard of Flatland dropped coin requires finite coordinates");
         }
@@ -5119,8 +5359,31 @@
             throw new Error("Wizard of Flatland dropped coin creation requires dropped coin tracking");
         }
         const coinId = profiler.hitchSpan("allocate dropped coin id", () => allocateDroppedCoinId());
+        const source = dropOptions && dropOptions.source ? dropOptions.source : "enemy-drop";
+        const minimumLandingRadius = dropOptions && Number.isFinite(dropOptions.minimumLandingRadius)
+            ? dropOptions.minimumLandingRadius
+            : 0;
+        const maximumLandingRadius = dropOptions && Number.isFinite(dropOptions.maximumLandingRadius)
+            ? dropOptions.maximumLandingRadius
+            : ENEMY_COIN_DROP_MAX_LANDING_RADIUS;
+        const peakHeight = dropOptions && Number.isFinite(dropOptions.peakHeight)
+            ? dropOptions.peakHeight
+            : ENEMY_COIN_DROP_POP_HEIGHT;
+        if (source !== "enemy-drop" && source !== "fountain-drop") {
+            throw new Error(`Wizard of Flatland dropped coin has invalid source ${source}`);
+        }
+        if (minimumLandingRadius < 0 || maximumLandingRadius < minimumLandingRadius) {
+            throw new Error("Wizard of Flatland dropped coin requires a valid landing annulus");
+        }
+        if (!(peakHeight > 0) || peakHeight > MAZE_FOUNTAIN_COIN_MAX_ARC_HEIGHT) {
+            throw new Error("Wizard of Flatland dropped coin requires an arc height from zero to three meters");
+        }
+        const flightDuration = Math.sqrt(8 * peakHeight / MAZE_FOUNTAIN_PARTICLE_GRAVITY);
         const landingAngle = Math.random() * Math.PI * 2;
-        const landingDistance = Math.sqrt(Math.random()) * ENEMY_COIN_DROP_MAX_LANDING_RADIUS;
+        const landingDistance = Math.sqrt(
+            minimumLandingRadius ** 2 +
+            Math.random() * (maximumLandingRadius ** 2 - minimumLandingRadius ** 2)
+        );
         const desiredLandingX = x + Math.cos(landingAngle) * landingDistance;
         const desiredLandingY = y + Math.sin(landingAngle) * landingDistance;
         const landing = profiler.hitchSpan(
@@ -5162,12 +5425,14 @@
             value: MAZE_COIN_VALUE,
             rushing: false,
             phase: Math.random() * Math.PI * 2,
-            source: "enemy-drop",
+            source,
+            maximumLandingRadius,
             dropPop: {
                 age: 0,
-                duration: ENEMY_COIN_DROP_POP_SECONDS,
+                duration: source === "fountain-drop" ? flightDuration : ENEMY_COIN_DROP_POP_SECONDS,
                 startX: x,
-                startY: y
+                startY: y,
+                peakHeight
             }
         };
         profiler.hitchSpan("validate and track dropped coin", () => {
@@ -5259,8 +5524,12 @@
                 coin.dropPop.age > coin.dropPop.duration ||
                 !Number.isFinite(coin.dropPop.startX) ||
                 !Number.isFinite(coin.dropPop.startY) ||
+                !(coin.dropPop.peakHeight > 0) ||
+                coin.dropPop.peakHeight > MAZE_FOUNTAIN_COIN_MAX_ARC_HEIGHT ||
                 Math.hypot(coin.homeX - coin.dropPop.startX, coin.homeY - coin.dropPop.startY)
-                    > ENEMY_COIN_DROP_MAX_LANDING_RADIUS + 0.000001
+                    > (Number.isFinite(coin.maximumLandingRadius)
+                        ? coin.maximumLandingRadius
+                        : ENEMY_COIN_DROP_MAX_LANDING_RADIUS) + 0.000001
             )
         ) {
             throw new Error(`Wizard of Flatland dropped coin ${coin.key} has invalid pop motion`);
@@ -8199,6 +8468,7 @@
         drawWallLabels();
         drawWallBuildPreview();
         drawCoins();
+        drawFountains();
         drawTalismans();
         drawTarget();
         if (state.debug.showAgentPath) drawAgentPaths();
@@ -8214,6 +8484,64 @@
         drawAgents();
         drawLosOverlay();
         drawWalls();
+        drawTemporaryNearestFountainIndicator();
+    }
+
+    // TEMPORARY DISCOVERY AID: keep an arrow to the nearest loaded fountain on-screen.
+    function drawTemporaryNearestFountainIndicator() {
+        if (!Array.isArray(state.fountains) || state.fountains.length === 0) return;
+        let nearest = null;
+        let nearestDistance = Infinity;
+        for (const fountain of state.fountains) {
+            validateFountain(fountain);
+            const distance = Math.hypot(fountain.x - state.target.x, fountain.y - state.target.y);
+            if (distance < nearestDistance) {
+                nearest = fountain;
+                nearestDistance = distance;
+            }
+        }
+        if (!nearest) return;
+        const angle = Math.atan2(nearest.y - state.target.y, nearest.x - state.target.x);
+        const directionX = Math.cos(angle);
+        const directionY = Math.sin(angle);
+        const inset = Math.max(28, Math.min(state.view.width, state.view.height) * 0.045);
+        const centerX = state.view.width * 0.5;
+        const centerY = state.view.height * 0.5;
+        const halfWidth = Math.max(1, centerX - inset);
+        const halfHeight = Math.max(1, centerY - inset);
+        const edgeScale = Math.min(
+            Math.abs(directionX) > 0.000001 ? halfWidth / Math.abs(directionX) : Infinity,
+            Math.abs(directionY) > 0.000001 ? halfHeight / Math.abs(directionY) : Infinity
+        );
+        if (!Number.isFinite(edgeScale)) {
+            throw new Error("Wizard of Flatland fountain indicator could not resolve a screen edge");
+        }
+        const x = centerX + directionX * edgeScale;
+        const y = centerY + directionY * edgeScale;
+        const size = Math.max(14, Math.min(state.view.width, state.view.height) * 0.022);
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle);
+        ctx.fillStyle = "rgba(8,31,54,0.94)";
+        ctx.strokeStyle = "#8bd5ff";
+        ctx.lineWidth = Math.max(2, size * 0.12);
+        ctx.beginPath();
+        ctx.moveTo(size, 0);
+        ctx.lineTo(-size * 0.65, size * 0.72);
+        ctx.lineTo(-size * 0.4, 0);
+        ctx.lineTo(-size * 0.65, -size * 0.72);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.rotate(-angle);
+        ctx.fillStyle = "#39aaf5";
+        ctx.beginPath();
+        ctx.arc(0, 0, size * 0.28, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#727982";
+        ctx.lineWidth = Math.max(2, size * 0.13);
+        ctx.stroke();
+        ctx.restore();
     }
 
     function updateLosAndExploration() {
@@ -10172,7 +10500,7 @@
             const point = worldToScreen(coin.x, coin.y);
             if (coin.dropPop) {
                 const popProgress = coin.dropPop.age / coin.dropPop.duration;
-                point.y -= Math.sin(popProgress * Math.PI) * ENEMY_COIN_DROP_POP_HEIGHT * state.view.scale;
+                point.y -= 4 * popProgress * (1 - popProgress) * coin.dropPop.peakHeight * state.view.scale;
             }
             const radius = Math.max(3.5, coin.radius * state.view.scale);
             if (coin.kind === "trophy") {
@@ -10223,6 +10551,62 @@
             drawWidth,
             drawHeight
         );
+    }
+
+    function drawFountains() {
+        if (!Array.isArray(state.fountains) || !Array.isArray(state.fountainParticles)) {
+            throw new Error("Wizard of Flatland fountain rendering requires fountain state");
+        }
+        ctx.save();
+        for (const fountain of state.fountains) {
+            validateFountain(fountain);
+            const point = worldToScreen(fountain.x, fountain.y);
+            const radius = Math.max(10, Math.min(state.view.width, state.view.height) * 0.02);
+            ctx.save();
+            ctx.translate(point.x, point.y);
+            ctx.scale(1, 0.75);
+            if (fountain.activated) {
+                const glow = ctx.createRadialGradient(0, 0, radius * 0.25, 0, 0, radius * 1.75);
+                glow.addColorStop(0, "rgba(64,180,255,0.35)");
+                glow.addColorStop(1, "rgba(20,100,255,0)");
+                ctx.fillStyle = glow;
+                ctx.beginPath();
+                ctx.arc(0, 0, radius * 1.75, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.fillStyle = fountain.activated ? "#168eea" : "#06295c";
+            ctx.strokeStyle = "#686d75";
+            ctx.lineWidth = Math.max(5, radius * 0.34);
+            ctx.beginPath();
+            ctx.arc(0, 0, radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+        }
+        for (const particle of state.fountainParticles) {
+            const point = worldToScreen(particle.x, particle.y);
+            const ascentHeight = particle.startY - particle.apexY;
+            if (!(ascentHeight > 0)) {
+                throw new Error("Wizard of Flatland fountain particle requires a positive arc height");
+            }
+            const ascentProgress = Math.max(0, Math.min(1, (particle.startY - particle.y) / ascentHeight));
+            const falling = particle.vy > 0;
+            const descentProgress = falling
+                ? Math.max(0, Math.min(
+                    1,
+                    (particle.y - particle.apexY) /
+                        (ascentHeight * MAZE_FOUNTAIN_PARTICLE_DESCENT_CUTOFF_RATIO)
+                ))
+                : 0;
+            const alpha = falling ? 1 - descentProgress : 1;
+            const red = Math.round(45 + (255 - 45) * ascentProgress);
+            const green = Math.round(165 + (255 - 165) * ascentProgress);
+            ctx.fillStyle = `rgba(${red},${green},255,${alpha * 0.9})`;
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, Math.max(1.5, particle.radius * state.view.scale), 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.restore();
     }
 
     function drawTalismans() {
@@ -11097,6 +11481,7 @@
         framePart("dynamic path cost patches", () => publishPendingDynamicPathCostPatches(now));
         framePart("temporary death blockers", () => updateTemporaryDeathBlockers());
         framePart("coins", () => updateCoins(dt));
+        framePart("fountains", () => updateFountains(dt));
         framePart("talismans", () => updateTalismans(dt));
         framePart("wizard vitals", () => regenerateWizardVitals(dt));
         framePart("passive healing", () => updatePassiveHealing(dt));

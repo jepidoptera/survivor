@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Wizard of Flatland</title>
-    <link rel="stylesheet" href="/wizard-of-flatland/styles.css?v=wizard-of-flatland-42">
+    <link rel="stylesheet" href="/wizard-of-flatland/styles.css?v=wizard-of-flatland-43">
 </head>
 <body>
     <main class="app-shell">
@@ -69,7 +69,18 @@
             </section>
         </div>
         <div id="spellLevelPanel" class="hidden" role="dialog" aria-label="Spell levels">
-            <div id="spellLevelHeader">level points 0</div>
+            <div id="spellLevelHeader">
+                <div id="spellLevelPlayerName" class="spellLevelPlayerName"></div>
+                <div class="spellLevelSummary">
+                    <span>Total level <strong id="spellLevelTotalLevel">0</strong></span>
+                    <span>Highest zone <strong id="spellLevelHighestZone">1</strong></span>
+                </div>
+                <div id="spellLevelPointCoin" class="spellLevelPointCoin unavailable" aria-label="0 spell levels available to spend">
+                    <svg class="spellLevelPointCountGraphic" viewBox="0 0 100 100" aria-hidden="true">
+                        <text id="spellLevelPointCount" x="50" y="45">0</text>
+                    </svg>
+                </div>
+            </div>
             <button id="spellLevelCloseButton" class="spellLevelCloseButton" type="button" aria-label="Close spell levels">x</button>
             <div id="spellLevelList"></div>
             <div id="spellLevelDetails"></div>
@@ -86,16 +97,16 @@
     <script src="/wizard-of-flatland/saveStore.js?v=wizard-of-flatland-1"></script>
     <script src="/wizard-of-flatland/flatlandMath.js?v=wizard-of-flatland-1"></script>
     <script src="/wizard-of-flatland/mazeSections.js?v=wizard-of-flatland-1"></script>
-    <script src="/wizard-of-flatland/mazePopulation.js?v=wizard-of-flatland-5"></script>
+    <script src="/wizard-of-flatland/mazePopulation.js?v=wizard-of-flatland-7"></script>
     <script src="/wizard-of-flatland/enemyActivation.js?v=wizard-of-flatland-1"></script>
     <script src="/wizard-of-flatland/mazeStreaming.js?v=wizard-of-flatland-3"></script>
     <script src="/wizard-of-flatland/pathfindingClient.js?v=wizard-of-flatland-7"></script>
     <script src="/wizard-of-flatland/spellData.js?v=wizard-of-flatland-2"></script>
-    <script src="/wizard-of-flatland/spellLevelPanel.js?v=wizard-of-flatland-1"></script>
+    <script src="/wizard-of-flatland/spellLevelPanel.js?v=wizard-of-flatland-2"></script>
     <script src="/wizard-of-flatland/wizardVitals.js?v=wizard-of-flatland-1"></script>
     <script src="/wizard-of-flatland/controls.js?v=wizard-of-flatland-1"></script>
     <script src="/wizard-of-flatland/profiler.js?v=wizard-of-flatland-5"></script>
     <script src="/wizard-of-flatland/debug.js?v=wizard-of-flatland-6"></script>
-    <script src="/wizard-of-flatland/main.js?v=wizard-of-flatland-166"></script>
+    <script src="/wizard-of-flatland/main.js?v=wizard-of-flatland-173"></script>
 </body>
 </html>

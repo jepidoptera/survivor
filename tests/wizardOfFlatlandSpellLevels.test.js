@@ -79,6 +79,29 @@ test("Wizard of Flatland spell-level panel closes on an outside pointer press", 
     );
 });
 
+test("Wizard of Flatland spell-level header summarizes player progression", () => {
+    const panelSource = fs.readFileSync(
+        path.join(__dirname, "../public/wizard-of-flatland/spellLevelPanel.js"),
+        "utf8"
+    );
+    const indexSource = fs.readFileSync(
+        path.join(__dirname, "../public/wizard-of-flatland/index.html"),
+        "utf8"
+    );
+    const styles = fs.readFileSync(STYLES_PATH, "utf8");
+    assert.match(
+        panelSource,
+        /Object\.values\(spellLevels\)\.reduce\(\(total, level\) => total \+ level, state\.levelPoints\)/
+    );
+    assert.match(panelSource, /api\.getHighestVisitedMazeZone\(\)/);
+    assert.match(panelSource, /spellLevelPointCoin\.classList\.toggle\("unavailable", state\.levelPoints === 0\)/);
+    assert.match(indexSource, /id="spellLevelPlayerName"[\s\S]*?id="spellLevelTotalLevel"[\s\S]*?id="spellLevelHighestZone"[\s\S]*?id="spellLevelPointCoin"/);
+    assert.match(indexSource, /class="spellLevelPointCountGraphic"[\s\S]*?id="spellLevelPointCount" x="50" y="45"/);
+    assert.match(styles, /\.spellLevelPointCoin\s*\{[\s\S]*?border-radius: 50%[\s\S]*?radial-gradient/);
+    assert.match(styles, /\.spellLevelPointCoin\.unavailable\s*\{[\s\S]*?radial-gradient/);
+    assert.match(styles, /\.spellLevelPointCountGraphic text\s*\{[\s\S]*?dominant-baseline: central;[\s\S]*?text-anchor: middle;[\s\S]*?text-shadow:/);
+});
+
 test("Wizard of Flatland magic recharge level 0 explains the baseline recharge time", () => {
     const panelSource = fs.readFileSync(
         path.join(__dirname, "../public/wizard-of-flatland/spellLevelPanel.js"),
