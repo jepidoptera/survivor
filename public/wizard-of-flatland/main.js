@@ -23,6 +23,15 @@
     const WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL = 22;
     const WALL_LABEL_HALLWAY_SIDE_HALF = 30;
     const WALL_LABEL_HALLWAY_SIDE_FULL = 31;
+    const COIN_SPAN_STRIDE = 8;
+    const COIN_SPAN_X1 = 0;
+    const COIN_SPAN_Y1 = 1;
+    const COIN_SPAN_X2 = 2;
+    const COIN_SPAN_Y2 = 3;
+    const COIN_SPAN_NORMAL_X = 4;
+    const COIN_SPAN_NORMAL_Y = 5;
+    const COIN_SPAN_MAX_DISTANCE = 6;
+    const COIN_SPAN_WALL_INDEX = 7;
     const PATH_SNAPSHOT_NODE_STRIDE = 9;
     const PATH_SNAPSHOT_EDGE_STRIDE = 4;
     const STATE_MILLING = 1;
@@ -209,6 +218,7 @@
     const MAZE_COIN_VALUE = 1;
     const MAZE_TROPHY_VALUE = 10;
     const MAZE_COIN_OWNING_WALL_DISTANCE = 2;
+    const MAZE_COIN_MIN_WALL_DISTANCE = 1;
     const MAZE_COIN_OTHER_WALL_MIN_DISTANCE = 1;
     const MAZE_COIN_ATTRACT_DISTANCE = 2;
     const MAZE_COIN_RUSH_SPEED = 11;
@@ -559,6 +569,8 @@
         manualWalls: createEmptyWallBuffer(),
         generatedMazeWalls: createEmptyWallBuffer(),
         generatedMazeWallSectionRanges: [],
+        generatedMazeCoinSpans: new Float32Array(0),
+        generatedMazeCoinSpanSectionRanges: [],
         generatedMazeChunkKeys: new Set(),
         generatedMazeSectionLastRequiredAt: new Map(),
         generatedMazeInstalledChunkKeys: new Set(),
@@ -669,7 +681,11 @@
             edges: new Int32Array(0),
             blockedEdges: new Int32Array(0),
             wallIndexByEdge: new Int32Array(0),
-            indexByKey: new Map(),
+            colStart: 0,
+            colEnd: -1,
+            rowStart: 0,
+            rowEnd: -1,
+            rowCount: 0,
             nodeStride: PATH_SNAPSHOT_NODE_STRIDE,
             edgeStride: PATH_SNAPSHOT_EDGE_STRIDE,
             version: 0,
@@ -701,6 +717,15 @@
             WALL_Y1,
             WALL_X2,
             WALL_Y2,
+            COIN_SPAN_STRIDE,
+            COIN_SPAN_X1,
+            COIN_SPAN_Y1,
+            COIN_SPAN_X2,
+            COIN_SPAN_Y2,
+            COIN_SPAN_NORMAL_X,
+            COIN_SPAN_NORMAL_Y,
+            COIN_SPAN_MAX_DISTANCE,
+            COIN_SPAN_WALL_INDEX,
             MAZE_ROOM_EMPTY_ENEMY_CHANCE,
             MAZE_ROOM_MAX_ENEMY_CHANCE,
             MAZE_ROOM_EARLY_ENEMY_CAPS,
@@ -720,6 +745,7 @@
             MAZE_COIN_VALUE,
             MAZE_TROPHY_VALUE,
             MAZE_COIN_OWNING_WALL_DISTANCE,
+            MAZE_COIN_MIN_WALL_DISTANCE,
             MAZE_COIN_OTHER_WALL_MIN_DISTANCE,
             MAZE_COIN_SECTION_EDGE_EPSILON,
             MAZE_COIN_PLACEMENT_ATTEMPTS_PER_COIN,
@@ -953,7 +979,7 @@
         setLabelText(labels.workerStatus, event.message || "pathfinding failed");
     });
 
-    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-32");
+    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-34");
     const losWorker = new Worker("/wizard-of-flatland/losWorker.js?v=wizard-of-flatland-2");
     losWorker.addEventListener("message", (event) => {
         profiler.task("LOS worker message", () => handleLosWorkerMessage(event));
@@ -1745,6 +1771,12 @@
             "maze worker result"
         );
         const allWalls = message.allWalls;
+        const coinSpans = message.coinSpans;
+        const coinSpanSectionRanges = validateMazeCoinSpanSectionRanges(
+            message.coinSpanSectionRanges,
+            coinSpans,
+            getWallCount(generatedWalls)
+        );
         if (Number(message.brokenWallGapCount) !== state.brokenWallGaps.length) {
             throw new Error(
                 `Wizard of Flatland maze worker returned ${message.brokenWallGapCount} broken gaps; `
@@ -1766,6 +1798,8 @@
             const wallGeometryChanged = !wallBuffersMatchExactly(state.walls, allWalls);
             state.generatedMazeWalls = generatedWalls;
             state.generatedMazeWallSectionRanges = wallSectionRanges;
+            state.generatedMazeCoinSpans = coinSpans;
+            state.generatedMazeCoinSpanSectionRanges = coinSpanSectionRanges;
             state.walls = allWalls;
             if (wallGeometryChanged) markWallsChanged();
             state.generatedMazeSignature = message.signature;
@@ -1949,8 +1983,8 @@
             state.nodeLayer.blockedEdges = packedBlockedEdges;
             state.nodeLayer.wallIndexByEdge = packedWallIndexByEdge;
         });
-        profiler.span("build path node key index", () => {
-            state.nodeLayer.indexByKey = buildPathfindingNodeIndexByKey(packedNodes);
+        profiler.span("install path node grid layout", () => {
+            installPathfindingNodeGridLayout(workerLayer, packedNodes);
         });
         profiler.span("apply dynamic path modifiers", () => {
             resetLiveEnemyPathfindingCosts();
@@ -1967,26 +2001,54 @@
         profiler.span("publish pathfinding snapshot", () => publishPathfindingSnapshot());
     }
 
-    function buildPathfindingNodeIndexByKey(packedNodes) {
+    function installPathfindingNodeGridLayout(layout, packedNodes) {
         if (!(packedNodes instanceof Float32Array) || packedNodes.length % PATH_SNAPSHOT_NODE_STRIDE !== 0) {
-            throw new Error("Wizard of Flatland path node key index requires packed nodes");
+            throw new Error("Wizard of Flatland path node grid layout requires packed nodes");
         }
-        const indexByKey = new Map();
-        const count = packedNodes.length / PATH_SNAPSHOT_NODE_STRIDE;
-        for (let pathIndex = 0; pathIndex < count; pathIndex++) {
+        if (!layout || typeof layout !== "object") {
+            throw new Error("Wizard of Flatland path node grid layout metadata is missing");
+        }
+        const colStart = Number(layout.colStart);
+        const colEnd = Number(layout.colEnd);
+        const rowStart = Number(layout.rowStart);
+        const rowEnd = Number(layout.rowEnd);
+        if (
+            !Number.isInteger(colStart) ||
+            !Number.isInteger(colEnd) ||
+            !Number.isInteger(rowStart) ||
+            !Number.isInteger(rowEnd) ||
+            colEnd < colStart ||
+            rowEnd < rowStart
+        ) {
+            throw new Error("Wizard of Flatland path node grid layout bounds are invalid");
+        }
+        const columnCount = colEnd - colStart + 1;
+        const rowCount = rowEnd - rowStart + 1;
+        const nodeCount = packedNodes.length / PATH_SNAPSHOT_NODE_STRIDE;
+        if (nodeCount !== columnCount * rowCount) {
+            throw new Error(
+                `Wizard of Flatland path node grid layout describes ${columnCount * rowCount} nodes; ` +
+                `${nodeCount} packed nodes were provided`
+            );
+        }
+        for (let pathIndex = 0; pathIndex < nodeCount; pathIndex++) {
+            const expectedCol = colStart + Math.floor(pathIndex / rowCount);
+            const expectedRow = rowStart + pathIndex % rowCount;
             const base = pathIndex * PATH_SNAPSHOT_NODE_STRIDE;
-            if (!Number.isFinite(packedNodes[base + PATH_NODE_XINDEX]) || !Number.isFinite(packedNodes[base + PATH_NODE_YINDEX])) {
-                throw new Error(`Wizard of Flatland path node key index found invalid node coordinates at index ${pathIndex}`);
+            const actualCol = packedNodes[base + PATH_NODE_XINDEX];
+            const actualRow = packedNodes[base + PATH_NODE_YINDEX];
+            if (actualCol !== expectedCol || actualRow !== expectedRow) {
+                throw new Error(
+                    `Wizard of Flatland path node grid layout expected ${expectedCol},${expectedRow} ` +
+                    `at index ${pathIndex}; found ${actualCol},${actualRow}`
+                );
             }
-            const xindex = Math.round(packedNodes[base + PATH_NODE_XINDEX]);
-            const yindex = Math.round(packedNodes[base + PATH_NODE_YINDEX]);
-            const key = pathfindingNodeKey(xindex, yindex);
-            if (indexByKey.has(key)) {
-                throw new Error(`Wizard of Flatland path node key index found duplicate node key ${key}`);
-            }
-            indexByKey.set(key, pathIndex);
         }
-        return indexByKey;
+        state.nodeLayer.colStart = colStart;
+        state.nodeLayer.colEnd = colEnd;
+        state.nodeLayer.rowStart = rowStart;
+        state.nodeLayer.rowEnd = rowEnd;
+        state.nodeLayer.rowCount = rowCount;
     }
 
     function removeFurthestGeneratedMazeSection(options, protectedKeys, now, force = false) {
@@ -2246,6 +2308,64 @@
         });
         if (expectedStart !== generatedWallCount) {
             throw new Error(`Wizard of Flatland ${context} maze wall section ranges do not cover generated walls`);
+        }
+        return validated;
+    }
+
+    function validateMazeCoinSpanSectionRanges(ranges, spans, generatedWallCount) {
+        if (!(spans instanceof Float32Array) || spans.length % COIN_SPAN_STRIDE !== 0) {
+            throw new Error("Wizard of Flatland maze worker coin spans are malformed");
+        }
+        if (!Array.isArray(ranges)) {
+            throw new Error("Wizard of Flatland maze worker coin span section ranges are missing");
+        }
+        let expectedStart = 0;
+        const validated = ranges.map((range) => {
+            if (
+                !range ||
+                typeof range.sectionKey !== "string" ||
+                range.sectionKey.length === 0 ||
+                !Number.isInteger(range.startSpanIndex) ||
+                !Number.isInteger(range.spanCount) ||
+                range.spanCount < 0 ||
+                range.startSpanIndex !== expectedStart
+            ) {
+                throw new Error("Wizard of Flatland maze worker coin span section ranges are malformed");
+            }
+            expectedStart += range.spanCount;
+            return {
+                sectionKey: range.sectionKey,
+                startSpanIndex: range.startSpanIndex,
+                spanCount: range.spanCount
+            };
+        });
+        if (expectedStart !== spans.length / COIN_SPAN_STRIDE) {
+            throw new Error("Wizard of Flatland maze worker coin span section ranges do not cover the span buffer");
+        }
+        if (!Number.isInteger(generatedWallCount) || generatedWallCount < 0) {
+            throw new Error("Wizard of Flatland maze worker coin span validation requires a wall count");
+        }
+        for (let base = 0; base < spans.length; base += COIN_SPAN_STRIDE) {
+            const length = Math.hypot(
+                spans[base + COIN_SPAN_X2] - spans[base + COIN_SPAN_X1],
+                spans[base + COIN_SPAN_Y2] - spans[base + COIN_SPAN_Y1]
+            );
+            const normalLength = Math.hypot(
+                spans[base + COIN_SPAN_NORMAL_X],
+                spans[base + COIN_SPAN_NORMAL_Y]
+            );
+            const maxDistance = spans[base + COIN_SPAN_MAX_DISTANCE];
+            const wallIndex = spans[base + COIN_SPAN_WALL_INDEX];
+            if (
+                !(length > 0) ||
+                Math.abs(normalLength - 1) > 0.0001 ||
+                (maxDistance !== 2 && maxDistance !== 2.5) ||
+                !Number.isInteger(wallIndex) ||
+                wallIndex < 0 ||
+                wallIndex >= generatedWallCount
+            ) {
+                throw new Error(`Wizard of Flatland maze worker coin span ${base / COIN_SPAN_STRIDE} is invalid`);
+            }
         }
         return validated;
     }
@@ -2667,6 +2787,8 @@
         state.manualWalls = createEmptyWallBuffer();
         state.generatedMazeWalls = createEmptyWallBuffer();
         state.generatedMazeWallSectionRanges = [];
+        state.generatedMazeCoinSpans = new Float32Array(0);
+        state.generatedMazeCoinSpanSectionRanges = [];
         state.generatedMazeChunkKeys = new Set();
         state.generatedMazeSectionLastRequiredAt = new Map();
         state.generatedMazeInstalledChunkKeys = new Set();
@@ -3042,6 +3164,8 @@
         refreshSpellLevelPanel();
         state.generatedMazeWalls = createEmptyWallBuffer();
         state.generatedMazeWallSectionRanges = [];
+        state.generatedMazeCoinSpans = new Float32Array(0);
+        state.generatedMazeCoinSpanSectionRanges = [];
         state.walls = createEmptyWallBuffer();
         markWallsChanged();
         state.manualWalls = createEmptyWallBuffer();
@@ -3542,7 +3666,11 @@
         state.nodeLayer.edges = new Int32Array(0);
         state.nodeLayer.blockedEdges = new Int32Array(0);
         state.nodeLayer.wallIndexByEdge = new Int32Array(0);
-        state.nodeLayer.indexByKey = new Map();
+        state.nodeLayer.colStart = 0;
+        state.nodeLayer.colEnd = -1;
+        state.nodeLayer.rowStart = 0;
+        state.nodeLayer.rowEnd = -1;
+        state.nodeLayer.rowCount = 0;
         state.nodeLayer.pathCenterX = NaN;
         state.nodeLayer.pathCenterY = NaN;
         state.nodeLayer.version += 1;
@@ -7651,7 +7779,29 @@
         if (!Number.isInteger(xindex) || !Number.isInteger(yindex)) {
             throw new Error("Wizard of Flatland path node grid lookup requires integer coordinates");
         }
-        return getPathfindingNodeIndexForKey(pathfindingNodeKey(xindex, yindex));
+        const layer = state.nodeLayer;
+        if (
+            xindex < layer.colStart ||
+            xindex > layer.colEnd ||
+            yindex < layer.rowStart ||
+            yindex > layer.rowEnd
+        ) {
+            return null;
+        }
+        const pathIndex = (xindex - layer.colStart) * layer.rowCount + yindex - layer.rowStart;
+        if (!isValidPathfindingNodeIndex(pathIndex)) {
+            throw new Error(`Wizard of Flatland path node grid lookup calculated invalid node index ${pathIndex}`);
+        }
+        const base = pathIndex * PATH_SNAPSHOT_NODE_STRIDE;
+        if (
+            layer.nodes[base + PATH_NODE_XINDEX] !== xindex ||
+            layer.nodes[base + PATH_NODE_YINDEX] !== yindex
+        ) {
+            throw new Error(
+                `Wizard of Flatland path node grid lookup found mismatched coordinates at index ${pathIndex}`
+            );
+        }
+        return pathIndex;
     }
 
     function advanceAgentPathCursor(agent) {
@@ -7876,10 +8026,16 @@
         if (typeof pathKey !== "string" || pathKey.length === 0) {
             throw new Error("Wizard of Flatland path node lookup requires a node key");
         }
-        if (!(state.nodeLayer.indexByKey instanceof Map)) {
-            throw new Error("Wizard of Flatland path node lookup requires a node key index");
+        const comma = pathKey.indexOf(",");
+        if (comma <= 0 || comma !== pathKey.lastIndexOf(",") || comma >= pathKey.length - 1) {
+            throw new Error(`Wizard of Flatland path node key is malformed: ${pathKey}`);
         }
-        return state.nodeLayer.indexByKey.has(pathKey) ? state.nodeLayer.indexByKey.get(pathKey) : null;
+        const xindex = Number(pathKey.slice(0, comma));
+        const yindex = Number(pathKey.slice(comma + 1));
+        if (!Number.isInteger(xindex) || !Number.isInteger(yindex) || pathfindingNodeKey(xindex, yindex) !== pathKey) {
+            throw new Error(`Wizard of Flatland path node key is malformed: ${pathKey}`);
+        }
+        return getPathfindingNodeIndexForGrid(xindex, yindex);
     }
 
     function resizeCanvas() {
@@ -8787,7 +8943,7 @@
             state.nodeLayer.edges,
             state.nodeLayer.blockedEdges
         );
-        state.nodeLayer.indexByKey = buildPathfindingNodeIndexByKey(packedNodes);
+        installPathfindingNodeGridLayout({ colStart, colEnd, rowStart, rowEnd }, packedNodes);
         resetLiveEnemyPathfindingCosts();
         applyTemporaryPathfindingModifiersToNodes();
         state.nodeLayer.nodeStride = PATH_SNAPSHOT_NODE_STRIDE;

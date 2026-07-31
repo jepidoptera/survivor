@@ -35,6 +35,11 @@ const PATH_NODE_BLOCKED_NEIGHBOR_COUNT = 7;
 const PATH_NODE_TEMPORARY_COST = 8;
 const PATH_EDGE_FROM = 0;
 const PATH_EDGE_TO = 1;
+const COIN_SPAN_STRIDE = 8;
+const COIN_SPAN_ENDPOINT_TRIM = 2;
+const COIN_SPAN_OUTER_WALL_DISTANCE = 2;
+const COIN_SPAN_INNER_WALL_DISTANCE = 2.5;
+const COIN_SPAN_MIN_LENGTH = 0.001;
 const MAZE_CHUNK_MIN_SIZE = 28;
 const MAZE_CHUNK_MAX_SIZE = 72;
 const MAZE_ROOM_EDGE_INSET_TILES = 2;
@@ -71,6 +76,7 @@ self.addEventListener("message", (event) => {
         self.postMessage(result, [
             result.generatedWalls.buffer,
             result.allWalls.buffer,
+            result.coinSpans.buffer,
             result.nodeLayer.nodes.buffer,
             result.nodeLayer.snapshotNodes.buffer,
             result.nodeLayer.edges.buffer,
@@ -111,6 +117,7 @@ function buildMazeSections(message) {
     const brokenWallGaps = normalizeBrokenWallGaps(message.brokenWallGaps || []);
     const brokenResult = applyBrokenWallGapsToBuffer(generatedWalls, wallSectionRanges, brokenWallGaps);
     generatedWalls = brokenResult.walls;
+    const coinSpanResult = buildMazeCoinSpans(generatedWalls, brokenResult.wallSectionRanges, options);
     const manualWalls = normalizeWalls(message.manualWalls || [], "manual walls");
     const allWalls = concatWallBuffers(generatedWalls, manualWalls);
     const bounds = normalizeBounds(message.bounds);
@@ -123,9 +130,196 @@ function buildMazeSections(message) {
         generatedWalls,
         allWalls,
         wallSectionRanges: brokenResult.wallSectionRanges,
+        coinSpans: coinSpanResult.spans,
+        coinSpanSectionRanges: coinSpanResult.sectionRanges,
         brokenWallGapCount: brokenWallGaps.length,
         nodeLayer
     };
+}
+
+function buildMazeCoinSpans(walls, wallSectionRanges, options) {
+    if (!(walls instanceof Float32Array) || walls.length % WALL_STRIDE !== 0) {
+        throw new Error("Wizard of Flatland coin span generation requires packed walls");
+    }
+    if (!Array.isArray(wallSectionRanges)) {
+        throw new Error("Wizard of Flatland coin span generation requires wall section ranges");
+    }
+    const values = [];
+    const sectionRanges = [];
+    for (const range of wallSectionRanges) {
+        const coord = parseMazeSectionKey(range.sectionKey);
+        const center = mazeSectionCenter(coord.q, coord.r, options);
+        const polygon = getHexCornersWorld(center.x, center.y, getMazeSectionRadius(options));
+        const startSpanIndex = values.length / COIN_SPAN_STRIDE;
+        const wallEnd = range.startWallIndex + range.wallCount;
+        for (let wallIndex = range.startWallIndex; wallIndex < wallEnd; wallIndex++) {
+            appendMazeCoinWallSideSpans(values, walls, range, wallIndex, 1, polygon);
+            appendMazeCoinWallSideSpans(values, walls, range, wallIndex, -1, polygon);
+        }
+        sectionRanges.push({
+            sectionKey: range.sectionKey,
+            startSpanIndex,
+            spanCount: values.length / COIN_SPAN_STRIDE - startSpanIndex
+        });
+    }
+    return { spans: new Float32Array(values), sectionRanges };
+}
+
+function appendMazeCoinWallSideSpans(values, walls, range, wallIndex, side, polygon) {
+    const base = wallIndex * WALL_STRIDE;
+    const ax = walls[base];
+    const ay = walls[base + 1];
+    const bx = walls[base + 2];
+    const by = walls[base + 3];
+    const dx = bx - ax;
+    const dy = by - ay;
+    const length = Math.hypot(dx, dy);
+    if (!(length > COIN_SPAN_ENDPOINT_TRIM * 2 + COIN_SPAN_MIN_LENGTH)) return;
+    const splitTs = [0, 1];
+    const wallEnd = range.startWallIndex + range.wallCount;
+    for (let otherWallIndex = range.startWallIndex; otherWallIndex < wallEnd; otherWallIndex++) {
+        if (otherWallIndex === wallIndex) continue;
+        const splitSide = getMazeCoinWallIntersectionSplitSide(walls, wallIndex, otherWallIndex);
+        if (splitSide && (splitSide.side === 0 || splitSide.side === side)) splitTs.push(splitSide.t);
+    }
+    splitTs.sort((left, right) => left - right);
+    const uniqueTs = [];
+    for (const t of splitTs) {
+        if (uniqueTs.length === 0 || Math.abs(t - uniqueTs[uniqueTs.length - 1]) > 0.00001) uniqueTs.push(t);
+    }
+    const normalX = -dy / length * side;
+    const normalY = dx / length * side;
+    const maxDistance = isMazeCoinSpanSideEdgeFacing(ax, ay, bx, by, normalX, normalY, polygon)
+        ? COIN_SPAN_OUTER_WALL_DISTANCE
+        : COIN_SPAN_INNER_WALL_DISTANCE;
+    const trimT = COIN_SPAN_ENDPOINT_TRIM / length;
+    for (let i = 0; i < uniqueTs.length - 1; i++) {
+        const startT = uniqueTs[i] + trimT;
+        const endT = uniqueTs[i + 1] - trimT;
+        if ((endT - startT) * length <= COIN_SPAN_MIN_LENGTH) continue;
+        const clipped = clipMazeCoinSpanToSection(
+            ax + dx * startT,
+            ay + dy * startT,
+            ax + dx * endT,
+            ay + dy * endT,
+            normalX,
+            normalY,
+            maxDistance,
+            polygon
+        );
+        if (!clipped) continue;
+        values.push(
+            clipped.ax,
+            clipped.ay,
+            clipped.bx,
+            clipped.by,
+            normalX,
+            normalY,
+            maxDistance,
+            wallIndex
+        );
+    }
+}
+
+function clipMazeCoinSpanToSection(ax, ay, bx, by, normalX, normalY, maxDistance, polygon) {
+    const offsetAx = ax + normalX * maxDistance;
+    const offsetAy = ay + normalY * maxDistance;
+    const offsetDx = bx - ax;
+    const offsetDy = by - ay;
+    let minT = 0;
+    let maxT = 1;
+    for (let i = 0; i < polygon.length; i++) {
+        const edgeA = polygon[i];
+        const edgeB = polygon[(i + 1) % polygon.length];
+        const edgeX = edgeB.x - edgeA.x;
+        const edgeY = edgeB.y - edgeA.y;
+        const startCross = cross2d(edgeX, edgeY, offsetAx - edgeA.x, offsetAy - edgeA.y);
+        const deltaCross = cross2d(edgeX, edgeY, offsetDx, offsetDy);
+        if (Math.abs(deltaCross) <= 0.000001) {
+            if (startCross < -0.000001) return null;
+            continue;
+        }
+        const boundaryT = -startCross / deltaCross;
+        if (deltaCross > 0) {
+            minT = Math.max(minT, boundaryT);
+        } else {
+            maxT = Math.min(maxT, boundaryT);
+        }
+        if (maxT - minT <= COIN_SPAN_MIN_LENGTH / Math.hypot(offsetDx, offsetDy)) return null;
+    }
+    minT = Math.max(0, minT);
+    maxT = Math.min(1, maxT);
+    if (!(maxT > minT)) return null;
+    return {
+        ax: ax + offsetDx * minT,
+        ay: ay + offsetDy * minT,
+        bx: ax + offsetDx * maxT,
+        by: ay + offsetDy * maxT
+    };
+}
+
+function getMazeCoinWallIntersectionSplitSide(walls, wallIndex, otherWallIndex) {
+    const base = wallIndex * WALL_STRIDE;
+    const otherBase = otherWallIndex * WALL_STRIDE;
+    const ax = walls[base];
+    const ay = walls[base + 1];
+    const bx = walls[base + 2];
+    const by = walls[base + 3];
+    const cx = walls[otherBase];
+    const cy = walls[otherBase + 1];
+    const dx = walls[otherBase + 2];
+    const dy = walls[otherBase + 3];
+    const rx = bx - ax;
+    const ry = by - ay;
+    const sx = dx - cx;
+    const sy = dy - cy;
+    const denom = cross2d(rx, ry, sx, sy);
+    const qx = cx - ax;
+    const qy = cy - ay;
+    if (Math.abs(denom) <= 0.000001) {
+        if (Math.abs(cross2d(qx, qy, rx, ry)) > 0.000001) return null;
+        const lengthSquared = rx * rx + ry * ry;
+        const cT = (qx * rx + qy * ry) / lengthSquared;
+        const dT = ((dx - ax) * rx + (dy - ay) * ry) / lengthSquared;
+        const overlapStart = Math.max(0, Math.min(cT, dT));
+        const overlapEnd = Math.min(1, Math.max(cT, dT));
+        if (overlapEnd - overlapStart > 0.00001) {
+            throw new Error(`Wizard of Flatland coin spans found overlapping collinear walls ${wallIndex} and ${otherWallIndex}`);
+        }
+        return null;
+    }
+    const t = cross2d(qx, qy, sx, sy) / denom;
+    const u = cross2d(qx, qy, rx, ry) / denom;
+    if (t <= 0.00001 || t >= 0.99999 || u < -0.00001 || u > 1.00001) return null;
+    if (u > 0.00001 && u < 0.99999) return { t, side: 0 };
+    const approachX = u <= 0.00001 ? sx : -sx;
+    const approachY = u <= 0.00001 ? sy : -sy;
+    const side = Math.sign(cross2d(rx, ry, approachX, approachY));
+    if (side === 0) return null;
+    return { t, side };
+}
+
+function isMazeCoinSpanSideEdgeFacing(ax, ay, bx, by, normalX, normalY, polygon) {
+    const endpoints = [{ x: ax, y: ay }, { x: bx, y: by }];
+    for (let i = 0; i < polygon.length; i++) {
+        const edgeA = polygon[i];
+        const edgeB = polygon[(i + 1) % polygon.length];
+        const nearEdge = endpoints.some((endpoint) => (
+            pointSegmentDistance(endpoint.x, endpoint.y, edgeA.x, edgeA.y, edgeB.x, edgeB.y)
+                <= COIN_SPAN_INNER_WALL_DISTANCE + 0.0001
+        ));
+        if (!nearEdge) continue;
+        const edgeX = edgeB.x - edgeA.x;
+        const edgeY = edgeB.y - edgeA.y;
+        const edgeLength = Math.hypot(edgeX, edgeY);
+        if (!(edgeLength > 0.000001)) {
+            throw new Error("Wizard of Flatland coin span found a degenerate section edge");
+        }
+        const outwardNormalX = edgeY / edgeLength;
+        const outwardNormalY = -edgeX / edgeLength;
+        if (normalX * outwardNormalX + normalY * outwardNormalY > 0.000001) return true;
+    }
+    return false;
 }
 
 function normalizeBrokenWallGaps(gaps) {
@@ -2452,6 +2646,10 @@ function buildPathfindingNodeLayer(walls, bounds, targetRadius) {
     return {
         pathCenterX: (bounds.minX + bounds.maxX) * 0.5,
         pathCenterY: (bounds.minY + bounds.maxY) * 0.5,
+        colStart,
+        colEnd,
+        rowStart,
+        rowEnd,
         nodes: packedNodes,
         snapshotNodes: packedNodes.slice(),
         edges: packedEdges,

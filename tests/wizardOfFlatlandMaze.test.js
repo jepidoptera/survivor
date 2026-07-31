@@ -42,6 +42,7 @@ function loadMazeWorkerExports(connectionCrossesWallFaces = () => false) {
             MAZE_OUTSIDE_DOOR_FULL_WALL_CHANCE,
             WALL_WORLD_THICKNESS,
             WALL_WORLD_HALF_THICKNESS,
+            COIN_SPAN_STRIDE,
             WALL_LABEL_ROOM_POCKET_OVERRIDE,
             WALL_LABEL_ROOM_POCKET_OVERRIDE_HALL_GAP,
             WALL_LABEL_ROOM_POCKET_CONNECTOR,
@@ -66,6 +67,10 @@ function loadMazeWorkerExports(connectionCrossesWallFaces = () => false) {
             normalizeBrokenWallGaps,
             applyBrokenWallGapsToBuffer,
             buildMazeSections,
+            buildMazeCoinSpans,
+            getMazeSectionRadius,
+            mazeSectionCenter,
+            pointInOrOnMazeSectionPolygon,
             buildPathfindingNodeLayer,
             getHexCornersWorld,
             getMazeSharedHallConnection,
@@ -121,6 +126,14 @@ test("Wizard of Flatland maze worker emits edge-aligned wall indices", () => {
         0.42
     );
 
+    const columnCount = result.colEnd - result.colStart + 1;
+    const rowCount = result.rowEnd - result.rowStart + 1;
+    assert.equal(result.nodes.length / 9, columnCount * rowCount);
+    for (let pathIndex = 0; pathIndex < result.nodes.length / 9; pathIndex++) {
+        const base = pathIndex * 9;
+        assert.equal(result.nodes[base + 4], result.colStart + Math.floor(pathIndex / rowCount));
+        assert.equal(result.nodes[base + 5], result.rowStart + pathIndex % rowCount);
+    }
     assert.equal(result.wallIndexByEdge.length, result.edges.length / 4);
     let blockedEdgeCount = 0;
     for (let edgeIndex = 0; edgeIndex < result.wallIndexByEdge.length; edgeIndex++) {
@@ -134,6 +147,129 @@ test("Wizard of Flatland maze worker emits edge-aligned wall indices", () => {
         }
     }
     assert.ok(blockedEdgeCount > 0);
+});
+
+test("Wizard of Flatland coin spans split only on the side approached by a terminating wall", () => {
+    const worker = loadMazeWorkerExports();
+    const walls = Float32Array.from([
+        -10, 0, 10, 0, 10, 0, 0, 0,
+        0, -5, 0, 0, 10, 0, 0, 0
+    ]);
+    const result = worker.buildMazeCoinSpans(
+        walls,
+        [{ sectionKey: "0,0", startWallIndex: 0, wallCount: 2 }],
+        { chunkSize: 44 }
+    );
+    const hostSpans = [];
+    for (let base = 0; base < result.spans.length; base += worker.COIN_SPAN_STRIDE) {
+        if (result.spans[base + 7] === 0) {
+            hostSpans.push(Array.from(result.spans.slice(base, base + worker.COIN_SPAN_STRIDE)));
+        }
+    }
+    const positiveSide = hostSpans.filter((span) => span[5] > 0);
+    const negativeSide = hostSpans.filter((span) => span[5] < 0);
+    assert.equal(positiveSide.length, 1);
+    assert.equal(negativeSide.length, 2);
+    assert.deepEqual(positiveSide[0].slice(0, 4), [-8, 0, 8, 0]);
+    assert.deepEqual(negativeSide.map((span) => span.slice(0, 4)), [
+        [-8, 0, -2, 0],
+        [2, 0, 8, 0]
+    ]);
+});
+
+test("Wizard of Flatland coin spans limit only the section-edge-facing side", () => {
+    const worker = loadMazeWorkerExports();
+    const edgeX = Math.cos(Math.PI / 6) * 22;
+    const wallX = edgeX - 2;
+    const walls = Float32Array.from([wallX, -8, wallX, 8, 10, 0, 0, 0]);
+    const result = worker.buildMazeCoinSpans(
+        walls,
+        [{ sectionKey: "0,0", startWallIndex: 0, wallCount: 1 }],
+        { chunkSize: 44 }
+    );
+    const maxDistanceByNormalX = new Map();
+    for (let base = 0; base < result.spans.length; base += worker.COIN_SPAN_STRIDE) {
+        maxDistanceByNormalX.set(Math.sign(result.spans[base + 4]), result.spans[base + 6]);
+    }
+    assert.equal(maxDistanceByNormalX.get(1), 2);
+    assert.equal(maxDistanceByNormalX.get(-1), 2.5);
+});
+
+test("Wizard of Flatland coin spans do not cap sides parallel to a nearby section edge", () => {
+    const worker = loadMazeWorkerExports();
+    const edgeX = Math.cos(Math.PI / 6) * 22;
+    const walls = Float32Array.from([10, 0, edgeX, 0, 10, 0, 0, 0]);
+    const result = worker.buildMazeCoinSpans(
+        walls,
+        [{ sectionKey: "0,0", startWallIndex: 0, wallCount: 1 }],
+        { chunkSize: 44 }
+    );
+    const maxDistances = [];
+    for (let base = 0; base < result.spans.length; base += worker.COIN_SPAN_STRIDE) {
+        maxDistances.push(result.spans[base + 6]);
+    }
+    assert.deepEqual(maxDistances, [2.5, 2.5]);
+});
+
+test("Wizard of Flatland coin spans clip shallow approaches until their offset clears the edge", () => {
+    const worker = loadMazeWorkerExports();
+    const edgeX = Math.cos(Math.PI / 6) * 22;
+    const wallStart = { x: 14, y: -10 };
+    const wallEnd = { x: edgeX, y: 0 };
+    const walls = Float32Array.from([
+        wallStart.x, wallStart.y, wallEnd.x, wallEnd.y, 10, 0, 0, 0
+    ]);
+    const result = worker.buildMazeCoinSpans(
+        walls,
+        [{ sectionKey: "0,0", startWallIndex: 0, wallCount: 1 }],
+        { chunkSize: 44 }
+    );
+    let outwardSpan = null;
+    for (let base = 0; base < result.spans.length; base += worker.COIN_SPAN_STRIDE) {
+        if (result.spans[base + 4] > 0) {
+            outwardSpan = Array.from(result.spans.slice(base, base + worker.COIN_SPAN_STRIDE));
+        }
+    }
+    assert.ok(outwardSpan);
+    assert.equal(outwardSpan[6], 2);
+    assert.ok(Math.hypot(outwardSpan[2] - wallEnd.x, outwardSpan[3] - wallEnd.y) > 2.5);
+    assert.ok(outwardSpan[2] + outwardSpan[4] * outwardSpan[6] <= edgeX + 0.0001);
+});
+
+test("Wizard of Flatland generated coin span envelopes stay inside their section", () => {
+    const worker = loadMazeWorkerExports();
+    const options = { seed: "coin-span-envelope", chunkSize: 44, roomScale: 0.56, twistiness: 0.62 };
+    const result = worker.buildMazeSections({
+        requestId: 3,
+        signature: "coin-span-envelope",
+        options,
+        keys: ["0,0"],
+        manualWalls: new Float32Array(0),
+        bounds: { minX: -25, minY: -25, maxX: 25, maxY: 25 },
+        targetRadius: 0.42
+    });
+    const center = worker.mazeSectionCenter(0, 0, options);
+    const polygon = worker.getHexCornersWorld(
+        center.x,
+        center.y,
+        worker.getMazeSectionRadius(options)
+    );
+    for (let base = 0; base < result.coinSpans.length; base += worker.COIN_SPAN_STRIDE) {
+        for (const t of [0, 0.5, 1]) {
+            const maxDistance = result.coinSpans[base + 6];
+            const point = {
+                x: result.coinSpans[base] + (result.coinSpans[base + 2] - result.coinSpans[base]) * t
+                    + result.coinSpans[base + 4] * maxDistance,
+                y: result.coinSpans[base + 1] + (result.coinSpans[base + 3] - result.coinSpans[base + 1]) * t
+                    + result.coinSpans[base + 5] * maxDistance
+            };
+            assert.equal(
+                worker.pointInOrOnMazeSectionPolygon(point, polygon),
+                true,
+                `span ${base / worker.COIN_SPAN_STRIDE} at t=${t} leaves the section`
+            );
+        }
+    }
 });
 
 test("Wizard of Flatland maze worker reports contiguous wall ranges for each section", () => {
