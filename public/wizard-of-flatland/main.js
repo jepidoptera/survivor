@@ -595,6 +595,7 @@
         generatedMazeWallSectionRanges: [],
         generatedMazeCoinSpans: new Float32Array(0),
         generatedMazeCoinSpanSectionRanges: [],
+        generatedMazeCoinLayoutsBySectionKey: new Map(),
         generatedMazeChunkKeys: new Set(),
         generatedMazeSectionLastRequiredAt: new Map(),
         generatedMazeInstalledChunkKeys: new Set(),
@@ -2247,6 +2248,61 @@
         state.collectedCoinSectionKeysByCoinKey = new Map();
         state.droppedCoinsByKey = new Map();
         state.nextDroppedCoinId = 1;
+        state.generatedMazeCoinLayoutsBySectionKey = new Map();
+    }
+
+    function getCachedOrCreateMazeCoinsForSection(sectionKey, options) {
+        if (!(state.generatedMazeCoinLayoutsBySectionKey instanceof Map)) {
+            throw new Error("Wizard of Flatland coin layout cache is missing");
+        }
+        if (!(state.generatedMazeCoinSpans instanceof Float32Array)) {
+            throw new Error("Wizard of Flatland coin layout cache requires packed spans");
+        }
+        const range = state.generatedMazeCoinSpanSectionRanges.find((candidate) => candidate.sectionKey === sectionKey);
+        if (!range) throw new Error(`Wizard of Flatland coin layout cache found no span range for ${sectionKey}`);
+        const configKey = [
+            options.seed,
+            options.chunkSize,
+            options.roomScale.toFixed(3),
+            options.twistiness.toFixed(3)
+        ].join("|");
+        const cached = state.generatedMazeCoinLayoutsBySectionKey.get(sectionKey);
+        if (mazeCoinLayoutCacheEntryMatches(
+            cached,
+            configKey,
+            state.generatedMazeCoinSpans,
+            range.startSpanIndex,
+            range.spanCount
+        )) {
+            return cached.coins.map((coin) => ({ ...coin }));
+        }
+        const coins = createMazeCoinsForSection(sectionKey, options);
+        const spanStart = range.startSpanIndex * COIN_SPAN_STRIDE;
+        const spanEnd = spanStart + range.spanCount * COIN_SPAN_STRIDE;
+        const entry = {
+            configKey,
+            spans: state.generatedMazeCoinSpans.slice(spanStart, spanEnd),
+            coins: coins.map((coin) => ({ ...coin }))
+        };
+        state.generatedMazeCoinLayoutsBySectionKey.set(sectionKey, entry);
+        return entry.coins.map((coin) => ({ ...coin }));
+    }
+
+    function mazeCoinLayoutCacheEntryMatches(entry, configKey, spans, startSpanIndex, spanCount) {
+        if (!entry || entry.configKey !== configKey || !(entry.spans instanceof Float32Array)) return false;
+        if (!Array.isArray(entry.coins)) {
+            throw new Error("Wizard of Flatland cached coin layout has no coin array");
+        }
+        if (!Number.isInteger(startSpanIndex) || startSpanIndex < 0 || !Number.isInteger(spanCount) || spanCount < 0) {
+            throw new Error("Wizard of Flatland cached coin layout comparison requires a valid span range");
+        }
+        const start = startSpanIndex * COIN_SPAN_STRIDE;
+        const length = spanCount * COIN_SPAN_STRIDE;
+        if (entry.spans.length !== length || start + length > spans.length) return false;
+        for (let i = 0; i < length; i++) {
+            if (entry.spans[i] !== spans[start + i]) return false;
+        }
+        return true;
     }
 
     function populateGeneratedMazeCoins(options) {
@@ -2275,7 +2331,7 @@
                 validateMazeSectionSnapshot(snapshot, sectionKey);
                 placedCoins.push(...snapshot.coins.map((coin) => migrateMazeCoinSnapshot(coin)));
             } else {
-                placedCoins.push(...createMazeCoinsForSection(sectionKey, options, placedCoins));
+                placedCoins.push(...getCachedOrCreateMazeCoinsForSection(sectionKey, options));
             }
         }
         const existingCoinsByKey = new Map(state.coins.map((coin) => [coin.key, coin]));
@@ -2886,6 +2942,7 @@
         state.generatedMazeWallSectionRanges = [];
         state.generatedMazeCoinSpans = new Float32Array(0);
         state.generatedMazeCoinSpanSectionRanges = [];
+        state.generatedMazeCoinLayoutsBySectionKey = new Map();
         state.generatedMazeChunkKeys = new Set();
         state.generatedMazeSectionLastRequiredAt = new Map();
         state.generatedMazeInstalledChunkKeys = new Set();
@@ -3234,6 +3291,7 @@
         state.spellCooldownRemaining = 0;
         state.spellCooldownDuration = 0;
         state.coins = [];
+        state.generatedMazeCoinLayoutsBySectionKey = new Map();
         state.collectedCoinKeys = new Set();
         state.collectedCoinSectionKeysByCoinKey = new Map();
         for (const coin of snapshot.collectedCoins) {
