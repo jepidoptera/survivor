@@ -272,6 +272,38 @@ test("Wizard of Flatland generated coin span envelopes stay inside their section
     }
 });
 
+test("Wizard of Flatland merges overlapping adjacent square-pocket connector walls", () => {
+    const worker = loadMazeWorkerExports();
+    const options = { seed: "fire maiden", chunkSize: 44, roomScale: 0.56, twistiness: 0.62 };
+    const result = worker.buildMazeSections({
+        requestId: 931,
+        signature: "adjacent-square-pocket-connectors",
+        options,
+        keys: [
+            "-1,-43", "-1,-44", "-1,-45", "0,-43", "0,-44",
+            "0,-45", "0,-46", "1,-44", "1,-45", "1,-46",
+            "1,-47", "2,-44", "2,-45", "2,-46", "2,-47"
+        ],
+        manualWalls: new Float32Array(0),
+        bounds: { minX: -800, minY: -1500, maxX: -700, maxY: -1400 },
+        targetRadius: 0.42
+    });
+
+    assert.ok(result.coinSpans.length > 0);
+    const connectorWalls = [];
+    for (let base = 0; base < result.generatedWalls.length; base += 8) {
+        if (result.generatedWalls[base + 4] === worker.WALL_LABEL_ROOM_POCKET_CONNECTOR) {
+            connectorWalls.push(Array.from(result.generatedWalls.slice(base, base + 4)));
+        }
+    }
+    assert.ok(connectorWalls.some((wall) => (
+        Math.abs(Math.min(wall[0], wall[2]) + 767.03058) < 0.001
+            && Math.abs(Math.max(wall[0], wall[2]) + 757.17413) < 0.001
+            && Math.abs(wall[1] + 1471.1547) < 0.001
+            && Math.abs(wall[3] + 1471.1547) < 0.001
+    )));
+});
+
 test("Wizard of Flatland maze worker reports contiguous wall ranges for each section", () => {
     const api = loadMazeWorkerExports();
     const firstWalls = Float32Array.from([0, 0, 1, 0, 1, 0, 0, 0]);

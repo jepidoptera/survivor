@@ -1544,7 +1544,76 @@ function buildMazeSquarePocketWallPlan(mutations, sectionCorners = null) {
     return {
         suppressedSides,
         sideOverrides,
-        extraWalls
+        extraWalls: mergeMazeSquarePocketExtraWalls(extraWalls)
+    };
+}
+
+function mergeMazeSquarePocketExtraWalls(walls) {
+    const merged = [];
+    for (const wall of walls) {
+        let candidate = wall;
+        let mergedExisting = true;
+        while (mergedExisting) {
+            mergedExisting = false;
+            for (let index = 0; index < merged.length; index++) {
+                const union = getMazeCollinearWallUnion(merged[index], candidate);
+                if (!union) continue;
+                merged.splice(index, 1);
+                candidate = union;
+                mergedExisting = true;
+                break;
+            }
+        }
+        merged.push(candidate);
+    }
+    return merged;
+}
+
+function getMazeCollinearWallUnion(first, second) {
+    const dx = first.b.x - first.a.x;
+    const dy = first.b.y - first.a.y;
+    const length = Math.hypot(dx, dy);
+    if (!(length > 0.001)) {
+        throw new Error("Wizard of Flatland maze square pocket extra wall requires separated endpoints");
+    }
+    const direction = { x: dx / length, y: dy / length };
+    const secondADistance = Math.abs(cross2d(
+        second.a.x - first.a.x,
+        second.a.y - first.a.y,
+        direction.x,
+        direction.y
+    ));
+    const secondBDistance = Math.abs(cross2d(
+        second.b.x - first.a.x,
+        second.b.y - first.a.y,
+        direction.x,
+        direction.y
+    ));
+    if (secondADistance > 0.001 || secondBDistance > 0.001) return null;
+    const secondA = pointProjectionParameter(
+        second.a.x,
+        second.a.y,
+        first.a.x,
+        first.a.y,
+        first.a.x + direction.x,
+        first.a.y + direction.y
+    );
+    const secondB = pointProjectionParameter(
+        second.b.x,
+        second.b.y,
+        first.a.x,
+        first.a.y,
+        first.a.x + direction.x,
+        first.a.y + direction.y
+    );
+    const secondStart = Math.min(secondA, secondB);
+    const secondEnd = Math.max(secondA, secondB);
+    if (secondEnd < -0.001 || secondStart > length + 0.001) return null;
+    return {
+        a: pointOnLine(first.a, direction, Math.min(0, secondStart)),
+        b: pointOnLine(first.a, direction, Math.max(length, secondEnd)),
+        labelCode: first.labelCode || second.labelCode,
+        sideCode: Number.isInteger(first.sideCode) ? first.sideCode : second.sideCode
     };
 }
 
