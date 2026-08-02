@@ -90,6 +90,19 @@ test("main-thread profiler can be restarted with a custom duration", () => {
     assert.equal(harness.profiler.getLastMainThreadProfile().elapsedMs, 5000);
 });
 
+test("profileFrames starts a duration-based multi-frame capture", () => {
+    const harness = loadProfiler();
+    harness.profiler.profileFrames(60);
+    harness.profiler.noteFrame(12, [{ label: "draw", duration: 8 }], { frameIntervalMs: 16.7 });
+    harness.advance(60000);
+    harness.finishTimer();
+
+    const result = harness.profiler.getLastMainThreadProfile();
+    assert.equal(result.elapsedMs, 60000);
+    assert.equal(result.frameCount, 1);
+    assert.equal(result.rows[0].section, "draw");
+});
+
 test("main-thread profiler rejects invalid durations", () => {
     const harness = loadProfiler();
     assert.throws(
@@ -112,6 +125,33 @@ test("main-thread profiler attributes work outside animation frames", () => {
     assert.equal(result.externalTasks[0].totalMs, 205);
     assert.equal(result.slowExternalTasks.length, 1);
     assert.equal(result.slowExternalTasks[0].durationMs, 205);
+});
+
+test("one-shot frame profiler reports the next complete frame", async () => {
+    const harness = loadProfiler();
+    const resultPromise = harness.profiler.profileFrame();
+
+    harness.profiler.noteFrame(12, [
+        { label: "simulation", duration: 3 },
+        { label: "draw", duration: 7 }
+    ], { frameIntervalMs: 33.333 });
+
+    const result = await resultPromise;
+    assert.equal(result.frameIntervalMs, 33.333);
+    assert.equal(result.measuredWorkMs, 12);
+    assert.equal(result.outsideFrameWorkMs, 21.333);
+    assert.equal(result.unaccountedFrameMs, 2);
+    assert.equal(result.sections[0].section, "draw");
+    assert.ok(Math.abs(result.fps - 30) < 0.01);
+});
+
+test("one-shot frame profiler rejects overlapping requests", () => {
+    const harness = loadProfiler();
+    harness.profiler.profileFrame();
+    assert.throws(
+        () => harness.profiler.profileFrame(),
+        /already waiting for a frame/
+    );
 });
 
 test("hitch profiler records nested sections and workload details", () => {

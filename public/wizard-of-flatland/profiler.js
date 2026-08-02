@@ -24,6 +24,7 @@
         let hitchProfileTimer = null;
         let currentHitchEvent = null;
         let lastHitchProfile = null;
+        let pendingFrameProfile = null;
 
         const api = {
             enabled: true,
@@ -43,9 +44,11 @@
             hitchTask,
             hitchSpan,
             startMainThreadProfile,
+            profileFrames: startMainThreadProfile,
             stopMainThreadProfile,
             startHitchProfile,
             stopHitchProfile,
+            profileFrame,
             getMainThreadProfile: () => mainThreadProfile,
             getLastMainThreadProfile: () => lastMainThreadProfile,
             getHitchProfile: () => hitchProfile,
@@ -170,6 +173,7 @@
         function noteFrame(duration, parts, timing) {
             if (!api.enabled) return;
             recordMainThreadFrame(duration, parts, timing);
+            completePendingFrameProfile(duration, parts, timing);
             if (duration < 24) return;
             const record = {
                 duration,
@@ -179,6 +183,66 @@
             };
             frameHitches.push(record);
             while (frameHitches.length > 40) frameHitches.shift();
+        }
+
+        function profileFrame() {
+            if (pendingFrameProfile) {
+                throw new Error("Wizard of Flatland frame profiler is already waiting for a frame");
+            }
+            return new Promise((resolve) => {
+                pendingFrameProfile = {
+                    requestedAt: performance.now(),
+                    resolve
+                };
+            });
+        }
+
+        function completePendingFrameProfile(duration, parts, timing) {
+            if (!pendingFrameProfile) return;
+            const pending = pendingFrameProfile;
+            pendingFrameProfile = null;
+            const measuredWorkMs = Math.max(0, Number(duration) || 0);
+            const frameIntervalMs = Math.max(
+                measuredWorkMs,
+                Number(timing && timing.frameIntervalMs) || measuredWorkMs
+            );
+            const sections = (Array.isArray(parts) ? parts : [])
+                .map((part) => ({
+                    section: String(part && part.label || ""),
+                    durationMs: Math.max(0, Number(part && part.duration) || 0)
+                }))
+                .sort((left, right) => right.durationMs - left.durationMs);
+            if (sections.some((part) => !part.section)) {
+                throw new Error("Wizard of Flatland frame profiler received an unlabeled frame part");
+            }
+            const instrumentedWorkMs = sections.reduce((total, part) => total + part.durationMs, 0);
+            const result = {
+                requestedAt: pending.requestedAt,
+                capturedAt: performance.now(),
+                fps: frameIntervalMs > 0 ? 1000 / frameIntervalMs : 0,
+                frameIntervalMs,
+                measuredWorkMs,
+                outsideFrameWorkMs: Math.max(0, frameIntervalMs - measuredWorkMs),
+                unaccountedFrameMs: Math.max(0, measuredWorkMs - instrumentedWorkMs),
+                sections
+            };
+            console.groupCollapsed(
+                `[Wizard of Flatland frame profiler] ${result.fps.toFixed(1)} FPS, `
+                + `${frameIntervalMs.toFixed(3)} ms interval, ${measuredWorkMs.toFixed(3)} ms measured work`
+            );
+            console.log({
+                fps: Number(result.fps.toFixed(2)),
+                frameIntervalMs: Number(frameIntervalMs.toFixed(3)),
+                measuredWorkMs: Number(measuredWorkMs.toFixed(3)),
+                outsideFrameWorkMs: Number(result.outsideFrameWorkMs.toFixed(3)),
+                unaccountedFrameMs: Number(result.unaccountedFrameMs.toFixed(3))
+            });
+            console.table(sections.map((part) => ({
+                section: part.section,
+                durationMs: Number(part.durationMs.toFixed(3))
+            })));
+            console.groupEnd();
+            pending.resolve(result);
         }
 
         function startMainThreadProfile(durationSeconds = defaultMainThreadProfileSeconds) {

@@ -50,6 +50,14 @@
             window.__wizardOfFlatlandProfiler = profiler;
             window.profileWizardMainThread = profiler.startMainThreadProfile;
             window.stopWizardMainThreadProfile = profiler.stopMainThreadProfile;
+            if (typeof profiler.profileFrames !== "function") {
+                throw new Error("Wizard of Flatland profiler is missing profileFrames");
+            }
+            state.debug.profileFrames = profiler.profileFrames;
+            if (typeof profiler.profileFrame !== "function") {
+                throw new Error("Wizard of Flatland profiler is missing profileFrame");
+            }
+            state.debug.profileFrame = profiler.profileFrame;
             if (typeof profiler.startHitchProfile !== "function" || typeof profiler.stopHitchProfile !== "function") {
                 throw new Error("Wizard of Flatland profiler is missing hitch profiling");
             }
