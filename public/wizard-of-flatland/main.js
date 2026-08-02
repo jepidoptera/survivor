@@ -339,7 +339,6 @@
     const FLOOR_INACTIVE_PYRAMID_DARKNESS_SECTION_DISTANCE = 3;
     const FLOOR_INACTIVE_PYRAMID_DARKNESS = 0.5;
     const MAZE_RING_BOUNDARY_INTERVAL = 7;
-    const MAZE_RING_BOUNDARY_COLOR = "rgba(255,255,255,0.52)";
     const VIEW_ZOOM_MIN = 0.45;
     const VIEW_ZOOM_MAX = 3.2;
     const VIEW_ZOOM_WHEEL_STEP = 0.0015;
@@ -8895,7 +8894,6 @@
     function draw() {
         resizeCanvas();
         drawFloor();
-        drawMazeRingBoundaries();
         if (state.debug.showHexGrid) drawHexGridLayer();
         drawPathfindingNodeLayer();
         drawWallShatterEffects();
@@ -9615,18 +9613,6 @@
         return Math.hypot(dx, dy);
     }
 
-    function getMaxDistanceFromOriginToRect(rect) {
-        if (!rect || !Number.isFinite(rect.minX) || !Number.isFinite(rect.minY) || !Number.isFinite(rect.maxX) || !Number.isFinite(rect.maxY)) {
-            throw new Error("Wizard of Flatland ring boundary drawing requires a finite viewport rectangle");
-        }
-        return Math.max(
-            Math.hypot(rect.minX, rect.minY),
-            Math.hypot(rect.maxX, rect.minY),
-            Math.hypot(rect.maxX, rect.maxY),
-            Math.hypot(rect.minX, rect.maxY)
-        );
-    }
-
     function getMinDistanceFromPointToRect(x, y, rect) {
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
             throw new Error("Wizard of Flatland point-rectangle distance requires a finite point");
@@ -9652,48 +9638,6 @@
             Math.hypot(rect.maxX - x, rect.maxY - y),
             Math.hypot(rect.minX - x, rect.maxY - y)
         );
-    }
-
-    function drawMazeRingBoundaries() {
-        if (!isProceduralMazeScenario()) return;
-        const options = getMazeOptions();
-        const viewport = getCurrentMazeViewportRect();
-        if (!viewport) throw new Error("Wizard of Flatland ring boundary drawing requires a current viewport");
-        const radius = getMazeSectionRadius(options);
-        if (!(radius > 0)) throw new Error("Wizard of Flatland ring boundary drawing requires a positive section radius");
-        const sectionWorldStep = Math.sqrt(3) * radius;
-        const minDistance = getMinDistanceFromOriginToRect(viewport);
-        const maxDistance = getMaxDistanceFromOriginToRect(viewport);
-        const firstRing = Math.max(
-            MAZE_RING_BOUNDARY_INTERVAL,
-            Math.ceil(minDistance / sectionWorldStep / MAZE_RING_BOUNDARY_INTERVAL) * MAZE_RING_BOUNDARY_INTERVAL
-        );
-        const lastRing = Math.floor(maxDistance / sectionWorldStep / MAZE_RING_BOUNDARY_INTERVAL) * MAZE_RING_BOUNDARY_INTERVAL;
-        if (lastRing < firstRing) return;
-
-        ctx.save();
-        ctx.strokeStyle = MAZE_RING_BOUNDARY_COLOR;
-        ctx.lineWidth = Math.max(1, state.view.scale * 0.026);
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-        ctx.setLineDash([Math.max(2.5, state.view.scale * 0.14), Math.max(3.5, state.view.scale * 0.18)]);
-        const center = worldToScreen(0, 0);
-        for (let ring = firstRing; ring <= lastRing; ring += MAZE_RING_BOUNDARY_INTERVAL) {
-            drawMazeRingBoundaryCircle(center, sectionWorldStep * ring);
-        }
-        ctx.setLineDash([]);
-        ctx.restore();
-    }
-
-    function drawMazeRingBoundaryCircle(center, worldRadius) {
-        if (!center || !Number.isFinite(center.x) || !Number.isFinite(center.y) || !(worldRadius > 0)) {
-            throw new Error("Wizard of Flatland ring boundary circle requires finite render data");
-        }
-        const screenRadius = worldRadius * state.view.scale;
-        if (!(screenRadius > 0)) throw new Error("Wizard of Flatland ring boundary circle requires a positive screen radius");
-        ctx.beginPath();
-        ctx.arc(center.x, center.y, screenRadius, 0, Math.PI * 2);
-        ctx.stroke();
     }
 
     function drawHexGridLayer() {
