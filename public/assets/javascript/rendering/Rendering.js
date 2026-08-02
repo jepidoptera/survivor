@@ -21599,6 +21599,48 @@ void main(void) {
                 const projectile = list[i];
                 if (!projectile || projectile.gone) continue;
 
+                if (projectile.type === "destructoBeam") {
+                    let graphics = projectile.beamGraphics || null;
+                    if (!graphics) {
+                        graphics = new PIXI.Graphics();
+                        graphics.name = "destructoBeamGraphics";
+                        projectile.beamGraphics = graphics;
+                    }
+                    if (graphics.parent !== container) container.addChild(graphics);
+                    graphics.clear();
+                    graphics.visible = projectile.visible !== false && !!projectile.targetWall;
+                    if (graphics.visible) {
+                        const startZ = this.getProjectileVisualBaseZ(projectile) + 0.75;
+                        const targetZ = Number.isFinite(projectile.targetWall.bottomZ)
+                            ? Number(projectile.targetWall.bottomZ) + (Math.max(0.1, Number(projectile.targetWall.height) || 1) * 0.5)
+                            : startZ;
+                        const start = this.camera.worldToScreen(Number(projectile.x), Number(projectile.y), startZ);
+                        const end = this.camera.worldToScreen(Number(projectile.targetX), Number(projectile.targetY), targetZ);
+                        const screenDx = end.x - start.x;
+                        const screenDy = end.y - start.y;
+                        const screenLength = Math.max(0.001, Math.hypot(screenDx, screenDy));
+                        const normalX = -screenDy / screenLength;
+                        const normalY = screenDx / screenLength;
+                        const colors = [0xff3030, 0x30ff30, 0x3090ff];
+                        const phases = [0, (Math.PI * 2) / 3, (Math.PI * 4) / 3];
+                        const timePhase = Number(projectile.phaseTime) * 12;
+                        const amplitude = 4 + (Number(projectile.progress) * 3);
+                        for (let wave = 0; wave < colors.length; wave++) {
+                            graphics.lineStyle(2, colors[wave], 0.95);
+                            for (let step = 0; step <= 32; step++) {
+                                const t = step / 32;
+                                const offset = Math.sin((t * Math.PI * 8) + timePhase + phases[wave]) * amplitude;
+                                const px = start.x + (screenDx * t) + (normalX * offset);
+                                const py = start.y + (screenDy * t) + (normalY * offset);
+                                if (step === 0) graphics.moveTo(px, py);
+                                else graphics.lineTo(px, py);
+                            }
+                        }
+                    }
+                    currentDisplayObjects.add(graphics);
+                    continue;
+                }
+
                 const texture = this.getProjectileTexture(projectile);
                 let sprite = projectile.pixiSprite || null;
                 if (!sprite) {

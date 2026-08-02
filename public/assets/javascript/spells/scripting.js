@@ -7031,7 +7031,10 @@
         setObjectScriptingName,
         rebuildNamedObjectRegistry,
         getConsoleGameObject,
-        getConsoleGameObjectState
+        getConsoleGameObjectState,
+        crumbleWall(target, directionX, directionY) {
+            return performCrumble(target, [directionX, directionY], {});
+        }
     };
 
     global.Scripting = scriptingApi;

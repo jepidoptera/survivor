@@ -1,6 +1,56 @@
 {
   "spells": [
     {
+      "id": "construction",
+      "displayName": "Construction",
+      "icon": "/assets/images/thumbnails/trap.svg",
+      "levels": [
+        {
+          "level": 1,
+          "headline": "Trap",
+          "subtitle": "Build a one-coin trap in two seconds.",
+          "coinCost": 1,
+          "buildTime": 2
+        },
+        {
+          "level": 2,
+          "headline": "Destructo Beam",
+          "subtitle": "Traps build in 1.6 seconds with level 2 fireballs. Channel 10 magic per second for 5 seconds to crumble a wall within range 10.",
+          "coinCost": 1,
+          "buildTime": 1.6,
+          "trapFireballLevel": 2,
+          "beamRange": 10,
+          "beamDuration": 5,
+          "costPerSecond": 10
+        },
+        {
+          "level": 3,
+          "headline": "Construction III",
+          "subtitle": "More construction plans coming soon."
+        },
+        {
+          "level": 4,
+          "headline": "Construction IV",
+          "subtitle": "More construction plans coming soon."
+        },
+        {
+          "level": 5,
+          "headline": "Construction V",
+          "subtitle": "More construction plans coming soon."
+        },
+        {
+          "level": 6,
+          "headline": "Construction VI",
+          "subtitle": "More construction plans coming soon."
+        },
+        {
+          "level": 7,
+          "headline": "Master Construction",
+          "subtitle": "More construction plans coming soon."
+        }
+      ]
+    },
+    {
       "id": "freeze",
       "displayName": "Freeze",
       "icon": "/assets/images/magic/iceball.png",

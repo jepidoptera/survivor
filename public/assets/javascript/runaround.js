@@ -64,6 +64,7 @@ let scriptedCameraZoomState = {
     durationMs: 0
 };
 let projectiles = [];
+if (typeof globalThis !== "undefined") globalThis.projectiles = projectiles;
 let animals = [];
 let powerups = (typeof globalThis !== "undefined" && Array.isArray(globalThis.powerups)) ? globalThis.powerups : [];
 let mousePos = {x: 0, y: 0, clientX: NaN, clientY: NaN};
@@ -75,6 +76,8 @@ let pendingPointerLockEntry = null;
 let pointerLockRangeDragInput = null;
 var messages = [];
 let keysPressed = {}; // Track which keys are currently pressed
+let buildTrapChordBDown = false;
+let buildTrapChordTDown = false;
 let spacebarDownAt = null;
 let treeGrowVariantChosenThisHold = false;
 let spellMenuKeyboardIndex = -1;
@@ -4923,6 +4926,14 @@ jQuery(() => {
             ) {
                 SpellSystem.updateDragPreview(wizard, mousePos.worldX, mousePos.worldY);
             }
+            if (typeof SpellSystem !== "undefined" && typeof SpellSystem.updateDestructoBeam === "function") {
+                SpellSystem.updateDestructoBeam(
+                    wizard,
+                    mousePos.worldX,
+                    mousePos.worldY,
+                    !!keysPressed[" "]
+                );
+            }
             
             // Calculate desired movement direction from input
             let moveVector = null;
@@ -6818,6 +6829,28 @@ jQuery(() => {
             return;
         }
 
+        if (!event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+            if (event.code === "KeyB" || keyLower === "b") buildTrapChordBDown = true;
+            if (event.code === "KeyT" || keyLower === "t") buildTrapChordTDown = true;
+            if (
+                wizard &&
+                buildTrapChordBDown &&
+                buildTrapChordTDown &&
+                typeof SpellSystem !== "undefined" &&
+                typeof SpellSystem.setCurrentSpell === "function"
+            ) {
+                event.preventDefault();
+                SpellSystem.setCurrentSpell(wizard, "trap");
+                if (wizard.currentSpell === "trap") {
+                    $("#spellMenu").addClass("hidden");
+                    $("#editorMenu").addClass("hidden");
+                    clearSpellMenuKeyboardFocus();
+                    clearEditorMenuKeyboardFocus();
+                    return;
+                }
+            }
+        }
+
         if (
             wizard &&
             !event.repeat &&
@@ -7692,6 +7725,8 @@ jQuery(() => {
         // Track key state
         const keyLower = event.key.toLowerCase();
         keysPressed[keyLower] = false;
+        if (event.code === "KeyB" || keyLower === "b") buildTrapChordBDown = false;
+        if (event.code === "KeyT" || keyLower === "t") buildTrapChordTDown = false;
         if (keyLower === "z") {
             cameraResetTapAwaitingRelease = false;
         }
