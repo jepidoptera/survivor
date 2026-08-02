@@ -182,7 +182,7 @@
           "headline": "Spikes I",
           "subtitle": "Nails in their coffin.",
           "manaCost": 17,
-          "damage": 22,
+          "damage": 21,
           "range": 15,
           "castDelay": 0.55,
           "projectileSpeed": 11
@@ -212,7 +212,7 @@
           "headline": "Spikes IV",
           "subtitle": "The spikeiest.",
           "manaCost": 9,
-          "damage": 25,
+          "damage": 27,
           "range": 20,
           "castDelay": 0.25,
           "projectileSpeed": 14
@@ -221,8 +221,8 @@
           "level": 6,
           "headline": "Spikes V",
           "subtitle": "Such spikes.",
-          "manaCost": 7,
-          "damage": 26,
+          "manaCost": 8,
+          "damage": 32,
           "range": 22,
           "castDelay": 0.15,
           "projectileSpeed": 15
@@ -231,8 +231,8 @@
           "level": 7,
           "headline": "Storm of Blades",
           "subtitle": "Maximum carnage.",
-          "manaCost": 5,
-          "damage": 27,
+          "manaCost": 7,
+          "damage": 40,
           "range": 25,
           "castDelay": 0.1,
           "projectileSpeed": 16
