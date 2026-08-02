@@ -55,7 +55,7 @@ test("Wizard of Flatland spell hotkeys cannot select unlearned spells", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
     assert.match(
         source,
-        /function setSelectedSpell\(spellId\) \{[\s\S]*?const learnedLevel = id === "destructobeam"[\s\S]*?if \(learnedLevel < \(id === "destructobeam" \? 2 : 1\)\) return false;[\s\S]*?state\.selectedSpell = id;/
+        /function setSelectedSpell\(spellId\) \{[\s\S]*?const learnedLevel = id === "destructobeam" \|\| id === "turret"[\s\S]*?const requiredLevel = id === "destructobeam" \? 2 : id === "turret" \? 3 : 1;[\s\S]*?if \(learnedLevel < requiredLevel\) return false;[\s\S]*?state\.selectedSpell = id;/
     );
 });
 
@@ -73,7 +73,7 @@ test("Wizard of Flatland spell-level button stays visible when no upgrade is ava
 
 test("Wizard of Flatland B+T selects learned construction", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
-    assert.match(source, /state\.buildTrapChord\.b && state\.buildTrapChord\.t/);
+    assert.match(source, /state\.buildChord\.b && state\.buildChord\.t/);
     assert.match(source, /setSelectedSpell\("construction"\)/);
     assert.match(source, /spellId === "construction"/);
     assert.match(source, /state\.selectedSpell === "construction"[\s\S]*TRAP_ICON_PATH/);
@@ -89,6 +89,102 @@ test("Wizard of Flatland B+T selects learned construction", () => {
     assert.match(source, /trap\.triggerDelayRemaining -= dt;[\s\S]*detonateTrap\(trap\)/);
     assert.match(source, /function detonateTrap\(trap\)[\s\S]*state\.agents = state\.agents\.filter[\s\S]*damageAgentAndMaybeDropCoin[\s\S]*createFireDeathEffect[\s\S]*return !killed/);
     assert.match(source, /function detonateTrap\(trap\)[\s\S]*damageWizardIntersectingFireballBlast\(trap\.x, trap\.y, stats\.explosionRadius, stats\.damage\)/);
+});
+
+test("Wizard of Flatland construction level 3 builds predictive safe-fire turrets", () => {
+    const data = JSON.parse(fs.readFileSync(SPELL_LEVELS_PATH, "utf8"));
+    const construction = data.spells.find((spell) => spell.id === "construction");
+    const turret = construction.levels[2].buildings.turret;
+    assert.deepEqual(turret, {
+        coinCost: 20,
+        manaCost: 50,
+        buildTime: 10,
+        hitpoints: 50,
+        spikeLevel: 1,
+        sizeScale: 1,
+        firingRateScale: 0.5,
+        playerSafetyAngleDegrees: 5
+    });
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(source, /state\.buildChord\.b && state\.buildChord\.k[\s\S]*setSelectedSpell\("turret"\)/);
+    assert.match(source, /function solveTurretIntercept[\s\S]*TURRET_INTERCEPT_ITERATIONS/);
+    assert.match(source, /function turretShotEndangersWizard[\s\S]*state\.target\.x \+ wizardVx \* closestTime/);
+    assert.match(source, /wizardAlong >= 0[\s\S]*wizardAlong <= shotLength[\s\S]*wizardLateral <= TARGET_RADIUS \+ SPIKE_PROJECTILE_RADIUS/);
+    assert.match(source, /relativeVx = wizardVx - dirX \* spikeSpeed[\s\S]*unconstrainedClosestTime/);
+    assert.match(source, /expectedWizardX = state\.target\.x \+ wizardVx \* aim\.flightTime[\s\S]*closestMovementWallDistance\([\s\S]*sweptApproach\.distance <= sweptSafetyRadius/);
+    assert.match(source, /findEarliestFireballWallHit\(turret\.x, turret\.y, aim\.x, aim\.y, SPIKE_PROJECTILE_RADIUS\)/);
+    assert.match(source, /turret\.cooldown = spikeStats\.castDelay \/ turret\.firingRateScale/);
+    assert.match(source, /state\.turrets = state\.turrets\.filter\(\(turret\) => turret\.health > 0\)/);
+    const turretLevels = construction.levels.slice(2).map((level) => level.buildings.turret);
+    assert.deepEqual(turretLevels.map((level) => level.spikeLevel), [1, 2, 3, 4, 5]);
+    assert.deepEqual(turretLevels.map((level) => level.coinCost), [20, 40, 60, 80, 100]);
+    assert.deepEqual(turretLevels.map((level) => level.buildTime), [10, 8, 6, 4, 2]);
+    assert.deepEqual(turretLevels.map((level) => level.sizeScale), [1, 1.1, 1.21, 1.331, 1.4641]);
+    assert.match(source, /function constrainActorToTurrets[\s\S]*const blockingRadius = radius \+ turret\.radius/);
+});
+
+test("Wizard of Flatland unfinished traps and turrets are translucent and flash on completion", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(source, /drawStar\(point\.x, point\.y, TRAP_RADIUS \* state\.view\.scale, 0\.5\)/);
+    assert.match(source, /for \(const build of state\.turretBuilds\)[\s\S]*drawTurret\(build, 0\.5\)/);
+    assert.match(source, /completionFlashRemaining: BUILD_COMPLETION_FLASH_SECONDS/g);
+    assert.match(source, /function drawBuildCompletionFlash[\s\S]*ctx\.shadowColor = "#ffffff"/);
+});
+
+test("Wizard of Flatland turrets cache friendly-fire exclusion angles", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(source, /function rebuildTurretFriendlyFireCaches[\s\S]*halfAngle: Math\.asin/);
+    assert.match(source, /if \(completed\.length > 0\) rebuildTurretFriendlyFireCaches\(\)/);
+    assert.match(source, /state\.turrets\.length !== turretCountBeforeDestruction[\s\S]*rebuildTurretFriendlyFireCaches\(\)/);
+    assert.match(source, /function turretShotIntersectsFriendlyTurret[\s\S]*blocked\.distance < targetDistance[\s\S]*blocked\.halfAngle/);
+    assert.match(source, /if \(turretShotIntersectsFriendlyTurret\(turret, aim\)\) continue/);
+});
+
+test("Wizard of Flatland wizard spells damage and destroy turrets", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(source, /function damageTurret\(turret, damage\)[\s\S]*turret\.health = Math\.max\(0, turret\.health - damage\)/);
+    assert.match(source, /function detonateFireball[\s\S]*damageTurretsIntersectingCircle\(fireball\.x, fireball\.y, fireball\.explosionRadius, fireball\.damage\)/);
+    assert.match(source, /function detonateTrap[\s\S]*damageTurretsIntersectingCircle\(trap\.x, trap\.y, stats\.explosionRadius, stats\.damage\)/);
+    assert.match(source, /sourceTurretId: turret\.id/);
+    assert.match(source, /const hitTurret = findTurretIntersectingProjectile\(fireball\)[\s\S]*damageTurret\(hitTurret, fireball\.damage\)/);
+    assert.match(source, /turret\.id !== projectile\.sourceTurretId/);
+    assert.match(source, /function damageTurretsInFreezeCone[\s\S]*getCircularTargetLosVisibilityScale[\s\S]*damageTurret/);
+    assert.match(source, /function removeDestroyedTurrets[\s\S]*rebuildTurretFriendlyFireCaches\(\)/);
+});
+
+test("Wizard of Flatland turret spikes cannot pass through the wizard", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(
+        source,
+        /fireball\.spellId === "spikes" && fireball\.firedByTurret === true[\s\S]*findSegmentCircleFirstIntersectionT\([\s\S]*TARGET_RADIUS \+ fireball\.projectileRadius[\s\S]*damageWizard\(fireball\.damage\)/
+    );
+});
+
+test("Wizard of Flatland completed turrets persist in checkpoint saves", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(source, /version: 4,[\s\S]*turrets: state\.turrets\.map\(createTurretCheckpointSnapshot\)/);
+    assert.match(source, /function createTurretCheckpointSnapshot[\s\S]*spikeLevel: turret\.spikeLevel[\s\S]*cooldown: turret\.cooldown/);
+    assert.match(source, /snapshot\.version !== 1 && snapshot\.version !== 2 && snapshot\.version !== 3 && snapshot\.version !== 4/);
+    assert.match(source, /snapshot\.version >= 3 \? snapshot\.turrets\.map[\s\S]*contactCooldownsByAgentId: new Map\(\)/);
+    assert.match(source, /state\.nextTurretId = state\.turrets\.reduce/);
+    assert.match(source, /state\.nextTurretId = state\.turrets\.reduce[\s\S]*rebuildTurretFriendlyFireCaches\(\)/);
+});
+
+test("Wizard of Flatland destructo beam destroys turrets and drops their build coins", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    assert.match(source, /function findDestructoBeamHit[\s\S]*kind: "wall"[\s\S]*kind: "turret"/);
+    assert.match(source, /const targetKey = hit\.kind === "wall" \? `wall:\$\{hit\.wallIndex\}` : `turret:\$\{hit\.turretId\}`/);
+    assert.match(source, /if \(hit\.kind === "wall"\)[\s\S]*turret\.health = 0;[\s\S]*removeDestroyedTurrets\(\)/);
+    assert.match(source, /duration: stats\.buildTime,[\s\S]*coinCost: stats\.coinCost/);
+    assert.match(source, /function removeDestroyedTurrets[\s\S]*coinIndex < turret\.coinCost[\s\S]*createDroppedMazeCoin\(turret\.x, turret\.y\)/);
+    assert.match(source, /coinCost: turret\.coinCost/);
+});
+
+test("Wizard of Flatland destructo beam completion time halves each construction level", () => {
+    const data = JSON.parse(fs.readFileSync(SPELL_LEVELS_PATH, "utf8"));
+    const construction = data.spells.find((spell) => spell.id === "construction");
+    assert.deepEqual(construction.levels.slice(1).map((level) => level.duration), [5, 2.5, 1.25, 0.625, 0.3125, 0.15625]);
+    assert.ok(construction.levels.slice(1).every((level) => level.range === 10 && level.costPerSecond === 10));
 });
 
 test("Wizard of Flatland trap uses a nine-point skip-two star", () => {

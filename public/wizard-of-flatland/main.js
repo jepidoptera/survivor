@@ -84,8 +84,13 @@
     const FREEZE_ICON_PATH = "/assets/images/magic/iceball.png";
     const TRAP_ICON_PATH = "/assets/images/thumbnails/trap.svg";
     const DESTRUCTO_BEAM_ICON_PATH = "/assets/images/thumbnails/destructo-beam.svg";
+    const TURRET_ICON_PATH = "/assets/images/thumbnails/turret.svg";
     const TRAP_RADIUS = 0.34;
     const TRAP_TRIGGER_DELAY_SECONDS = 0.05;
+    const TURRET_RADIUS = TARGET_RADIUS * 1.5;
+    const TURRET_BARREL_INNER_RADIUS_SCALE = 0.5;
+    const TURRET_INTERCEPT_ITERATIONS = 8;
+    const BUILD_COMPLETION_FLASH_SECONDS = 0.3;
     const FREEZE_PARTICLES_PER_SECOND_AT_LEVEL_ONE = 132;
     const FREEZE_PARTICLE_COUNT_MULTIPLIER_PER_LEVEL = 1.25;
     const FREEZE_CONE_START_WIDTH = 1;
@@ -572,6 +577,9 @@
         fireballExplosions: [],
         traps: [],
         trapBuilds: [],
+        turrets: [],
+        turretBuilds: [],
+        nextTurretId: 1,
         fireDeathEffects: [],
         freezeParticles: [],
         spikeShatterEffects: [],
@@ -687,10 +695,12 @@
         zoomHeld: false,
         relocateSprintHeld: false,
         relocateSprintActive: false,
-        buildTrapChord: { b: false, t: false },
+        buildChord: { b: false, t: false, k: false },
         destructoBeam: {
             held: false,
             targetWallIndex: null,
+            targetTurretId: null,
+            targetKey: "",
             progress: 0,
             hitX: NaN,
             hitY: NaN,
@@ -1337,10 +1347,11 @@
         if (!isSelectableSpellId(id)) {
             throw new Error(`Wizard of Flatland cannot select unknown spell: ${spellId}`);
         }
-        const learnedLevel = id === "destructobeam"
+        const learnedLevel = id === "destructobeam" || id === "turret"
             ? getWizardSpellLevel("construction")
             : getWizardSpellLevel(id);
-        if (learnedLevel < (id === "destructobeam" ? 2 : 1)) return false;
+        const requiredLevel = id === "destructobeam" ? 2 : id === "turret" ? 3 : 1;
+        if (learnedLevel < requiredLevel) return false;
         state.selectedSpell = id;
         updateSelectedSpellHud();
         refreshSpellLevelPanel();
@@ -1369,6 +1380,10 @@
             spellStatusIconImage.src = DESTRUCTO_BEAM_ICON_PATH;
             return;
         }
+        if (state.selectedSpell === "turret") {
+            spellStatusIconImage.src = TURRET_ICON_PATH;
+            return;
+        }
         throw new Error(`Wizard of Flatland selected spell HUD cannot display unknown spell: ${state.selectedSpell}`);
     }
 
@@ -1384,7 +1399,7 @@
     }
 
     function isSelectableSpellId(spellId) {
-        return spellId === "fireball" || spellId === "freeze" || spellId === "spikes" || spellId === "construction" || spellId === "destructobeam";
+        return spellId === "fireball" || spellId === "freeze" || spellId === "spikes" || spellId === "construction" || spellId === "destructobeam" || spellId === "turret";
     }
 
     function getWizardOfFlatlandDebugApi() {
@@ -3080,7 +3095,7 @@
             spawnBudgetsBySectionKey.set(homeSectionKey, (spawnBudgetsBySectionKey.get(homeSectionKey) || 0) + 1);
         }
         return {
-            version: 2,
+            version: 4,
             sectionSnapshotVersion: 1,
             savedAt: new Date().toISOString(),
             playerName: validateStartupPlayerName(state.playerName, "checkpoint save"),
@@ -3091,6 +3106,7 @@
             collectedCoins: getVisitedCollectedCoinSnapshots(visitedSectionKeys),
             nextDroppedCoinId: getNextAvailableDroppedCoinId(),
             enemies,
+            turrets: state.turrets.map(createTurretCheckpointSnapshot),
             spawnBudgets: Array.from(spawnBudgetsBySectionKey.entries())
                 .sort((a, b) => a[0].localeCompare(b[0]))
                 .map(([sectionKey, budget]) => ({ sectionKey, budget })),
@@ -3251,6 +3267,41 @@
         };
     }
 
+    function createTurretCheckpointSnapshot(turret) {
+        validateTurretCheckpointData(turret, "checkpoint save");
+        return {
+            id: turret.id,
+            x: turret.x,
+            y: turret.y,
+            radius: turret.radius,
+            coinCost: turret.coinCost,
+            health: turret.health,
+            maxHealth: turret.maxHealth,
+            spikeLevel: turret.spikeLevel,
+            firingRateScale: turret.firingRateScale,
+            playerSafetyAngleDegrees: turret.playerSafetyAngleDegrees,
+            heading: turret.heading,
+            cooldown: turret.cooldown
+        };
+    }
+
+    function validateTurretCheckpointData(turret, context) {
+        if (!turret || typeof turret !== "object") throw new Error(`Wizard of Flatland ${context} turret is missing`);
+        if (!Number.isInteger(turret.id) || turret.id < 1) throw new Error(`Wizard of Flatland ${context} turret requires a positive id`);
+        for (const field of ["x", "y", "radius", "coinCost", "health", "maxHealth", "firingRateScale", "playerSafetyAngleDegrees", "heading", "cooldown"]) {
+            if (!Number.isFinite(turret[field])) throw new Error(`Wizard of Flatland ${context} turret requires finite ${field}`);
+        }
+        if (!(turret.radius > 0) || turret.coinCost < 0 || !(turret.maxHealth > 0) || turret.health <= 0 || turret.health > turret.maxHealth) {
+            throw new Error(`Wizard of Flatland ${context} turret has invalid geometry or health`);
+        }
+        if (!Number.isInteger(turret.spikeLevel) || turret.spikeLevel < 1 || turret.spikeLevel > 7) {
+            throw new Error(`Wizard of Flatland ${context} turret has invalid spike level`);
+        }
+        if (!(turret.firingRateScale > 0) || !(turret.playerSafetyAngleDegrees > 0) || turret.cooldown < 0) {
+            throw new Error(`Wizard of Flatland ${context} turret has invalid firing stats`);
+        }
+    }
+
     function parseWizardCheckpointSnapshot(text) {
         if (typeof text !== "string" || text.length === 0) {
             throw new Error("Wizard of Flatland saved checkpoint is missing");
@@ -3269,7 +3320,7 @@
         if (!snapshot || typeof snapshot !== "object") {
             throw new Error("Wizard of Flatland saved checkpoint must be an object");
         }
-        if (snapshot.version !== 1 && snapshot.version !== 2) {
+        if (snapshot.version !== 1 && snapshot.version !== 2 && snapshot.version !== 3 && snapshot.version !== 4) {
             throw new Error(`Wizard of Flatland saved checkpoint version is unsupported: ${snapshot.version}`);
         }
         validateWizardPositionTarget(snapshot.wizard, "saved checkpoint wizard position");
@@ -3278,6 +3329,18 @@
         }
         if (!Array.isArray(snapshot.visitedSectionKeys) || !Array.isArray(snapshot.collectedCoins) || !Array.isArray(snapshot.enemies) || !Array.isArray(snapshot.spawnBudgets)) {
             throw new Error("Wizard of Flatland saved checkpoint arrays are malformed");
+        }
+        if (snapshot.version >= 3) {
+            if (!Array.isArray(snapshot.turrets)) throw new Error("Wizard of Flatland saved checkpoint turrets are malformed");
+            const turretIds = new Set();
+            for (const turret of snapshot.turrets) {
+                const migratedTurret = snapshot.version === 3 && turret.coinCost === undefined
+                    ? { ...turret, coinCost: turret.spikeLevel * 10 }
+                    : turret;
+                validateTurretCheckpointData(migratedTurret, "saved checkpoint");
+                if (turretIds.has(turret.id)) throw new Error(`Wizard of Flatland saved checkpoint repeats turret ${turret.id}`);
+                turretIds.add(turret.id);
+            }
         }
         if (!snapshot.vitals || typeof snapshot.vitals !== "object") {
             throw new Error("Wizard of Flatland saved checkpoint requires vitals");
@@ -3320,6 +3383,16 @@
         state.fireballExplosions = [];
         state.traps = [];
         state.trapBuilds = [];
+        state.turrets = snapshot.version >= 3 ? snapshot.turrets.map((turret) => ({
+            ...turret,
+            coinCost: snapshot.version === 3 && turret.coinCost === undefined ? turret.spikeLevel * 10 : turret.coinCost,
+            completionFlashRemaining: 0,
+            friendlyFireAngles: [],
+            contactCooldownsByAgentId: new Map()
+        })) : [];
+        state.turretBuilds = [];
+        state.nextTurretId = state.turrets.reduce((nextId, turret) => Math.max(nextId, turret.id + 1), 1);
+        rebuildTurretFriendlyFireCaches();
         state.fireDeathEffects = [];
         state.freezeParticles = [];
         state.spikeShatterEffects = [];
@@ -4077,6 +4150,7 @@
 
     function constrainTargetToWalls() {
         constrainActorToWalls(state.target, TARGET_RADIUS);
+        constrainActorToTurrets(state.target, TARGET_RADIUS);
     }
 
     function updateTargetKeyboardMovement(dt) {
@@ -4567,6 +4641,10 @@
             return;
         }
         if (state.selectedSpell === "destructobeam") return;
+        if (state.selectedSpell === "turret") {
+            startTurretBuild();
+            return;
+        }
         throw new Error(`Wizard of Flatland cannot cast unknown selected spell: ${state.selectedSpell}`);
     }
 
@@ -4684,6 +4762,7 @@
                 return !damageAgentWithFreezeTemperatureAndMaybeDropCoin(agent, damage * visibilityScale);
             });
         });
+        damageTurretsInFreezeCone(stats, losSnapshot, dirX, dirY, startHalfWidth, coneSlope, damage);
         profiler.hitchSpan("emit freeze particles", () => emitFreezeParticles(dt, stats, dirX, dirY, halfAngle));
     }
 
@@ -4731,6 +4810,324 @@
         return stats;
     }
 
+    function getTurretConstructionStats() {
+        const definition = getSpellLevelDefinitions().find((spell) => spell.id === "construction");
+        const level = getWizardSpellLevel("construction");
+        if (level < 3) return null;
+        const levelData = definition && definition.levels.slice(0, level).reverse().find((entry) => (
+            entry && entry.buildings && entry.buildings.turret
+        ));
+        const stats = levelData && levelData.buildings.turret;
+        if (
+            !stats || !(stats.buildTime > 0) || !(stats.hitpoints > 0) ||
+            !(stats.spikeLevel > 0) || !(stats.sizeScale >= 1) || !(stats.firingRateScale > 0) ||
+            !(stats.playerSafetyAngleDegrees > 0) || !Number.isFinite(stats.coinCost) ||
+            stats.coinCost < 0 || !Number.isFinite(stats.manaCost) || stats.manaCost < 0
+        ) {
+            throw new Error(`Wizard of Flatland construction level ${level} requires turret stats`);
+        }
+        return stats;
+    }
+
+    function getSpikeStatsForLevel(level) {
+        const definition = getSpellLevelDefinitions().find((spell) => spell.id === "spikes");
+        const data = definition && definition.levels[Math.round(level) - 1];
+        if (!data || !(data.damage > 0) || !(data.range > 0) || !(data.castDelay > 0) || !(data.projectileSpeed > 0)) {
+            throw new Error(`Wizard of Flatland turret requires spike level ${level}`);
+        }
+        return data;
+    }
+
+    function startTurretBuild() {
+        if (state.spellCooldownRemaining > 0) return;
+        const stats = getTurretConstructionStats();
+        if (!stats) return;
+        if (state.wizardVitals.exp < stats.coinCost || state.wizardVitals.magic < stats.manaCost) return;
+        const cursor = getCurrentProjectedCursorWorldPoint();
+        if (!spendWizardMagic(stats.manaCost)) {
+            throw new Error("Wizard of Flatland turret magic affordability changed during construction");
+        }
+        state.wizardVitals.exp -= stats.coinCost;
+        updateStatusBars();
+        state.turretBuilds.push({
+            x: cursor.x,
+            y: cursor.y,
+            age: 0,
+            duration: stats.buildTime,
+            coinCost: stats.coinCost,
+            hitpoints: stats.hitpoints,
+            radius: TURRET_RADIUS * stats.sizeScale,
+            spikeLevel: stats.spikeLevel,
+            firingRateScale: stats.firingRateScale,
+            playerSafetyAngleDegrees: stats.playerSafetyAngleDegrees
+        });
+        state.spellCooldownRemaining = stats.buildTime;
+        state.spellCooldownDuration = stats.buildTime;
+        updateSpellCooldownHud();
+    }
+
+    function solveTurretIntercept(turret, agent, spikeSpeed) {
+        let flightTime = Math.hypot(agent.x - turret.x, agent.y - turret.y) / spikeSpeed;
+        for (let iteration = 0; iteration < TURRET_INTERCEPT_ITERATIONS; iteration++) {
+            const targetX = agent.x + agent.vx * flightTime;
+            const targetY = agent.y + agent.vy * flightTime;
+            flightTime = Math.hypot(targetX - turret.x, targetY - turret.y) / spikeSpeed;
+        }
+        const x = agent.x + agent.vx * flightTime;
+        const y = agent.y + agent.vy * flightTime;
+        return { x, y, flightTime };
+    }
+
+    function turretShotEndangersWizard(turret, aim, spikeSpeed, safetyAngleRadians, wizardVx, wizardVy) {
+        const shotDx = aim.x - turret.x;
+        const shotDy = aim.y - turret.y;
+        const shotLength = Math.hypot(shotDx, shotDy);
+        if (!(shotLength > 0.000001)) return true;
+        const dirX = shotDx / shotLength;
+        const dirY = shotDy / shotLength;
+        const wizardDx = state.target.x - turret.x;
+        const wizardDy = state.target.y - turret.y;
+        const wizardAlong = wizardDx * dirX + wizardDy * dirY;
+        const wizardLateral = Math.abs(wizardDx * -dirY + wizardDy * dirX);
+        if (
+            wizardAlong >= 0 &&
+            wizardAlong <= shotLength &&
+            wizardLateral <= TARGET_RADIUS + SPIKE_PROJECTILE_RADIUS + Math.tan(safetyAngleRadians) * wizardAlong
+        ) return true;
+
+        const expectedWizardX = state.target.x + wizardVx * aim.flightTime;
+        const expectedWizardY = state.target.y + wizardVy * aim.flightTime;
+        const sweptApproach = closestMovementWallDistance(
+            turret.x,
+            turret.y,
+            aim.x,
+            aim.y,
+            state.target.x,
+            state.target.y,
+            expectedWizardX,
+            expectedWizardY
+        );
+        if (!sweptApproach || !Number.isFinite(sweptApproach.distance) || !Number.isFinite(sweptApproach.t)) {
+            throw new Error(`Wizard of Flatland turret ${turret.id} requires a finite wizard swept-area check`);
+        }
+        const sweptSafetyRadius =
+            TARGET_RADIUS +
+            SPIKE_PROJECTILE_RADIUS +
+            Math.tan(safetyAngleRadians) * shotLength * Math.max(0, Math.min(1, sweptApproach.t));
+        if (sweptApproach.distance <= sweptSafetyRadius) return true;
+
+        const relativeX = state.target.x - turret.x;
+        const relativeY = state.target.y - turret.y;
+        const relativeVx = wizardVx - dirX * spikeSpeed;
+        const relativeVy = wizardVy - dirY * spikeSpeed;
+        const relativeSpeedSquared = relativeVx * relativeVx + relativeVy * relativeVy;
+        const unconstrainedClosestTime = relativeSpeedSquared > 0
+            ? -(relativeX * relativeVx + relativeY * relativeVy) / relativeSpeedSquared
+            : 0;
+        const closestTime = Math.max(0, Math.min(aim.flightTime, unconstrainedClosestTime));
+        const spikeX = turret.x + dirX * spikeSpeed * closestTime;
+        const spikeY = turret.y + dirY * spikeSpeed * closestTime;
+        const wizardX = state.target.x + wizardVx * closestTime;
+        const wizardY = state.target.y + wizardVy * closestTime;
+        const distance = Math.hypot(wizardX - spikeX, wizardY - spikeY);
+        const safetyRadius =
+            Math.tan(safetyAngleRadians) * Math.max(0, spikeSpeed * closestTime) +
+            TARGET_RADIUS +
+            SPIKE_PROJECTILE_RADIUS;
+        return distance <= safetyRadius;
+    }
+
+    function findTurretTarget(turret, spikeStats, dt) {
+        const wizardVx = dt > 0 ? state.targetTravelVector.x / dt : 0;
+        const wizardVy = dt > 0 ? state.targetTravelVector.y / dt : 0;
+        const safetyAngle = turret.playerSafetyAngleDegrees * Math.PI / 180;
+        let best = null;
+        for (const agent of state.agents) {
+            const distance = Math.hypot(agent.x - turret.x, agent.y - turret.y);
+            if (distance > spikeStats.range + agent.radius) continue;
+            const aim = solveTurretIntercept(turret, agent, spikeStats.projectileSpeed);
+            if (aim.flightTime * spikeStats.projectileSpeed > spikeStats.range) continue;
+            if (turretShotIntersectsFriendlyTurret(turret, aim)) continue;
+            if (findEarliestFireballWallHit(turret.x, turret.y, aim.x, aim.y, SPIKE_PROJECTILE_RADIUS)) continue;
+            if (turretShotEndangersWizard(turret, aim, spikeStats.projectileSpeed, safetyAngle, wizardVx, wizardVy)) continue;
+            if (!best || distance < best.distance) best = { agent, aim, distance };
+        }
+        return best;
+    }
+
+    function fireTurretSpike(turret, target, spikeStats) {
+        const dx = target.aim.x - turret.x;
+        const dy = target.aim.y - turret.y;
+        const length = Math.hypot(dx, dy);
+        if (!(length > 0.000001)) return;
+        const dirX = dx / length;
+        const dirY = dy / length;
+        turret.heading = Math.atan2(dirY, dirX);
+        state.fireballs.push({
+            spellId: "spikes",
+            x: turret.x + dirX * (turret.radius + SPIKE_PROJECTILE_RADIUS),
+            y: turret.y + dirY * (turret.radius + SPIKE_PROJECTILE_RADIUS),
+            dirX,
+            dirY,
+            age: 0,
+            impactActive: false,
+            speed: spikeStats.projectileSpeed,
+            maxAge: spikeStats.range / spikeStats.projectileSpeed,
+            damage: spikeStats.damage,
+            projectileRadius: SPIKE_PROJECTILE_RADIUS,
+            firedByTurret: true,
+            sourceTurretId: turret.id
+        });
+        turret.cooldown = spikeStats.castDelay / turret.firingRateScale;
+    }
+
+    function rebuildTurretFriendlyFireCaches() {
+        for (const turret of state.turrets) {
+            const spikeStats = getSpikeStatsForLevel(turret.spikeLevel);
+            turret.friendlyFireAngles = [];
+            for (const other of state.turrets) {
+                if (other === turret) continue;
+                const dx = other.x - turret.x;
+                const dy = other.y - turret.y;
+                const distance = Math.hypot(dx, dy);
+                if (!(distance > 0) || distance > spikeStats.range + other.radius) continue;
+                const blockingRadius = other.radius + SPIKE_PROJECTILE_RADIUS;
+                turret.friendlyFireAngles.push({
+                    turretId: other.id,
+                    x: other.x,
+                    y: other.y,
+                    distance,
+                    angle: Math.atan2(dy, dx),
+                    halfAngle: Math.asin(Math.min(1, blockingRadius / distance))
+                });
+            }
+        }
+    }
+
+    function turretShotIntersectsFriendlyTurret(turret, aim) {
+        if (!Array.isArray(turret.friendlyFireAngles)) {
+            throw new Error(`Wizard of Flatland turret ${turret.id} requires a friendly-fire angle cache`);
+        }
+        const dx = aim.x - turret.x;
+        const dy = aim.y - turret.y;
+        const targetDistance = Math.hypot(dx, dy);
+        const targetAngle = Math.atan2(dy, dx);
+        return turret.friendlyFireAngles.some((blocked) => (
+            blocked.distance < targetDistance &&
+            Math.abs(normalizeAngle(targetAngle - blocked.angle)) <= blocked.halfAngle
+        ));
+    }
+
+    function updateTurrets(dt) {
+        const cursor = state.turretBuilds.length > 0 ? getCurrentProjectedCursorWorldPoint() : null;
+        for (const build of state.turretBuilds) {
+            build.x = cursor.x;
+            build.y = cursor.y;
+            build.age += dt;
+        }
+        const completed = state.turretBuilds.filter((build) => build.age >= build.duration);
+        state.turretBuilds = state.turretBuilds.filter((build) => build.age < build.duration);
+        for (const build of completed) state.turrets.push({
+            id: state.nextTurretId++,
+            x: build.x,
+            y: build.y,
+            radius: build.radius,
+            coinCost: build.coinCost,
+            health: build.hitpoints,
+            maxHealth: build.hitpoints,
+            spikeLevel: build.spikeLevel,
+            firingRateScale: build.firingRateScale,
+            playerSafetyAngleDegrees: build.playerSafetyAngleDegrees,
+            heading: state.target.heading,
+            cooldown: 0,
+            completionFlashRemaining: BUILD_COMPLETION_FLASH_SECONDS,
+            friendlyFireAngles: [],
+            contactCooldownsByAgentId: new Map()
+        });
+        if (completed.length > 0) rebuildTurretFriendlyFireCaches();
+        for (const turret of state.turrets) {
+            turret.completionFlashRemaining = Math.max(0, turret.completionFlashRemaining - dt);
+            for (const [agentId, remaining] of turret.contactCooldownsByAgentId) {
+                const next = remaining - dt;
+                if (next <= 0) turret.contactCooldownsByAgentId.delete(agentId);
+                else turret.contactCooldownsByAgentId.set(agentId, next);
+            }
+            for (const agent of state.agents) {
+                if (
+                    Math.hypot(agent.x - turret.x, agent.y - turret.y) >
+                    agent.radius + turret.radius + TARGET_NPC_PUSH_SLOP * 2
+                ) continue;
+                if (turret.contactCooldownsByAgentId.has(agent.id)) continue;
+                turret.health -= getAgentHitDamage(agent);
+                turret.contactCooldownsByAgentId.set(agent.id, 1);
+            }
+            turret.cooldown = Math.max(0, turret.cooldown - dt);
+            const spikeStats = getSpikeStatsForLevel(turret.spikeLevel);
+            const target = findTurretTarget(turret, spikeStats, dt);
+            if (target) turret.heading = Math.atan2(target.aim.y - turret.y, target.aim.x - turret.x);
+            if (target && turret.cooldown <= 0) fireTurretSpike(turret, target, spikeStats);
+        }
+        const turretCountBeforeDestruction = state.turrets.length;
+        state.turrets = state.turrets.filter((turret) => turret.health > 0);
+        if (state.turrets.length !== turretCountBeforeDestruction) rebuildTurretFriendlyFireCaches();
+    }
+
+    function damageTurret(turret, damage) {
+        if (!turret || !Number.isFinite(turret.health) || !(turret.maxHealth > 0)) {
+            throw new Error("Wizard of Flatland turret damage requires finite turret health");
+        }
+        if (!(damage > 0)) throw new Error("Wizard of Flatland turret damage requires a positive amount");
+        turret.health = Math.max(0, turret.health - damage);
+        return turret.health <= 0;
+    }
+
+    function removeDestroyedTurrets() {
+        const previousCount = state.turrets.length;
+        for (const turret of state.turrets) {
+            if (turret.health > 0) continue;
+            if (!Number.isInteger(turret.coinCost) || turret.coinCost < 0) {
+                throw new Error(`Wizard of Flatland destroyed turret ${turret.id} requires a non-negative integer coin cost`);
+            }
+            for (let coinIndex = 0; coinIndex < turret.coinCost; coinIndex++) {
+                createDroppedMazeCoin(turret.x, turret.y);
+            }
+        }
+        state.turrets = state.turrets.filter((turret) => turret.health > 0);
+        if (state.turrets.length !== previousCount) {
+            rebuildTurretFriendlyFireCaches();
+        }
+    }
+
+    function damageTurretsIntersectingCircle(circleX, circleY, radius, damage) {
+        for (const turret of state.turrets) {
+            const distance = Math.hypot(turret.x - circleX, turret.y - circleY);
+            if (distance > radius + FIREBALL_HALF_DAMAGE_OUTER_RADIUS + turret.radius) continue;
+            const damageScale = distance <= radius + turret.radius ? 1 : 0.5;
+            damageTurret(turret, damage * damageScale);
+        }
+        removeDestroyedTurrets();
+    }
+
+    function damageTurretsInFreezeCone(stats, losSnapshot, dirX, dirY, startHalfWidth, coneSlope, damage) {
+        for (const turret of state.turrets) {
+            const dx = turret.x - state.target.x;
+            const dy = turret.y - state.target.y;
+            const forwardDistance = dx * dirX + dy * dirY;
+            if (forwardDistance < -turret.radius || forwardDistance > stats.range + turret.radius) continue;
+            const lateralDistance = Math.abs(dx * -dirY + dy * dirX);
+            const halfWidth = startHalfWidth + Math.max(0, forwardDistance) * coneSlope;
+            if (lateralDistance > halfWidth + turret.radius) continue;
+            const visibilityScale = getCircularTargetLosVisibilityScale(
+                losSnapshot,
+                turret.x,
+                turret.y,
+                turret.radius
+            );
+            if (visibilityScale > 0) damageTurret(turret, damage * visibilityScale);
+        }
+        removeDestroyedTurrets();
+    }
+
     function getDestructoBeamStats() {
         const definition = getSpellLevelDefinitions().find((spell) => spell.id === "construction");
         const level = getWizardSpellLevel("construction");
@@ -4744,12 +5141,33 @@
 
     function resetDestructoBeamTarget() {
         state.destructoBeam.targetWallIndex = null;
+        state.destructoBeam.targetTurretId = null;
+        state.destructoBeam.targetKey = "";
         state.destructoBeam.progress = 0;
         state.destructoBeam.hitX = NaN;
         state.destructoBeam.hitY = NaN;
     }
 
-    function findDestructoBeamWallHit(range) {
+    function findSegmentCircleFirstIntersectionT(ax, ay, bx, by, cx, cy, radius) {
+        const dx = bx - ax;
+        const dy = by - ay;
+        const fx = ax - cx;
+        const fy = ay - cy;
+        const a = dx * dx + dy * dy;
+        const c = fx * fx + fy * fy - radius * radius;
+        if (c <= 0) return 0;
+        const b = 2 * (fx * dx + fy * dy);
+        const discriminant = b * b - 4 * a * c;
+        if (discriminant < 0 || !(a > 0)) return null;
+        const root = Math.sqrt(discriminant);
+        const first = (-b - root) / (2 * a);
+        const second = (-b + root) / (2 * a);
+        if (first >= 0 && first <= 1) return first;
+        if (second >= 0 && second <= 1) return second;
+        return null;
+    }
+
+    function findDestructoBeamHit(range) {
         const cursor = getCurrentProjectedCursorWorldPoint();
         const dx = cursor.x - state.target.x;
         const dy = cursor.y - state.target.y;
@@ -4774,10 +5192,30 @@
             );
             if (!intersection || (best && intersection.t >= best.t)) continue;
             best = {
+                kind: "wall",
                 wallIndex,
                 t: intersection.t,
                 x: state.target.x + (endX - state.target.x) * intersection.t,
                 y: state.target.y + (endY - state.target.y) * intersection.t
+            };
+        }
+        for (const turret of state.turrets) {
+            const t = findSegmentCircleFirstIntersectionT(
+                state.target.x,
+                state.target.y,
+                endX,
+                endY,
+                turret.x,
+                turret.y,
+                turret.radius
+            );
+            if (t === null || (best && t >= best.t)) continue;
+            best = {
+                kind: "turret",
+                turretId: turret.id,
+                t,
+                x: state.target.x + (endX - state.target.x) * t,
+                y: state.target.y + (endY - state.target.y) * t
             };
         }
         return best;
@@ -4817,13 +5255,16 @@
             resetDestructoBeamTarget();
             return;
         }
-        const hit = findDestructoBeamWallHit(stats.range);
+        const hit = findDestructoBeamHit(stats.range);
         if (!hit) {
             resetDestructoBeamTarget();
             return;
         }
-        if (beam.targetWallIndex !== hit.wallIndex) {
-            beam.targetWallIndex = hit.wallIndex;
+        const targetKey = hit.kind === "wall" ? `wall:${hit.wallIndex}` : `turret:${hit.turretId}`;
+        if (beam.targetKey !== targetKey) {
+            beam.targetKey = targetKey;
+            beam.targetWallIndex = hit.kind === "wall" ? hit.wallIndex : null;
+            beam.targetTurretId = hit.kind === "turret" ? hit.turretId : null;
             beam.progress = 0;
         }
         beam.hitX = hit.x;
@@ -4834,8 +5275,15 @@
         }
         beam.progress += dt;
         if (beam.progress < stats.duration) return;
-        const segment = getDestructoBeamTargetSegment(hit.wallIndex, hit.x, hit.y);
-        breakWallSegmentForAgent({ id: "destructo-beam" }, segment);
+        if (hit.kind === "wall") {
+            const segment = getDestructoBeamTargetSegment(hit.wallIndex, hit.x, hit.y);
+            breakWallSegmentForAgent({ id: "destructo-beam" }, segment);
+        } else {
+            const turret = state.turrets.find((candidate) => candidate.id === hit.turretId);
+            if (!turret) throw new Error(`Wizard of Flatland destructo beam lost turret ${hit.turretId}`);
+            turret.health = 0;
+            removeDestroyedTurrets();
+        }
         resetDestructoBeamTarget();
     }
 
@@ -4883,6 +5331,7 @@
             return !killed;
         });
         damageWizardIntersectingFireballBlast(trap.x, trap.y, stats.explosionRadius, stats.damage);
+        damageTurretsIntersectingCircle(trap.x, trap.y, stats.explosionRadius, stats.damage);
         state.fireballExplosions.push({ x: trap.x, y: trap.y, radius: stats.explosionRadius, age: 0 });
         for (const other of state.traps) {
             if (
@@ -4918,6 +5367,7 @@
             y: build.y,
             level: build.level,
             detonated: false,
+            completionFlashRemaining: BUILD_COMPLETION_FLASH_SECONDS,
             triggerDelayRemaining: null
         });
         const previouslyTriggered = state.traps.filter((trap) => (
@@ -4933,7 +5383,10 @@
                 scheduleTrapDetonation(trap);
             }
         }
-        for (const trap of state.traps) trap.triggerDelayFresh = false;
+        for (const trap of state.traps) {
+            trap.triggerDelayFresh = false;
+            trap.completionFlashRemaining = Math.max(0, trap.completionFlashRemaining - dt);
+        }
         state.traps = state.traps.filter((trap) => !trap.detonated);
     }
 
@@ -5113,6 +5566,23 @@
             const nextX = fireball.x + fireball.dirX * fireball.speed * dt;
             const nextY = fireball.y + fireball.dirY * fireball.speed * dt;
             const wallHit = findEarliestFireballWallHit(previousX, previousY, nextX, nextY, fireball.projectileRadius * FIREBALL_WALL_HIT_RADIUS_SCALE);
+            const wizardHitT = fireball.spellId === "spikes" && fireball.firedByTurret === true
+                ? findSegmentCircleFirstIntersectionT(
+                    previousX,
+                    previousY,
+                    nextX,
+                    nextY,
+                    state.target.x,
+                    state.target.y,
+                    TARGET_RADIUS + fireball.projectileRadius
+                )
+                : null;
+            if (wizardHitT !== null && (!wallHit || wizardHitT < wallHit.t)) {
+                fireball.x = previousX + (nextX - previousX) * wizardHitT;
+                fireball.y = previousY + (nextY - previousY) * wizardHitT;
+                damageWizard(fireball.damage);
+                continue;
+            }
             if (wallHit) {
                 if (fireball.spellId === "spikes") {
                     bounceSpikeProjectile(fireball, wallHit);
@@ -5129,6 +5599,18 @@
             }
             fireball.x = nextX;
             fireball.y = nextY;
+            const hitTurret = findTurretIntersectingProjectile(fireball);
+            if (hitTurret) {
+                if (fireball.spellId === "spikes") {
+                    damageTurret(hitTurret, fireball.damage);
+                    removeDestroyedTurrets();
+                    continue;
+                }
+                detonateFireball(fireball);
+                fireball.age += dt * FIREBALL_IMPACT_ANIMATION_SPEED_MULTIPLIER;
+                if (fireball.age < fireball.maxAge) survivors.push(fireball);
+                continue;
+            }
             const hitAgent = findAgentIntersectingFireball(fireball);
             if (hitAgent) {
                 if (fireball.spellId === "spikes") {
@@ -5915,6 +6397,17 @@
         }) || null;
     }
 
+    function findTurretIntersectingProjectile(projectile) {
+        if (!projectile || !Number.isFinite(projectile.x) || !Number.isFinite(projectile.y) || !(projectile.projectileRadius > 0)) {
+            throw new Error("Wizard of Flatland turret projectile hit test requires finite projectile data");
+        }
+        return state.turrets.find((turret) => (
+            turret.id !== projectile.sourceTurretId &&
+            Math.hypot(turret.x - projectile.x, turret.y - projectile.y) <=
+            turret.radius + projectile.projectileRadius
+        )) || null;
+    }
+
     function detonateFireball(fireball) {
         if (!fireball || !Number.isFinite(fireball.x) || !Number.isFinite(fireball.y)) {
             throw new Error("Wizard of Flatland fireball explosion requires a finite fireball");
@@ -5932,6 +6425,7 @@
             fireball.losSnapshot
         );
         damageWizardIntersectingFireballBlast(fireball.x, fireball.y, fireball.explosionRadius, fireball.damage);
+        damageTurretsIntersectingCircle(fireball.x, fireball.y, fireball.explosionRadius, fireball.damage);
         state.fireballExplosions.push({
             x: fireball.x,
             y: fireball.y,
@@ -7080,6 +7574,30 @@
 
     function constrainAgentToWalls(agent) {
         constrainActorToWalls(agent, agent.radius);
+        constrainActorToTurrets(agent, agent.radius);
+    }
+
+    function constrainActorToTurrets(actor, radius) {
+        for (let pass = 0; pass < 4; pass++) {
+            let changed = false;
+            for (const turret of state.turrets) {
+                const blockingRadius = radius + turret.radius;
+                let dx = actor.x - turret.x;
+                let dy = actor.y - turret.y;
+                let distance = Math.hypot(dx, dy);
+                if (distance >= blockingRadius) continue;
+                if (!(distance > TARGET_NPC_PUSH_MIN_AXIS)) {
+                    dx = 1;
+                    dy = 0;
+                    distance = 1;
+                }
+                const correction = blockingRadius - distance + TARGET_NPC_PUSH_SLOP;
+                actor.x += dx / distance * correction;
+                actor.y += dy / distance * correction;
+                changed = true;
+            }
+            if (!changed) break;
+        }
     }
 
     function constrainActorToWalls(actor, radius) {
@@ -8793,6 +9311,22 @@
         return count;
     }
 
+    function drawBuildCompletionFlash(x, y, radius, remaining) {
+        if (!(remaining > 0)) return;
+        const progress = 1 - remaining / BUILD_COMPLETION_FLASH_SECONDS;
+        const pulse = 0.5 + 0.5 * Math.cos(progress * Math.PI * 4);
+        ctx.save();
+        ctx.globalAlpha = (1 - progress) * (0.55 + pulse * 0.45);
+        ctx.strokeStyle = "#ffffff";
+        ctx.shadowColor = "#ffffff";
+        ctx.shadowBlur = Math.max(8, radius * 0.5);
+        ctx.lineWidth = Math.max(3, radius * 0.12);
+        ctx.beginPath();
+        ctx.arc(x, y, radius * (1.05 + progress * 0.35), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+    }
+
     function drawTraps() {
         const drawStar = (x, y, radius, alpha) => {
             ctx.save();
@@ -8817,12 +9351,69 @@
         };
         for (const build of state.trapBuilds) {
             const point = worldToScreen(build.x, build.y);
-            const progress = Math.max(0, Math.min(1, build.age / build.duration));
-            drawStar(point.x, point.y, TRAP_RADIUS * state.view.scale, 0.2 + progress * 0.8);
+            drawStar(point.x, point.y, TRAP_RADIUS * state.view.scale, 0.5);
         }
         for (const trap of state.traps) {
             const point = worldToScreen(trap.x, trap.y);
-            drawStar(point.x, point.y, TRAP_RADIUS * state.view.scale, 1);
+            const radius = TRAP_RADIUS * state.view.scale;
+            drawStar(point.x, point.y, radius, 1);
+            drawBuildCompletionFlash(point.x, point.y, radius, trap.completionFlashRemaining);
+        }
+    }
+
+    function drawTurrets() {
+        const drawTurret = (turret, alpha) => {
+            const point = worldToScreen(turret.x, turret.y);
+            const radius = turret.radius * state.view.scale;
+            const innerRadius = radius * TURRET_BARREL_INNER_RADIUS_SCALE;
+            const heading = Number.isFinite(turret.heading) ? turret.heading : state.target.heading;
+            const barrelLength = radius * 1.35;
+            const barrelWidth = innerRadius * 2 / 3;
+            ctx.save();
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = "#ffffff";
+            ctx.strokeStyle = "#000000";
+            ctx.lineWidth = Math.max(2, state.view.scale * 0.08);
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, innerRadius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.lineCap = "butt";
+            ctx.strokeStyle = "#000000";
+            ctx.lineWidth = barrelWidth + Math.max(2, state.view.scale * 0.08);
+            ctx.beginPath();
+            ctx.moveTo(point.x, point.y);
+            ctx.lineTo(point.x + Math.cos(heading) * barrelLength, point.y + Math.sin(heading) * barrelLength);
+            ctx.stroke();
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = barrelWidth;
+            ctx.stroke();
+            if (Number.isFinite(turret.health) && turret.health < turret.maxHealth) {
+                const width = radius * 1.5;
+                const ratio = Math.max(0, Math.min(1, turret.health / turret.maxHealth));
+                ctx.fillStyle = "#250000";
+                ctx.fillRect(point.x - width / 2, point.y - radius - 8, width, 4);
+                ctx.fillStyle = "#ffffff";
+                ctx.fillRect(point.x - width / 2, point.y - radius - 8, width * ratio, 4);
+            }
+            ctx.restore();
+        };
+        for (const build of state.turretBuilds) {
+            drawTurret(build, 0.5);
+        }
+        for (const turret of state.turrets) {
+            drawTurret(turret, 1);
+            const point = worldToScreen(turret.x, turret.y);
+            drawBuildCompletionFlash(
+                point.x,
+                point.y,
+                turret.radius * state.view.scale,
+                turret.completionFlashRemaining
+            );
         }
     }
 
@@ -8904,6 +9495,7 @@
         drawFountains();
         drawTalismans();
         drawTraps();
+        drawTurrets();
         drawDestructoBeam();
         drawTarget();
         if (state.debug.showAgentPath) drawAgentPaths();
@@ -12000,6 +12592,7 @@
         framePart("enemy temperatures", () => updateEnemyTemperatures(dt));
         framePart("fireballs", () => updateFireballs(dt));
         framePart("traps", () => updateTraps(dt));
+        framePart("turrets", () => updateTurrets(dt));
         framePart("fire deaths", () => updateFireDeathEffects(dt));
         framePart("spike shatters", () => updateSpikeShatterEffects(dt));
         framePart("wall shatters", () => updateWallShatterEffects(dt));
@@ -12111,13 +12704,21 @@
     window.addEventListener("keydown", (event) => {
         if (state.startupMenuOpen) return;
         if (!isEditableEventTarget(event.target) && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
-            if (event.code === "KeyB") state.buildTrapChord.b = true;
-            if (event.code === "KeyT") state.buildTrapChord.t = true;
-            if (state.buildTrapChord.b && state.buildTrapChord.t) {
+            if (event.code === "KeyB") state.buildChord.b = true;
+            if (event.code === "KeyT") state.buildChord.t = true;
+            if (event.code === "KeyK") state.buildChord.k = true;
+            if (state.buildChord.b && state.buildChord.t) {
                 event.preventDefault();
                 state.wallTool.active = false;
                 cancelWallBuildDrag();
                 setSelectedSpell("construction");
+                return;
+            }
+            if (state.buildChord.b && state.buildChord.k) {
+                event.preventDefault();
+                state.wallTool.active = false;
+                cancelWallBuildDrag();
+                setSelectedSpell("turret");
                 return;
             }
         }
@@ -12186,8 +12787,9 @@
     });
     window.addEventListener("keyup", (event) => {
         if (state.startupMenuOpen) return;
-        if (event.code === "KeyB") state.buildTrapChord.b = false;
-        if (event.code === "KeyT") state.buildTrapChord.t = false;
+        if (event.code === "KeyB") state.buildChord.b = false;
+        if (event.code === "KeyT") state.buildChord.t = false;
+        if (event.code === "KeyK") state.buildChord.k = false;
         if (event.code === "Space" || event.key === " ") {
             event.preventDefault();
             state.spaceHeld = false;
@@ -12218,8 +12820,9 @@
         state.zoomHeld = false;
         state.relocateSprintHeld = false;
         state.relocateSprintActive = false;
-        state.buildTrapChord.b = false;
-        state.buildTrapChord.t = false;
+        state.buildChord.b = false;
+        state.buildChord.t = false;
+        state.buildChord.k = false;
         state.destructoBeam.held = false;
         resetDestructoBeamTarget();
         state.wallTool.active = false;

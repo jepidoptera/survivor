@@ -575,13 +575,26 @@
         {
           "level": 3,
           "headline": "Construction III",
-          "subtitle": "Traps detonate as level 3 fireballs.",
+          "subtitle": "Build turrets that fire level 1 spikes without endangering you.",
+          "costPerSecond": 10,
+          "range": 10,
+          "duration": 2.5,
           "buildings": {
             "trap": {
               "coinCost": 1,
               "manaCost": 10,
               "buildTime": 1.4,
               "fireballLevel": 3
+            },
+            "turret": {
+              "coinCost": 20,
+              "manaCost": 50,
+              "buildTime": 10,
+              "hitpoints": 50,
+              "spikeLevel": 1,
+              "sizeScale": 1,
+              "firingRateScale": 0.5,
+              "playerSafetyAngleDegrees": 5
             }
           }
         },
@@ -589,12 +602,25 @@
           "level": 4,
           "headline": "Construction IV",
           "subtitle": "Traps detonate as level 4 fireballs.",
+          "costPerSecond": 10,
+          "range": 10,
+          "duration": 1.25,
           "buildings": {
             "trap": {
               "coinCost": 1,
               "manaCost": 10,
               "buildTime": 1.2,
               "fireballLevel": 4
+            },
+            "turret": {
+              "coinCost": 40,
+              "manaCost": 50,
+              "buildTime": 8,
+              "hitpoints": 50,
+              "spikeLevel": 2,
+              "sizeScale": 1.1,
+              "firingRateScale": 0.5,
+              "playerSafetyAngleDegrees": 5
             }
           }
         },
@@ -602,12 +628,25 @@
           "level": 5,
           "headline": "Construction V",
           "subtitle": "Traps detonate as level 5 fireballs.",
+          "costPerSecond": 10,
+          "range": 10,
+          "duration": 0.625,
           "buildings": {
             "trap": {
               "coinCost": 1,
               "manaCost": 10,
               "buildTime": 1,
               "fireballLevel": 5
+            },
+            "turret": {
+              "coinCost": 60,
+              "manaCost": 50,
+              "buildTime": 6,
+              "hitpoints": 50,
+              "spikeLevel": 3,
+              "sizeScale": 1.21,
+              "firingRateScale": 0.5,
+              "playerSafetyAngleDegrees": 5
             }
           }
         },
@@ -615,12 +654,25 @@
           "level": 6,
           "headline": "Construction VI",
           "subtitle": "Traps detonate as level 6 fireballs.",
+          "costPerSecond": 10,
+          "range": 10,
+          "duration": 0.3125,
           "buildings": {
             "trap": {
               "coinCost": 1,
               "manaCost": 10,
               "buildTime": 0.8,
               "fireballLevel": 6
+            },
+            "turret": {
+              "coinCost": 80,
+              "manaCost": 50,
+              "buildTime": 4,
+              "hitpoints": 50,
+              "spikeLevel": 4,
+              "sizeScale": 1.331,
+              "firingRateScale": 0.5,
+              "playerSafetyAngleDegrees": 5
             }
           }
         },
@@ -628,12 +680,25 @@
           "level": 7,
           "headline": "Master Construction",
           "subtitle": "Traps detonate as level 7 fireballs.",
+          "costPerSecond": 10,
+          "range": 10,
+          "duration": 0.15625,
           "buildings": {
             "trap": {
               "coinCost": 1,
               "manaCost": 10,
               "buildTime": 0.6,
               "fireballLevel": 7
+            },
+            "turret": {
+              "coinCost": 100,
+              "manaCost": 50,
+              "buildTime": 2,
+              "hitpoints": 50,
+              "spikeLevel": 5,
+              "sizeScale": 1.4641,
+              "firingRateScale": 0.5,
+              "playerSafetyAngleDegrees": 5
             }
           }
         }
