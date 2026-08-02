@@ -50,6 +50,7 @@ globalThis.__testExport = removeFurthestGeneratedMazeSection;`,
 
 function loadSystem(state, clock, getRequiredKeys) {
     const posted = [];
+    const statuses = [];
     const context = {
         Float32Array,
         Map,
@@ -95,12 +96,67 @@ function loadSystem(state, clock, getRequiredKeys) {
             },
             getPathfindingLayerBounds: () => ({ minX: 0, minY: 0, maxX: 1, maxY: 1 }),
             getSavedSectionWallOverrides: () => [],
-            setWorkerStatus() {},
+            setWorkerStatus(status) { statuses.push(status); },
             installGeneratedMazeWorkerResult() {}
         }
     });
-    return { system, posted };
+    return { system, posted, statuses };
 }
+
+function createStreamingState() {
+    return {
+        generatedMazeChunkKeys: new Set(),
+        generatedMazeSectionLastRequiredAt: new Map(),
+        generatedMazeSignature: "",
+        generatedMazePendingSignature: "",
+        generatedMazeRequestId: 1,
+        generatedMazeActiveRequestId: 0,
+        generatedMazeLoading: false,
+        brokenWallGaps: [],
+        manualWalls: new Float32Array(0)
+    };
+}
+
+test("Wizard of Flatland retries a worker-reported maze failure after a bounded delay", () => {
+    const clock = { now: 1000 };
+    const state = createStreamingState();
+    const { system, posted, statuses } = loadSystem(state, clock, () => ["missing"]);
+
+    assert.equal(system.refreshGeneratedMazeIfNeeded(), true);
+    const failedRequestId = state.generatedMazeActiveRequestId;
+    system.handleMazeWorkerMessage({ data: {
+        type: "error",
+        requestId: failedRequestId,
+        message: "section generation exploded"
+    } });
+
+    assert.equal(state.generatedMazeLoading, false);
+    assert.equal(state.generatedMazeActiveRequestId, 0);
+    assert.equal(state.generatedMazePendingSignature, "");
+    assert.equal(state.generatedMazeLastError.message, "section generation exploded");
+    assert.equal(statuses.at(-1), "section generation exploded");
+    assert.equal(system.refreshGeneratedMazeIfNeeded(), false);
+    assert.equal(posted.length, 1);
+
+    clock.now = 2000;
+    assert.equal(system.refreshGeneratedMazeIfNeeded(), true);
+    assert.equal(posted.length, 2);
+});
+
+test("Wizard of Flatland releases a maze request after a worker error event", () => {
+    const clock = { now: 1000 };
+    const state = createStreamingState();
+    const { system } = loadSystem(state, clock, () => ["missing"]);
+
+    system.refreshGeneratedMazeIfNeeded();
+    system.handleMazeWorkerError({ message: "worker crashed" });
+
+    assert.equal(state.generatedMazeLoading, false);
+    assert.equal(state.generatedMazeActiveRequestId, 0);
+    assert.equal(state.generatedMazePendingSignature, "");
+    assert.equal(state.generatedMazeLastError.message, "worker crashed");
+    assert.equal(state.generatedMazeLastError.source, "worker-event");
+});
 
 test("Wizard of Flatland section cache retains recently required sections across boundary zigzags", () => {
     const clock = { now: 1000 };

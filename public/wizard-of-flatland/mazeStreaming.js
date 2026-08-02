@@ -1,6 +1,8 @@
 (function () {
     "use strict";
 
+    const MAZE_WORKER_RETRY_DELAY_MS = 1000;
+
     function createMazeStreamingSystem(deps) {
         const state = deps && deps.state;
         const worker = deps && deps.worker;
@@ -96,9 +98,38 @@
             const signature = getMazeSignature(options, keys);
             if (!changed && signature === state.generatedMazeSignature) return false;
             if (!changed && signature === state.generatedMazePendingSignature) return false;
+            if (
+                signature === state.generatedMazeFailedSignature
+                && Number.isFinite(state.generatedMazeRetryAt)
+                && now < state.generatedMazeRetryAt
+            ) {
+                return false;
+            }
 
             requestGeneratedMazeRefresh(options, keys, signature);
             return true;
+        }
+
+        function failActiveMazeRequest(message, details = {}) {
+            const failedRequestId = state.generatedMazeActiveRequestId;
+            const failedSignature = state.generatedMazePendingSignature;
+            const errorMessage = typeof message === "string" && message.length > 0
+                ? message
+                : "maze worker failed";
+            state.generatedMazeLoading = false;
+            state.generatedMazeActiveRequestId = 0;
+            state.generatedMazePendingSignature = "";
+            state.generatedMazeFailedSignature = failedSignature;
+            state.generatedMazeRetryAt = performance.now() + MAZE_WORKER_RETRY_DELAY_MS;
+            state.generatedMazeLastError = {
+                at: performance.now(),
+                requestId: failedRequestId,
+                signature: failedSignature,
+                message: errorMessage,
+                ...details
+            };
+            callbacks.setWorkerStatus(errorMessage);
+            console.error("[wizard of flatland maze worker]", state.generatedMazeLastError);
         }
 
         function requestGeneratedMazeRefresh(options, keys, signature) {
@@ -144,8 +175,7 @@
             if (message.type === "ready") return;
             if (message.type === "error") {
                 if (Number(message.requestId) !== Number(state.generatedMazeActiveRequestId)) return;
-                state.generatedMazeLoading = false;
-                callbacks.setWorkerStatus(message.message || "maze error");
+                failActiveMazeRequest(message.message || "maze error", { source: "worker-message" });
                 return;
             }
             if (message.type !== "maze_sections_result") return;
@@ -160,11 +190,13 @@
                     : 0
             });
             callbacks.installGeneratedMazeWorkerResult(message);
+            state.generatedMazeFailedSignature = "";
+            state.generatedMazeRetryAt = 0;
+            state.generatedMazeLastError = null;
         }
 
         function handleMazeWorkerError(event) {
-            state.generatedMazeLoading = false;
-            callbacks.setWorkerStatus(event.message || "maze worker failed");
+            failActiveMazeRequest(event && event.message || "maze worker failed", { source: "worker-event" });
         }
 
         return Object.freeze({
