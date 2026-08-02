@@ -82,6 +82,10 @@
     const FIREBALL_ICON_PATH = "/assets/images/thumbnails/fireball.png";
     const SPIKE_ICON_PATH = "/assets/images/magic/spike.png";
     const FREEZE_ICON_PATH = "/assets/images/magic/iceball.png";
+    const TRAP_ICON_PATH = "/assets/images/thumbnails/trap.svg";
+    const DESTRUCTO_BEAM_ICON_PATH = "/assets/images/thumbnails/destructo-beam.svg";
+    const TRAP_RADIUS = 0.34;
+    const TRAP_TRIGGER_DELAY_SECONDS = 0.05;
     const FREEZE_PARTICLES_PER_SECOND_AT_LEVEL_ONE = 132;
     const FREEZE_PARTICLE_COUNT_MULTIPLIER_PER_LEVEL = 1.25;
     const FREEZE_CONE_START_WIDTH = 1;
@@ -567,6 +571,8 @@
         agents: [],
         fireballs: [],
         fireballExplosions: [],
+        traps: [],
+        trapBuilds: [],
         fireDeathEffects: [],
         freezeParticles: [],
         spikeShatterEffects: [],
@@ -604,6 +610,9 @@
         generatedMazeActiveRequestId: 0,
         generatedMazePendingSignature: "",
         generatedMazeLoading: false,
+        generatedMazeFailedSignature: "",
+        generatedMazeRetryAt: 0,
+        generatedMazeLastError: null,
         generatedMazeLookaheadKeys: [],
         generatedMazeLookaheadNextRefreshAt: 0,
         generatedMazeInitialEnemySpawnBudgetsBySectionKey: new Map(),
@@ -649,7 +658,8 @@
             freeze: 0,
             spikes: 0,
             healing: 0,
-            magicrecharge: 0
+            magicrecharge: 0,
+            construction: 0
         },
         spellCooldownRemaining: 0,
         spellCooldownDuration: 0,
@@ -678,6 +688,16 @@
         zoomHeld: false,
         relocateSprintHeld: false,
         relocateSprintActive: false,
+        buildTrapChord: { b: false, t: false },
+        destructoBeam: {
+            held: false,
+            targetWallIndex: null,
+            progress: 0,
+            hitX: NaN,
+            hitY: NaN,
+            rangeEndX: NaN,
+            rangeEndY: NaN
+        },
         stats: null,
         debug: createWizardOfFlatlandDebugState(),
         wallTool: {
@@ -840,6 +860,7 @@
         const relocateSprintInUse = state.relocateSprintHeld && getWizardSpellLevel("teleport") >= 1;
         return state.spellCooldownRemaining <= 0 &&
             !(state.selectedSpell === "freeze" && state.spaceHeld) &&
+            !(state.selectedSpell === "destructobeam" && state.spaceHeld) &&
             !relocateSprintInUse;
     };
     const wizardVitalsSystem = getWizardFlatlandVitalsApi().createWizardVitalsSystem({
@@ -1317,7 +1338,10 @@
         if (!isSelectableSpellId(id)) {
             throw new Error(`Wizard of Flatland cannot select unknown spell: ${spellId}`);
         }
-        if (getWizardSpellLevel(id) < 1) return false;
+        const learnedLevel = id === "destructobeam"
+            ? getWizardSpellLevel("construction")
+            : getWizardSpellLevel(id);
+        if (learnedLevel < (id === "destructobeam" ? 2 : 1)) return false;
         state.selectedSpell = id;
         updateSelectedSpellHud();
         refreshSpellLevelPanel();
@@ -1338,6 +1362,14 @@
             spellStatusIconImage.src = FREEZE_ICON_PATH;
             return;
         }
+        if (state.selectedSpell === "construction") {
+            spellStatusIconImage.src = TRAP_ICON_PATH;
+            return;
+        }
+        if (state.selectedSpell === "destructobeam") {
+            spellStatusIconImage.src = DESTRUCTO_BEAM_ICON_PATH;
+            return;
+        }
         throw new Error(`Wizard of Flatland selected spell HUD cannot display unknown spell: ${state.selectedSpell}`);
     }
 
@@ -1347,12 +1379,13 @@
             freeze: 0,
             spikes: 0,
             healing: 0,
-            magicrecharge: 0
+            magicrecharge: 0,
+            construction: 0
         };
     }
 
     function isSelectableSpellId(spellId) {
-        return spellId === "fireball" || spellId === "freeze" || spellId === "spikes";
+        return spellId === "fireball" || spellId === "freeze" || spellId === "spikes" || spellId === "construction" || spellId === "destructobeam";
     }
 
     function getWizardOfFlatlandDebugApi() {
@@ -2919,6 +2952,8 @@
         state.wallShatterEffects = [];
         state.brokenWallGaps = [];
         state.spaceHeld = false;
+        state.destructoBeam.held = false;
+        resetDestructoBeamTarget();
         state.spellCooldownRemaining = 0;
         state.spellCooldownDuration = 0;
         state.fountains = [];
@@ -3284,6 +3319,8 @@
         state.restoredSectionSnapshotKeys = new Set();
         state.fireballs = [];
         state.fireballExplosions = [];
+        state.traps = [];
+        state.trapBuilds = [];
         state.fireDeathEffects = [];
         state.freezeParticles = [];
         state.spikeShatterEffects = [];
@@ -4526,6 +4563,11 @@
             return;
         }
         if (state.selectedSpell === "freeze") return;
+        if (state.selectedSpell === "construction") {
+            startTrapBuild();
+            return;
+        }
+        if (state.selectedSpell === "destructobeam") return;
         throw new Error(`Wizard of Flatland cannot cast unknown selected spell: ${state.selectedSpell}`);
     }
 
@@ -4600,6 +4642,7 @@
 
     function updateHeldSpellCasting(dt) {
         if (!state.spaceHeld) return;
+        if (state.selectedSpell === "destructobeam") return;
         if (state.selectedSpell === "freeze") {
             profiler.hitchSpan("update freeze spell", () => updateFreezeSpell(dt));
             return;
@@ -4668,6 +4711,231 @@
         }
         if (killed) emitFreezeDeathParticles(agent);
         return killed;
+    }
+
+    function getConstructionLevelStats() {
+        const definition = getSpellLevelDefinitions().find((spell) => spell.id === "construction");
+        const level = getWizardSpellLevel("construction");
+        const levelStats = definition && definition.levels[level - 1];
+        const stats = levelStats && levelStats.buildings && levelStats.buildings.trap;
+        if (
+            !stats ||
+            !(stats.buildTime > 0) ||
+            !(stats.fireballLevel > 0) ||
+            !Number.isInteger(stats.coinCost) ||
+            stats.coinCost < 0 ||
+            !Number.isFinite(stats.manaCost) ||
+            stats.manaCost < 0
+        ) {
+            throw new Error(`Wizard of Flatland construction level ${level} requires trap stats`);
+        }
+        return stats;
+    }
+
+    function getDestructoBeamStats() {
+        const definition = getSpellLevelDefinitions().find((spell) => spell.id === "construction");
+        const level = getWizardSpellLevel("construction");
+        if (level < 2) return null;
+        const stats = definition && definition.levels.slice(0, level).reverse().find((entry) => (
+            entry && entry.costPerSecond > 0 && entry.range > 0 && entry.duration > 0
+        ));
+        if (!stats) throw new Error(`Wizard of Flatland construction level ${level} requires destructo beam stats`);
+        return stats;
+    }
+
+    function resetDestructoBeamTarget() {
+        state.destructoBeam.targetWallIndex = null;
+        state.destructoBeam.progress = 0;
+        state.destructoBeam.hitX = NaN;
+        state.destructoBeam.hitY = NaN;
+    }
+
+    function findDestructoBeamWallHit(range) {
+        const cursor = getCurrentProjectedCursorWorldPoint();
+        const dx = cursor.x - state.target.x;
+        const dy = cursor.y - state.target.y;
+        const length = Math.hypot(dx, dy);
+        if (!(length > 0.000001)) return null;
+        const endX = state.target.x + dx / length * range;
+        const endY = state.target.y + dy / length * range;
+        state.destructoBeam.rangeEndX = endX;
+        state.destructoBeam.rangeEndY = endY;
+        let best = null;
+        for (let wallIndex = 0; wallIndex < getWallCount(state.walls); wallIndex++) {
+            const base = wallIndex * WALL_STRIDE;
+            const intersection = segmentIntersectionParameters(
+                state.target.x,
+                state.target.y,
+                endX,
+                endY,
+                state.walls[base + WALL_X1],
+                state.walls[base + WALL_Y1],
+                state.walls[base + WALL_X2],
+                state.walls[base + WALL_Y2]
+            );
+            if (!intersection || (best && intersection.t >= best.t)) continue;
+            best = {
+                wallIndex,
+                t: intersection.t,
+                x: state.target.x + (endX - state.target.x) * intersection.t,
+                y: state.target.y + (endY - state.target.y) * intersection.t
+            };
+        }
+        return best;
+    }
+
+    function getDestructoBeamTargetSegment(wallIndex, hitX, hitY) {
+        if (!Number.isInteger(wallIndex) || wallIndex < 0 || wallIndex >= getWallCount(state.walls)) {
+            throw new Error(`Wizard of Flatland destructo beam received invalid wall ${wallIndex}`);
+        }
+        const base = wallIndex * WALL_STRIDE;
+        const ax = state.walls[base + WALL_X1];
+        const ay = state.walls[base + WALL_Y1];
+        const bx = state.walls[base + WALL_X2];
+        const by = state.walls[base + WALL_Y2];
+        const wallT = pointProjectionParameter(hitX, hitY, ax, ay, bx, by);
+        const ids = state.wallBreakSegmentIdsByWallIndex[wallIndex];
+        if (!Array.isArray(ids) || ids.length === 0) {
+            throw new Error(`Wizard of Flatland destructo beam wall ${wallIndex} has no breakable sections`);
+        }
+        const clampedT = Math.max(0, Math.min(1, wallT));
+        const id = ids[Math.min(ids.length - 1, Math.floor(clampedT * ids.length))];
+        const segment = state.wallBreakSegmentsById.get(id);
+        if (!segment) throw new Error(`Wizard of Flatland destructo beam section ${id} is missing`);
+        return segment;
+    }
+
+    function updateDestructoBeam(dt) {
+        const beam = state.destructoBeam;
+        beam.held = state.spaceHeld && state.selectedSpell === "destructobeam";
+        if (!beam.held) {
+            resetDestructoBeamTarget();
+            return;
+        }
+        const stats = getDestructoBeamStats();
+        if (!stats) {
+            beam.held = false;
+            resetDestructoBeamTarget();
+            return;
+        }
+        const hit = findDestructoBeamWallHit(stats.range);
+        if (!hit) {
+            resetDestructoBeamTarget();
+            return;
+        }
+        if (beam.targetWallIndex !== hit.wallIndex) {
+            beam.targetWallIndex = hit.wallIndex;
+            beam.progress = 0;
+        }
+        beam.hitX = hit.x;
+        beam.hitY = hit.y;
+        if (!spendWizardMagic(stats.costPerSecond * dt)) {
+            resetDestructoBeamTarget();
+            return;
+        }
+        beam.progress += dt;
+        if (beam.progress < stats.duration) return;
+        const segment = getDestructoBeamTargetSegment(hit.wallIndex, hit.x, hit.y);
+        breakWallSegmentForAgent({ id: "destructo-beam" }, segment);
+        resetDestructoBeamTarget();
+    }
+
+    function getFireballStatsForLevel(level) {
+        const definition = getSpellLevelDefinitions().find((spell) => spell.id === "fireball");
+        const stats = definition && definition.levels[Math.max(1, Math.min(7, Math.round(level))) - 1];
+        if (!stats || !(stats.damage > 0) || !(stats.explosionRadius > 0)) {
+            throw new Error(`Wizard of Flatland trap requires fireball level ${level}`);
+        }
+        return stats;
+    }
+
+    function startTrapBuild() {
+        if (state.spellCooldownRemaining > 0) return;
+        const stats = getConstructionLevelStats();
+        const coinCost = stats.coinCost;
+        if (!Number.isFinite(state.wizardVitals.exp)) {
+            throw new Error("Wizard of Flatland trap construction requires a finite coin balance");
+        }
+        if (state.wizardVitals.exp < coinCost) return;
+        const manaCost = stats.manaCost;
+        if (state.wizardVitals.magic < manaCost) return;
+        const cursor = getCurrentProjectedCursorWorldPoint();
+        if (!spendWizardMagic(manaCost)) {
+            throw new Error("Wizard of Flatland trap magic affordability changed during construction");
+        }
+        state.wizardVitals.exp -= coinCost;
+        updateStatusBars();
+        state.trapBuilds.push({ x: cursor.x, y: cursor.y, age: 0, duration: stats.buildTime, level: stats.fireballLevel });
+        state.spellCooldownRemaining = stats.buildTime;
+        state.spellCooldownDuration = stats.buildTime;
+        updateSpellCooldownHud();
+    }
+
+    function detonateTrap(trap) {
+        if (trap.exploded) return;
+        trap.exploded = true;
+        const stats = getFireballStatsForLevel(trap.level);
+        state.agents = state.agents.filter((agent) => {
+            const distance = Math.hypot(agent.x - trap.x, agent.y - trap.y);
+            if (distance > stats.explosionRadius + FIREBALL_HALF_DAMAGE_OUTER_RADIUS + agent.radius) return true;
+            const damageScale = distance <= stats.explosionRadius + agent.radius ? 1 : 0.5;
+            const killed = damageAgentAndMaybeDropCoin(agent, stats.damage * damageScale);
+            if (killed) state.fireDeathEffects.push(createFireDeathEffect(agent));
+            return !killed;
+        });
+        damageWizardIntersectingFireballBlast(trap.x, trap.y, stats.explosionRadius, stats.damage);
+        state.fireballExplosions.push({ x: trap.x, y: trap.y, radius: stats.explosionRadius, age: 0 });
+        for (const other of state.traps) {
+            if (
+                other !== trap &&
+                !other.detonated &&
+                !Number.isFinite(other.triggerDelayRemaining) &&
+                Math.hypot(other.x - trap.x, other.y - trap.y) <= stats.explosionRadius
+            ) {
+                scheduleTrapDetonation(other);
+            }
+        }
+        trap.detonated = true;
+    }
+
+    function scheduleTrapDetonation(trap) {
+        if (!trap || trap.detonated || Number.isFinite(trap.triggerDelayRemaining)) return false;
+        trap.triggerDelayRemaining = TRAP_TRIGGER_DELAY_SECONDS;
+        trap.triggerDelayFresh = true;
+        return true;
+    }
+
+    function updateTraps(dt) {
+        const cursor = state.trapBuilds.length > 0 ? getCurrentProjectedCursorWorldPoint() : null;
+        for (const build of state.trapBuilds) {
+            build.x = cursor.x;
+            build.y = cursor.y;
+            build.age += dt;
+        }
+        const completed = state.trapBuilds.filter((build) => build.age >= build.duration);
+        state.trapBuilds = state.trapBuilds.filter((build) => build.age < build.duration);
+        for (const build of completed) state.traps.push({
+            x: build.x,
+            y: build.y,
+            level: build.level,
+            detonated: false,
+            triggerDelayRemaining: null
+        });
+        const previouslyTriggered = state.traps.filter((trap) => (
+            Number.isFinite(trap.triggerDelayRemaining) && trap.triggerDelayFresh !== true
+        ));
+        for (const trap of previouslyTriggered) {
+            trap.triggerDelayRemaining -= dt;
+            if (trap.triggerDelayRemaining <= 0) detonateTrap(trap);
+        }
+        for (const trap of state.traps) {
+            if (trap.detonated || Number.isFinite(trap.triggerDelayRemaining)) continue;
+            if (state.agents.some((agent) => Math.hypot(agent.x - trap.x, agent.y - trap.y) <= agent.radius + TRAP_RADIUS)) {
+                scheduleTrapDetonation(trap);
+            }
+        }
+        for (const trap of state.traps) trap.triggerDelayFresh = false;
+        state.traps = state.traps.filter((trap) => !trap.detonated);
     }
 
     function updateRelocateSprint(dt) {
@@ -5671,6 +5939,15 @@
             radius: fireball.explosionRadius,
             age: 0
         });
+        for (const trap of state.traps) {
+            if (
+                !trap.detonated &&
+                !Number.isFinite(trap.triggerDelayRemaining) &&
+                Math.hypot(trap.x - fireball.x, trap.y - fireball.y) <= fireball.explosionRadius
+            ) {
+                scheduleTrapDetonation(trap);
+            }
+        }
     }
 
     function damageWizardIntersectingFireballBlast(circleX, circleY, radius, damage) {
@@ -8517,6 +8794,104 @@
         return count;
     }
 
+    function drawTraps() {
+        const drawStar = (x, y, radius, alpha) => {
+            ctx.save();
+            ctx.globalAlpha = alpha;
+            ctx.strokeStyle = "#ffffff";
+            ctx.fillStyle = "#000000";
+            ctx.lineWidth = Math.max(1.5, radius * 0.1);
+            ctx.beginPath();
+            for (let step = 0, index = 0; step < 9; step += 1, index = (index + 2) % 9) {
+                const angle = -Math.PI / 2 + index * Math.PI * 2 / 9;
+                const px = x + Math.cos(angle) * radius;
+                const py = y + Math.sin(angle) * radius;
+                if (step === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(x, y, radius * 0.83, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+        };
+        for (const build of state.trapBuilds) {
+            const point = worldToScreen(build.x, build.y);
+            const progress = Math.max(0, Math.min(1, build.age / build.duration));
+            drawStar(point.x, point.y, TRAP_RADIUS * state.view.scale, 0.2 + progress * 0.8);
+        }
+        for (const trap of state.traps) {
+            const point = worldToScreen(trap.x, trap.y);
+            drawStar(point.x, point.y, TRAP_RADIUS * state.view.scale, 1);
+        }
+    }
+
+    function drawDestructoBeam() {
+        const beam = state.destructoBeam;
+        if (!beam.held || !Number.isFinite(beam.hitX) || !Number.isFinite(beam.hitY)) return;
+        const endX = beam.hitX;
+        const endY = beam.hitY;
+        const start = worldToScreen(state.target.x, state.target.y);
+        const end = worldToScreen(endX, endY);
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const length = Math.hypot(dx, dy);
+        if (!(length > 0.001)) return;
+        const nx = -dy / length;
+        const ny = dx / length;
+        const stats = getDestructoBeamStats();
+        const progress = stats ? Math.max(0, Math.min(1, beam.progress / stats.duration)) : 0;
+        ctx.save();
+        ctx.lineCap = "round";
+        const colors = ["#ff3030", "#35a7ff", "#38e06f"];
+        for (let wave = 0; wave < colors.length; wave++) {
+            ctx.strokeStyle = colors[wave];
+            ctx.lineWidth = Math.max(1.2, state.view.scale * 0.035);
+            ctx.shadowColor = colors[wave];
+            ctx.shadowBlur = Math.max(7, state.view.scale * 0.18);
+            ctx.beginPath();
+            for (let step = 0; step <= 36; step++) {
+                const t = step / 36;
+                const offset = Math.sin(t * Math.PI * 12 + wave * Math.PI * 2 / 3 - beam.progress * 12)
+                    * Math.max(2, state.view.scale * 0.08);
+                const x = start.x + dx * t + nx * offset;
+                const y = start.y + dy * t + ny * offset;
+                if (step === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+        ctx.shadowColor = "transparent";
+        ctx.shadowBlur = 0;
+        if (Number.isFinite(beam.hitX) && Number.isFinite(beam.hitY)) {
+            const glow = worldToScreen(beam.hitX, beam.hitY);
+            const radius = state.view.scale * (0.18 + progress * 0.32);
+            const gradient = ctx.createRadialGradient(glow.x, glow.y, 0, glow.x, glow.y, radius);
+            gradient.addColorStop(0, `rgba(255,255,255,${0.35 + progress * 0.65})`);
+            gradient.addColorStop(1, "rgba(255,255,255,0)");
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(glow.x, glow.y, radius, 0, Math.PI * 2);
+            ctx.fill();
+            if (Number.isInteger(beam.targetWallIndex)) {
+                const segment = getDestructoBeamTargetSegment(
+                    beam.targetWallIndex,
+                    beam.hitX,
+                    beam.hitY
+                );
+                const a = worldToScreen(segment.ax, segment.ay);
+                const b = worldToScreen(segment.bx, segment.by);
+                ctx.strokeStyle = `rgba(255,255,255,${0.2 + progress * 0.8})`;
+                ctx.lineWidth = Math.max(2, state.view.scale * WALL_WORLD_THICKNESS * (1 + progress));
+                ctx.beginPath();
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+                ctx.stroke();
+            }
+        }
+        ctx.restore();
+    }
+
     function draw() {
         resizeCanvas();
         drawFloor();
@@ -8530,6 +8905,8 @@
         drawCoins();
         drawFountains();
         drawTalismans();
+        drawTraps();
+        drawDestructoBeam();
         drawTarget();
         if (state.debug.showAgentPath) drawAgentPaths();
         drawFreezeParticles();
@@ -11674,9 +12051,11 @@
                 })
             );
         });
+        framePart("destructo beam", () => updateDestructoBeam(dt));
         framePart("freeze particles", () => updateFreezeParticles(dt));
         framePart("enemy temperatures", () => updateEnemyTemperatures(dt));
         framePart("fireballs", () => updateFireballs(dt));
+        framePart("traps", () => updateTraps(dt));
         framePart("fire deaths", () => updateFireDeathEffects(dt));
         framePart("spike shatters", () => updateSpikeShatterEffects(dt));
         framePart("wall shatters", () => updateWallShatterEffects(dt));
@@ -11787,6 +12166,17 @@
     }
     window.addEventListener("keydown", (event) => {
         if (state.startupMenuOpen) return;
+        if (!isEditableEventTarget(event.target) && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+            if (event.code === "KeyB") state.buildTrapChord.b = true;
+            if (event.code === "KeyT") state.buildTrapChord.t = true;
+            if (state.buildTrapChord.b && state.buildTrapChord.t) {
+                event.preventDefault();
+                state.wallTool.active = false;
+                cancelWallBuildDrag();
+                setSelectedSpell("construction");
+                return;
+            }
+        }
         if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key && event.key.toLowerCase() === "f") {
             event.preventDefault();
             if (!event.repeat) toggleDebugFpsCounter();
@@ -11817,6 +12207,14 @@
             setSelectedSpell("freeze");
             return;
         }
+        if (
+            !isEditableEventTarget(event.target) &&
+            (event.code === "KeyX" || (typeof event.key === "string" && event.key.toLowerCase() === "x"))
+        ) {
+            event.preventDefault();
+            setSelectedSpell("destructobeam");
+            return;
+        }
         if (event.code === "Space" || event.key === " ") {
             event.preventDefault();
             if (!state.spaceHeld) shootSelectedSpell();
@@ -11844,6 +12242,8 @@
     });
     window.addEventListener("keyup", (event) => {
         if (state.startupMenuOpen) return;
+        if (event.code === "KeyB") state.buildTrapChord.b = false;
+        if (event.code === "KeyT") state.buildTrapChord.t = false;
         if (event.code === "Space" || event.key === " ") {
             event.preventDefault();
             state.spaceHeld = false;
@@ -11874,6 +12274,10 @@
         state.zoomHeld = false;
         state.relocateSprintHeld = false;
         state.relocateSprintActive = false;
+        state.buildTrapChord.b = false;
+        state.buildTrapChord.t = false;
+        state.destructoBeam.held = false;
+        resetDestructoBeamTarget();
         state.wallTool.active = false;
         cancelWallBuildDrag();
     });

@@ -537,6 +537,107 @@
           "projectileSpeed": 0
         }
       ]
+    },
+    {
+      "id": "construction",
+      "displayName": "Construction",
+      "icon": "/assets/images/thumbnails/trap.svg",
+      "levels": [
+        {
+          "level": 1,
+          "headline": "Trap",
+          "subtitle": "Build a one-coin trap in two seconds. It detonates as a level 1 fireball.",
+          "buildings": {
+            "trap": {
+              "coinCost": 1,
+              "manaCost": 10,
+              "buildTime": 2,
+              "fireballLevel": 1
+            }
+          }
+        },
+        {
+          "level": 2,
+          "headline": "Destructo Beam",
+          "subtitle": "Traps build in 1.6 seconds with level 2 fireballs. Channel five seconds to remove a wall section.",
+          "buildings": {
+            "trap": {
+              "coinCost": 1,
+              "manaCost": 10,
+              "buildTime": 1.6,
+              "fireballLevel": 2
+            }
+          },
+          "costPerSecond": 10,
+          "range": 10,
+          "duration": 5
+        },
+        {
+          "level": 3,
+          "headline": "Construction III",
+          "subtitle": "Traps detonate as level 3 fireballs.",
+          "buildings": {
+            "trap": {
+              "coinCost": 1,
+              "manaCost": 10,
+              "buildTime": 1.4,
+              "fireballLevel": 3
+            }
+          }
+        },
+        {
+          "level": 4,
+          "headline": "Construction IV",
+          "subtitle": "Traps detonate as level 4 fireballs.",
+          "buildings": {
+            "trap": {
+              "coinCost": 1,
+              "manaCost": 10,
+              "buildTime": 1.2,
+              "fireballLevel": 4
+            }
+          }
+        },
+        {
+          "level": 5,
+          "headline": "Construction V",
+          "subtitle": "Traps detonate as level 5 fireballs.",
+          "buildings": {
+            "trap": {
+              "coinCost": 1,
+              "manaCost": 10,
+              "buildTime": 1,
+              "fireballLevel": 5
+            }
+          }
+        },
+        {
+          "level": 6,
+          "headline": "Construction VI",
+          "subtitle": "Traps detonate as level 6 fireballs.",
+          "buildings": {
+            "trap": {
+              "coinCost": 1,
+              "manaCost": 10,
+              "buildTime": 0.8,
+              "fireballLevel": 6
+            }
+          }
+        },
+        {
+          "level": 7,
+          "headline": "Master Construction",
+          "subtitle": "Traps detonate as level 7 fireballs.",
+          "buildings": {
+            "trap": {
+              "coinCost": 1,
+              "manaCost": 10,
+              "buildTime": 0.6,
+              "fireballLevel": 7
+            }
+          }
+        }
+      ]
     }
   ]
 }
