@@ -1533,6 +1533,7 @@
 
     async function startNewWizardGame(playerName) {
         const normalizedName = validateStartupPlayerName(playerName, "new game");
+        await fetchSpellLevelDefinitions();
         state.playerName = normalizedName;
         state.mazeSeed = normalizedName;
         if (mazeSeedInput) mazeSeedInput.value = normalizedName;
@@ -1556,6 +1557,7 @@
 
     async function loadWizardGame(playerName) {
         const normalizedName = validateStartupPlayerName(playerName, "load game");
+        await fetchSpellLevelDefinitions();
         const snapshot = await saveStore.getSave(normalizedName);
         if (!snapshot) {
             throw new Error(`No talisman checkpoint save exists for "${normalizedName}"`);
@@ -8542,11 +8544,89 @@
         drawAgents();
         drawLosOverlay();
         drawWalls();
-        drawTemporaryNearestFountainIndicator();
+        drawPerceptionNavigationIndicators();
+        drawPerceptionEnemyIndicator();
     }
 
-    // TEMPORARY DISCOVERY AID: keep an arrow to the nearest loaded fountain on-screen.
-    function drawTemporaryNearestFountainIndicator() {
+    function getPerceptionEnemyIndicatorCounts() {
+        const coord = worldToMazeSectionCoord(state.target.x, state.target.y, getMazeOptions());
+        const sectionKey = mazeSectionKey(coord.q, coord.r);
+        const maxPerRoom = getMazeRoomMaxEnemyCount(sectionKey);
+        const activeEnemies = state.agents.reduce((count, agent) => (
+            count + (
+                agent
+                && agent.activated === true
+                && isAgentInInstalledMazeSection(agent)
+                && !(Number.isFinite(agent.health) && agent.health <= 0)
+                    ? 1
+                    : 0
+            )
+        ), 0);
+        return { activeEnemies, maxPerRoom };
+    }
+
+    function getPerceptionEnemyIndicatorColor(activeEnemies, maxPerRoom, nowSeconds) {
+        if (!Number.isInteger(activeEnemies) || activeEnemies < 0) {
+            throw new Error("Wizard of Flatland perception indicator requires a non-negative active enemy count");
+        }
+        if (!Number.isInteger(maxPerRoom) || maxPerRoom < 0) {
+            throw new Error("Wizard of Flatland perception indicator requires a non-negative room quota");
+        }
+        if (!Number.isFinite(nowSeconds)) {
+            throw new Error("Wizard of Flatland perception indicator requires finite animation time");
+        }
+        if (activeEnemies === 0) return { fill: "rgb(32, 210, 88)", flash: 0 };
+        if (maxPerRoom === 0 || activeEnemies > maxPerRoom) {
+            const flash = 0.5 + 0.5 * Math.sin(nowSeconds * Math.PI * 2);
+            return {
+                fill: `rgb(255, ${Math.round(40 + flash * 175)}, ${Math.round(20 + flash * 120)})`,
+                flash
+            };
+        }
+        const redProgress = maxPerRoom <= 1 ? 1 : (activeEnemies - 1) / (maxPerRoom - 1);
+        return {
+            fill: `rgb(255, ${Math.round(214 * (1 - redProgress))}, 0)`,
+            flash: 0
+        };
+    }
+
+    function drawPerceptionEnemyIndicator() {
+        if (getWizardSpellLevel("omnivision") < 1) return;
+        if (!(state.view.width > 0 && state.view.height > 0)) {
+            throw new Error("Wizard of Flatland perception indicator requires a valid viewport");
+        }
+        const counts = getPerceptionEnemyIndicatorCounts();
+        const color = getPerceptionEnemyIndicatorColor(
+            counts.activeEnemies,
+            counts.maxPerRoom,
+            performance.now() / 1000
+        );
+        const radius = Math.max(26, Math.min(40, Math.min(state.view.width, state.view.height) * 0.046));
+        const inset = radius + Math.max(12, radius * 0.8);
+        ctx.save();
+        ctx.fillStyle = color.fill;
+        ctx.strokeStyle = color.flash > 0
+            ? `rgba(255,255,255,${0.65 + color.flash * 0.35})`
+            : "rgba(255,255,255,0.92)";
+        ctx.lineWidth = Math.max(2, radius * 0.14);
+        ctx.shadowColor = color.flash > 0 ? "rgba(255,80,20,0.95)" : "rgba(0,0,0,0.45)";
+        ctx.shadowBlur = color.flash > 0 ? radius * (0.7 + color.flash * 1.15) : radius * 0.25;
+        ctx.beginPath();
+        ctx.arc(state.view.width - inset, state.view.height - inset, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    function drawPerceptionNavigationIndicators() {
+        if (getWizardSpellLevel("omnivision") < 2) return;
+        const playerCoord = worldToMazeSectionCoord(state.target.x, state.target.y, getMazeOptions());
+        const playerSectionKey = mazeSectionKey(playerCoord.q, playerCoord.r);
+        drawPerceptionFountainIndicator(playerSectionKey);
+        drawPerceptionPyramidIndicator(playerCoord, playerSectionKey);
+    }
+
+    function drawPerceptionFountainIndicator(playerSectionKey) {
         if (!Array.isArray(state.fountains) || state.fountains.length === 0) return;
         let nearest = null;
         let nearestDistance = Infinity;
@@ -8559,7 +8639,73 @@
             }
         }
         if (!nearest) return;
-        const angle = Math.atan2(nearest.y - state.target.y, nearest.x - state.target.x);
+        if (nearest.sectionKey === playerSectionKey) return;
+        drawPerceptionDirectionArrow(nearest.x, nearest.y, {
+            fill: "rgba(8,31,54,0.94)",
+            stroke: "#8bd5ff",
+            centerFill: "#39aaf5"
+        });
+    }
+
+    function getNearestPyramidIndicatorTarget(playerCoord) {
+        if (getMazePyramidRoomDistance(playerCoord.q, playerCoord.r) !== null) return null;
+        const options = getMazeOptions();
+        const playerRing = getMazeSectionRing(playerCoord.q, playerCoord.r);
+        const outerPyramidRing = playerRing < PYRAMID_FIRST_ROOM_DISTANCE
+            ? PYRAMID_FIRST_ROOM_DISTANCE
+            : PYRAMID_FIRST_ROOM_DISTANCE
+                + (Math.floor((playerRing - PYRAMID_FIRST_ROOM_DISTANCE) / PYRAMID_ROOM_DISTANCE_STEP) + 1)
+                    * PYRAMID_ROOM_DISTANCE_STEP;
+        let nearest = null;
+        let nearestDistance = Infinity;
+        const considerPyramid = (q, r) => {
+            const center = mazeSectionCenter(q, r, options);
+            const distance = Math.hypot(center.x - state.target.x, center.y - state.target.y);
+            if (distance < nearestDistance) {
+                nearest = { q, r, x: center.x, y: center.y };
+                nearestDistance = distance;
+            }
+        };
+        considerPyramid(0, 0);
+        for (
+            let distance = PYRAMID_FIRST_ROOM_DISTANCE;
+            distance <= outerPyramidRing;
+            distance += PYRAMID_ROOM_DISTANCE_STEP
+        ) {
+            const pyramidsPerSide = (distance - PYRAMID_FIRST_ROOM_DISTANCE) / PYRAMID_ROOM_DISTANCE_STEP + 1;
+            for (let side = 0; side < MAZE_SECTION_DIRECTIONS.length; side += 1) {
+                const start = MAZE_SECTION_DIRECTIONS[side];
+                const end = MAZE_SECTION_DIRECTIONS[(side + 1) % MAZE_SECTION_DIRECTIONS.length];
+                for (let index = 0; index < pyramidsPerSide; index += 1) {
+                    const offset = Math.floor(index * distance / pyramidsPerSide);
+                    considerPyramid(
+                        start.q * distance + (end.q - start.q) * offset,
+                        start.r * distance + (end.r - start.r) * offset
+                    );
+                }
+            }
+        }
+        if (!nearest) {
+            throw new Error("Wizard of Flatland perception could not locate a pyramid");
+        }
+        return nearest;
+    }
+
+    function drawPerceptionPyramidIndicator(playerCoord, playerSectionKey) {
+        const pyramid = getNearestPyramidIndicatorTarget(playerCoord);
+        if (!pyramid || mazeSectionKey(pyramid.q, pyramid.r) === playerSectionKey) return;
+        drawPerceptionDirectionArrow(pyramid.x, pyramid.y, {
+            fill: "rgba(48,24,8,0.94)",
+            stroke: "#ffd36a",
+            centerFill: "#f39a28"
+        });
+    }
+
+    function drawPerceptionDirectionArrow(targetX, targetY, style) {
+        if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) {
+            throw new Error("Wizard of Flatland perception direction arrow requires a finite target");
+        }
+        const angle = Math.atan2(targetY - state.target.y, targetX - state.target.x);
         const directionX = Math.cos(angle);
         const directionY = Math.sin(angle);
         const inset = Math.max(28, Math.min(state.view.width, state.view.height) * 0.045);
@@ -8572,7 +8718,7 @@
             Math.abs(directionY) > 0.000001 ? halfHeight / Math.abs(directionY) : Infinity
         );
         if (!Number.isFinite(edgeScale)) {
-            throw new Error("Wizard of Flatland fountain indicator could not resolve a screen edge");
+            throw new Error("Wizard of Flatland perception direction arrow could not resolve a screen edge");
         }
         const x = centerX + directionX * edgeScale;
         const y = centerY + directionY * edgeScale;
@@ -8580,8 +8726,8 @@
         ctx.save();
         ctx.translate(x, y);
         ctx.rotate(angle);
-        ctx.fillStyle = "rgba(8,31,54,0.94)";
-        ctx.strokeStyle = "#8bd5ff";
+        ctx.fillStyle = style.fill;
+        ctx.strokeStyle = style.stroke;
         ctx.lineWidth = Math.max(2, size * 0.12);
         ctx.beginPath();
         ctx.moveTo(size, 0);
@@ -8592,7 +8738,7 @@
         ctx.fill();
         ctx.stroke();
         ctx.rotate(-angle);
-        ctx.fillStyle = "#39aaf5";
+        ctx.fillStyle = style.centerFill;
         ctx.beginPath();
         ctx.arc(0, 0, size * 0.28, 0, Math.PI * 2);
         ctx.fill();

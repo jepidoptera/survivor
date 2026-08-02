@@ -462,7 +462,7 @@
         {
           "level": 1,
           "headline": "Vision I",
-          "subtitle": "See a around corners.",
+          "subtitle": "Sense how many enemies are active nearby.",
           "costPerSecond": 24,
           "damage": 0,
           "range": 8,
@@ -473,7 +473,7 @@
         {
           "level": 2,
           "headline": "Vision II",
-          "subtitle": "See through walls.",
+          "subtitle": "Points toward the nearest fountain and pyramid.",
           "costPerSecond": 22,
           "damage": 0,
           "range": 10,
