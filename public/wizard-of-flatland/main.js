@@ -1005,7 +1005,7 @@
     state.debug.startSolverProfile = startSolverProfile;
     state.debug.stopSolverProfile = stopSolverProfile;
 
-    const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-90");
+    const worker = new Worker("/wizard-of-flatland/solverWorker.js?v=wizard-of-flatland-91");
     worker.addEventListener("message", (event) => {
         profiler.task("solver worker message", () => profiler.hitchTask(
             "solver worker message",
@@ -8099,6 +8099,29 @@
         if (!message) return;
         if (message.type === "ready") {
             setLabelText(labels.workerStatus, "ready");
+            return;
+        }
+        if (message.type === "invalid_agent") {
+            state.waitingForWorker = false;
+            state.solverWallVersion = 0;
+            if (Number(message.worldVersion) !== Number(state.worldVersion)) {
+                setLabelText(labels.workerStatus, "stale invalid enemy report discarded");
+                return;
+            }
+            const agentId = Number(message.agentId);
+            if (!Number.isFinite(agentId)) {
+                throw new Error("Wizard of Flatland solver returned an invalid enemy report without a finite enemy id");
+            }
+            const previousCount = state.agents.length;
+            state.agents = state.agents.filter((agent) => agent.id !== agentId);
+            if (state.agents.length === previousCount) {
+                console.warn(`Wizard of Flatland solver rejected enemy ${agentId}, but that enemy was already absent`);
+            } else {
+                console.warn(
+                    `Wizard of Flatland deleted stuck enemy ${agentId}: ${message.message || "wall invariant violated"}`
+                );
+            }
+            setLabelText(labels.workerStatus, `deleted stuck enemy ${agentId}`);
             return;
         }
         if (message.type === "error") {

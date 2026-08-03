@@ -205,6 +205,67 @@ test("Wizard of Flatland rejects stale solver results before applying movement o
     assert.equal(source.includes("wall hit requires a target edge"), false);
 });
 
+test("Wizard of Flatland deletes only the enemy rejected by the solver wall invariant", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const warnings = [];
+    const context = {
+        Number,
+        console: { warn: (message) => warnings.push(message) },
+        state: {
+            waitingForWorker: true,
+            solverWallVersion: 12,
+            worldVersion: 4,
+            agents: [{ id: 10 }, { id: 7431 }, { id: 20 }]
+        },
+        setLabelText(_label, text) { context.status = text; },
+        labels: { workerStatus: {} }
+    };
+    vm.createContext(context);
+    vm.runInContext([
+        extractFunction(source, "handleWorkerMessage"),
+        "globalThis.__handle = handleWorkerMessage;"
+    ].join("\n"), context, { filename: "wizard-of-flatland-invalid-agent.js" });
+
+    context.__handle({ data: {
+        type: "invalid_agent",
+        worldVersion: 4,
+        agentId: 7431,
+        message: "wall invariant violated for agent 7431"
+    } });
+
+    assert.equal(context.state.waitingForWorker, false);
+    assert.equal(context.state.solverWallVersion, 0);
+    assert.deepEqual(context.state.agents.map((agent) => agent.id), [10, 20]);
+    assert.match(warnings[0], /deleted stuck enemy 7431/);
+    assert.equal(context.status, "deleted stuck enemy 7431");
+});
+
+test("Wizard of Flatland does not delete an enemy from a stale solver wall report", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const context = {
+        Number,
+        console: { warn() {} },
+        state: {
+            waitingForWorker: true,
+            solverWallVersion: 12,
+            worldVersion: 5,
+            agents: [{ id: 7431 }]
+        },
+        setLabelText(_label, text) { context.status = text; },
+        labels: { workerStatus: {} }
+    };
+    vm.createContext(context);
+    vm.runInContext([
+        extractFunction(source, "handleWorkerMessage"),
+        "globalThis.__handle = handleWorkerMessage;"
+    ].join("\n"), context, { filename: "wizard-of-flatland-stale-invalid-agent.js" });
+
+    context.__handle({ data: { type: "invalid_agent", worldVersion: 4, agentId: 7431 } });
+
+    assert.deepEqual(context.state.agents.map((agent) => agent.id), [7431]);
+    assert.equal(context.status, "stale invalid enemy report discarded");
+});
+
 test("Wizard of Flatland enemy hit damage survives removal of the attacking enemy", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
     const context = { Number };

@@ -101,6 +101,16 @@ self.addEventListener("message", (event) => {
         const result = solveStep(message);
         self.postMessage(result, [result.agents.buffer]);
     } catch (error) {
+        if (error && error.code === "agent_wall_invariant") {
+            self.postMessage({
+                type: "invalid_agent",
+                requestId: message.requestId,
+                worldVersion: message.worldVersion,
+                agentId: error.agentId,
+                message: error.message
+            });
+            return;
+        }
         self.postMessage({
             type: "error",
             requestId: message.requestId,
@@ -727,7 +737,10 @@ function solveStep(message) {
 
         if (violatesWalls(candidateX, candidateY, radius, walls)) {
             wallLeaks += 1;
-            throw new Error(`wall invariant violated for agent ${id}`);
+            const error = new Error(`wall invariant violated for agent ${id}`);
+            error.code = "agent_wall_invariant";
+            error.agentId = id;
+            throw error;
         }
 
         next[outBase] = id;

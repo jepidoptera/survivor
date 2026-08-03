@@ -156,6 +156,37 @@ test("Wizard of Flatland recovering attackers stay designated while backing away
     assert.equal(result.stats.retreating, 1);
 });
 
+test("Wizard of Flatland identifies an enemy that violates the wall invariant", () => {
+    const { solveStep } = loadSolverWorkerApi();
+    let caught = null;
+    try {
+        solveStep({
+            type: "step",
+            requestId: 9,
+            worldVersion: 2,
+            dt: 0.05,
+            agents: createPackedAgent({ id: 7431, x: 6, y: 0 }),
+            walls: Float32Array.from([6, -1, 6, 1, 0, 0, 0, 0]),
+            params: {
+                targetX: 0,
+                targetY: 0,
+                targetRadius: 0.5,
+                ringRadius: 5,
+                separationStrength: 1,
+                speedScale: 1,
+                targetMoved: false
+            }
+        });
+    } catch (error) {
+        caught = error;
+    }
+
+    assert.ok(caught);
+    assert.equal(caught.code, "agent_wall_invariant");
+    assert.equal(caught.agentId, 7431);
+    assert.match(caught.message, /wall invariant violated for agent 7431/);
+});
+
 test("Wizard of Flatland turret-locked enemies ram their turret without damaging the wizard", () => {
     const { solveStep } = loadSolverWorkerApi();
     const result = solveStep({
