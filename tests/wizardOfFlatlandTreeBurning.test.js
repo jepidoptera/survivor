@@ -27,7 +27,7 @@ test("Wizard of Flatland burning trees lose 50 health per second and crumble for
 
 test("Wizard of Flatland tree flames and LOS blockers scale with burn damage", () => {
     assert.match(source, /const damageRatio = Math\.max\(0, Math\.min\(1, 1 - burnState\.health \/ TREE_MAX_HEALTH\)\)/);
-    assert.match(source, /const flameRadius = treeRadius \* damageRatio \* crumbleScale/);
+    assert.match(source, /const flameRadius = treeInnerRadius \* damageRatio \* crumbleScale/);
     assert.match(source, /const healthRatio = Math\.max\(0, Math\.min\(1, tree\.burnState\.health \/ TREE_MAX_HEALTH\)\)/);
     assert.match(source, /walls\[base \+ WALL_X1\] = tree\.centerX \+ \(walls\[base \+ WALL_X1\] - tree\.centerX\) \* scale/);
 });
@@ -51,16 +51,22 @@ test("Wizard of Flatland tree fire uses orange and yellow diamond flames", () =>
 test("Wizard of Flatland tree flames grow and shrink over varied five-second lives", () => {
     assert.match(source, /const TREE_FLAME_LIFETIME_SECONDS = 5/);
     assert.match(source, /const TREE_FLAME_LIFETIME_VARIATION = 0\.2/);
+    assert.match(source, /const TREE_FLAME_SIZE_MULTIPLIER = 1\.5/);
     assert.match(source, /const lifeEnvelope = Math\.sin\(lifeProgress \* Math\.PI\)/);
     assert.match(source, /burnState\.flames\[flameIndex\] = createTreeFlameLifecycle\(flameIndex\)/);
+    assert.match(source, /sizeScale: 0\.85 \+ Math\.random\(\) \* 0\.65/);
+    assert.match(source, /const width = flameRadius \* 0\.27 \* TREE_FLAME_SIZE_MULTIPLIER \* flame\.sizeScale/);
     assert.match(source, /return \{\s*age: 0,/);
 });
 
-test("Wizard of Flatland tree fire grows to ten flames across the tree width", () => {
-    assert.match(source, /const TREE_FLAME_MAX_COUNT = 10/);
+test("Wizard of Flatland tree fire grows to twenty flames across the tree canopy", () => {
+    assert.match(source, /const TREE_FLAME_MAX_COUNT = 20/);
     assert.match(source, /Math\.ceil\(damageRatio \* TREE_FLAME_MAX_COUNT\)/);
-    assert.match(source, /const slotX = side \* \(0\.1 \+ pairIndex \* 0\.2\)/);
-    assert.match(source, /const spread = treeRadius \* damageRatio/);
+    assert.match(source, /const distanceNorm = Math\.random\(\) \* 0\.9;\s*const angle = Math\.random\(\) \* Math\.PI \* 2;/);
+    assert.match(source, /xNorm: Math\.cos\(angle\) \* distanceNorm,\s*yNorm: Math\.sin\(angle\) \* distanceNorm/);
+    assert.match(source, /const treeInnerRadius = Math\.min\(\.\.\.tree\.points\.map/);
+    assert.match(source, /const spread = treeInnerRadius \* damageRatio/);
+    assert.match(source, /const y = tree\.centerY \+ flame\.yNorm \* spread;/);
 });
 
 test("Wizard of Flatland spikes are absorbed by trees with a leaf burst", () => {

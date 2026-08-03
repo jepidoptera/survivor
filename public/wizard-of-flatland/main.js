@@ -120,9 +120,10 @@
     const TREE_MAX_HEALTH = 1000;
     const TREE_BURN_DAMAGE_PER_SECOND = 50;
     const TREE_CRUMBLE_SECONDS = 1;
-    const TREE_FLAME_MAX_COUNT = 10;
+    const TREE_FLAME_MAX_COUNT = 20;
     const TREE_FLAME_LIFETIME_SECONDS = 5;
     const TREE_FLAME_LIFETIME_VARIATION = 0.2;
+    const TREE_FLAME_SIZE_MULTIPLIER = 1.5;
     const SPIKE_PROJECTILE_RADIUS = 0.18;
     const SPIKE_BOUNCE_MAX_SPIN_HZ = 5;
     const SPIKE_BOUNCE_MAX_DAMAGE_LOSS_RATIO = 0.75;
@@ -6828,16 +6829,15 @@
         if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= TREE_FLAME_MAX_COUNT) {
             throw new Error(`Wizard of Flatland tree flame received invalid slot ${slotIndex}`);
         }
-        const pairIndex = Math.floor(slotIndex / 2);
-        const side = slotIndex % 2 === 0 ? -1 : 1;
-        const slotX = side * (0.1 + pairIndex * 0.2);
+        const distanceNorm = Math.random() * 0.9;
+        const angle = Math.random() * Math.PI * 2;
         const lifetimeScale = 1 + (Math.random() * 2 - 1) * TREE_FLAME_LIFETIME_VARIATION;
         return {
             age: 0,
             lifetime: TREE_FLAME_LIFETIME_SECONDS * lifetimeScale,
-            xNorm: Math.max(-1, Math.min(1, slotX + (Math.random() * 2 - 1) * 0.055)),
-            yNorm: (Math.random() * 2 - 1) * 0.24,
-            sizeScale: 0.85 + Math.random() * 0.3
+            xNorm: Math.cos(angle) * distanceNorm,
+            yNorm: Math.sin(angle) * distanceNorm,
+            sizeScale: 0.85 + Math.random() * 0.65
         };
     }
 
@@ -11706,20 +11706,20 @@
             ctx.closePath();
             ctx.fill();
             if (!burnState.burning) continue;
-            const treeRadius = Math.max(...tree.points.map((point) => Math.hypot(point.x - tree.centerX, point.y - tree.centerY)));
-            const flameRadius = treeRadius * damageRatio * crumbleScale;
+            const treeInnerRadius = Math.min(...tree.points.map((point) => Math.hypot(point.x - tree.centerX, point.y - tree.centerY)));
+            const flameRadius = treeInnerRadius * damageRatio * crumbleScale;
             if (!(flameRadius > 0.001)) continue;
             for (let flameIndex = 0; flameIndex < burnState.flames.length; flameIndex++) {
                 const flame = burnState.flames[flameIndex];
                 const lifeProgress = Math.max(0, Math.min(1, flame.age / flame.lifetime));
                 const lifeEnvelope = Math.sin(lifeProgress * Math.PI);
                 if (!(lifeEnvelope > 0.000001)) continue;
-                const spread = treeRadius * damageRatio;
+                const spread = treeInnerRadius * damageRatio;
                 const x = tree.centerX + flame.xNorm * spread;
-                const y = tree.centerY + flame.yNorm * spread * 0.45;
+                const y = tree.centerY + flame.yNorm * spread;
                 const phase = nowSeconds * (8 + flameIndex) + flameIndex * 1.7;
                 const flicker = 0.86 + Math.sin(phase * 1.9) * 0.14;
-                const width = flameRadius * 0.27 * flame.sizeScale * lifeEnvelope * flicker;
+                const width = flameRadius * 0.27 * TREE_FLAME_SIZE_MULTIPLIER * flame.sizeScale * lifeEnvelope * flicker;
                 const height = width * 1.65;
                 const sway = Math.sin(phase * 2.3) * width * 0.24;
                 ctx.save();
