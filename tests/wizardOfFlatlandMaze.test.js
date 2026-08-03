@@ -31,7 +31,6 @@ function loadMazeWorkerExports(connectionCrossesWallFaces = () => false) {
             MAZE_SQUARE_ROOM_OPPOSITE_SIDE_CHANCE,
             MAZE_SQUARE_ROOM_SIDE_OFFSET,
             MAZE_SQUARE_ROOM_SIDE_GAP_WIDTH,
-            MAZE_SQUARE_ROOM_WALL_END_SHORTEN,
             MAZE_SQUARE_ROOM_HALLWAY_SNAP_DISTANCE,
             MAZE_SQUARE_ROOM_POCKET_INCORPORATE_CHANCE,
             MAZE_FULL_WALL_HALLWAY_CHANCE,
@@ -1427,7 +1426,7 @@ test("Wizard of Flatland deletes adjacent unincorporated corner pockets crossed 
     assert.equal(segments.length, 0);
 });
 
-test("Wizard of Flatland corner pocket back wall stops at hallway corridor when not incorporated", () => {
+test("Wizard of Flatland deletes an unincorporated corner pocket beside a hallway", () => {
     const api = loadMazeWorkerExports();
     const options = {
         seed: "square-side-hallway-cut-3",
@@ -1462,35 +1461,7 @@ test("Wizard of Flatland corner pocket back wall stops at hallway corridor when 
     const walls = api.createWallBufferBuilder();
     api.appendMazeSquareSideWalls(walls, room, new Map([[0, connection]]), options);
     const segments = wallSegments(api.finishWallBuffer(walls));
-
-    const squaredCorner = room.corners[0];
-    const originalCorner = hexRoomCorners[0];
-    const sideVector = api.normalizeVector(room.corners[1].x - room.corners[5].x, room.corners[1].y - room.corners[5].y, "test side vector");
-    const outward = api.normalizeVector(originalCorner.x - squaredCorner.x, originalCorner.y - squaredCorner.y, "test outward");
-    const wallCenter = {
-        x: squaredCorner.x + outward.x * api.MAZE_SQUARE_ROOM_SIDE_OFFSET,
-        y: squaredCorner.y + outward.y * api.MAZE_SQUARE_ROOM_SIDE_OFFSET
-    };
-    const hallwayInterval = api.getMazeHallwayCorridorLineInterval(room, 0, connection, wallCenter, sideVector, options);
-    const parallelSegments = segments.filter((segment) => {
-        const dx = segment.bx - segment.ax;
-        const dy = segment.by - segment.ay;
-        const length = Math.hypot(dx, dy);
-        return Math.abs(dx / length - sideVector.x) < 0.00001 && Math.abs(dy / length - sideVector.y) < 0.00001;
-    });
-
-    assert.ok(parallelSegments.length >= 1);
-    let foundCenterToHallwaySegment = false;
-    for (const segment of parallelSegments) {
-        const start = api.pointProjectionParameter(segment.ax, segment.ay, wallCenter.x, wallCenter.y, wallCenter.x + sideVector.x, wallCenter.y + sideVector.y);
-        const end = api.pointProjectionParameter(segment.bx, segment.by, wallCenter.x, wallCenter.y, wallCenter.x + sideVector.x, wallCenter.y + sideVector.y);
-        assert.ok(end <= hallwayInterval.start + 0.00001 || start >= hallwayInterval.end - 0.00001);
-        assert.ok(start < hallwayInterval.end - 0.00001, "square side wall should not continue beyond the far hallway edge");
-        if (start >= api.MAZE_SQUARE_ROOM_SIDE_GAP_WIDTH * 0.5 - 0.00001 && Math.abs(end - hallwayInterval.start) < 0.00001) {
-            foundCenterToHallwaySegment = true;
-        }
-    }
-    assert.equal(foundCenterToHallwaySegment, true);
+    assert.equal(segments.length, 0);
 });
 
 test("Wizard of Flatland corner pocket back walls snap to nearby hallway edges", () => {

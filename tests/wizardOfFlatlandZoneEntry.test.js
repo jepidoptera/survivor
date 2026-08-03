@@ -23,6 +23,10 @@ test("Wizard of Flatland announces and persists first entry into a new zone", ()
     assert.match(main, /const color = FLOOR_ZONE_COLORS\[Math\.min\(zone, FLOOR_ZONE_COLORS\.length - 1\)\]/);
     assert.match(main, /highestEnteredMazeZone: state\.highestEnteredMazeZone/);
     assert.match(main, /state\.highestEnteredMazeZone = snapshot\.highestEnteredMazeZone === undefined/);
+    assert.match(main, /const zoneLevel = getMazeZoneForWorldPoint\(homeX, homeY, getMazeOptions\(\)\)/);
+    assert.match(main, /return getMazeZoneForWorldPoint\(metadata\.x, metadata\.y, getMazeOptions\(\)\)/);
+    assert.match(main, /homeX: Number\.isFinite\(agent\.homeX\) \? agent\.homeX : agent\.x/);
+    assert.match(main, /return getMazeZoneForWorldPoint\(homeX, homeY, getMazeOptions\(\)\)/);
 });
 
 test("Wizard of Flatland does not recruit hibernating enemies for turrets", () => {

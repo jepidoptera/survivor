@@ -1079,7 +1079,7 @@
         setLabelText(labels.workerStatus, event.message || "pathfinding failed");
     });
 
-    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-45");
+    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-46");
     const losWorker = new Worker("/wizard-of-flatland/losWorker.js?v=wizard-of-flatland-3");
     losWorker.addEventListener("message", (event) => {
         profiler.task("LOS worker message", () => handleLosWorkerMessage(event));
@@ -3293,6 +3293,8 @@
             sectionKey,
             homeSectionKey,
             autoSpawnSectionKey: typeof agent.autoSpawnSectionKey === "string" ? agent.autoSpawnSectionKey : "",
+            homeX: Number.isFinite(agent.homeX) ? agent.homeX : agent.x,
+            homeY: Number.isFinite(agent.homeY) ? agent.homeY : agent.y,
             x: agent.x,
             y: agent.y,
             vx: agent.vx,
@@ -3556,12 +3558,16 @@
         }
         const enemyScale = getEnemyScaleForCheckpointSnapshot(snapshot);
         const enemyDamageScale = getEnemyDamageScaleForCheckpointSnapshot(snapshot);
-        const zoneLevel = getAgentHomeZone(snapshot);
+        const homeX = Number.isFinite(snapshot.homeX) ? snapshot.homeX : snapshot.x;
+        const homeY = Number.isFinite(snapshot.homeY) ? snapshot.homeY : snapshot.y;
+        const zoneLevel = getMazeZoneForWorldPoint(homeX, homeY, getMazeOptions());
         const maxHealth = ENEMY_MAX_HEALTH * enemyScale;
         const agent = {
             id: snapshot.id,
             x: snapshot.x,
             y: snapshot.y,
+            homeX,
+            homeY,
             vx: Number(snapshot.vx) || 0,
             vy: Number(snapshot.vy) || 0,
             radius: AGENT_RADIUS * enemyScale,
@@ -4104,6 +4110,8 @@
             id,
             x,
             y,
+            homeX: x,
+            homeY: y,
             vx: 0,
             vy: 0,
             radius: AGENT_RADIUS * enemyScale,
@@ -4199,7 +4207,10 @@
 
     function getEnemyZoneForAgentMetadata(metadata) {
         if (!metadata || typeof metadata !== "object") return 0;
-        return getAgentHomeZone(metadata);
+        if (!Number.isFinite(metadata.x) || !Number.isFinite(metadata.y)) {
+            throw new Error("Wizard of Flatland enemy zone assignment requires a finite spawn point");
+        }
+        return getMazeZoneForWorldPoint(metadata.x, metadata.y, getMazeOptions());
     }
 
     function getAgentHitDamage(agent) {
@@ -6301,13 +6312,15 @@
     }
 
     function getAgentHomeZone(agent) {
-        const homeSectionKey = getAgentHomeSectionKey(agent);
-        const homeCoord = parseMazeSectionKey(homeSectionKey);
-        const homeRing = getMazeSectionRing(homeCoord.q, homeCoord.r);
-        if (!Number.isInteger(homeRing) || homeRing < 0) {
-            throw new Error(`Wizard of Flatland enemy ${agent.id} coin drop has invalid home ring ${homeRing}`);
+        if (!agent || typeof agent !== "object") {
+            throw new Error("Wizard of Flatland enemy zone membership requires an enemy");
         }
-        return Math.floor(homeRing / MAZE_RING_BOUNDARY_INTERVAL);
+        const homeX = Number.isFinite(agent.homeX) ? agent.homeX : agent.x;
+        const homeY = Number.isFinite(agent.homeY) ? agent.homeY : agent.y;
+        if (!Number.isFinite(homeX) || !Number.isFinite(homeY)) {
+            throw new Error(`Wizard of Flatland enemy ${agent.id} zone membership requires a finite home point`);
+        }
+        return getMazeZoneForWorldPoint(homeX, homeY, getMazeOptions());
     }
 
     function sampleEnemyCoinDropCount(zone, random = Math.random) {

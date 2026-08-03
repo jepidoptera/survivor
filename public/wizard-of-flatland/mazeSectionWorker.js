@@ -55,7 +55,6 @@ const MAZE_SQUARE_ROOM_SIDE_CHANCE = 1 / 10;
 const MAZE_SQUARE_ROOM_OPPOSITE_SIDE_CHANCE = 2 / 3;
 const MAZE_SQUARE_ROOM_SIDE_OFFSET = 4;
 const MAZE_SQUARE_ROOM_SIDE_GAP_WIDTH = 4;
-const MAZE_SQUARE_ROOM_WALL_END_SHORTEN = 2;
 const MAZE_SQUARE_ROOM_HALLWAY_SNAP_DISTANCE = 3;
 const MAZE_SQUARE_ROOM_POCKET_INCORPORATE_CHANCE = 0.4;
 const PYRAMID_FIRST_ROOM_DISTANCE = 8;
@@ -2294,15 +2293,8 @@ function appendMazeSquareSideWalls(walls, room, hallConnections, options) {
         const pocketSides = getMazeSquarePocketSides(cornerIndex);
         const leftPocketIncorporated = isMazeSquarePocketIncorporatedByNeighbor(room, cornerIndex, pocketSides[0], options);
         const rightPocketIncorporated = isMazeSquarePocketIncorporatedByNeighbor(room, cornerIndex, pocketSides[1], options);
-        const leftPocketIntersectsHallway = doesMazeSquarePocketIntersectHallway(pocketSides[0], hallConnections);
-        const rightPocketIntersectsHallway = doesMazeSquarePocketIntersectHallway(pocketSides[1], hallConnections);
-        const bothUnincorporatedPocketsCrossHallways = !leftPocketIncorporated
-            && !rightPocketIncorporated
-            && leftPocketIntersectsHallway
-            && rightPocketIntersectsHallway;
-        if (bothUnincorporatedPocketsCrossHallways) continue;
-        const keepLeftPocket = leftPocketIncorporated || leftPocketIntersectsHallway;
-        const keepRightPocket = rightPocketIncorporated || rightPocketIntersectsHallway;
+        const keepLeftPocket = leftPocketIncorporated;
+        const keepRightPocket = rightPocketIncorporated;
         if (!keepLeftPocket && !keepRightPocket) continue;
         const originalCorner = getHexCornersWorld(room.center.x, room.center.y, room.radius)[cornerIndex];
         const squaredCorner = room.corners[cornerIndex];
@@ -2320,27 +2312,23 @@ function appendMazeSquareSideWalls(walls, room, hallConnections, options) {
         let intervals = [];
         if (keepLeftPocket) {
             intervals.push({
-                start: leftPocketIncorporated ? span.start : span.start + span.startEdgeDistanceScale * MAZE_SQUARE_ROOM_WALL_END_SHORTEN,
+                start: span.start,
                 end: -MAZE_SQUARE_ROOM_SIDE_GAP_WIDTH * 0.5
             });
         }
         if (keepRightPocket) {
             intervals.push({
                 start: MAZE_SQUARE_ROOM_SIDE_GAP_WIDTH * 0.5,
-                end: rightPocketIncorporated ? span.end : span.end - span.endEdgeDistanceScale * MAZE_SQUARE_ROOM_WALL_END_SHORTEN
+                end: span.end
             });
         }
         intervals = subtractMazeSquareSideHallwayIntervals(intervals, room, cornerIndex, wallCenter, sideVector, hallConnections, options);
         appendLineIntervalsAsWalls(walls, wallCenter, sideVector, intervals, WALL_LABEL_SQUARE_SIDE_PARALLEL, cornerIndex);
         const gap = getCenteredLineGapEndpoints(wallCenter, sideVector, MAZE_SQUARE_ROOM_SIDE_GAP_WIDTH);
         // Each back-wall endpoint grows outward as a corner-pocket front wall.
-        if (keepLeftPocket) appendPerpendicularSquareSideWall(walls, gap.left, outward, room.sectionCorners, leftPocketIncorporated);
-        if (keepRightPocket) appendPerpendicularSquareSideWall(walls, gap.right, outward, room.sectionCorners, rightPocketIncorporated);
+        if (keepLeftPocket) appendPerpendicularSquareSideWall(walls, gap.left, outward, room.sectionCorners);
+        if (keepRightPocket) appendPerpendicularSquareSideWall(walls, gap.right, outward, room.sectionCorners);
     }
-}
-
-function doesMazeSquarePocketIntersectHallway(pocketSide, hallConnections) {
-    return !!hallConnections && hallConnections.has(pocketSide);
 }
 
 function subtractMazeSquareSideHallwayIntervals(intervals, room, cornerIndex, wallCenter, sideVector, hallConnections, options) {
@@ -2617,24 +2605,9 @@ function getCenteredLineGapEndpoints(center, direction, gapWidth) {
     };
 }
 
-function appendPerpendicularSquareSideWall(walls, start, outward, sectionCorners, fullLength = false) {
+function appendPerpendicularSquareSideWall(walls, start, outward, sectionCorners) {
     const span = intersectRayWithPolygon(start, outward, sectionCorners, "Wizard of Flatland maze square side perpendicular wall");
-    if (fullLength) {
-        appendSegmentWall(walls, start.x, start.y, span.end.x, span.end.y, WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL);
-        return;
-    }
-    const length = Math.hypot(span.end.x - start.x, span.end.y - start.y);
-    if (!(length > MAZE_SQUARE_ROOM_WALL_END_SHORTEN + 0.001)) {
-        throw new Error("Wizard of Flatland maze square side perpendicular wall requires enough length to shorten");
-    }
-    appendSegmentWall(
-        walls,
-        start.x,
-        start.y,
-        span.end.x - outward.x * MAZE_SQUARE_ROOM_WALL_END_SHORTEN,
-        span.end.y - outward.y * MAZE_SQUARE_ROOM_WALL_END_SHORTEN,
-        WALL_LABEL_SQUARE_SIDE_PERPENDICULAR
-    );
+    appendSegmentWall(walls, start.x, start.y, span.end.x, span.end.y, WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL);
 }
 
 function appendWallWithGap(walls, a, b, gapT, gapWidth, labelCode, sideCode = -1, fullWall = false) {
