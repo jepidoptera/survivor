@@ -5895,8 +5895,10 @@
             }
             const dx = state.target.x - coin.x;
             const dy = state.target.y - coin.y;
-            const distance = Math.hypot(dx, dy);
-            if (distance <= MAZE_COIN_ATTRACT_DISTANCE) {
+            const distanceSquared = dx * dx + dy * dy;
+            let distance = 0;
+            if (distanceSquared <= MAZE_COIN_ATTRACT_DISTANCE * MAZE_COIN_ATTRACT_DISTANCE) {
+                distance = Math.sqrt(distanceSquared);
                 const reachable = isMazeCoinReachableFromTarget(coin);
                 if (distance <= getMazeCoinCollectDistance(coin) && reachable) {
                     collectMazeCoin(coin);
@@ -5906,7 +5908,7 @@
             } else {
                 coin.rushing = false;
             }
-            if (coin.rushing && distance > 0.000001) {
+            if (coin.rushing && distanceSquared > 0.000000000001) {
                 const step = Math.min(distance, MAZE_COIN_RUSH_SPEED * dt);
                 const rushX = dx / distance * step;
                 const rushY = dy / distance * step;
@@ -5919,11 +5921,10 @@
                     coin.homeY += rushY;
                     updateDroppedCoinSectionFromHomePosition(coin);
                 }
-            }
-            const nextDistance = Math.hypot(state.target.x - coin.x, state.target.y - coin.y);
-            if (coin.rushing && nextDistance <= getMazeCoinCollectDistance(coin)) {
-                collectMazeCoin(coin);
-                continue;
+                if (distance - step <= getMazeCoinCollectDistance(coin)) {
+                    collectMazeCoin(coin);
+                    continue;
+                }
             }
             survivors.push(coin);
         }
@@ -9491,12 +9492,15 @@
         const contactPasses = Number(state.stats && state.stats.contactPasses || 0);
         const contactPairChecks = Number(state.stats && state.stats.contactPairChecks || 0);
         const activeEnemyCount = countActiveEnemies();
+        const visibleCoinCount = countCoinsInsideCanvas();
+        const loadedCoinCount = Array.isArray(state.coins) ? state.coins.length : 0;
         const slowestPart = Array.isArray(frameParts) && frameParts.length > 0
             ? frameParts.reduce((slowest, part) => part.duration > slowest.duration ? part : slowest, frameParts[0])
             : null;
         const lines = [
             `FPS ${fps.toFixed(1)}`,
             `Render ${renderMs.toFixed(2)} ms`,
+            `Coins ${visibleCoinCount} visible/${loadedCoinCount} loaded`,
             `Active enemies ${activeEnemyCount}`,
             `NPC solver ${npcSolverMs.toFixed(2)} ms`,
             `Contact ${contactPasses}p/${contactPairChecks}c`,
@@ -9514,6 +9518,32 @@
         if (slowestPart) lines.push(`Main ${slowestPart.label} ${slowestPart.duration.toFixed(2)} ms`);
         element.textContent = lines.join("\n");
         state.debug.lastFpsCounterUpdateAt = now;
+    }
+
+    function countCoinsInsideCanvas() {
+        if (!Array.isArray(state.coins)) return 0;
+        let count = 0;
+        for (const coin of state.coins) {
+            validateCoin(coin);
+            const point = worldToScreen(coin.x, coin.y);
+            if (coin.dropPop) {
+                const popProgress = coin.dropPop.age / coin.dropPop.duration;
+                point.y -= 4 * popProgress * (1 - popProgress) * coin.dropPop.peakHeight * state.view.scale;
+            }
+            const radius = Math.max(3.5, coin.radius * state.view.scale);
+            if (isCoinInsideCanvas(coin, point, radius)) count++;
+        }
+        return count;
+    }
+
+    function isCoinInsideCanvas(coin, point, radius) {
+        const cullRadius = coin.kind === "trophy"
+            ? radius * MAZE_TROPHY_IMAGE_SCALE * 2
+            : Math.max(radius * 1.9, state.view.scale * 0.22);
+        return point.x + cullRadius >= 0 &&
+            point.x - cullRadius <= canvas.width &&
+            point.y + cullRadius >= 0 &&
+            point.y - cullRadius <= canvas.height;
     }
 
     function countActiveEnemies() {
@@ -11926,12 +11956,12 @@
                 point.y -= 4 * popProgress * (1 - popProgress) * coin.dropPop.peakHeight * state.view.scale;
             }
             const radius = Math.max(3.5, coin.radius * state.view.scale);
+            if (!isCoinInsideCanvas(coin, point, radius)) continue;
             if (coin.kind === "trophy") {
                 drawTrophyCoin(coin, point, radius);
                 continue;
             }
             const glowRadius = Math.max(radius * 1.9, state.view.scale * 0.22);
-            const shineAngle = (performance.now() * 0.006 + coin.phase) % (Math.PI * 2);
             ctx.fillStyle = coin.rushing ? "rgba(255,238,128,0.24)" : "rgba(255,214,74,0.18)";
             ctx.beginPath();
             ctx.arc(point.x, point.y, glowRadius, 0, Math.PI * 2);
@@ -11943,14 +11973,6 @@
             ctx.fill();
             ctx.strokeStyle = "#fff1a8";
             ctx.lineWidth = Math.max(1.25, radius * 0.18);
-            ctx.stroke();
-
-            ctx.strokeStyle = "rgba(255,255,255,0.88)";
-            ctx.lineWidth = Math.max(1, radius * 0.14);
-            ctx.lineCap = "round";
-            ctx.beginPath();
-            ctx.moveTo(point.x + Math.cos(shineAngle) * radius * 0.12, point.y + Math.sin(shineAngle) * radius * 0.12);
-            ctx.lineTo(point.x + Math.cos(shineAngle) * radius * 0.62, point.y + Math.sin(shineAngle) * radius * 0.62);
             ctx.stroke();
         }
         ctx.restore();
