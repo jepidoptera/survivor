@@ -240,7 +240,9 @@ test("Wizard of Flatland enemy death costs use the bounded local node search", (
     const addDeathCost = extractFunction(source, "addEnemyDeathPathfindingCost");
 
     assert.match(addDeathCost, /nearestLocalPassablePathfindingNodes/);
+    assert.match(addDeathCost, /allowFewer:\s*true/);
     assert.match(addDeathCost, /maxRadius:\s*2/);
+    assert.doesNotMatch(addDeathCost, /pathIndices\.length\s*!==\s*ENEMY_DEATH_PATH_COST_TILE_COUNT/);
     assert.doesNotMatch(addDeathCost, /nearestReachablePathfindingNodes/);
     assert.doesNotMatch(source, /function nearestReachablePathfindingNodes/);
     assert.doesNotMatch(source, /function buildCurrentPathfindingAdjacency/);

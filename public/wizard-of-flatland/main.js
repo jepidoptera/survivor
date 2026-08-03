@@ -6949,9 +6949,6 @@
                 }
             )
         );
-        if (pathIndices.length !== ENEMY_DEATH_PATH_COST_TILE_COUNT) {
-            throw new Error(`Wizard of Flatland enemy ${agent.id} death path cost could not find ${ENEMY_DEATH_PATH_COST_TILE_COUNT} local passable path nodes`);
-        }
         const expiresAt = performance.now() / 1000 + ENEMY_DEATH_PATH_COST_SECONDS;
         const changedNodeKeys = state.enemyDeathPathChangedNodeKeysScratch;
         if (!(changedNodeKeys instanceof Set)) {
