@@ -132,6 +132,9 @@
     const SPIKE_SHATTER_VISUAL_SECONDS = 0.5;
     const SPIKE_SHATTER_MAX_OFFSET_RADIUS = 0.5;
     const SPIKE_SHATTER_MAX_ROTATION = 30 * Math.PI / 180;
+    const SPIKE_TREE_LEAF_VISUAL_SECONDS = 0.45;
+    const SPIKE_TREE_LEAF_COUNT = 7;
+    const SPIKE_TREE_LEAF_MAX_DISTANCE = 0.65;
     const ENEMY_MAX_HEALTH = 20;
     const WIZARD_MAX_HEALTH = 100;
     const WIZARD_NEW_GAME_STARTING_HEALTH = 10;
@@ -602,6 +605,7 @@
         fireDeathEffects: [],
         freezeParticles: [],
         spikeShatterEffects: [],
+        spikeTreeLeafEffects: [],
         wallShatterEffects: [],
         treeBurnStatesByKey: new Map(),
         brokenWallGaps: [],
@@ -3011,6 +3015,7 @@
         state.fireDeathEffects = [];
         state.freezeParticles = [];
         state.spikeShatterEffects = [];
+        state.spikeTreeLeafEffects = [];
         state.wallShatterEffects = [];
         state.treeBurnStatesByKey = new Map();
         state.brokenWallGaps = [];
@@ -3459,6 +3464,7 @@
         state.fireDeathEffects = [];
         state.freezeParticles = [];
         state.spikeShatterEffects = [];
+        state.spikeTreeLeafEffects = [];
         state.wallShatterEffects = [];
         state.brokenWallGaps = [];
         state.spaceHeld = false;
@@ -5811,6 +5817,10 @@
             }
             if (wallHit) {
                 if (fireball.spellId === "spikes") {
+                    if (wallHit.labelCode === WALL_LABEL_TREE) {
+                        state.spikeTreeLeafEffects.push(createSpikeTreeLeafEffect(fireball, wallHit));
+                        continue;
+                    }
                     bounceSpikeProjectile(fireball, wallHit);
                     fireball.age += dt;
                     if (fireball.age < fireball.maxAge && fireball.damage > 0.000001) survivors.push(fireball);
@@ -6604,7 +6614,8 @@
                 x: fromX + (toX - fromX) * hit.t,
                 y: fromY + (toY - fromY) * hit.t,
                 nx: hit.nx,
-                ny: hit.ny
+                ny: hit.ny,
+                labelCode: Math.round(state.walls[i + WALL_LABEL_CODE])
             };
         }
         return best;
@@ -6917,6 +6928,61 @@
             effect.age += dt;
             return effect.age < SPIKE_SHATTER_VISUAL_SECONDS;
         });
+    }
+
+    function updateSpikeTreeLeafEffects(dt) {
+        if (!Array.isArray(state.spikeTreeLeafEffects)) {
+            throw new Error("Wizard of Flatland spike tree leaf update requires effect tracking");
+        }
+        state.spikeTreeLeafEffects = state.spikeTreeLeafEffects.filter((effect) => {
+            validateSpikeTreeLeafEffect(effect);
+            effect.age += dt;
+            return effect.age < SPIKE_TREE_LEAF_VISUAL_SECONDS;
+        });
+    }
+
+    function createSpikeTreeLeafEffect(spike, wallHit) {
+        if (
+            !spike ||
+            spike.spellId !== "spikes" ||
+            !Number.isFinite(spike.dirX) ||
+            !Number.isFinite(spike.dirY) ||
+            !wallHit ||
+            wallHit.labelCode !== WALL_LABEL_TREE ||
+            !Number.isFinite(wallHit.x) ||
+            !Number.isFinite(wallHit.y)
+        ) {
+            throw new Error("Wizard of Flatland spike tree leaf burst requires a finite tree impact");
+        }
+        const incomingAngle = Math.atan2(spike.dirY, spike.dirX);
+        const leaves = [];
+        for (let index = 0; index < SPIKE_TREE_LEAF_COUNT; index++) {
+            const angle = incomingAngle + Math.PI + (Math.random() - 0.5) * Math.PI * 1.35;
+            const distance = SPIKE_TREE_LEAF_MAX_DISTANCE * (0.35 + Math.random() * 0.65);
+            leaves.push({
+                offsetX: Math.cos(angle) * distance,
+                offsetY: Math.sin(angle) * distance,
+                size: 0.07 + Math.random() * 0.06,
+                rotation: Math.random() * Math.PI * 2,
+                spin: (Math.random() * 2 - 1) * Math.PI * 3,
+                color: Math.random() < 0.5 ? "#58a832" : "#82c94b"
+            });
+        }
+        return { age: 0, x: wallHit.x, y: wallHit.y, leaves };
+    }
+
+    function validateSpikeTreeLeafEffect(effect) {
+        if (
+            !effect ||
+            !Number.isFinite(effect.age) ||
+            effect.age < 0 ||
+            !Number.isFinite(effect.x) ||
+            !Number.isFinite(effect.y) ||
+            !Array.isArray(effect.leaves) ||
+            effect.leaves.length !== SPIKE_TREE_LEAF_COUNT
+        ) {
+            throw new Error("Wizard of Flatland spike tree leaf effect requires finite particle data");
+        }
     }
 
     function createSpikeShatterEffect(agent) {
@@ -10075,6 +10141,7 @@
         drawFireballExplosions();
         drawFireDeathEffects();
         drawSpikeShatterEffects();
+        drawSpikeTreeLeafEffects();
         drawAgents();
         drawLosOverlay();
         drawWalls();
@@ -10433,6 +10500,33 @@
         los.lastCompletedRequestId = message.requestId;
         los.lastCompletedWallRevision = message.wallRevision;
         explorationSystem.applyVisibility(message.hitWallIndices, message.hitWallTs);
+        discoverTreesHitByLosRays(message.hitWallIndices);
+    }
+
+    function discoverTreesHitByLosRays(hitWallIndices) {
+        if (!(hitWallIndices instanceof Int32Array)) {
+            throw new Error("Wizard of Flatland tree discovery requires LOS wall-hit indices");
+        }
+        validateWallBuffer(state.walls, "tree discovery wall buffer");
+        const discoveredGroupStarts = new Set();
+        for (const wallIndex of hitWallIndices) {
+            if (wallIndex < 0) continue;
+            const hitBase = wallIndex * WALL_STRIDE;
+            if (hitBase >= state.walls.length) {
+                throw new Error(`Wizard of Flatland tree discovery references missing wall ${wallIndex}`);
+            }
+            if (Math.round(state.walls[hitBase + WALL_LABEL_CODE]) !== WALL_LABEL_TREE) continue;
+            const sideCode = Math.round(state.walls[hitBase + WALL_LABEL_SIDE]);
+            if (discoveredGroupStarts.has(hitBase)) continue;
+            discoveredGroupStarts.add(hitBase);
+            for (let base = hitBase; base < state.walls.length; base += WALL_STRIDE) {
+                if (
+                    Math.round(state.walls[base + WALL_LABEL_CODE]) !== WALL_LABEL_TREE ||
+                    Math.round(state.walls[base + WALL_LABEL_SIDE]) !== sideCode
+                ) break;
+                explorationSystem.revealActiveWall(base / WALL_STRIDE);
+            }
+        }
     }
 
     function clearCompletedLosSnapshot(reason) {
@@ -12845,6 +12939,42 @@
         }
     }
 
+    function drawSpikeTreeLeafEffects() {
+        if (!Array.isArray(state.spikeTreeLeafEffects) || state.spikeTreeLeafEffects.length === 0) return;
+        for (const effect of state.spikeTreeLeafEffects) {
+            validateSpikeTreeLeafEffect(effect);
+            const progress = Math.max(0, Math.min(1, effect.age / SPIKE_TREE_LEAF_VISUAL_SECONDS));
+            const movementProgress = 1 - Math.pow(1 - progress, 2);
+            for (const leaf of effect.leaves) {
+                if (
+                    !leaf ||
+                    !Number.isFinite(leaf.offsetX) ||
+                    !Number.isFinite(leaf.offsetY) ||
+                    !(leaf.size > 0) ||
+                    !Number.isFinite(leaf.rotation) ||
+                    !Number.isFinite(leaf.spin) ||
+                    typeof leaf.color !== "string"
+                ) {
+                    throw new Error("Wizard of Flatland spike tree leaf render requires finite leaf geometry");
+                }
+                const point = worldToScreen(
+                    effect.x + leaf.offsetX * movementProgress,
+                    effect.y + leaf.offsetY * movementProgress + progress * progress * 0.18
+                );
+                ctx.save();
+                ctx.globalAlpha = 1 - progress;
+                ctx.translate(point.x, point.y);
+                ctx.rotate(leaf.rotation + leaf.spin * effect.age);
+                ctx.scale(1, 0.48);
+                ctx.fillStyle = leaf.color;
+                ctx.beginPath();
+                ctx.arc(0, 0, Math.max(1.5, leaf.size * state.view.scale), 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+    }
+
     function drawWallShatterEffects() {
         if (!Array.isArray(state.wallShatterEffects) || state.wallShatterEffects.length === 0) return;
         ctx.save();
@@ -13436,6 +13566,7 @@
         framePart("turrets", () => updateTurrets(dt));
         framePart("fire deaths", () => updateFireDeathEffects(dt));
         framePart("spike shatters", () => updateSpikeShatterEffects(dt));
+        framePart("spike tree leaves", () => updateSpikeTreeLeafEffects(dt));
         framePart("wall shatters", () => updateWallShatterEffects(dt));
         framePart("temporary path costs", () => updateTemporaryPathfindingCosts());
         framePart("live enemy path costs", () => updateLiveEnemyPathfindingCosts());

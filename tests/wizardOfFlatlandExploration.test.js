@@ -6,6 +6,7 @@ const vm = require("node:vm");
 
 const EXPLORATION_PATH = path.join(__dirname, "../public/wizard-of-flatland/exploration.js");
 const LOS_PATH = path.join(__dirname, "../public/wizard-of-flatland/los.js");
+const MAIN_SOURCE = fs.readFileSync(path.join(__dirname, "../public/wizard-of-flatland/main.js"), "utf8");
 const LAYOUT = {
     stride: 8,
     x1: 0,
@@ -224,6 +225,31 @@ test("Wizard of Flatland exploration fills adjacent LOS hits with one-cell paddi
     system.applyVisibility(Int32Array.from([0, 0]), Float32Array.from([0.375, 0.625]));
 
     assert.deepEqual(intervals(system).map(({ startT, endT }) => [startT, endT]), [[0.25, 0.875]]);
+});
+
+test("Wizard of Flatland tree discovery turns one silhouette hit into a binary reveal", () => {
+    const context = loadScript(EXPLORATION_PATH);
+    const system = context.getWizardFlatlandExplorationApi().createExplorationSystem({ cellSize: 0.25 });
+    const treeWalls = Float32Array.from([
+        ...wall(4, -1, 5, 0, 40, 0),
+        ...wall(5, 0, 4, 1, 40, 0),
+        ...wall(4, 1, 4, -1, 40, 0)
+    ]);
+    system.syncWalls(treeWalls, LAYOUT);
+    system.revealActiveWall(0);
+    system.revealActiveWall(1);
+    system.revealActiveWall(2);
+
+    assert.equal(intervals(system).length, 3);
+    assert.ok(intervals(system).every(({ startT, endT }) => startT === 0 && endT === 1));
+    assert.match(
+        MAIN_SOURCE,
+        /explorationSystem\.applyVisibility\(message\.hitWallIndices, message\.hitWallTs\);\s*discoverTreesHitByLosRays\(message\.hitWallIndices\)/
+    );
+    assert.match(
+        MAIN_SOURCE,
+        /function discoverTreesHitByLosRays[\s\S]*const hitBase = wallIndex \* WALL_STRIDE[\s\S]*explorationSystem\.revealActiveWall\(base \/ WALL_STRIDE\)/
+    );
 });
 
 test("Wizard of Flatland exploration survives wall buffer reorder through stable geometry keys", () => {

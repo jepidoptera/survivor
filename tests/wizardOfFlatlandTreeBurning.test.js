@@ -63,6 +63,17 @@ test("Wizard of Flatland tree fire grows to ten flames across the tree width", (
     assert.match(source, /const spread = treeRadius \* damageRatio/);
 });
 
+test("Wizard of Flatland spikes are absorbed by trees with a leaf burst", () => {
+    assert.match(
+        source,
+        /if \(wallHit\.labelCode === WALL_LABEL_TREE\) \{[\s\S]*state\.spikeTreeLeafEffects\.push\(createSpikeTreeLeafEffect\(fireball, wallHit\)\);[\s\S]*continue;/
+    );
+    assert.match(source, /const SPIKE_TREE_LEAF_COUNT = 7;/);
+    assert.match(source, /function createSpikeTreeLeafEffect[\s\S]*color: Math\.random\(\) < 0\.5 \? "#58a832" : "#82c94b"/);
+    assert.match(source, /framePart\("spike tree leaves", \(\) => updateSpikeTreeLeafEffects\(dt\)\)/);
+    assert.match(source, /function drawSpikeTreeLeafEffects[\s\S]*ctx\.scale\(1, 0\.48\)[\s\S]*ctx\.arc/);
+});
+
 test("Wizard of Flatland diamond flames flicker and waver above a fixed bottom point", () => {
     assert.match(source, /const flicker = 0\.86 \+ Math\.sin\(phase \* 1\.9\) \* 0\.14/);
     assert.match(source, /const sway = Math\.sin\(phase \* 2\.3\) \* width \* 0\.24/);

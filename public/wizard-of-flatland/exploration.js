@@ -169,6 +169,16 @@
             return changed;
         }
 
+        function revealActiveWall(wallIndex) {
+            if (!Number.isInteger(wallIndex) || wallIndex < 0 || wallIndex >= activeRecords.length) {
+                throw new Error(`Wizard of Flatland exploration cannot reveal missing active wall ${wallIndex}`);
+            }
+            const record = activeRecords[wallIndex].record;
+            const changed = revealCellRange(record, 0, record.cellCount - 1);
+            if (changed) version++;
+            return changed;
+        }
+
         function forEachActiveInterval(callback) {
             if (typeof callback !== "function") throw new Error("Wizard of Flatland exploration interval visitor is required");
             for (const active of activeRecords) {
@@ -279,6 +289,7 @@
         return Object.freeze({
             syncWalls,
             applyVisibility,
+            revealActiveWall,
             forEachActiveInterval,
             isWallExplored,
             inheritSplit,
