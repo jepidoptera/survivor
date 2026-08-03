@@ -29,7 +29,7 @@
             return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(dq + dr));
         }
 
-        function updateEnemyActivation(agents, target, options, proceduralMaze) {
+        function updateEnemyActivation(agents, target, options, proceduralMaze, highestEnteredZone) {
             if (!Array.isArray(agents)) {
                 throw new Error("Wizard of Flatland enemy activation requires an agent array");
             }
@@ -39,6 +39,9 @@
             if (!proceduralMaze) {
                 for (const agent of agents) agent.activated = true;
                 return;
+            }
+            if (!Number.isInteger(highestEnteredZone) || highestEnteredZone < 0) {
+                throw new Error("Wizard of Flatland enemy activation requires a non-negative highest entered zone");
             }
 
             const targetCoord = mazeSections.worldToMazeSectionCoord(target.x, target.y, options);
@@ -51,14 +54,22 @@
                 if (!agent || !Number.isFinite(agent.x) || !Number.isFinite(agent.y)) {
                     throw new Error("Wizard of Flatland enemy activation requires finite enemy positions");
                 }
+                if (!Number.isInteger(agent.zoneLevel) || agent.zoneLevel < 0) {
+                    throw new Error(`Wizard of Flatland enemy activation requires enemy ${agent.id} to have a non-negative zone level`);
+                }
                 const coord = mazeSections.worldToMazeSectionCoord(agent.x, agent.y, options);
                 const sectionKey = mazeSections.mazeSectionKey(coord.q, coord.r);
                 agentSectionKeys.set(agent, sectionKey);
+                if (agent.zoneLevel > highestEnteredZone) {
+                    agent.activated = false;
+                    continue;
+                }
                 const distanceSquared = (agent.x - target.x) ** 2 + (agent.y - target.y) ** 2;
                 if (distanceSquared <= wakeDistanceSquared) wakingSectionKeys.add(sectionKey);
             }
 
             for (const agent of agents) {
+                if (agent.zoneLevel > highestEnteredZone) continue;
                 const sectionKey = agentSectionKeys.get(agent);
                 if (wakingSectionKeys.has(sectionKey)) {
                     agent.activated = true;

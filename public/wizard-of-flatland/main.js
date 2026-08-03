@@ -23,6 +23,7 @@
     const WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL = 22;
     const WALL_LABEL_HALLWAY_SIDE_HALF = 30;
     const WALL_LABEL_HALLWAY_SIDE_FULL = 31;
+    const WALL_LABEL_ZONE_BOUNDARY = 32;
     const WALL_LABEL_TREE = 40;
     const COIN_SPAN_STRIDE = 8;
     const COIN_SPAN_X1 = 0;
@@ -116,6 +117,12 @@
     const FIREBALL_SELF_DAMAGE_SCALE = 0.25;
     const FIREBALL_WALL_HIT_RADIUS_SCALE = 0.5;
     const FIREBALL_HALF_DAMAGE_OUTER_RADIUS = 1;
+    const TREE_MAX_HEALTH = 1000;
+    const TREE_BURN_DAMAGE_PER_SECOND = 50;
+    const TREE_CRUMBLE_SECONDS = 1;
+    const TREE_FLAME_MAX_COUNT = 10;
+    const TREE_FLAME_LIFETIME_SECONDS = 5;
+    const TREE_FLAME_LIFETIME_VARIATION = 0.2;
     const SPIKE_PROJECTILE_RADIUS = 0.18;
     const SPIKE_BOUNCE_MAX_SPIN_HZ = 5;
     const SPIKE_BOUNCE_MAX_DAMAGE_LOSS_RATIO = 0.75;
@@ -326,7 +333,7 @@
     const WIZARD_HAT_TOP_DOWN_BRIM_HEIGHT = 2.25;
     const WIZARD_HAT_TOP_DOWN_BRIM_DROP = 0.12;
     const WIZARD_HAT_TOP_DOWN_CONE_HEIGHT = 0.8112;
-    const FLOOR_CENTER_COLOR = "#303030";
+    const FLOOR_CENTER_COLOR = "#555555";
     const FLOOR_RED_COLOR = "#5e0906";
     const FLOOR_ORANGE_COLOR = "#482706";
     const FLOOR_YELLOW_COLOR = "#373006";
@@ -343,7 +350,8 @@
         FLOOR_PURPLE_COLOR
     ];
     const FLOOR_GRADIENT_SECTION_DISTANCE = 7;
-    const FLOOR_GRADIENT_OUTER_SECTION_DISTANCE = FLOOR_GRADIENT_SECTION_DISTANCE * (FLOOR_ZONE_COLORS.length - 1);
+    const FLOOR_ZONE_SOLID_SECTION_DISTANCE = 2;
+    const FLOOR_ZONE_FADE_STEP_COUNT = 16;
     const FLOOR_HOME_BASE_LIGHT_SECTION_DISTANCE = 7;
     const FLOOR_HOME_BASE_LIGHT_BRIGHTNESS = 0.5;
     const FLOOR_HOME_BASE_LIGHT_MIN_VIEWPORT_EXAGGERATION_SECTIONS = 1;
@@ -351,6 +359,7 @@
     const FLOOR_INACTIVE_PYRAMID_DARKNESS_SECTION_DISTANCE = 3;
     const FLOOR_INACTIVE_PYRAMID_DARKNESS = 0.5;
     const MAZE_RING_BOUNDARY_INTERVAL = 7;
+    const MAZE_ROOM_EDGE_INSET_TILES = 2;
     const VIEW_ZOOM_MIN = 0.45;
     const VIEW_ZOOM_MAX = 3.2;
     const VIEW_ZOOM_WHEEL_STEP = 0.0015;
@@ -378,6 +387,7 @@
     const fireballCooldownRingArc = document.getElementById("fireballCooldownRingArc");
     const spellStatusIconImage = document.querySelector("#fireballStatusIcon img");
     const levelUpAnnouncement = document.getElementById("levelUpAnnouncement");
+    const zoneAnnouncement = document.getElementById("zoneAnnouncement");
     const spellLevelPanel = document.getElementById("spellLevelPanel");
     const spellLevelHeader = document.getElementById("spellLevelHeader");
     const spellLevelPlayerName = document.getElementById("spellLevelPlayerName");
@@ -465,6 +475,7 @@
             WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL,
             WALL_LABEL_HALLWAY_SIDE_HALF,
             WALL_LABEL_HALLWAY_SIDE_FULL,
+            WALL_LABEL_ZONE_BOUNDARY,
             WALL_LABEL_TREE
         }
     });
@@ -592,6 +603,7 @@
         freezeParticles: [],
         spikeShatterEffects: [],
         wallShatterEffects: [],
+        treeBurnStatesByKey: new Map(),
         brokenWallGaps: [],
         wallBreakSegmentsById: new Map(),
         wallBreakSegmentIdsByWallIndex: [],
@@ -610,6 +622,7 @@
         activatedTalismanSectionKeys: new Set(),
         homeBaseTalismanSectionKey: "",
         visitedMazeSectionKeys: new Set(),
+        highestEnteredMazeZone: 0,
         walls: createEmptyWallBuffer(),
         manualWalls: createEmptyWallBuffer(),
         generatedMazeWalls: createEmptyWallBuffer(),
@@ -871,6 +884,20 @@
         void levelUpAnnouncement.offsetWidth;
         levelUpAnnouncement.classList.add("active");
     };
+
+    function playZoneAnnouncement(zone) {
+        if (!zoneAnnouncement) throw new Error("Wizard of Flatland zone announcement is missing");
+        if (!Number.isInteger(zone) || zone < 1) {
+            throw new Error("Wizard of Flatland zone announcement requires a positive zone");
+        }
+        const color = FLOOR_ZONE_COLORS[Math.min(zone, FLOOR_ZONE_COLORS.length - 1)];
+        zoneAnnouncement.textContent = `Zone ${zone}`;
+        zoneAnnouncement.style.color = color;
+        zoneAnnouncement.style.textShadow = `0 3px 0 #000, 0 0 18px ${color}, 0 0 34px rgba(255, 255, 255, 0.55)`;
+        zoneAnnouncement.classList.remove("active");
+        void zoneAnnouncement.offsetWidth;
+        zoneAnnouncement.classList.add("active");
+    }
     const canRechargeMagic = () => {
         if (!Number.isFinite(state.spellCooldownRemaining)) {
             throw new Error("Wizard of Flatland magic recharge requires finite spell cooldown");
@@ -1052,7 +1079,7 @@
         setLabelText(labels.workerStatus, event.message || "pathfinding failed");
     });
 
-    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-38");
+    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-45");
     const losWorker = new Worker("/wizard-of-flatland/losWorker.js?v=wizard-of-flatland-3");
     losWorker.addEventListener("message", (event) => {
         profiler.task("LOS worker message", () => handleLosWorkerMessage(event));
@@ -1973,6 +2000,17 @@
         return highestZone;
     }
 
+    function updateEnteredMazeZone() {
+        if (!isProceduralMazeScenario()) return;
+        if (!Number.isInteger(state.highestEnteredMazeZone) || state.highestEnteredMazeZone < 0) {
+            throw new Error("Wizard of Flatland zone entry requires a non-negative highest entered zone");
+        }
+        const enteredZone = getMazeZoneForWorldPoint(state.target.x, state.target.y, getMazeOptions());
+        if (enteredZone <= state.highestEnteredMazeZone) return;
+        state.highestEnteredMazeZone = enteredZone;
+        playZoneAnnouncement(enteredZone);
+    }
+
     function rebuildWallBreakSegmentRegistry() {
         const previousRegistry = new Map(state.wallBreakSegmentsById);
         for (const range of state.generatedMazeWallSectionRanges) {
@@ -2882,6 +2920,7 @@
         state.fountainParticles = [];
         state.homeBaseTalismanSectionKey = "";
         state.visitedMazeSectionKeys = new Set();
+        state.highestEnteredMazeZone = 0;
     }
 
     function freezeAgentsInMazeSection(sectionKey, options) {
@@ -2973,6 +3012,7 @@
         state.freezeParticles = [];
         state.spikeShatterEffects = [];
         state.wallShatterEffects = [];
+        state.treeBurnStatesByKey = new Map();
         state.brokenWallGaps = [];
         state.spaceHeld = false;
         state.destructoBeam.held = false;
@@ -3087,6 +3127,9 @@
         if (!(state.generatedMazeInstalledChunkKeys instanceof Set)) {
             throw new Error("Wizard of Flatland checkpoint save requires active section tracking");
         }
+        if (!Number.isInteger(state.highestEnteredMazeZone) || state.highestEnteredMazeZone < 0) {
+            throw new Error("Wizard of Flatland checkpoint save requires a non-negative highest entered zone");
+        }
         const activeSectionKeys = new Set(state.generatedMazeInstalledChunkKeys);
         const visitedSectionKeys = new Set(state.visitedMazeSectionKeys);
         const spawnBudgetsBySectionKey = snapshotVisitedMazeSpawnBudgets(visitedSectionKeys);
@@ -3112,6 +3155,7 @@
             maze: getMazeOptions(),
             activeSectionKeys: Array.from(activeSectionKeys).sort(),
             visitedSectionKeys: Array.from(visitedSectionKeys).sort(),
+            highestEnteredMazeZone: state.highestEnteredMazeZone,
             collectedCoins: getVisitedCollectedCoinSnapshots(visitedSectionKeys),
             nextDroppedCoinId: getNextAvailableDroppedCoinId(),
             enemies,
@@ -3361,6 +3405,12 @@
         if (snapshot.nextDroppedCoinId !== undefined && (!Number.isInteger(snapshot.nextDroppedCoinId) || snapshot.nextDroppedCoinId < 1)) {
             throw new Error("Wizard of Flatland saved checkpoint nextDroppedCoinId must be a positive integer");
         }
+        if (
+            snapshot.highestEnteredMazeZone !== undefined
+            && (!Number.isInteger(snapshot.highestEnteredMazeZone) || snapshot.highestEnteredMazeZone < 0)
+        ) {
+            throw new Error("Wizard of Flatland saved checkpoint highest entered zone must be a non-negative integer");
+        }
         if (snapshot.homeBaseTalismanSectionKey !== undefined && typeof snapshot.homeBaseTalismanSectionKey !== "string") {
             throw new Error("Wizard of Flatland saved checkpoint home base talisman key must be a string");
         }
@@ -3432,6 +3482,10 @@
         state.activatedFountainSectionKeys = new Set(snapshot.activatedFountainSectionKeys || []);
         state.homeBaseTalismanSectionKey = getHomeBaseTalismanSectionKeyFromCheckpointSnapshot(snapshot);
         state.visitedMazeSectionKeys = new Set(snapshot.visitedSectionKeys);
+        const restoredWizardZone = getMazeZoneForWorldPoint(state.target.x, state.target.y, getMazeOptions());
+        state.highestEnteredMazeZone = snapshot.highestEnteredMazeZone === undefined
+            ? restoredWizardZone
+            : Math.max(snapshot.highestEnteredMazeZone, restoredWizardZone);
         state.generatedMazeInitialEnemySpawnBudgetsBySectionKey = new Map(snapshot.spawnBudgets.map((entry) => {
             if (!entry || typeof entry.sectionKey !== "string" || !Number.isInteger(entry.budget) || entry.budget < 0) {
                 throw new Error("Wizard of Flatland saved checkpoint spawn budget is malformed");
@@ -4979,7 +5033,11 @@
         }
         if (targetedAgent.targetTurretId !== null && targetedAgent.targetTurretId !== undefined) return;
         const allies = state.agents
-            .filter((agent) => agent !== targetedAgent && (agent.targetTurretId === null || agent.targetTurretId === undefined))
+            .filter((agent) => (
+                agent !== targetedAgent
+                && agent.activated === true
+                && (agent.targetTurretId === null || agent.targetTurretId === undefined)
+            ))
             .map((agent) => ({
                 agent,
                 distanceSquared: squareDistance(agent.x, agent.y, turret.x, turret.y)
@@ -4991,6 +5049,9 @@
     }
 
     function lockAgentOnTurret(agent, turret) {
+        if (agent.activated !== true) {
+            throw new Error(`Wizard of Flatland turret ${turret.id} cannot recruit hibernating enemy ${agent.id}`);
+        }
         if (agent.targetTurretId !== null && agent.targetTurretId !== undefined) {
             throw new Error(`Wizard of Flatland enemy ${agent.id} cannot switch from turret ${agent.targetTurretId} to turret ${turret.id}`);
         }
@@ -5485,6 +5546,7 @@
         });
         damageWizardIntersectingFireballBlast(trap.x, trap.y, stats.explosionRadius, stats.damage);
         damageTurretsIntersectingCircle(trap.x, trap.y, stats.explosionRadius, stats.damage);
+        damageTreesIntersectingFireBlast(trap.x, trap.y, stats.explosionRadius, stats.damage);
         state.fireballExplosions.push({ x: trap.x, y: trap.y, radius: stats.explosionRadius, age: 0 });
         for (const other of state.traps) {
             if (
@@ -6580,6 +6642,7 @@
         );
         damageWizardIntersectingFireballBlast(fireball.x, fireball.y, fireball.explosionRadius, fireball.damage);
         damageTurretsIntersectingCircle(fireball.x, fireball.y, fireball.explosionRadius, fireball.damage);
+        damageTreesIntersectingFireBlast(fireball.x, fireball.y, fireball.explosionRadius, fireball.damage);
         state.fireballExplosions.push({
             x: fireball.x,
             y: fireball.y,
@@ -6616,6 +6679,175 @@
             explosion.age += dt;
             return explosion.age < FIREBALL_EXPLOSION_VISUAL_SECONDS;
         });
+    }
+
+    function getTreePolygonRecords() {
+        validateWallBuffer(state.walls, "tree polygon scan");
+        const records = [];
+        for (let base = 0; base < state.walls.length;) {
+            if (Math.round(state.walls[base + WALL_LABEL_CODE]) !== WALL_LABEL_TREE) {
+                base += WALL_STRIDE;
+                continue;
+            }
+            const sideCode = Math.round(state.walls[base + WALL_LABEL_SIDE]);
+            const startBase = base;
+            const points = [];
+            while (
+                base < state.walls.length &&
+                Math.round(state.walls[base + WALL_LABEL_CODE]) === WALL_LABEL_TREE &&
+                Math.round(state.walls[base + WALL_LABEL_SIDE]) === sideCode
+            ) {
+                points.push({ x: state.walls[base + WALL_X1], y: state.walls[base + WALL_Y1] });
+                base += WALL_STRIDE;
+            }
+            if (points.length < 3) throw new Error("Wizard of Flatland tree requires at least three polygon edges");
+            const centerX = points.reduce((sum, point) => sum + point.x, 0) / points.length;
+            const centerY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
+            const key = `${centerX.toFixed(4)},${centerY.toFixed(4)}`;
+            let burnState = state.treeBurnStatesByKey.get(key);
+            if (!burnState) {
+                burnState = { key, centerX, centerY, health: TREE_MAX_HEALTH, burning: false, crumbleAge: null, flames: [] };
+                state.treeBurnStatesByKey.set(key, burnState);
+            }
+            records.push({ key, startBase, endBase: base, points, centerX, centerY, burnState });
+        }
+        return records;
+    }
+
+    function damageTreesIntersectingFireBlast(x, y, radius, damage) {
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !(radius > 0) || !(damage > 0)) {
+            throw new Error("Wizard of Flatland tree fire damage requires a finite positive blast");
+        }
+        for (const tree of getTreePolygonRecords()) {
+            const reachesTree = pointInPolygon(x, y, tree.points) || tree.points.some((point, index) => {
+                const next = tree.points[(index + 1) % tree.points.length];
+                return pointSegmentDistance(x, y, point.x, point.y, next.x, next.y) <= radius;
+            });
+            if (!reachesTree || tree.burnState.crumbleAge !== null) continue;
+            tree.burnState.health = Math.max(0, tree.burnState.health - damage);
+            tree.burnState.burning = true;
+        }
+    }
+
+    function updateBurningTrees(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return;
+        const removedRanges = [];
+        let losShapeChanged = false;
+        for (const tree of getTreePolygonRecords()) {
+            const burnState = tree.burnState;
+            if (!burnState.burning) continue;
+            const damageRatio = Math.max(0, Math.min(1, 1 - burnState.health / TREE_MAX_HEALTH));
+            updateTreeFlameLifecycles(burnState, damageRatio, dt);
+            if (burnState.crumbleAge === null) {
+                burnState.health = Math.max(0, burnState.health - TREE_BURN_DAMAGE_PER_SECOND * dt);
+                losShapeChanged = true;
+                if (burnState.health <= 0) burnState.crumbleAge = 0;
+            } else {
+                burnState.crumbleAge += dt;
+                losShapeChanged = true;
+                if (burnState.crumbleAge >= TREE_CRUMBLE_SECONDS) removedRanges.push(tree);
+            }
+        }
+        if (losShapeChanged) state.wallVersion++;
+        if (removedRanges.length === 0) return;
+        const removedKeys = new Set(removedRanges.map((tree) => tree.key));
+        const removedWallIndices = [];
+        for (const tree of removedRanges) {
+            for (let wallIndex = tree.startBase / WALL_STRIDE; wallIndex < tree.endBase / WALL_STRIDE; wallIndex++) {
+                removedWallIndices.push(wallIndex);
+            }
+        }
+        const removedWallIndexSet = new Set(removedWallIndices);
+        let removedBeforeRange = 0;
+        state.generatedMazeWallSectionRanges = state.generatedMazeWallSectionRanges.map((range) => {
+            let removedInsideRange = 0;
+            for (let wallIndex = range.startWallIndex; wallIndex < range.startWallIndex + range.wallCount; wallIndex++) {
+                if (removedWallIndexSet.has(wallIndex)) removedInsideRange++;
+            }
+            const adjusted = {
+                ...range,
+                startWallIndex: range.startWallIndex - removedBeforeRange,
+                wallCount: range.wallCount - removedInsideRange
+            };
+            removedBeforeRange += removedInsideRange;
+            return adjusted;
+        });
+        state.walls = filterWallBufferTreeGroups(state.walls, removedKeys);
+        state.generatedMazeWalls = filterWallBufferTreeGroups(state.generatedMazeWalls, removedKeys);
+        markWallsChanged();
+        state.worldVersion += 1;
+        clearAgentPathRequestsForMapRebuild();
+        if (!isProceduralMazeScenario()) rebuildPathfindingNodeLayer();
+    }
+
+    function updateTreeFlameLifecycles(burnState, damageRatio, dt) {
+        if (!burnState || !Array.isArray(burnState.flames)) {
+            throw new Error("Wizard of Flatland burning tree requires flame lifecycle state");
+        }
+        if (!Number.isFinite(damageRatio) || damageRatio < 0 || damageRatio > 1 || !(dt > 0)) {
+            throw new Error("Wizard of Flatland tree flame lifecycle requires finite burn progress and time");
+        }
+        const targetCount = Math.max(1, Math.min(TREE_FLAME_MAX_COUNT, Math.ceil(damageRatio * TREE_FLAME_MAX_COUNT)));
+        while (burnState.flames.length < targetCount) {
+            burnState.flames.push(createTreeFlameLifecycle(burnState.flames.length));
+        }
+        for (let flameIndex = 0; flameIndex < burnState.flames.length; flameIndex++) {
+            const flame = burnState.flames[flameIndex];
+            flame.age += dt;
+            if (flame.age >= flame.lifetime) {
+                burnState.flames[flameIndex] = createTreeFlameLifecycle(flameIndex);
+            }
+        }
+    }
+
+    function createTreeFlameLifecycle(slotIndex) {
+        if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= TREE_FLAME_MAX_COUNT) {
+            throw new Error(`Wizard of Flatland tree flame received invalid slot ${slotIndex}`);
+        }
+        const pairIndex = Math.floor(slotIndex / 2);
+        const side = slotIndex % 2 === 0 ? -1 : 1;
+        const slotX = side * (0.1 + pairIndex * 0.2);
+        const lifetimeScale = 1 + (Math.random() * 2 - 1) * TREE_FLAME_LIFETIME_VARIATION;
+        return {
+            age: 0,
+            lifetime: TREE_FLAME_LIFETIME_SECONDS * lifetimeScale,
+            xNorm: Math.max(-1, Math.min(1, slotX + (Math.random() * 2 - 1) * 0.055)),
+            yNorm: (Math.random() * 2 - 1) * 0.24,
+            sizeScale: 0.85 + Math.random() * 0.3
+        };
+    }
+
+    function filterWallBufferTreeGroups(walls, removedKeys) {
+        validateWallBuffer(walls, "tree removal wall buffer");
+        if (!(removedKeys instanceof Set)) throw new Error("Wizard of Flatland tree removal requires tree keys");
+        const kept = [];
+        for (const treeOrWall of iterateWallBufferTreeGroups(walls)) {
+            if (treeOrWall.treeKey && removedKeys.has(treeOrWall.treeKey)) continue;
+            for (let i = treeOrWall.startBase; i < treeOrWall.endBase; i++) kept.push(walls[i]);
+        }
+        return new Float32Array(kept);
+    }
+
+    function iterateWallBufferTreeGroups(walls) {
+        const groups = [];
+        for (let base = 0; base < walls.length;) {
+            const startBase = base;
+            if (Math.round(walls[base + WALL_LABEL_CODE]) !== WALL_LABEL_TREE) {
+                base += WALL_STRIDE;
+                groups.push({ startBase, endBase: base, treeKey: null });
+                continue;
+            }
+            const sideCode = Math.round(walls[base + WALL_LABEL_SIDE]);
+            const points = [];
+            while (base < walls.length && Math.round(walls[base + WALL_LABEL_CODE]) === WALL_LABEL_TREE && Math.round(walls[base + WALL_LABEL_SIDE]) === sideCode) {
+                points.push({ x: walls[base + WALL_X1], y: walls[base + WALL_Y1] });
+                base += WALL_STRIDE;
+            }
+            const centerX = points.reduce((sum, point) => sum + point.x, 0) / points.length;
+            const centerY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
+            groups.push({ startBase, endBase: base, treeKey: `${centerX.toFixed(4)},${centerY.toFixed(4)}` });
+        }
+        return groups;
     }
 
     function updateFireDeathEffects(dt) {
@@ -8694,7 +8926,14 @@
         let goalNodeKey = "";
         let requestsSent = 0;
         let phaseStarted = state.debug.solverProfile ? performance.now() : 0;
-        updateEnemyActivation(state.agents, state.target, getMazeOptions(), isProceduralMazeScenario());
+        updateEnteredMazeZone();
+        updateEnemyActivation(
+            state.agents,
+            state.target,
+            getMazeOptions(),
+            isProceduralMazeScenario(),
+            state.highestEnteredMazeZone
+        );
         if (phaseStarted) recordSolverProfileSection("pathing: enemy activation", phaseStarted);
         for (const agent of state.agents) {
             metrics.agents += 1;
@@ -10110,7 +10349,7 @@
         const los = state.los;
         if (los.workerInstalledWallRevision === state.wallVersion) return;
         validateWallBuffer(state.walls, "LOS worker wall publication");
-        const walls = cloneWallBuffer(state.walls, "LOS worker walls");
+        const walls = buildTreeScaledLosWallBuffer();
         explorationSystem.syncWalls(state.walls, explorationWallLayout);
         losWorker.postMessage({
             type: "set-walls",
@@ -10118,6 +10357,24 @@
             walls
         }, [walls.buffer]);
         los.workerInstalledWallRevision = state.wallVersion;
+    }
+
+    function buildTreeScaledLosWallBuffer() {
+        const walls = cloneWallBuffer(state.walls, "LOS worker walls");
+        for (const tree of getTreePolygonRecords()) {
+            const healthRatio = Math.max(0, Math.min(1, tree.burnState.health / TREE_MAX_HEALTH));
+            const crumbleRatio = tree.burnState.crumbleAge === null
+                ? 1
+                : Math.max(0, 1 - tree.burnState.crumbleAge / TREE_CRUMBLE_SECONDS);
+            const scale = healthRatio * crumbleRatio;
+            for (let base = tree.startBase; base < tree.endBase; base += WALL_STRIDE) {
+                walls[base + WALL_X1] = tree.centerX + (walls[base + WALL_X1] - tree.centerX) * scale;
+                walls[base + WALL_Y1] = tree.centerY + (walls[base + WALL_Y1] - tree.centerY) * scale;
+                walls[base + WALL_X2] = tree.centerX + (walls[base + WALL_X2] - tree.centerX) * scale;
+                walls[base + WALL_Y2] = tree.centerY + (walls[base + WALL_Y2] - tree.centerY) * scale;
+            }
+        }
+        return walls;
     }
 
     function handleLosWorkerMessage(event) {
@@ -10343,35 +10600,198 @@
         const viewport = getCurrentMazeViewportRect();
         if (!viewport) throw new Error("Wizard of Flatland floor gradient requires a current viewport");
         const sectionWorldStep = Math.sqrt(3) * getMazeSectionRadius(options);
-        const outerWorldRadius = sectionWorldStep * FLOOR_GRADIENT_OUTER_SECTION_DISTANCE;
-        if (!(outerWorldRadius > 0)) {
-            throw new Error("Wizard of Flatland floor gradient requires a positive radius");
-        }
         ctx.fillStyle = FLOOR_PURPLE_COLOR;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        if (getMinDistanceFromOriginToRect(viewport) >= outerWorldRadius) {
-            drawInactivePyramidFloorDarkness(options, viewport, sectionWorldStep);
-            drawHomeBaseFloorLight(options, viewport, sectionWorldStep);
-            return;
+        drawBoundaryClippedFloorZones(options, viewport, sectionWorldStep);
+        drawInactivePyramidFloorDarkness(options, viewport, sectionWorldStep);
+        drawHomeBaseFloorLight(options, viewport, sectionWorldStep);
+    }
+
+    function getMazeZoneBoundaryRoomRadius(options) {
+        const sectionRadius = getMazeSectionRadius(options);
+        return Math.max(5, sectionRadius - MAZE_ROOM_EDGE_INSET_TILES / Math.cos(Math.PI / 6));
+    }
+
+    function getMazeZoneBoundaryApothem(zone, options) {
+        if (!Number.isInteger(zone) || zone < 0) {
+            throw new Error(`Wizard of Flatland zone boundary requires a non-negative zone, received ${zone}`);
         }
-        const center = worldToScreen(0, 0);
-        const outerRadius = outerWorldRadius * state.view.scale;
-        if (!(outerRadius > 0)) {
-            throw new Error("Wizard of Flatland floor gradient requires a positive radius");
+        const sectionRadius = getMazeSectionRadius(options);
+        const roomRadius = getMazeZoneBoundaryRoomRadius(options);
+        const boundaryRing = (zone + 1) * MAZE_RING_BOUNDARY_INTERVAL - 1;
+        return 1.5 * sectionRadius * boundaryRing + roomRadius * 0.5;
+    }
+
+    function getMazeZoneBoundaryPolygon(zone, options) {
+        const radius = getMazeZoneBoundaryApothem(zone, options) / Math.cos(Math.PI / 6);
+        return Array.from({ length: 6 }, (_, index) => {
+            const angle = index * Math.PI / 3;
+            return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
+        });
+    }
+
+    function getMazeZoneForWorldPoint(x, y, options) {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error("Wizard of Flatland zone lookup requires a finite world point");
         }
-        const gradient = ctx.createRadialGradient(center.x, center.y, 0, center.x, center.y, outerRadius);
-        for (let zoneIndex = 0; zoneIndex < FLOOR_ZONE_COLORS.length; zoneIndex += 1) {
-            gradient.addColorStop(zoneIndex / (FLOOR_ZONE_COLORS.length - 1), FLOOR_ZONE_COLORS[zoneIndex]);
+        let boundaryDistance = -Infinity;
+        for (let side = 0; side < 6; side += 1) {
+            const normalAngle = Math.PI / 6 + side * Math.PI / 3;
+            boundaryDistance = Math.max(
+                boundaryDistance,
+                x * Math.cos(normalAngle) + y * Math.sin(normalAngle)
+            );
+        }
+        const sectionRadius = getMazeSectionRadius(options);
+        const firstBoundaryApothem = getMazeZoneBoundaryApothem(0, options);
+        const boundaryStep = 1.5 * sectionRadius * MAZE_RING_BOUNDARY_INTERVAL;
+        let zone = Math.max(0, Math.ceil((boundaryDistance - firstBoundaryApothem) / boundaryStep));
+        while (zone > 0 && boundaryDistance <= getMazeZoneBoundaryApothem(zone - 1, options)) zone -= 1;
+        while (boundaryDistance > getMazeZoneBoundaryApothem(zone, options)) zone += 1;
+        return zone;
+    }
+
+    function drawBoundaryClippedFloorZones(options, viewport, sectionWorldStep) {
+        if (!(sectionWorldStep > 0)) {
+            throw new Error("Wizard of Flatland boundary-clipped floor requires a positive section step");
+        }
+        const corners = [
+            { x: viewport.minX, y: viewport.minY },
+            { x: viewport.maxX, y: viewport.minY },
+            { x: viewport.maxX, y: viewport.maxY },
+            { x: viewport.minX, y: viewport.maxY }
+        ];
+        const maximumVisibleZone = Math.min(
+            FLOOR_ZONE_COLORS.length - 1,
+            Math.max(...corners.map((point) => getMazeZoneForWorldPoint(point.x, point.y, options)))
+        );
+        for (let zone = 0; zone <= maximumVisibleZone; zone += 1) {
+            drawBoundaryClippedFloorZone(zone, options, sectionWorldStep);
+        }
+    }
+
+    function drawBoundaryClippedFloorZone(zone, options, sectionWorldStep) {
+        if (!Number.isInteger(zone) || zone < 0 || zone >= FLOOR_ZONE_COLORS.length) {
+            throw new Error(`Wizard of Flatland boundary-clipped floor received invalid zone ${zone}`);
         }
         ctx.save();
         ctx.beginPath();
-        ctx.arc(center.x, center.y, outerRadius, 0, Math.PI * 2);
-        ctx.clip();
-        ctx.fillStyle = gradient;
+        const appendBoundaryPath = (polygon) => {
+            const first = worldToScreen(polygon[0].x, polygon[0].y);
+            ctx.moveTo(first.x, first.y);
+            for (let index = 1; index < polygon.length; index += 1) {
+                const point = worldToScreen(polygon[index].x, polygon[index].y);
+                ctx.lineTo(point.x, point.y);
+            }
+            ctx.closePath();
+        };
+        appendBoundaryPath(getMazeZoneBoundaryPolygon(zone, options));
+        if (zone > 0) appendBoundaryPath(getMazeZoneBoundaryPolygon(zone - 1, options));
+        ctx.clip("evenodd");
+        if (zone === FLOOR_ZONE_COLORS.length - 1) {
+            ctx.fillStyle = FLOOR_ZONE_COLORS[zone];
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.restore();
+            return;
+        }
+        const currentColor = FLOOR_ZONE_COLORS[zone];
+        const nextColor = FLOOR_ZONE_COLORS[zone + 1];
+        const sectionRadius = getMazeSectionRadius(options);
+        const firstRing = zone * FLOOR_GRADIENT_SECTION_DISTANCE;
+        const solidEndRing = firstRing + FLOOR_ZONE_SOLID_SECTION_DISTANCE - 1;
+        const roomRadius = getMazeZoneBoundaryRoomRadius(options);
+        const solidEndHexRadius = (1.5 * sectionRadius * solidEndRing + roomRadius * 0.5)
+            / Math.cos(Math.PI / 6);
+        const outerHexRadius = getMazeZoneBoundaryApothem(zone, options) / Math.cos(Math.PI / 6);
+        const center = worldToScreen(0, 0);
+        const hexApothemScale = Math.cos(Math.PI / 6);
+        ctx.fillStyle = currentColor;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
+        for (let sector = 0; sector < 6; sector += 1) {
+            const startAngle = sector * Math.PI / 3;
+            const endAngle = (sector + 1) * Math.PI / 3;
+            const sideAngle = startAngle + Math.PI / 6;
+            const expandedRadius = outerHexRadius * 1.01;
+            const startCorner = worldToScreen(
+                Math.cos(startAngle) * expandedRadius,
+                Math.sin(startAngle) * expandedRadius
+            );
+            const endCorner = worldToScreen(
+                Math.cos(endAngle) * expandedRadius,
+                Math.sin(endAngle) * expandedRadius
+            );
+            if (!doesScreenTriangleIntersectCanvas(center, startCorner, endCorner)) continue;
+            const normalX = Math.cos(sideAngle);
+            const normalY = Math.sin(sideAngle);
+            const gradientStart = worldToScreen(
+                normalX * solidEndHexRadius * hexApothemScale,
+                normalY * solidEndHexRadius * hexApothemScale
+            );
+            const gradientEnd = worldToScreen(
+                normalX * outerHexRadius * hexApothemScale,
+                normalY * outerHexRadius * hexApothemScale
+            );
+            const gradient = ctx.createLinearGradient(
+                gradientStart.x,
+                gradientStart.y,
+                gradientEnd.x,
+                gradientEnd.y
+            );
+            gradient.addColorStop(0, currentColor);
+            for (let fadeStep = 1; fadeStep <= FLOOR_ZONE_FADE_STEP_COUNT; fadeStep += 1) {
+                const fadeT = fadeStep / FLOOR_ZONE_FADE_STEP_COUNT;
+                const colorMix = 0.5 * getFloorZoneFadeProgress(fadeT);
+                gradient.addColorStop(fadeT, mixHexColors(currentColor, nextColor, colorMix));
+            }
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(center.x, center.y);
+            ctx.lineTo(startCorner.x, startCorner.y);
+            ctx.lineTo(endCorner.x, endCorner.y);
+            ctx.closePath();
+            ctx.clip();
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.restore();
+        }
         ctx.restore();
-        drawInactivePyramidFloorDarkness(options, viewport, sectionWorldStep);
-        drawHomeBaseFloorLight(options, viewport, sectionWorldStep);
+    }
+
+    function doesScreenTriangleIntersectCanvas(a, b, c) {
+        for (const point of [a, b, c]) {
+            if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+                throw new Error("Wizard of Flatland floor sector requires finite screen points");
+            }
+        }
+        const minX = Math.min(a.x, b.x, c.x);
+        const maxX = Math.max(a.x, b.x, c.x);
+        const minY = Math.min(a.y, b.y, c.y);
+        const maxY = Math.max(a.y, b.y, c.y);
+        return maxX >= 0 && minX <= canvas.width && maxY >= 0 && minY <= canvas.height;
+    }
+
+    function getFloorZoneFadeProgress(t) {
+        if (!Number.isFinite(t) || t < 0 || t > 1) {
+            throw new Error("Wizard of Flatland floor fade progress requires a value between zero and one");
+        }
+        return (2 * t + 99 * t * t) / 101;
+    }
+
+    function mixHexColors(fromColor, toColor, amount) {
+        if (!/^#[0-9a-f]{6}$/i.test(fromColor) || !/^#[0-9a-f]{6}$/i.test(toColor)) {
+            throw new Error("Wizard of Flatland floor color mixing requires six-digit hex colors");
+        }
+        if (!Number.isFinite(amount) || amount < 0 || amount > 1) {
+            throw new Error("Wizard of Flatland floor color mixing amount must be between zero and one");
+        }
+        const from = Number.parseInt(fromColor.slice(1), 16);
+        const to = Number.parseInt(toColor.slice(1), 16);
+        const channels = [16, 8, 0].map((shift) => {
+            const fromChannel = (from >> shift) & 0xff;
+            const toChannel = (to >> shift) & 0xff;
+            return Math.round(fromChannel + (toChannel - fromChannel) * amount);
+        });
+        return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
     }
 
     function drawInactivePyramidFloorDarkness(options, viewport, sectionWorldStep) {
@@ -10493,21 +10913,13 @@
             viewportMaxDistance
         );
         const lightGradient = ctx.createRadialGradient(center.x, center.y, 0, center.x, center.y, lightRadius);
-        const saturationGradient = ctx.createRadialGradient(center.x, center.y, 0, center.x, center.y, lightRadius);
         for (const stop of lightStops) {
             const position = stop.distance / lightRadiusWorld;
             lightGradient.addColorStop(position, `rgba(255,255,255,${stop.brightness})`);
-            saturationGradient.addColorStop(position, `rgba(255,0,0,${stop.brightness})`);
         }
         ctx.save();
         ctx.beginPath();
         ctx.arc(center.x, center.y, lightRadius, 0, Math.PI * 2);
-        ctx.globalCompositeOperation = "saturation";
-        if (ctx.globalCompositeOperation !== "saturation") {
-            throw new Error("Wizard of Flatland home base floor light requires saturation compositing");
-        }
-        ctx.fillStyle = saturationGradient;
-        ctx.fill();
         ctx.globalCompositeOperation = "lighter";
         ctx.fillStyle = lightGradient;
         ctx.fill();
@@ -11131,11 +11543,7 @@
                     base += WALL_STRIDE;
                 }
                 if (!explored) continue;
-                treePath.moveTo(state.walls[treeStart + WALL_X1], state.walls[treeStart + WALL_Y1]);
-                for (let edgeBase = treeStart; edgeBase < base; edgeBase += WALL_STRIDE) {
-                    treePath.lineTo(state.walls[edgeBase + WALL_X2], state.walls[edgeBase + WALL_Y2]);
-                }
-                treePath.closePath();
+                // Trees are drawn from their live burn state below.
             }
             cache.wallPath = wallPath;
             cache.treePath = treePath;
@@ -11156,9 +11564,78 @@
         ctx.strokeStyle = "#ffffff";
         ctx.stroke(cache.wallPath);
         ctx.strokeStyle = "#008800";
-        ctx.fillStyle = "#008800";
-        ctx.fill(cache.treePath);
+        drawLiveTreePolygons();
         ctx.restore();
+    }
+
+    function drawLiveTreePolygons() {
+        const nowSeconds = performance.now() / 1000;
+        for (const tree of getTreePolygonRecords()) {
+            if (!tree.points.some((point, index) => explorationSystem.isWallExplored(
+                point.x,
+                point.y,
+                tree.points[(index + 1) % tree.points.length].x,
+                tree.points[(index + 1) % tree.points.length].y,
+                WALL_LABEL_TREE,
+                Math.round(state.walls[tree.startBase + WALL_LABEL_SIDE])
+            ))) continue;
+            const burnState = tree.burnState;
+            const damageRatio = Math.max(0, Math.min(1, 1 - burnState.health / TREE_MAX_HEALTH));
+            const crumbleScale = burnState.crumbleAge === null
+                ? 1
+                : Math.max(0, 1 - burnState.crumbleAge / TREE_CRUMBLE_SECONDS);
+            const brightness = Math.round(136 * (1 - damageRatio));
+            ctx.fillStyle = burnState.crumbleAge === null
+                ? `rgb(0,${136 - Math.round(96 * damageRatio)},0)`
+                : `rgb(${brightness},${brightness},${brightness})`;
+            ctx.beginPath();
+            for (let i = 0; i < tree.points.length; i++) {
+                const point = tree.points[i];
+                const x = tree.centerX + (point.x - tree.centerX) * crumbleScale;
+                const y = tree.centerY + (point.y - tree.centerY) * crumbleScale;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+            ctx.fill();
+            if (!burnState.burning) continue;
+            const treeRadius = Math.max(...tree.points.map((point) => Math.hypot(point.x - tree.centerX, point.y - tree.centerY)));
+            const flameRadius = treeRadius * damageRatio * crumbleScale;
+            if (!(flameRadius > 0.001)) continue;
+            for (let flameIndex = 0; flameIndex < burnState.flames.length; flameIndex++) {
+                const flame = burnState.flames[flameIndex];
+                const lifeProgress = Math.max(0, Math.min(1, flame.age / flame.lifetime));
+                const lifeEnvelope = Math.sin(lifeProgress * Math.PI);
+                if (!(lifeEnvelope > 0.000001)) continue;
+                const spread = treeRadius * damageRatio;
+                const x = tree.centerX + flame.xNorm * spread;
+                const y = tree.centerY + flame.yNorm * spread * 0.45;
+                const phase = nowSeconds * (8 + flameIndex) + flameIndex * 1.7;
+                const flicker = 0.86 + Math.sin(phase * 1.9) * 0.14;
+                const width = flameRadius * 0.27 * flame.sizeScale * lifeEnvelope * flicker;
+                const height = width * 1.65;
+                const sway = Math.sin(phase * 2.3) * width * 0.24;
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.fillStyle = "rgba(255,92,16,0.86)";
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(-width, -height);
+                ctx.lineTo(sway, -height * 2);
+                ctx.lineTo(width, -height);
+                ctx.closePath();
+                ctx.fill();
+                ctx.fillStyle = "rgba(255,209,72,0.92)";
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(-width * 0.5, -height * 0.56);
+                ctx.lineTo(sway * 0.45, -height * 1.12);
+                ctx.lineTo(width * 0.5, -height * 0.56);
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+            }
+        }
     }
 
     function getHomeBaseFloorLightStops(lightRadiusWorld, viewportMinDistance, viewportCenterDistance, viewportMaxDistance) {
@@ -12916,6 +13393,9 @@
         framePart("target movement", () => updateTargetKeyboardMovement(dt));
         framePart("refresh maze sections", () => refreshGeneratedMazeIfNeeded(false));
         framePart("refresh path bounds", () => refreshMazePathBoundsIfNeeded());
+        // Burn geometry must advance before LOS is requested. Changing the wall
+        // revision afterward would make this frame's worker result stale.
+        framePart("burning trees", () => updateBurningTrees(dt));
         framePart("line of sight", () => updateLosAndExploration());
         framePart("spell cooldowns", () => updateSpellCooldowns(dt));
         framePart("held spell casting", () => {

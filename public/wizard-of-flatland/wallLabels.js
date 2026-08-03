@@ -55,6 +55,8 @@
                     return "hallway side | half-length";
                 case constants.WALL_LABEL_HALLWAY_SIDE_FULL:
                     return "hallway side | corner pocket extended";
+                case constants.WALL_LABEL_ZONE_BOUNDARY:
+                    return `zone boundary${sideText} | outward corridor closed`;
                 case constants.WALL_LABEL_TREE:
                     return `tree${sideText} | obstacle edge`;
                 default:

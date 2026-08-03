@@ -96,29 +96,77 @@ function countPyramidsOnRing(api, ring) {
     return count;
 }
 
-test("Wizard of Flatland floor zones follow a dark, perceptually even rainbow", () => {
+test("Wizard of Flatland floor zones start gray before the dark, perceptually even rainbow", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
-    assert.match(source, /const FLOOR_CENTER_COLOR = "#303030";/);
+    assert.match(source, /const FLOOR_CENTER_COLOR = "#555555";/);
     assert.match(source, /const FLOOR_RED_COLOR = "#5e0906";/);
     assert.match(source, /const FLOOR_ORANGE_COLOR = "#482706";/);
     assert.match(source, /const FLOOR_YELLOW_COLOR = "#373006";/);
     assert.match(source, /const FLOOR_GREEN_COLOR = "#073b0f";/);
     assert.match(source, /const FLOOR_BLUE_COLOR = "#052b69";/);
     assert.match(source, /const FLOOR_PURPLE_COLOR = "#3e0b6f";/);
+    assert.match(
+        source,
+        /const FLOOR_ZONE_COLORS = \[\s*FLOOR_CENTER_COLOR,\s*FLOOR_RED_COLOR,\s*FLOOR_ORANGE_COLOR,\s*FLOOR_YELLOW_COLOR,\s*FLOOR_GREEN_COLOR,\s*FLOOR_BLUE_COLOR,\s*FLOOR_PURPLE_COLOR\s*\];/
+    );
 });
 
-test("Wizard of Flatland pyramid light increases floor saturation with its brightness", () => {
+test("Wizard of Flatland floor gradients reach a half mix before sharply changing zones", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const drawSource = extractFunction(source, "drawBoundaryClippedFloorZone");
+    const routingSource = extractFunction(source, "drawBoundaryClippedFloorZones");
+    assert.match(routingSource, /getMazeZoneForWorldPoint\(point\.x, point\.y, options\)/);
+    assert.match(drawSource, /appendBoundaryPath\(getMazeZoneBoundaryPolygon\(zone, options\)\)/);
+    assert.match(drawSource, /ctx\.clip\("evenodd"\)/);
+    assert.match(drawSource, /const colorMix = 0\.5 \* getFloorZoneFadeProgress\(fadeT\)/);
+    assert.match(drawSource, /for \(let sector = 0; sector < 6; sector \+= 1\)/);
+    assert.match(drawSource, /const startAngle = sector \* Math\.PI \/ 3/);
+    assert.match(drawSource, /const endAngle = \(sector \+ 1\) \* Math\.PI \/ 3/);
+    assert.match(drawSource, /const sideAngle = startAngle \+ Math\.PI \/ 6/);
+    assert.match(drawSource, /if \(!doesScreenTriangleIntersectCanvas\(center, startCorner, endCorner\)\) continue/);
+    assert.match(drawSource, /const gradient = ctx\.createLinearGradient/);
+    assert.match(drawSource, /gradient\.addColorStop\(fadeT, mixHexColors\(currentColor, nextColor, colorMix\)\)/);
+
+    const context = { Math, Number };
+    vm.createContext(context);
+    vm.runInContext(
+        `${extractFunction(source, "mixHexColors")} globalThis.__mixHexColors = mixHexColors;`,
+        context,
+        { filename: "wizard-of-flatland-floor-color-mix.js" }
+    );
+    assert.equal(context.__mixHexColors("#555555", "#5e0906", 0.5), "#5a2f2e");
+});
+
+test("Wizard of Flatland keeps the first two rings of each floor zone at its exact color", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const drawSource = extractFunction(source, "drawBoundaryClippedFloorZone");
+    assert.match(source, /const FLOOR_ZONE_SOLID_SECTION_DISTANCE = 2;/);
+    assert.match(drawSource, /const solidEndRing = firstRing \+ FLOOR_ZONE_SOLID_SECTION_DISTANCE - 1/);
+    assert.match(drawSource, /normalX \* solidEndHexRadius \* hexApothemScale/);
+    assert.match(drawSource, /gradient\.addColorStop\(0, currentColor\)/);
+});
+
+test("Wizard of Flatland floor fade accelerates to one hundred times its starting rate", () => {
+    const source = fs.readFileSync(MAIN_PATH, "utf8");
+    const context = { Math, Number };
+    vm.createContext(context);
+    vm.runInContext(
+        `${extractFunction(source, "getFloorZoneFadeProgress")} globalThis.__fade = getFloorZoneFadeProgress;`,
+        context,
+        { filename: "wizard-of-flatland-floor-fade.js" }
+    );
+    assert.equal(context.__fade(0), 0);
+    assert.equal(context.__fade(0.5), 103 / 404);
+    assert.equal(context.__fade(1), 1);
+    assert.match(source, /const FLOOR_ZONE_FADE_STEP_COUNT = 16;/);
+    assert.match(extractFunction(source, "getFloorZoneFadeProgress"), /return \(2 \* t \+ 99 \* t \* t\) \/ 101;/);
+});
+
+test("Wizard of Flatland pyramid light brightens floors without hue-amplifying saturation", () => {
     const source = fs.readFileSync(MAIN_PATH, "utf8");
     const drawSource = extractFunction(source, "drawHomeBaseFloorLight");
-    assert.match(
-        drawSource,
-        /saturationGradient\.addColorStop\(position, `rgba\(255,0,0,\$\{stop\.brightness\}\)`\)/
-    );
-    assert.match(
-        drawSource,
-        /globalCompositeOperation = "saturation"[\s\S]*?fillStyle = saturationGradient;[\s\S]*?fill\(\)[\s\S]*?globalCompositeOperation = "lighter"[\s\S]*?fillStyle = lightGradient;[\s\S]*?fill\(\)/
-    );
-    assert.match(drawSource, /requires saturation compositing/);
+    assert.doesNotMatch(drawSource, /saturationGradient|globalCompositeOperation = "saturation"/);
+    assert.match(drawSource, /globalCompositeOperation = "lighter"[\s\S]*?fillStyle = lightGradient;[\s\S]*?fill\(\)/);
 });
 
 test("Wizard of Flatland darkens three rooms around non-activated pyramids", () => {

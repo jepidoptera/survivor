@@ -14,6 +14,7 @@ const WALL_LABEL_SQUARE_SIDE_PERPENDICULAR = 21;
 const WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL = 22;
 const WALL_LABEL_HALLWAY_SIDE_HALF = 30;
 const WALL_LABEL_HALLWAY_SIDE_FULL = 31;
+const WALL_LABEL_ZONE_BOUNDARY = 32;
 const WALL_LABEL_TREE = 40;
 const HEX_GRID_COL_STEP = 0.866;
 const HEX_GRID_WIDTH = 1 / HEX_GRID_COL_STEP;
@@ -45,6 +46,7 @@ const MAZE_CHUNK_MIN_SIZE = 28;
 const MAZE_CHUNK_MAX_SIZE = 72;
 const MAZE_ROOM_EDGE_INSET_TILES = 2;
 const MAZE_DOOR_WIDTH = 3;
+const MAZE_ZONE_CROSSING_HALLWAY_WIDTH = 6;
 const MAZE_FULL_WALL_HALLWAY_CHANCE = 1 / 2;
 const MAZE_OUTSIDE_DOOR_WIDE_WIDTH = 5;
 const MAZE_OUTSIDE_DOOR_WIDE_CHANCE = 1 / 3;
@@ -684,12 +686,14 @@ function appendMazeSectionWalls(walls, q, r, options) {
     const outsideDoor = getMazeSectionOutsideDoor(q, r, options, new Set(hallConnections.keys()));
     const incomingSquarePocketMutations = getMazeSectionIncomingSquarePocketMutations(room, options);
 
-    appendMazeRoomWalls(walls, room, hallConnections, outsideDoor, incomingSquarePocketMutations);
+    appendMazeRoomWalls(walls, room, hallConnections, outsideDoor, incomingSquarePocketMutations, options);
     appendMazeSquareSideWalls(walls, room, hallConnections, options);
+    appendMazeZoneBoundaryWalls(walls, room, options);
     for (const [side, connection] of hallConnections.entries()) {
         if (!connection) throw new Error(`Wizard of Flatland maze hallway ${key}:${side} is missing connection data`);
-        if (isMazeHallwaySuppressedByIncomingSquarePocket(room, side, options)) continue;
-        const squarePocketHallway = getMazeSquarePocketHallwayTarget(room, side, options);
+        const crossesZone = isMazeZoneCrossingHallway(room.q, room.r, side);
+        if (!crossesZone && isMazeHallwaySuppressedByIncomingSquarePocket(room, side, options)) continue;
+        const squarePocketHallway = crossesZone ? null : getMazeSquarePocketHallwayTarget(room, side, options);
         if (squarePocketHallway) {
             appendMazeHalfHallwayToSquarePocket(walls, room, side, connection, squarePocketHallway.pocket, options);
             continue;
@@ -700,8 +704,80 @@ function appendMazeSectionWalls(walls, q, r, options) {
     validateMazeSectionNativeWalls(walls, startLength, room);
 }
 
+function appendMazeZoneBoundaryWalls(walls, room, options) {
+    const ring = getMazeSectionRing(room.q, room.r);
+    if ((ring + 1) % MAZE_RING_BOUNDARY_INTERVAL !== 0) return;
+    for (let cornerIndex = 0; cornerIndex < 6; cornerIndex += 1) {
+        if (!isMazeZoneBoundaryOutsideCorner(room.q, room.r, cornerIndex, ring)) continue;
+        const roomCorner = room.corners[cornerIndex];
+        const adjacentRoomCorner = getMazeZoneBoundaryAdjacentRoomCorner(room, cornerIndex, ring, options);
+        const sectionEnd = shortenSegmentEndToPolygon(
+            roomCorner,
+            adjacentRoomCorner,
+            room.sectionCorners,
+            `Wizard of Flatland zone boundary wall ${room.key}:${cornerIndex}`
+        );
+        appendSegmentWall(
+            walls,
+            roomCorner.x,
+            roomCorner.y,
+            sectionEnd.x,
+            sectionEnd.y,
+            WALL_LABEL_ZONE_BOUNDARY,
+            cornerIndex
+        );
+    }
+}
+
+function getMazeZoneBoundaryAdjacentRoomCorner(room, cornerIndex, ring, options) {
+    const before = MAZE_SECTION_DIRECTIONS[(cornerIndex + 5) % 6];
+    const after = MAZE_SECTION_DIRECTIONS[cornerIndex];
+    const beforeRing = getMazeSectionRing(room.q + before.q, room.r + before.r);
+    const afterRing = getMazeSectionRing(room.q + after.q, room.r + after.r);
+    const sameRingDirection = beforeRing === ring && afterRing === ring + 1
+        ? before
+        : afterRing === ring && beforeRing === ring + 1
+            ? after
+            : null;
+    if (!sameRingDirection) {
+        throw new Error(`Wizard of Flatland zone boundary corner ${room.key}:${cornerIndex} has no same-ring neighbor`);
+    }
+    const neighborRoom = buildMazeRoom(
+        room.q + sameRingDirection.q,
+        room.r + sameRingDirection.r,
+        options
+    );
+    const sharedSectionCorner = room.sectionCorners[cornerIndex];
+    const matchingCornerIndex = neighborRoom.sectionCorners.findIndex((candidate) => (
+        Math.hypot(candidate.x - sharedSectionCorner.x, candidate.y - sharedSectionCorner.y) < 0.001
+    ));
+    if (matchingCornerIndex < 0) {
+        throw new Error(`Wizard of Flatland zone boundary rooms ${room.key} and ${neighborRoom.key} have no shared corner`);
+    }
+    return neighborRoom.corners[matchingCornerIndex];
+}
+
+function isMazeZoneBoundaryOutsideCorner(q, r, cornerIndex, ring = getMazeSectionRing(q, r)) {
+    if (!Number.isInteger(cornerIndex) || cornerIndex < 0 || cornerIndex >= 6) {
+        throw new Error("Wizard of Flatland zone boundary corner requires an index from zero through five");
+    }
+    const before = MAZE_SECTION_DIRECTIONS[(cornerIndex + 5) % 6];
+    const after = MAZE_SECTION_DIRECTIONS[cornerIndex];
+    const beforeRing = getMazeSectionRing(q + before.q, r + before.r);
+    const afterRing = getMazeSectionRing(q + after.q, r + after.r);
+    return (beforeRing === ring && afterRing === ring + 1)
+        || (afterRing === ring && beforeRing === ring + 1);
+}
+
+function getMazeSectionRing(q, r) {
+    if (!Number.isInteger(q) || !Number.isInteger(r)) {
+        throw new Error("Wizard of Flatland maze ring requires integer section coordinates");
+    }
+    return Math.max(Math.abs(q), Math.abs(r), Math.abs(-q - r));
+}
+
 function appendMazeRoomTrees(walls, room, options) {
-    const ring = Math.max(Math.abs(room.q), Math.abs(room.r), Math.abs(-room.q - room.r));
+    const ring = getMazeSectionRing(room.q, room.r);
     const zone = Math.floor(ring / MAZE_RING_BOUNDARY_INTERVAL) + 1;
     if (zone < MAZE_TREE_FIRST_ZONE || isMazePyramidRoomSectionCoord(room.q, room.r)) return;
     const combined = isMazeRoomCombined(room.q, room.r, options);
@@ -831,6 +907,8 @@ function buildMazeRoom(q, r, options) {
     const roomRadius = Math.max(5, sectionRadius - MAZE_ROOM_EDGE_INSET_TILES / Math.cos(Math.PI / 6));
     const hexRoomCorners = getHexCornersWorld(center.x, center.y, roomRadius);
     const squareSideCorners = getMazeSectionSquareSideCorners(q, r, options);
+    const corners = getSquaredMazeRoomCorners(hexRoomCorners, squareSideCorners);
+    applyMazeZoneCornerBoundaryGeometry(corners, q, r, center, roomRadius, sectionRadius);
     return {
         q,
         r,
@@ -840,7 +918,7 @@ function buildMazeRoom(q, r, options) {
         sectionRadius,
         sectionCorners: getHexCornersWorld(center.x, center.y, sectionRadius),
         squareSideCorners,
-        corners: getSquaredMazeRoomCorners(hexRoomCorners, squareSideCorners)
+        corners
     };
 }
 
@@ -900,6 +978,9 @@ function getHexCornersWorld(cx, cy, radius) {
 }
 
 function getMazeSectionSquareSideCorners(q, r, options) {
+    const zoneBoundaryCorner = getMazeZoneBoundarySquaredCorner(q, r);
+    if (zoneBoundaryCorner !== null) return [zoneBoundaryCorner];
+    if (isMazeZoneCornerRoom(q, r)) return [];
     const selected = [];
     const selectedSet = new Set();
     const random = seededRandom(hashString(`${options.seed}|square-room-sides|${q},${r}`));
@@ -916,6 +997,76 @@ function getMazeSectionSquareSideCorners(q, r, options) {
         break;
     }
     return selected;
+}
+
+function getMazeZoneBoundarySquaredCorner(q, r) {
+    const ring = getMazeSectionRing(q, r);
+    if ((ring + 1) % MAZE_RING_BOUNDARY_INTERVAL !== 0) return null;
+    const outwardSides = getMazeZoneOutwardSides(q, r, ring);
+    if (outwardSides.length === 3) return null;
+    if (outwardSides.length !== 2) {
+        throw new Error(`Wizard of Flatland zone-edge room ${q},${r} requires two or three outward sides`);
+    }
+    const outwardSet = new Set(outwardSides);
+    for (let cornerIndex = 0; cornerIndex < 6; cornerIndex += 1) {
+        if (outwardSet.has((cornerIndex + 5) % 6) && outwardSet.has(cornerIndex)) return cornerIndex;
+    }
+    throw new Error(`Wizard of Flatland zone-edge room ${q},${r} has non-adjacent outward sides`);
+}
+
+function getMazeZoneOutwardSides(q, r, ring = getMazeSectionRing(q, r)) {
+    const outwardSides = [];
+    for (let side = 0; side < MAZE_SECTION_DIRECTIONS.length; side += 1) {
+        const dir = MAZE_SECTION_DIRECTIONS[side];
+        if (getMazeSectionRing(q + dir.q, r + dir.r) === ring + 1) outwardSides.push(side);
+    }
+    return outwardSides;
+}
+
+function isMazeZoneCornerRoom(q, r) {
+    const ring = getMazeSectionRing(q, r);
+    return (ring + 1) % MAZE_RING_BOUNDARY_INTERVAL === 0
+        && getMazeZoneOutwardSides(q, r, ring).length === 3;
+}
+
+function getMazeZoneBoundaryApothem(ring, roomRadius, sectionRadius) {
+    if (!Number.isInteger(ring) || ring < 0 || !(roomRadius > 0) || !(sectionRadius > 0)) {
+        throw new Error("Wizard of Flatland zone boundary apothem requires a ring and positive radii");
+    }
+    return 1.5 * sectionRadius * ring + roomRadius * 0.5;
+}
+
+function applyMazeZoneCornerBoundaryGeometry(corners, q, r, center, roomRadius, sectionRadius) {
+    if (!isMazeZoneCornerRoom(q, r)) return;
+    const ring = getMazeSectionRing(q, r);
+    const outwardSides = getMazeZoneOutwardSides(q, r, ring);
+    const outwardSet = new Set(outwardSides);
+    const middleSide = outwardSides.find((side) => (
+        outwardSet.has((side + 5) % 6) && outwardSet.has((side + 1) % 6)
+    ));
+    if (!Number.isInteger(middleSide)) {
+        throw new Error(`Wizard of Flatland zone-corner room ${q},${r} has no middle outward side`);
+    }
+    const centerDistance = Math.hypot(center.x, center.y);
+    if (!(centerDistance > 0)) {
+        throw new Error(`Wizard of Flatland zone-corner room ${q},${r} requires a nonzero center`);
+    }
+    const boundaryRadius = getMazeZoneBoundaryApothem(ring, roomRadius, sectionRadius) / Math.cos(Math.PI / 6);
+    const corner = {
+        x: center.x / centerDistance * boundaryRadius,
+        y: center.y / centerDistance * boundaryRadius
+    };
+    corners[middleSide] = { ...corner };
+    corners[(middleSide + 1) % 6] = { ...corner };
+}
+
+function isMazeZoneCornerCollapsedSide(q, r, side) {
+    if (!isMazeZoneCornerRoom(q, r)) return false;
+    const outwardSides = getMazeZoneOutwardSides(q, r);
+    const outwardSet = new Set(outwardSides);
+    return outwardSides.includes(side)
+        && outwardSet.has((side + 5) % 6)
+        && outwardSet.has((side + 1) % 6);
 }
 
 function addMazeSquareSideCorner(selected, selectedSet, cornerIndex) {
@@ -985,6 +1136,7 @@ function getMazeSectionIncomingSquarePocketMutation(room, side, options) {
 }
 
 function getMazeSquarePocketIncorporationMutation(sourceRoom, cornerIndex, pocketSide, targetRoom, targetSide, options) {
+    if (getMazeRoomZone(sourceRoom) !== getMazeRoomZone(targetRoom)) return null;
     if (!canMazeSquarePocketConnectToSide(targetRoom, targetSide)) return null;
     if (!shouldMazeSquarePocketIncorporate(sourceRoom.q, sourceRoom.r, cornerIndex, pocketSide, options)) return null;
     const pocket = getMazeSquarePocketGeometry(sourceRoom, cornerIndex, pocketSide);
@@ -1030,6 +1182,7 @@ function canMazeSquarePocketConnectToSide(room, side) {
     if (!Number.isInteger(side)) {
         throw new Error("Wizard of Flatland maze square pocket side check requires an integer side");
     }
+    if (isMazeZoneCornerRoom(room.q, room.r)) return false;
     return !isMazeRoomSideSquaredOff(room, side);
 }
 
@@ -1458,9 +1611,48 @@ function getMazeSharedHallConnection(q, r, side, options, requireOpen = false) {
         edgeKey: ordered,
         open,
         t: thisKey < neighborKey ? edgeT : 1 - edgeT,
-        width: MAZE_DOOR_WIDTH,
+        width: isMazeZoneCrossingHallway(q, r, side)
+            ? MAZE_ZONE_CROSSING_HALLWAY_WIDTH
+            : MAZE_DOOR_WIDTH,
         fullWall
     };
+}
+
+function isMazeZoneBoundaryRoom(q, r) {
+    const ring = getMazeSectionRing(q, r);
+    return (ring + 1) % MAZE_RING_BOUNDARY_INTERVAL === 0;
+}
+
+function getMazeRoomZone(room) {
+    if (!room || !Number.isInteger(room.q) || !Number.isInteger(room.r)) {
+        throw new Error("Wizard of Flatland room zone lookup requires integer room coordinates");
+    }
+    return Math.floor(getMazeSectionRing(room.q, room.r) / MAZE_RING_BOUNDARY_INTERVAL);
+}
+
+function isMazeZoneCrossingHallway(q, r, side) {
+    const dir = MAZE_SECTION_DIRECTIONS[side];
+    if (!dir) throw new Error("Wizard of Flatland zone-crossing hallway side is invalid");
+    const thisZone = Math.floor(getMazeSectionRing(q, r) / MAZE_RING_BOUNDARY_INTERVAL);
+    const neighborZone = Math.floor(
+        getMazeSectionRing(q + dir.q, r + dir.r) / MAZE_RING_BOUNDARY_INTERVAL
+    );
+    return thisZone !== neighborZone;
+}
+
+function getMazeZoneCrossingHallwayChance(q, r, side) {
+    if (!isMazeZoneCrossingHallway(q, r, side)) {
+        throw new Error("Wizard of Flatland zone-crossing hallway chance requires rooms in different zones");
+    }
+    const dir = MAZE_SECTION_DIRECTIONS[side];
+    const boundaryRing = Math.min(
+        getMazeSectionRing(q, r),
+        getMazeSectionRing(q + dir.q, r + dir.r)
+    );
+    if ((boundaryRing + 1) % MAZE_RING_BOUNDARY_INTERVAL !== 0) {
+        throw new Error(`Wizard of Flatland zone crossing has invalid boundary ring ${boundaryRing}`);
+    }
+    return boundaryRing / (8 * boundaryRing + 4);
 }
 
 function canMazeSharedHallwayUseFullWall(q, r, side, options) {
@@ -1474,12 +1666,17 @@ function canMazeSharedHallwayUseFullWall(q, r, side, options) {
 function isMazeSharedHallOpen(q, r, side, options) {
     const dir = MAZE_SECTION_DIRECTIONS[side];
     if (!dir) throw new Error("Wizard of Flatland maze hallway side is invalid");
+    if (isMazeZoneCornerCollapsedSide(q, r, side)
+        || isMazeZoneCornerCollapsedSide(q + dir.q, r + dir.r, (side + 3) % 6)) return false;
     if (isMazePyramidRoomSectionCoord(q, r) || isMazePyramidRoomSectionCoord(q + dir.q, r + dir.r)) return true;
     const thisKey = mazeSectionKey(q, r);
     const neighborKey = mazeSectionKey(q + dir.q, r + dir.r);
     const ordered = thisKey < neighborKey ? `${thisKey}|${neighborKey}` : `${neighborKey}|${thisKey}`;
     const random = seededRandom(hashString(`${options.seed}|hall-open|${ordered}`));
-    return random() < 1 / 3;
+    const openChance = isMazeZoneCrossingHallway(q, r, side)
+        ? getMazeZoneCrossingHallwayChance(q, r, side)
+        : 1 / 3;
+    return random() < openChance;
 }
 
 function getMazeOutsideDoorOpening(seedKey) {
@@ -1505,7 +1702,11 @@ function getMazeOutsideDoorOpening(seedKey) {
 function getMazeSectionOutsideDoor(q, r, options, hallSides) {
     const random = seededRandom(hashString(`${options.seed}|outside-door|${q},${r}`));
     const sideOptions = [0, 1, 2, 3, 4, 5]
-        .filter((side) => !hallSides.has(side) && canMazeSectionOwnOutsideDoorSide(q, r, side));
+        .filter((side) => (
+            !hallSides.has(side)
+            && !isMazeZoneCrossingHallway(q, r, side)
+            && canMazeSectionOwnOutsideDoorSide(q, r, side)
+        ));
     if (sideOptions.length === 0) return null;
     const side = sideOptions[Math.floor(random() * sideOptions.length)];
     const opening = getMazeOutsideDoorOpening(`${options.seed}|outside-door-opening|${q},${r}`);
@@ -1523,7 +1724,7 @@ function canMazeSectionOwnOutsideDoorSide(q, r, side) {
     return mazeSectionKey(q, r) < mazeSectionKey(q + dir.q, r + dir.r);
 }
 
-function appendMazeRoomWalls(walls, room, hallConnections, outsideDoor, incomingSquarePocketMutations = []) {
+function appendMazeRoomWalls(walls, room, hallConnections, outsideDoor, incomingSquarePocketMutations = [], options = null) {
     const squarePocketWallPlan = buildMazeSquarePocketWallPlan(incomingSquarePocketMutations, room.sectionCorners);
     for (let side = 0; side < 6; side++) {
         if (squarePocketWallPlan.suppressedSides.has(side)) continue;
@@ -1539,6 +1740,36 @@ function appendMazeRoomWalls(walls, room, hallConnections, outsideDoor, incoming
         const b = room.corners[(side + 1) % 6];
         const connection = hallConnections.get(side);
         if (connection) {
+            if (isMazeZoneCrossingHallway(room.q, room.r, side)) {
+                if (!options) throw new Error("Wizard of Flatland cross-zone room opening requires maze options");
+                const dir = MAZE_SECTION_DIRECTIONS[side];
+                const neighborSide = (side + 3) % 6;
+                const neighborRoom = buildMazeRoom(room.q + dir.q, room.r + dir.r, options);
+                const neighborConnection = getMazeSharedHallConnection(
+                    neighborRoom.q,
+                    neighborRoom.r,
+                    neighborSide,
+                    options,
+                    true
+                );
+                const gaps = getMazeCrossZoneHallwayGaps(
+                    room,
+                    side,
+                    connection,
+                    neighborRoom,
+                    neighborSide,
+                    neighborConnection
+                );
+                appendWallWithEndpointGap(
+                    walls,
+                    a,
+                    b,
+                    gaps.startGap,
+                    WALL_LABEL_ROOM_HALL_GAP,
+                    side
+                );
+                continue;
+            }
             appendWallWithGap(walls, a, b, connection.t, connection.width, WALL_LABEL_ROOM_HALL_GAP, side, connection.fullWall);
             continue;
         }
@@ -1681,6 +1912,19 @@ function buildMazeSquarePocketWallPlan(mutations, sectionCorners = null) {
         sideOverrides,
         extraWalls: mergeMazeSquarePocketExtraWalls(extraWalls)
     };
+}
+
+function appendWallWithEndpointGap(walls, a, b, gap, labelCode, sideCode = -1) {
+    if (!gap || !gap.left || !gap.right) {
+        throw new Error("Wizard of Flatland wall endpoint gap requires two endpoints");
+    }
+    const leftT = pointProjectionParameter(gap.left.x, gap.left.y, a.x, a.y, b.x, b.y);
+    const rightT = pointProjectionParameter(gap.right.x, gap.right.y, a.x, a.y, b.x, b.y);
+    if (leftT < -0.001 || rightT > 1.001 || !(rightT > leftT)) {
+        throw new Error("Wizard of Flatland wall endpoint gap must lie in wall order");
+    }
+    appendSegmentWall(walls, a.x, a.y, gap.left.x, gap.left.y, labelCode, sideCode);
+    appendSegmentWall(walls, gap.right.x, gap.right.y, b.x, b.y, labelCode, sideCode);
 }
 
 function mergeMazeSquarePocketExtraWalls(walls) {
@@ -2298,13 +2542,8 @@ function getMazeHalfHallwayCorridorPolygon(room, side, connection, options) {
     if (!dir) throw new Error("Wizard of Flatland maze square side hallway cut side is invalid");
     const neighborQ = room.q + dir.q;
     const neighborR = room.r + dir.r;
-    const neighborCenter = mazeSectionCenter(neighborQ, neighborR, options);
-    const neighborRoomRadius = Math.max(5, getMazeSectionRadius(options) - MAZE_ROOM_EDGE_INSET_TILES / Math.cos(Math.PI / 6));
-    const startGap = getWallGapEndpointsForConnection(room.corners[side], room.corners[(side + 1) % 6], connection);
     const neighborSide = (side + 3) % 6;
-    const neighborHexCorners = getHexCornersWorld(neighborCenter.x, neighborCenter.y, neighborRoomRadius);
-    const neighborSquareSideCorners = getMazeSectionSquareSideCorners(neighborQ, neighborR, options);
-    const neighborCorners = getSquaredMazeRoomCorners(neighborHexCorners, neighborSquareSideCorners);
+    const neighborRoom = buildMazeRoom(neighborQ, neighborR, options);
     const neighborConnection = getMazeSharedHallConnection(neighborQ, neighborR, neighborSide, options, true);
     if (
         neighborConnection.edgeKey !== connection.edgeKey ||
@@ -2313,7 +2552,21 @@ function getMazeHalfHallwayCorridorPolygon(room, side, connection, options) {
     ) {
         throw new Error("Wizard of Flatland maze square side hallway cut reciprocal connection mismatch");
     }
-    const neighborGap = getWallGapEndpointsForConnection(neighborCorners[neighborSide], neighborCorners[(neighborSide + 1) % 6], neighborConnection);
+    const gaps = isMazeZoneCrossingHallway(room.q, room.r, side)
+        ? getMazeCrossZoneHallwayGaps(room, side, connection, neighborRoom, neighborSide, neighborConnection)
+        : {
+            startGap: getWallGapEndpointsForConnection(
+                room.corners[side],
+                room.corners[(side + 1) % 6],
+                connection
+            ),
+            neighborGap: getWallGapEndpointsForConnection(
+                neighborRoom.corners[neighborSide],
+                neighborRoom.corners[(neighborSide + 1) % 6],
+                neighborConnection
+            )
+        };
+    const { startGap, neighborGap } = gaps;
     return [
         startGap.left,
         neighborGap.right,
@@ -2402,12 +2655,7 @@ function appendMazeHalfHallwayToNeighbor(walls, room, side, connection, options)
     const dy = neighborCenter.y - room.center.y;
     const length = Math.hypot(dx, dy);
     if (!(length > 0.001)) throw new Error("Wizard of Flatland maze hallway requires separated section centers");
-    const neighborRoomRadius = Math.max(5, getMazeSectionRadius(options) - MAZE_ROOM_EDGE_INSET_TILES / Math.cos(Math.PI / 6));
-    const startGap = getWallGapEndpointsForConnection(room.corners[side], room.corners[(side + 1) % 6], connection);
     const neighborSide = (side + 3) % 6;
-    const neighborHexCorners = getHexCornersWorld(neighborCenter.x, neighborCenter.y, neighborRoomRadius);
-    const neighborSquareSideCorners = getMazeSectionSquareSideCorners(room.q + dir.q, room.r + dir.r, options);
-    const neighborCorners = getSquaredMazeRoomCorners(neighborHexCorners, neighborSquareSideCorners);
     const neighborConnection = getMazeSharedHallConnection(room.q + dir.q, room.r + dir.r, neighborSide, options, true);
     if (
         neighborConnection.edgeKey !== connection.edgeKey ||
@@ -2416,8 +2664,25 @@ function appendMazeHalfHallwayToNeighbor(walls, room, side, connection, options)
     ) {
         throw new Error("Wizard of Flatland maze reciprocal hallway connection mismatch");
     }
-    const neighborGap = getWallGapEndpointsForConnection(neighborCorners[neighborSide], neighborCorners[(neighborSide + 1) % 6], neighborConnection);
-    const omissions = getMazeThreeHallwayJunctionWallOmissions(room, side, options);
+    const neighborRoom = buildMazeRoom(room.q + dir.q, room.r + dir.r, options);
+    const gaps = isMazeZoneCrossingHallway(room.q, room.r, side)
+        ? getMazeCrossZoneHallwayGaps(room, side, connection, neighborRoom, neighborSide, neighborConnection)
+        : {
+            startGap: getWallGapEndpointsForConnection(
+                room.corners[side],
+                room.corners[(side + 1) % 6],
+                connection
+            ),
+            neighborGap: getWallGapEndpointsForConnection(
+                neighborRoom.corners[neighborSide],
+                neighborRoom.corners[(neighborSide + 1) % 6],
+                neighborConnection
+            )
+        };
+    const { startGap, neighborGap } = gaps;
+    const omissions = isMazeZoneCrossingHallway(room.q, room.r, side)
+        ? { left: false, right: false }
+        : getMazeThreeHallwayJunctionWallOmissions(room, side, options);
     if (!omissions.left) appendHalfHallwaySideWall(walls, startGap.left, neighborGap.right, room.sectionCorners);
     appendHalfHallwaySideWallWithJunctionOmission(
         walls,
@@ -2491,6 +2756,8 @@ function shouldOpenMazeThreeSectionHallwayLoopAtCorner(room, cornerIndex, omitte
     const sideBefore = (cornerIndex + 5) % 6;
     const sideAfter = cornerIndex;
     if (omittedSide !== sideBefore) return false;
+    if (isMazeZoneCrossingHallway(room.q, room.r, sideBefore)
+        || isMazeZoneCrossingHallway(room.q, room.r, sideAfter)) return false;
     if (!isMazeSharedHallOpen(room.q, room.r, sideBefore, options)) return false;
     if (!isMazeSharedHallOpen(room.q, room.r, sideAfter, options)) return false;
     const beforeDir = MAZE_SECTION_DIRECTIONS[sideBefore];
@@ -2511,6 +2778,8 @@ function shouldOpenMazeFourSectionHallwayLoopAtCorner(room, cornerIndex, omitted
     const sideBefore = (cornerIndex + 5) % 6;
     const sideAfter = cornerIndex;
     if (omittedSide !== sideBefore) return false;
+    if (isMazeZoneCrossingHallway(room.q, room.r, sideBefore)
+        || isMazeZoneCrossingHallway(room.q, room.r, sideAfter)) return false;
     if (!isMazeSharedHallOpen(room.q, room.r, sideBefore, options)) return false;
     if (!isMazeSharedHallOpen(room.q, room.r, sideAfter, options)) return false;
     const beforeDir = MAZE_SECTION_DIRECTIONS[sideBefore];
@@ -2941,6 +3210,79 @@ function isPathfindingNodeTerrainPassable(node, walls, targetRadius) {
     }
     if (isPointInsideTreePolygon(node.x, node.y, walls)) return false;
     return true;
+}
+
+function getMazeCrossZoneHallwayGaps(room, side, connection, neighborRoom, neighborSide, neighborConnection) {
+    if (!isMazeZoneCrossingHallway(room.q, room.r, side)) {
+        throw new Error("Wizard of Flatland cross-zone hallway geometry requires rooms in different zones");
+    }
+    const canonicalFirst = room.key < neighborRoom.key;
+    const firstRoom = canonicalFirst ? room : neighborRoom;
+    const firstSide = canonicalFirst ? side : neighborSide;
+    const firstConnection = canonicalFirst ? connection : neighborConnection;
+    const secondRoom = canonicalFirst ? neighborRoom : room;
+    const secondSide = canonicalFirst ? neighborSide : side;
+    const firstA = firstRoom.corners[firstSide];
+    const firstB = firstRoom.corners[(firstSide + 1) % 6];
+    const secondA = secondRoom.corners[secondSide];
+    const secondB = secondRoom.corners[(secondSide + 1) % 6];
+    const firstTangent = normalizeVector(
+        firstB.x - firstA.x,
+        firstB.y - firstA.y,
+        "Wizard of Flatland cross-zone hallway requires a first wall direction"
+    );
+    let secondTangent = normalizeVector(
+        secondB.x - secondA.x,
+        secondB.y - secondA.y,
+        "Wizard of Flatland cross-zone hallway requires a second wall direction"
+    );
+    if (firstTangent.x * secondTangent.x + firstTangent.y * secondTangent.y < 0) {
+        secondTangent = { x: -secondTangent.x, y: -secondTangent.y };
+    }
+    const averageTangent = normalizeVector(
+        firstTangent.x + secondTangent.x,
+        firstTangent.y + secondTangent.y,
+        "Wizard of Flatland cross-zone hallway requires an average wall direction"
+    );
+    let hallwayDirection = { x: -averageTangent.y, y: averageTangent.x };
+    const towardSecond = {
+        x: secondRoom.center.x - firstRoom.center.x,
+        y: secondRoom.center.y - firstRoom.center.y
+    };
+    if (hallwayDirection.x * towardSecond.x + hallwayDirection.y * towardSecond.y < 0) {
+        hallwayDirection = { x: -hallwayDirection.x, y: -hallwayDirection.y };
+    }
+    const firstCenter = pointOnHexSide(firstA, firstB, firstConnection.t);
+    const secondHit = intersectLineWithInfiniteLine(firstCenter, hallwayDirection, secondA, secondB);
+    if (!secondHit || !(secondHit.lineT > 0.001)) {
+        throw new Error(`Wizard of Flatland cross-zone hallway ${room.key}:${side} cannot reach its second wall`);
+    }
+    const secondWallT = pointProjectionParameter(
+        secondHit.point.x,
+        secondHit.point.y,
+        secondA.x,
+        secondA.y,
+        secondB.x,
+        secondB.y
+    );
+    if (secondWallT < -0.001 || secondWallT > 1.001) {
+        throw new Error(`Wizard of Flatland cross-zone hallway ${room.key}:${side} misses its second wall segment`);
+    }
+    const firstGap = getCenteredLineGapEndpoints(firstCenter, firstTangent, connection.width);
+    const secondLocalTangent = normalizeVector(
+        secondB.x - secondA.x,
+        secondB.y - secondA.y,
+        "Wizard of Flatland cross-zone hallway requires a local second wall direction"
+    );
+    const secondGap = getCenteredLineGapEndpoints(secondHit.point, secondLocalTangent, connection.width);
+    return canonicalFirst
+        ? { startGap: firstGap, neighborGap: secondGap, hallwayDirection, averageTangent }
+        : {
+            startGap: secondGap,
+            neighborGap: firstGap,
+            hallwayDirection: { x: -hallwayDirection.x, y: -hallwayDirection.y },
+            averageTangent
+        };
 }
 
 function isPointInsideTreePolygon(x, y, walls) {
