@@ -23,6 +23,7 @@
     const WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL = 22;
     const WALL_LABEL_HALLWAY_SIDE_HALF = 30;
     const WALL_LABEL_HALLWAY_SIDE_FULL = 31;
+    const WALL_LABEL_TREE = 40;
     const COIN_SPAN_STRIDE = 8;
     const COIN_SPAN_X1 = 0;
     const COIN_SPAN_Y1 = 1;
@@ -463,7 +464,8 @@
             WALL_LABEL_SQUARE_SIDE_PERPENDICULAR,
             WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL,
             WALL_LABEL_HALLWAY_SIDE_HALF,
-            WALL_LABEL_HALLWAY_SIDE_FULL
+            WALL_LABEL_HALLWAY_SIDE_FULL,
+            WALL_LABEL_TREE
         }
     });
     const validateWallLabelBuffer = wallLabelSystem.validateWallLabelBuffer;
@@ -653,7 +655,8 @@
             enemyVisibilityById: new Map()
         },
         exploredWallRenderCache: {
-            path: null,
+            wallPath: null,
+            treePath: null,
             explorationVersion: -1,
             worldVersion: -1
         },
@@ -1049,8 +1052,8 @@
         setLabelText(labels.workerStatus, event.message || "pathfinding failed");
     });
 
-    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-34");
-    const losWorker = new Worker("/wizard-of-flatland/losWorker.js?v=wizard-of-flatland-2");
+    const mazeWorker = new Worker("/wizard-of-flatland/mazeSectionWorker.js?v=wizard-of-flatland-38");
+    const losWorker = new Worker("/wizard-of-flatland/losWorker.js?v=wizard-of-flatland-3");
     losWorker.addEventListener("message", (event) => {
         profiler.task("LOS worker message", () => handleLosWorkerMessage(event));
     });
@@ -7751,6 +7754,7 @@
     }
 
     function constrainActorToWalls(actor, radius) {
+        pushActorOutsideTreePolygons(actor, radius);
         for (let pass = 0; pass < 4; pass++) {
             let changed = false;
             for (let i = 0; i < state.walls.length; i += WALL_STRIDE) {
@@ -8013,6 +8017,47 @@
             aggregate.calls += 1;
             aggregate.totalMs += duration;
             aggregate.maxMs = Math.max(aggregate.maxMs, duration);
+        }
+    }
+
+    function pushActorOutsideTreePolygons(actor, radius) {
+        for (let base = 0; base < state.walls.length;) {
+            if (Math.round(state.walls[base + WALL_LABEL_CODE]) !== WALL_LABEL_TREE) {
+                base += WALL_STRIDE;
+                continue;
+            }
+            const treeSide = Math.round(state.walls[base + WALL_LABEL_SIDE]);
+            const treeStart = base;
+            const vertices = [];
+            while (
+                base < state.walls.length &&
+                Math.round(state.walls[base + WALL_LABEL_CODE]) === WALL_LABEL_TREE &&
+                Math.round(state.walls[base + WALL_LABEL_SIDE]) === treeSide
+            ) {
+                vertices.push({ x: state.walls[base + WALL_X1], y: state.walls[base + WALL_Y1] });
+                base += WALL_STRIDE;
+            }
+            if (!pointInPolygon(actor.x, actor.y, vertices)) continue;
+            let nearest = null;
+            for (let edgeBase = treeStart; edgeBase < base; edgeBase += WALL_STRIDE) {
+                const ax = state.walls[edgeBase + WALL_X1];
+                const ay = state.walls[edgeBase + WALL_Y1];
+                const bx = state.walls[edgeBase + WALL_X2];
+                const by = state.walls[edgeBase + WALL_Y2];
+                const t = Math.max(0, Math.min(1, pointProjectionParameter(actor.x, actor.y, ax, ay, bx, by)));
+                const x = ax + (bx - ax) * t;
+                const y = ay + (by - ay) * t;
+                const distance = Math.hypot(x - actor.x, y - actor.y);
+                if (!nearest || distance < nearest.distance) nearest = { x, y, distance };
+            }
+            if (!nearest || !(nearest.distance > 0.000001)) {
+                throw new Error("Wizard of Flatland could not push an actor out of a solid tree");
+            }
+            const outwardX = (nearest.x - actor.x) / nearest.distance;
+            const outwardY = (nearest.y - actor.y) / nearest.distance;
+            const clearance = radius + WALL_WORLD_HALF_THICKNESS + TARGET_NPC_PUSH_SLOP;
+            actor.x = nearest.x + outwardX * clearance;
+            actor.y = nearest.y + outwardY * clearance;
         }
     }
 
@@ -9958,6 +10003,9 @@
                 wallY1: WALL_Y1,
                 wallX2: WALL_X2,
                 wallY2: WALL_Y2,
+                wallLabelCode: WALL_LABEL_CODE,
+                wallSideCode: WALL_LABEL_SIDE,
+                treeLabelCode: WALL_LABEL_TREE,
                 bins: los.bins,
                 maxDistance: los.maxDistance,
                 wallRanges,
@@ -10987,15 +11035,19 @@
         const cache = state.exploredWallRenderCache;
         const explorationVersion = explorationSystem.getVersion();
         if (
-            !cache.path ||
+            !cache.wallPath ||
+            !cache.treePath ||
             cache.explorationVersion !== explorationVersion ||
             cache.worldVersion !== state.worldVersion
         ) {
             if (typeof Path2D !== "function") {
                 throw new Error("Wizard of Flatland explored wall rendering requires Path2D");
             }
-            const path = new Path2D();
+            const wallPath = new Path2D();
+            const treePath = new Path2D();
             explorationSystem.forEachActiveInterval((wall, startT, endT) => {
+                if (wall.labelCode === WALL_LABEL_TREE) return;
+                const path = wallPath;
                 path.moveTo(
                     wall.ax + (wall.bx - wall.ax) * startT,
                     wall.ay + (wall.by - wall.ay) * startT
@@ -11005,7 +11057,38 @@
                     wall.ay + (wall.by - wall.ay) * endT
                 );
             });
-            cache.path = path;
+            for (let base = 0; base < state.walls.length;) {
+                if (Math.round(state.walls[base + WALL_LABEL_CODE]) !== WALL_LABEL_TREE) {
+                    base += WALL_STRIDE;
+                    continue;
+                }
+                const treeSide = Math.round(state.walls[base + WALL_LABEL_SIDE]);
+                const treeStart = base;
+                let explored = false;
+                while (
+                    base < state.walls.length &&
+                    Math.round(state.walls[base + WALL_LABEL_CODE]) === WALL_LABEL_TREE &&
+                    Math.round(state.walls[base + WALL_LABEL_SIDE]) === treeSide
+                ) {
+                    explored = explored || explorationSystem.isWallExplored(
+                        state.walls[base + WALL_X1],
+                        state.walls[base + WALL_Y1],
+                        state.walls[base + WALL_X2],
+                        state.walls[base + WALL_Y2],
+                        WALL_LABEL_TREE,
+                        treeSide
+                    );
+                    base += WALL_STRIDE;
+                }
+                if (!explored) continue;
+                treePath.moveTo(state.walls[treeStart + WALL_X1], state.walls[treeStart + WALL_Y1]);
+                for (let edgeBase = treeStart; edgeBase < base; edgeBase += WALL_STRIDE) {
+                    treePath.lineTo(state.walls[edgeBase + WALL_X2], state.walls[edgeBase + WALL_Y2]);
+                }
+                treePath.closePath();
+            }
+            cache.wallPath = wallPath;
+            cache.treePath = treePath;
             cache.explorationVersion = explorationVersion;
             cache.worldVersion = state.worldVersion;
         }
@@ -11021,7 +11104,10 @@
         );
         ctx.lineWidth = WALL_WORLD_THICKNESS;
         ctx.strokeStyle = "#ffffff";
-        ctx.stroke(cache.path);
+        ctx.stroke(cache.wallPath);
+        ctx.strokeStyle = "#008800";
+        ctx.fillStyle = "#008800";
+        ctx.fill(cache.treePath);
         ctx.restore();
     }
 

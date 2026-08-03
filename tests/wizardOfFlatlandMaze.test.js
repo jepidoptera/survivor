@@ -50,6 +50,10 @@ function loadMazeWorkerExports(connectionCrossesWallFaces = () => false) {
             WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL,
             WALL_LABEL_HALLWAY_SIDE_HALF,
             WALL_LABEL_HALLWAY_SIDE_FULL,
+            WALL_LABEL_TREE,
+            MAZE_TREE_BASE_RADIUS,
+            MAZE_TREE_AVERAGE_PROTRUSION,
+            MAZE_TREE_PROTRUSION_VARIATION,
             getMazeSquarePocketIncorporateChance,
             MAZE_DOOR_WIDTH,
             getMazeOutsideDoorOpening,
@@ -91,6 +95,9 @@ function loadMazeWorkerExports(connectionCrossesWallFaces = () => false) {
             canMazeSquarePocketConnectToSide,
             isMazeRoomSideSquaredOff,
             isMazeSharedHallOpen,
+            isMazeRoomCombined,
+            appendMazeTree,
+            getMazeSquaredRoomTreePlacementPoints,
             getMazeHalfHallwayBoundarySegments,
             getMazeSquarePocketOrthogonalHallwaySpan,
             getMazeThreeHallwayJunctionWallOmissions,
@@ -147,6 +154,70 @@ test("Wizard of Flatland maze worker emits edge-aligned wall indices", () => {
         }
     }
     assert.ok(blockedEdgeCount > 0);
+});
+
+test("Wizard of Flatland trees are irregular seven-to-nine point stars", () => {
+    const worker = loadMazeWorkerExports();
+    const builder = worker.createWallBufferBuilder();
+    let value = 0;
+    worker.appendMazeTree(builder, 12, -7, () => {
+        value = (value + 0.173) % 1;
+        return value;
+    }, 2);
+    const walls = worker.finishWallBuffer(builder);
+    const edgeCount = walls.length / 8;
+    assert.ok(edgeCount >= 14 && edgeCount <= 18);
+    assert.equal(edgeCount % 2, 0);
+    for (let edge = 0; edge < edgeCount; edge++) {
+        const base = edge * 8;
+        assert.equal(walls[base + 4], worker.WALL_LABEL_TREE);
+        assert.equal(walls[base + 5], 2);
+        const radius = Math.hypot(walls[base] - 12, walls[base + 1] + 7);
+        if (edge % 2 === 0) {
+            assert.ok(Math.abs(radius - worker.MAZE_TREE_BASE_RADIUS) < 0.0001);
+        } else {
+            const min = worker.MAZE_TREE_BASE_RADIUS * (1 + worker.MAZE_TREE_AVERAGE_PROTRUSION - worker.MAZE_TREE_PROTRUSION_VARIATION);
+            const max = worker.MAZE_TREE_BASE_RADIUS * (1 + worker.MAZE_TREE_AVERAGE_PROTRUSION + worker.MAZE_TREE_PROTRUSION_VARIATION);
+            assert.ok(radius >= min - 0.0001 && radius <= max + 0.0001);
+        }
+    }
+});
+
+test("Wizard of Flatland tree interiors are blocked pathfinding terrain", () => {
+    const worker = loadMazeWorkerExports();
+    const builder = worker.createWallBufferBuilder();
+    let value = 0;
+    worker.appendMazeTree(builder, 0, 0, () => {
+        value = (value + 0.173) % 1;
+        return value;
+    }, 0);
+    const walls = worker.finishWallBuffer(builder);
+    assert.equal(worker.isPathfindingNodeTerrainPassable({ x: 0, y: 0 }, walls, 0.42), false);
+    assert.equal(worker.isPathfindingNodeTerrainPassable({ x: 8, y: 0 }, walls, 0.42), true);
+});
+
+test("Wizard of Flatland squared-room trees follow the new long wall", () => {
+    const worker = loadMazeWorkerExports();
+    const hexCorners = worker.getHexCornersWorld(0, 0, 20);
+    const room = {
+        key: "squared-tree-room",
+        center: { x: 0, y: 0 },
+        radius: 20,
+        squareSideCorners: [0],
+        corners: worker.getSquaredMazeRoomCorners(hexCorners, [0])
+    };
+    const points = worker.getMazeSquaredRoomTreePlacementPoints(room, 3, () => 0.5);
+    const wallA = room.corners[5];
+    const wallB = room.corners[1];
+    const wallDx = wallB.x - wallA.x;
+    const wallDy = wallB.y - wallA.y;
+    const treeDx = points[2].x - points[0].x;
+    const treeDy = points[2].y - points[0].y;
+    const cross = Math.abs(wallDx * treeDy - wallDy * treeDx);
+
+    assert.equal(points.length, 3);
+    assert.ok(Math.hypot(treeDx, treeDy) > 10, "trees should spread along the squared wall");
+    assert.ok(cross < 0.000001, "tree placement line should be parallel to the squared wall");
 });
 
 test("Wizard of Flatland coin spans split only on the side approached by a terminating wall", () => {

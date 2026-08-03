@@ -77,6 +77,9 @@
         const y1 = options.wallY1;
         const x2 = options.wallX2;
         const y2 = options.wallY2;
+        const labelCodeOffset = options.wallLabelCode;
+        const sideCodeOffset = options.wallSideCode;
+        const treeLabelCode = options.treeLabelCode;
         const originX = options.originX;
         const originY = options.originY;
         const maxDistance = options.maxDistance;
@@ -101,6 +104,50 @@
             }
             const end = (range.startWallIndex + range.wallCount) * wallStride;
             for (let i = range.startWallIndex * wallStride; i < end; i += wallStride) {
+                if (
+                    Number.isInteger(labelCodeOffset) &&
+                    Number.isInteger(sideCodeOffset) &&
+                    Number.isInteger(treeLabelCode) &&
+                    Math.round(walls[i + labelCodeOffset]) === treeLabelCode
+                ) {
+                    const sideCode = Math.round(walls[i + sideCodeOffset]);
+                    const firstTreeBase = i;
+                    const vertices = [];
+                    while (
+                        i < end &&
+                        Math.round(walls[i + labelCodeOffset]) === treeLabelCode &&
+                        Math.round(walls[i + sideCodeOffset]) === sideCode
+                    ) {
+                        scannedWallCount++;
+                        vertices.push({
+                            x: finiteNumber(walls[i + x1], "tree vertex x"),
+                            y: finiteNumber(walls[i + y1], "tree vertex y")
+                        });
+                        i += wallStride;
+                    }
+                    i -= wallStride;
+                    const silhouette = getPolygonAngularSilhouette(vertices, originX, originY);
+                    const clipped = clipSegmentToCircle(
+                        originX,
+                        originY,
+                        maxDistance,
+                        silhouette.right.x,
+                        silhouette.right.y,
+                        silhouette.left.x,
+                        silhouette.left.y
+                    );
+                    if (clipped) {
+                        out.push({
+                            ax: silhouette.right.x,
+                            ay: silhouette.right.y,
+                            bx: silhouette.left.x,
+                            by: silhouette.left.y,
+                            wallIndex: firstTreeBase / wallStride,
+                            clipped
+                        });
+                    }
+                    continue;
+                }
                 scannedWallCount++;
                 const ax = finiteNumber(walls[i + x1], "wall start x");
                 const ay = finiteNumber(walls[i + y1], "wall start y");
@@ -112,6 +159,31 @@
             }
         }
         return { candidates: out, scannedWallCount };
+    }
+
+    function getPolygonAngularSilhouette(vertices, originX, originY) {
+        if (!Array.isArray(vertices) || vertices.length < 3) {
+            throw new Error("Wizard of Flatland tree LOS requires at least three polygon vertices");
+        }
+        const center = vertices.reduce((sum, vertex) => ({
+            x: sum.x + vertex.x / vertices.length,
+            y: sum.y + vertex.y / vertices.length
+        }), { x: 0, y: 0 });
+        const centerAngle = Math.atan2(center.y - originY, center.x - originX);
+        let right = null;
+        let left = null;
+        for (const vertex of vertices) {
+            const angle = Math.atan2(vertex.y - originY, vertex.x - originX);
+            let delta = angle - centerAngle;
+            while (delta > Math.PI) delta -= Math.PI * 2;
+            while (delta < -Math.PI) delta += Math.PI * 2;
+            if (!right || delta < right.delta) right = { ...vertex, delta };
+            if (!left || delta > left.delta) left = { ...vertex, delta };
+        }
+        if (!right || !left || right === left) {
+            throw new Error("Wizard of Flatland tree LOS could not resolve its silhouette");
+        }
+        return { right, left };
     }
 
     function addCandidateToRayBuckets(candidate, buckets, originX, originY, bins) {
@@ -161,6 +233,9 @@
             wallY1,
             wallX2,
             wallY2,
+            wallLabelCode: Number.isInteger(input.wallLabelCode) ? input.wallLabelCode : undefined,
+            wallSideCode: Number.isInteger(input.wallSideCode) ? input.wallSideCode : undefined,
+            treeLabelCode: Number.isInteger(input.treeLabelCode) ? input.treeLabelCode : undefined,
             originX,
             originY,
             maxDistance,
@@ -211,6 +286,9 @@
             wallY1,
             wallX2,
             wallY2,
+            wallLabelCode: Number.isInteger(input.wallLabelCode) ? input.wallLabelCode : undefined,
+            wallSideCode: Number.isInteger(input.wallSideCode) ? input.wallSideCode : undefined,
+            treeLabelCode: Number.isInteger(input.treeLabelCode) ? input.treeLabelCode : undefined,
             originX,
             originY
         });

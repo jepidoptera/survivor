@@ -98,6 +98,42 @@ test("Wizard of Flatland LOS returns the wall and normalized position hit by eac
     }
 });
 
+test("Wizard of Flatland LOS casts one silhouette for a solid tree polygon", () => {
+    const context = loadScript(LOS_PATH);
+    const api = context.getWizardFlatlandLosApi();
+    const vertices = [
+        [5, -3], [6, -1], [8, -2], [7, 0],
+        [8, 2], [6, 1], [5, 3], [4, 0]
+    ];
+    const walls = [];
+    for (let i = 0; i < vertices.length; i++) {
+        const a = vertices[i];
+        const b = vertices[(i + 1) % vertices.length];
+        walls.push(...wall(a[0], a[1], b[0], b[1], 40, 0));
+    }
+    const result = api.computeVisibilityPolygon({
+        x: 0,
+        y: 0,
+        walls: Float32Array.from(walls),
+        wallStride: 8,
+        wallLabelCode: 4,
+        wallSideCode: 5,
+        treeLabelCode: 40,
+        bins: 360,
+        maxDistance: 20
+    });
+
+    assert.equal(result.scannedWallCount, vertices.length);
+    assert.equal(result.candidateWallCount, 1);
+    const hitBins = [];
+    for (let bin = 0; bin < result.hitWallIndices.length; bin++) {
+        if (result.hitWallIndices[bin] >= 0) hitBins.push(bin);
+    }
+    assert.ok(hitBins.length > 0);
+    assert.ok(hitBins.every((bin) => result.hitWallIndices[bin] === 0));
+    assert.equal(hitBins.at(-1) - hitBins[0] + 1, hitBins.length);
+});
+
 test("Wizard of Flatland LOS retains crossing walls and rejects walls outside the sight circle", () => {
     const context = loadScript(LOS_PATH);
     const api = context.getWizardFlatlandLosApi();

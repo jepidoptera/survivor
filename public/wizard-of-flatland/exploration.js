@@ -45,6 +45,8 @@
                 ay,
                 bx,
                 by,
+                labelCode: Math.round(labelCode),
+                sideCode: Math.round(sideCode),
                 length,
                 cellCount: Math.max(1, Math.ceil(length / cellSize)),
                 bits: new Uint32Array(Math.ceil(Math.max(1, Math.ceil(length / cellSize)) / 32))
@@ -182,6 +184,11 @@
             }
         }
 
+        function isWallExplored(ax, ay, bx, by, labelCode, sideCode) {
+            const record = records.get(wallKey(ax, ay, bx, by, labelCode, sideCode));
+            return !!record && record.bits.some((word) => word !== 0);
+        }
+
         function inheritSplit(parent, children) {
             if (!parent || !Array.isArray(children)) throw new Error("Wizard of Flatland exploration split inheritance requires wall pieces");
             const source = records.get(wallKey(parent.ax, parent.ay, parent.bx, parent.by, parent.labelCode, parent.sideCode));
@@ -273,6 +280,7 @@
             syncWalls,
             applyVisibility,
             forEachActiveInterval,
+            isWallExplored,
             inheritSplit,
             exportWalls,
             importWalls,

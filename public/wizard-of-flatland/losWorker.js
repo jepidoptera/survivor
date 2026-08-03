@@ -1,7 +1,7 @@
 "use strict";
 
 importScripts("/wizard-of-flatland/wallGeometry.js?v=wizard-of-flatland-1");
-importScripts("/wizard-of-flatland/los.js?v=wizard-of-flatland-5");
+importScripts("/wizard-of-flatland/los.js?v=wizard-of-flatland-6");
 
 const computeVisibilityPolygon = self.getWizardFlatlandLosApi().computeVisibilityPolygon;
 let walls = null;

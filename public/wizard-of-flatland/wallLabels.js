@@ -55,6 +55,8 @@
                     return "hallway side | half-length";
                 case constants.WALL_LABEL_HALLWAY_SIDE_FULL:
                     return "hallway side | corner pocket extended";
+                case constants.WALL_LABEL_TREE:
+                    return `tree${sideText} | obstacle edge`;
                 default:
                     throw new Error(`Wizard of Flatland wall label code is unknown: ${code}`);
             }

@@ -14,6 +14,7 @@ const WALL_LABEL_SQUARE_SIDE_PERPENDICULAR = 21;
 const WALL_LABEL_SQUARE_SIDE_PERPENDICULAR_FULL = 22;
 const WALL_LABEL_HALLWAY_SIDE_HALF = 30;
 const WALL_LABEL_HALLWAY_SIDE_FULL = 31;
+const WALL_LABEL_TREE = 40;
 const HEX_GRID_COL_STEP = 0.866;
 const HEX_GRID_WIDTH = 1 / HEX_GRID_COL_STEP;
 const HEX_GRID_HEIGHT = 1;
@@ -57,6 +58,14 @@ const MAZE_SQUARE_ROOM_HALLWAY_SNAP_DISTANCE = 3;
 const MAZE_SQUARE_ROOM_POCKET_INCORPORATE_CHANCE = 0.4;
 const PYRAMID_FIRST_ROOM_DISTANCE = 8;
 const PYRAMID_ROOM_DISTANCE_STEP = 7;
+const MAZE_RING_BOUNDARY_INTERVAL = 7;
+const MAZE_TREE_FIRST_ZONE = 3;
+const MAZE_TREE_PLAIN_ROOM_CHANCE = 0.5;
+const MAZE_TREE_COMBINED_ROOM_CHANCE = 1;
+const MAZE_TREE_BASE_RADIUS = 2.5;
+const MAZE_TREE_AVERAGE_PROTRUSION = 0.2;
+const MAZE_TREE_SPACING_VARIATION = 0.2;
+const MAZE_TREE_PROTRUSION_VARIATION = 0.1;
 const MAZE_SECTION_DIRECTIONS = [
     { q: 1, r: 0 },
     { q: 0, r: 1 },
@@ -687,7 +696,133 @@ function appendMazeSectionWalls(walls, q, r, options) {
         }
         appendMazeHalfHallwayToNeighbor(walls, room, side, connection, options);
     }
+    appendMazeRoomTrees(walls, room, options);
     validateMazeSectionNativeWalls(walls, startLength, room);
+}
+
+function appendMazeRoomTrees(walls, room, options) {
+    const ring = Math.max(Math.abs(room.q), Math.abs(room.r), Math.abs(-room.q - room.r));
+    const zone = Math.floor(ring / MAZE_RING_BOUNDARY_INTERVAL) + 1;
+    if (zone < MAZE_TREE_FIRST_ZONE || isMazePyramidRoomSectionCoord(room.q, room.r)) return;
+    const combined = isMazeRoomCombined(room.q, room.r, options);
+    const random = seededRandom(hashString(`${options.seed}|trees|${room.key}`));
+    const chance = combined ? MAZE_TREE_COMBINED_ROOM_CHANCE : MAZE_TREE_PLAIN_ROOM_CHANCE;
+    if (random() >= chance) return;
+    const count = combined ? 1 + Math.floor(random() * 3) : 1;
+    const placementRadius = Math.min(
+        room.radius - MAZE_TREE_BASE_RADIUS * (1 + MAZE_TREE_AVERAGE_PROTRUSION + MAZE_TREE_PROTRUSION_VARIATION),
+        room.radius * 0.4
+    );
+    if (!(placementRadius >= 0)) {
+        throw new Error(`Wizard of Flatland room ${room.key} is too small for a tree`);
+    }
+    const placementPhase = random() * Math.PI * 2;
+    const squaredPlacementPoints = room.squareSideCorners.length > 0
+        ? getMazeSquaredRoomTreePlacementPoints(room, count, random)
+        : null;
+    for (let treeIndex = 0; treeIndex < count; treeIndex++) {
+        const angle = placementPhase + treeIndex / count * Math.PI * 2 + (random() - 0.5) * 0.16;
+        const distance = count === 1
+            ? random() * placementRadius
+            : Math.min(placementRadius, MAZE_TREE_BASE_RADIUS * 1.5 + 2);
+        const center = squaredPlacementPoints
+            ? squaredPlacementPoints[treeIndex]
+            : {
+                x: room.center.x + Math.cos(angle) * distance,
+                y: room.center.y + Math.sin(angle) * distance
+            };
+        appendMazeTree(
+            walls,
+            center.x,
+            center.y,
+            random,
+            treeIndex
+        );
+    }
+}
+
+function getMazeSquaredRoomTreePlacementPoints(room, count, random) {
+    if (!room || !Array.isArray(room.squareSideCorners) || room.squareSideCorners.length === 0) {
+        throw new Error("Wizard of Flatland squared-room tree placement requires a squared corner");
+    }
+    if (!Number.isInteger(count) || count < 1 || count > 3 || typeof random !== "function") {
+        throw new Error("Wizard of Flatland squared-room tree placement requires one to three trees and a random source");
+    }
+    const cornerIndex = room.squareSideCorners[0];
+    const previous = room.corners[(cornerIndex + 5) % 6];
+    const next = room.corners[(cornerIndex + 1) % 6];
+    const dx = next.x - previous.x;
+    const dy = next.y - previous.y;
+    const length = Math.hypot(dx, dy);
+    if (!(length > 0.001)) throw new Error(`Wizard of Flatland squared room ${room.key} has no long-wall direction`);
+    const axisX = dx / length;
+    const axisY = dy / length;
+    const normalX = -axisY;
+    const normalY = axisX;
+    const maximumTreeRadius = MAZE_TREE_BASE_RADIUS
+        * (1 + MAZE_TREE_AVERAGE_PROTRUSION + MAZE_TREE_PROTRUSION_VARIATION);
+    const requestedSpacing = maximumTreeRadius * 2 + 2;
+    const maximumOffset = Math.max(0, room.radius * 0.48 - maximumTreeRadius);
+    const spacing = count > 1
+        ? Math.min(requestedSpacing, maximumOffset * 2 / (count - 1))
+        : 0;
+    const groupShift = (random() - 0.5) * Math.min(requestedSpacing * 0.35, maximumOffset);
+    const points = [];
+    for (let index = 0; index < count; index++) {
+        const orderedOffset = (index - (count - 1) * 0.5) * spacing;
+        const axisJitter = (random() - 0.5) * Math.min(0.7, Math.max(0, spacing * 0.08));
+        const normalJitter = (random() - 0.5) * 1.2;
+        const axisOffset = Math.max(-maximumOffset, Math.min(maximumOffset, orderedOffset + groupShift + axisJitter));
+        points.push({
+            x: room.center.x + axisX * axisOffset + normalX * normalJitter,
+            y: room.center.y + axisY * axisOffset + normalY * normalJitter
+        });
+    }
+    return points;
+}
+
+function isMazeRoomCombined(q, r, options) {
+    for (let side = 0; side < MAZE_SECTION_DIRECTIONS.length; side++) {
+        if (getMazeSharedHallConnection(q, r, side, options).fullWall) return true;
+    }
+    return false;
+}
+
+function appendMazeTree(walls, centerX, centerY, random, treeIndex) {
+    const pointCount = 7 + Math.floor(random() * 3);
+    const rawSpacings = [];
+    let spacingTotal = 0;
+    for (let i = 0; i < pointCount; i++) {
+        const spacing = 1 + (random() * 2 - 1) * MAZE_TREE_SPACING_VARIATION;
+        rawSpacings.push(spacing);
+        spacingTotal += spacing;
+    }
+    let angle = random() * Math.PI * 2;
+    const points = [];
+    for (let i = 0; i < pointCount; i++) {
+        const spacingAngle = Math.PI * 2 * rawSpacings[i] / spacingTotal;
+        points.push({
+            x: centerX + Math.cos(angle - spacingAngle * 0.5) * MAZE_TREE_BASE_RADIUS,
+            y: centerY + Math.sin(angle - spacingAngle * 0.5) * MAZE_TREE_BASE_RADIUS
+        });
+        const protrusion = MAZE_TREE_AVERAGE_PROTRUSION
+            + (random() * 2 - 1) * MAZE_TREE_PROTRUSION_VARIATION;
+        const radius = MAZE_TREE_BASE_RADIUS * (1 + protrusion);
+        points.push({ x: centerX + Math.cos(angle) * radius, y: centerY + Math.sin(angle) * radius });
+        angle += spacingAngle;
+    }
+    for (let i = 0; i < points.length; i++) {
+        const a = points[i];
+        const b = points[(i + 1) % points.length];
+        appendWallPiece(walls, {
+            ax: a.x,
+            ay: a.y,
+            bx: b.x,
+            by: b.y,
+            labelCode: WALL_LABEL_TREE,
+            sideCode: treeIndex
+        });
+    }
 }
 
 function buildMazeRoom(q, r, options) {
@@ -2804,7 +2939,38 @@ function isPathfindingNodeTerrainPassable(node, walls, targetRadius) {
         const distance = pointSegmentDistance(node.x, node.y, walls[i], walls[i + 1], walls[i + 2], walls[i + 3]);
         if (distance < targetRadius + WALL_WORLD_HALF_THICKNESS) return false;
     }
+    if (isPointInsideTreePolygon(node.x, node.y, walls)) return false;
     return true;
+}
+
+function isPointInsideTreePolygon(x, y, walls) {
+    for (let base = 0; base < walls.length;) {
+        if (Math.round(walls[base + 4]) !== WALL_LABEL_TREE) {
+            base += WALL_STRIDE;
+            continue;
+        }
+        const sideCode = Math.round(walls[base + 5]);
+        const vertices = [];
+        while (
+            base < walls.length &&
+            Math.round(walls[base + 4]) === WALL_LABEL_TREE &&
+            Math.round(walls[base + 5]) === sideCode
+        ) {
+            vertices.push({ x: walls[base], y: walls[base + 1] });
+            base += WALL_STRIDE;
+        }
+        let inside = false;
+        for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+            const a = vertices[i];
+            const b = vertices[j];
+            if (
+                (a.y > y) !== (b.y > y) &&
+                x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x
+            ) inside = !inside;
+        }
+        if (inside) return true;
+    }
+    return false;
 }
 
 function pointSegmentDistance(px, py, ax, ay, bx, by) {
