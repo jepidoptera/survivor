@@ -1,7 +1,7 @@
 (function () {
     "use strict";
 
-    const STRIDE = 19;
+    const STRIDE = 23;
     const OUT_STRIDE = 15;
     const WALL_STRIDE = 8;
     const WALL_X1 = 0;
@@ -90,6 +90,12 @@
     const TURRET_RADIUS = TARGET_RADIUS * 1.5;
     const TURRET_BARREL_INNER_RADIUS_SCALE = 0.5;
     const TURRET_INTERCEPT_ITERATIONS = 8;
+    const TURRET_REPORT_MAX_DISTANCE = 45;
+    const TURRET_REPORT_VOLUME = 0.32;
+    const TURRET_MUZZLE_FLASH_SECONDS = 0.12;
+    const TURRET_ROTATIONS_PER_SECOND = 1;
+    const TURRET_MAX_TURN_RADIANS_PER_SECOND = Math.PI * 2 * TURRET_ROTATIONS_PER_SECOND;
+    const TURRET_FIRE_ALIGNMENT_EPSILON_RADIANS = 0.000001;
     const BUILD_COMPLETION_FLASH_SECONDS = 0.3;
     const FREEZE_PARTICLES_PER_SECOND_AT_LEVEL_ONE = 132;
     const FREEZE_PARTICLE_COUNT_MULTIPLIER_PER_LEVEL = 1.25;
@@ -3259,6 +3265,7 @@
             heading: agent.heading,
             millingDirection: agent.millingDirection,
             millingWallTurnLock: agent.millingWallTurnLock || 0,
+            targetTurretId: Number.isInteger(agent.targetTurretId) ? agent.targetTurretId : null,
             solverState: agent.solverState,
             wallClamps: agent.wallClamps || 0,
             activated: agent.activated === true,
@@ -3387,6 +3394,7 @@
             ...turret,
             coinCost: snapshot.version === 3 && turret.coinCost === undefined ? turret.spikeLevel * 10 : turret.coinCost,
             completionFlashRemaining: 0,
+            muzzleFlashRemaining: 0,
             friendlyFireAngles: [],
             contactCooldownsByAgentId: new Map()
         })) : [];
@@ -3520,6 +3528,7 @@
             headingHistory: [],
             millingDirection: snapshot.millingDirection >= 0 ? 1 : -1,
             millingWallTurnLock: Math.max(0, Number(snapshot.millingWallTurnLock) || 0),
+            targetTurretId: Number.isInteger(snapshot.targetTurretId) ? snapshot.targetTurretId : null,
             solverState: Number.isFinite(snapshot.solverState) ? snapshot.solverState : STATE_MILLING,
             wallClamps: Math.max(0, Number(snapshot.wallClamps) || 0),
             pathMode: PATH_MODE_DIRECT,
@@ -4059,6 +4068,7 @@
             headingHistory: [],
             millingDirection: (id % 2) === 0 ? 1 : -1,
             millingWallTurnLock: 0,
+            targetTurretId: null,
             solverState: STATE_MILLING,
             wallClamps: 0,
             pathMode: PATH_MODE_DIRECT,
@@ -4844,9 +4854,6 @@
         if (!stats) return;
         if (state.wizardVitals.exp < stats.coinCost || state.wizardVitals.magic < stats.manaCost) return;
         const cursor = getCurrentProjectedCursorWorldPoint();
-        if (!spendWizardMagic(stats.manaCost)) {
-            throw new Error("Wizard of Flatland turret magic affordability changed during construction");
-        }
         state.wizardVitals.exp -= stats.coinCost;
         updateStatusBars();
         state.turretBuilds.push({
@@ -4854,6 +4861,8 @@
             y: cursor.y,
             age: 0,
             duration: stats.buildTime,
+            manaCost: stats.manaCost,
+            magicSpent: 0,
             coinCost: stats.coinCost,
             hitpoints: stats.hitpoints,
             radius: TURRET_RADIUS * stats.sizeScale,
@@ -4952,7 +4961,53 @@
             if (turretShotEndangersWizard(turret, aim, spikeStats.projectileSpeed, safetyAngle, wizardVx, wizardVy)) continue;
             if (!best || distance < best.distance) best = { agent, aim, distance };
         }
+        if (best) recruitTurretAttackers(turret, best.agent);
         return best;
+    }
+
+    const TURRET_ALLY_RECRUIT_COUNT = 10;
+
+    function recruitTurretAttackers(turret, targetedAgent) {
+        if (!turret || !Number.isInteger(turret.id) || !(turret.health > 0)) {
+            throw new Error("Wizard of Flatland turret recruitment requires a living turret with an id");
+        }
+        if (!targetedAgent || !state.agents.includes(targetedAgent)) {
+            throw new Error(`Wizard of Flatland turret ${turret.id} recruitment requires its targeted enemy`);
+        }
+        if (targetedAgent.targetTurretId !== null && targetedAgent.targetTurretId !== undefined) return;
+        const allies = state.agents
+            .filter((agent) => agent !== targetedAgent && (agent.targetTurretId === null || agent.targetTurretId === undefined))
+            .map((agent) => ({
+                agent,
+                distanceSquared: squareDistance(agent.x, agent.y, turret.x, turret.y)
+            }))
+            .sort((left, right) => left.distanceSquared - right.distanceSquared || left.agent.id - right.agent.id)
+            .slice(0, TURRET_ALLY_RECRUIT_COUNT)
+            .map((entry) => entry.agent);
+        for (const agent of [targetedAgent, ...allies]) lockAgentOnTurret(agent, turret);
+    }
+
+    function lockAgentOnTurret(agent, turret) {
+        if (agent.targetTurretId !== null && agent.targetTurretId !== undefined) {
+            throw new Error(`Wizard of Flatland enemy ${agent.id} cannot switch from turret ${agent.targetTurretId} to turret ${turret.id}`);
+        }
+        agent.targetTurretId = turret.id;
+        agent.activated = true;
+        agent.pathMode = PATH_MODE_WORKER;
+        agent.pathGoalX = turret.x;
+        agent.pathGoalY = turret.y;
+        agent.pathNodeKeys = [];
+        agent.pathWaypoints = [];
+        agent.pathCursor = 0;
+        clearAgentWallBreakTarget(agent);
+    }
+
+    function getAgentTargetTurret(agent) {
+        if (agent.targetTurretId === null || agent.targetTurretId === undefined) return null;
+        const turret = state.turrets.find((candidate) => candidate.id === agent.targetTurretId && candidate.health > 0);
+        if (turret) return turret;
+        agent.targetTurretId = null;
+        return null;
     }
 
     function fireTurretSpike(turret, target, spikeStats) {
@@ -4978,7 +5033,76 @@
             firedByTurret: true,
             sourceTurretId: turret.id
         });
+        turret.muzzleFlashRemaining = TURRET_MUZZLE_FLASH_SECONDS;
+        playTurretArtilleryReport(turret);
         turret.cooldown = spikeStats.castDelay / turret.firingRateScale;
+    }
+
+    let wizardAudioContext = null;
+    let turretReportNoiseBuffer = null;
+
+    function unlockWizardAudio() {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        if (!wizardAudioContext) wizardAudioContext = new AudioContextClass();
+        if (wizardAudioContext.state === "suspended") wizardAudioContext.resume().catch(() => {});
+    }
+
+    function getTurretReportNoiseBuffer(audioContext) {
+        if (turretReportNoiseBuffer) return turretReportNoiseBuffer;
+        const sampleCount = Math.ceil(audioContext.sampleRate * 0.75);
+        const buffer = audioContext.createBuffer(1, sampleCount, audioContext.sampleRate);
+        const samples = buffer.getChannelData(0);
+        for (let index = 0; index < samples.length; index++) {
+            const decay = Math.exp(-index / audioContext.sampleRate * 7);
+            samples[index] = (Math.random() * 2 - 1) * decay;
+        }
+        turretReportNoiseBuffer = buffer;
+        return buffer;
+    }
+
+    function playTurretArtilleryReport(turret) {
+        if (!wizardAudioContext || wizardAudioContext.state !== "running") return;
+        const distance = Math.hypot(turret.x - state.target.x, turret.y - state.target.y);
+        if (distance >= TURRET_REPORT_MAX_DISTANCE) return;
+        const now = wizardAudioContext.currentTime;
+        const distanceGain = Math.pow(1 - distance / TURRET_REPORT_MAX_DISTANCE, 1.5);
+        const masterGain = wizardAudioContext.createGain();
+        masterGain.gain.setValueAtTime(TURRET_REPORT_VOLUME * distanceGain, now);
+        masterGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.35);
+
+        const pan = wizardAudioContext.createStereoPanner();
+        pan.pan.value = Math.max(-0.85, Math.min(0.85, (turret.x - state.target.x) / 18));
+        pan.connect(masterGain);
+        masterGain.connect(wizardAudioContext.destination);
+
+        const boom = wizardAudioContext.createOscillator();
+        const boomGain = wizardAudioContext.createGain();
+        boom.type = "sine";
+        boom.frequency.setValueAtTime(92, now);
+        boom.frequency.exponentialRampToValueAtTime(34, now + 0.55);
+        boomGain.gain.setValueAtTime(0.0001, now);
+        boomGain.gain.exponentialRampToValueAtTime(1, now + 0.008);
+        boomGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.25);
+        boom.connect(boomGain);
+        boomGain.connect(pan);
+        boom.start(now);
+        boom.stop(now + 1.3);
+
+        const noise = wizardAudioContext.createBufferSource();
+        const noiseFilter = wizardAudioContext.createBiquadFilter();
+        const noiseGain = wizardAudioContext.createGain();
+        noise.buffer = getTurretReportNoiseBuffer(wizardAudioContext);
+        noiseFilter.type = "lowpass";
+        noiseFilter.frequency.setValueAtTime(720, now);
+        noiseFilter.frequency.exponentialRampToValueAtTime(110, now + 0.7);
+        noiseGain.gain.setValueAtTime(0.75, now);
+        noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.8);
+        noise.connect(noiseFilter);
+        noiseFilter.connect(noiseGain);
+        noiseGain.connect(pan);
+        noise.start(now);
+        noise.stop(now + 0.8);
     }
 
     function rebuildTurretFriendlyFireCaches() {
@@ -5023,7 +5147,17 @@
         for (const build of state.turretBuilds) {
             build.x = cursor.x;
             build.y = cursor.y;
-            build.age += dt;
+            const nextAge = Math.min(build.duration, build.age + dt);
+            const requiredMagicSpent = build.manaCost * nextAge / build.duration;
+            const magicPayment = requiredMagicSpent - build.magicSpent;
+            if (!(magicPayment >= 0) || !Number.isFinite(magicPayment)) {
+                throw new Error("Wizard of Flatland turret construction produced an invalid incremental magic payment");
+            }
+            if (magicPayment > 0 && !spendWizardMagic(magicPayment)) {
+                throw new Error("Wizard of Flatland reserved turret construction magic became unavailable");
+            }
+            build.magicSpent = requiredMagicSpent;
+            build.age = nextAge;
         }
         const completed = state.turretBuilds.filter((build) => build.age >= build.duration);
         state.turretBuilds = state.turretBuilds.filter((build) => build.age < build.duration);
@@ -5041,12 +5175,14 @@
             heading: state.target.heading,
             cooldown: 0,
             completionFlashRemaining: BUILD_COMPLETION_FLASH_SECONDS,
+            muzzleFlashRemaining: 0,
             friendlyFireAngles: [],
             contactCooldownsByAgentId: new Map()
         });
         if (completed.length > 0) rebuildTurretFriendlyFireCaches();
         for (const turret of state.turrets) {
             turret.completionFlashRemaining = Math.max(0, turret.completionFlashRemaining - dt);
+            turret.muzzleFlashRemaining = Math.max(0, turret.muzzleFlashRemaining - dt);
             for (const [agentId, remaining] of turret.contactCooldownsByAgentId) {
                 const next = remaining - dt;
                 if (next <= 0) turret.contactCooldownsByAgentId.delete(agentId);
@@ -5058,14 +5194,24 @@
                     agent.radius + turret.radius + TARGET_NPC_PUSH_SLOP * 2
                 ) continue;
                 if (turret.contactCooldownsByAgentId.has(agent.id)) continue;
-                turret.health -= getAgentHitDamage(agent);
+                const destroyed = damageTurret(turret, getAgentHitDamage(agent));
                 turret.contactCooldownsByAgentId.set(agent.id, 1);
+                if (destroyed) break;
             }
+            if (turret.health <= 0) continue;
             turret.cooldown = Math.max(0, turret.cooldown - dt);
             const spikeStats = getSpikeStatsForLevel(turret.spikeLevel);
             const target = findTurretTarget(turret, spikeStats, dt);
-            if (target) turret.heading = Math.atan2(target.aim.y - turret.y, target.aim.x - turret.x);
-            if (target && turret.cooldown <= 0) fireTurretSpike(turret, target, spikeStats);
+            if (target) {
+                const desiredHeading = Math.atan2(target.aim.y - turret.y, target.aim.x - turret.x);
+                const headingDelta = shortestAngleDelta(turret.heading, desiredHeading);
+                const maxTurn = TURRET_MAX_TURN_RADIANS_PER_SECOND * dt;
+                const appliedTurn = Math.max(-maxTurn, Math.min(maxTurn, headingDelta));
+                turret.heading = normalizeAngle(turret.heading + appliedTurn);
+                const aligned = Math.abs(shortestAngleDelta(turret.heading, desiredHeading)) <=
+                    TURRET_FIRE_ALIGNMENT_EPSILON_RADIANS;
+                if (aligned && turret.cooldown <= 0) fireTurretSpike(turret, target, spikeStats);
+            }
         }
         const turretCountBeforeDestruction = state.turrets.length;
         state.turrets = state.turrets.filter((turret) => turret.health > 0);
@@ -5081,12 +5227,16 @@
         return turret.health <= 0;
     }
 
-    function removeDestroyedTurrets() {
+    function removeDestroyedTurrets(refundBuildCoins = false) {
+        if (typeof refundBuildCoins !== "boolean") {
+            throw new Error("Wizard of Flatland turret removal requires an explicit boolean refund policy");
+        }
         const previousCount = state.turrets.length;
         for (const turret of state.turrets) {
             if (turret.health > 0) continue;
+            if (!refundBuildCoins) continue;
             if (!Number.isInteger(turret.coinCost) || turret.coinCost < 0) {
-                throw new Error(`Wizard of Flatland destroyed turret ${turret.id} requires a non-negative integer coin cost`);
+                throw new Error(`Wizard of Flatland deconstructed turret ${turret.id} requires a non-negative integer coin cost`);
             }
             for (let coinIndex = 0; coinIndex < turret.coinCost; coinIndex++) {
                 createDroppedMazeCoin(turret.x, turret.y);
@@ -5282,7 +5432,7 @@
             const turret = state.turrets.find((candidate) => candidate.id === hit.turretId);
             if (!turret) throw new Error(`Wizard of Flatland destructo beam lost turret ${hit.turretId}`);
             turret.health = 0;
-            removeDestroyedTurrets();
+            removeDestroyedTurrets(true);
         }
         resetDestructoBeamTarget();
     }
@@ -7676,6 +7826,8 @@
         const packed = new Float32Array(activeAgents.length * STRIDE);
         for (let i = 0; i < activeAgents.length; i++) {
             const agent = activeAgents[i];
+            const targetTurret = getAgentTargetTurret(agent);
+            const combatTarget = targetTurret || state.target;
             const base = i * STRIDE;
             packed[base] = agent.id;
             packed[base + 1] = agent.x;
@@ -7698,6 +7850,10 @@
             packed[base + 16] = Number.isFinite(agent.pathGoalY) ? agent.pathGoalY : state.target.y;
             packed[base + 17] = agent.pathGoalWallBlocked === true ? 1 : 0;
             packed[base + 18] = getAgentHitDamage(agent);
+            packed[base + 19] = combatTarget.x;
+            packed[base + 20] = combatTarget.y;
+            packed[base + 21] = targetTurret ? targetTurret.radius : TARGET_RADIUS;
+            packed[base + 22] = targetTurret ? 1 : 0;
         }
         return packed;
     }
@@ -8490,16 +8646,20 @@
                 metrics.frozen += 1;
                 continue;
             }
+            const targetTurret = getAgentTargetTurret(agent);
+            const combatTarget = targetTurret || state.target;
             const losStarted = performance.now();
-            const hasLos = getSharedEnemyLineOfSight(agent);
+            const hasLos = targetTurret
+                ? hasDirectLineOfSight(agent.x, agent.y, targetTurret.x, targetTurret.y, agent.radius)
+                : getSharedEnemyLineOfSight(agent);
             metrics.lineOfSightChecks += 1;
             metrics.lineOfSightMs += performance.now() - losStarted;
             if (state.debug.solverProfile) recordSolverProfileSection("pathing: shared LOS lookup", losStarted);
             if (hasLos) {
                 phaseStarted = state.debug.solverProfile ? performance.now() : 0;
                 agent.pathMode = PATH_MODE_DIRECT;
-                agent.pathGoalX = state.target.x;
-                agent.pathGoalY = state.target.y;
+                agent.pathGoalX = combatTarget.x;
+                agent.pathGoalY = combatTarget.y;
                 clearAgentWallBreakTarget(agent);
                 agent.pathNodeKeys = [];
                 agent.pathWaypoints = [];
@@ -8542,6 +8702,17 @@
                 }
                 goalNodeKey = getPathfindingNodeKey(goalNodeIndex);
             }
+            const agentGoalNodeIndex = targetTurret
+                ? nearestPassablePathfindingNode(targetTurret.x, targetTurret.y, metrics)
+                : goalNodeIndex;
+            if (!Number.isInteger(agentGoalNodeIndex)) {
+                metrics.stopped += 1;
+                stopAgentForMissingPathNode(agent);
+                continue;
+            }
+            const agentGoalNodeKey = targetTurret
+                ? getPathfindingNodeKey(agentGoalNodeIndex)
+                : goalNodeKey;
             phaseStarted = state.debug.solverProfile ? performance.now() : 0;
             const rawStartNodeIndex = nearestPathfindingNodeForAgent(agent, metrics);
             if (phaseStarted) recordSolverProfileSection("pathing: nearest-node lookup", phaseStarted);
@@ -8576,7 +8747,7 @@
             const requestIntervalMs = PATH_REQUEST_INTERVAL_SECONDS * 1000;
             const currentPathInvalid = !waypoint || waypoint.stale === true || waypoint.blocked === true;
             const requestedRouteChanged =
-                agent.pathRequestedGoalKey !== goalNodeKey ||
+                agent.pathRequestedGoalKey !== agentGoalNodeKey ||
                 agent.pathRequestedRawStartKey !== rawStartNodeKey ||
                 agent.pathRequestedStartKey !== startNodeKey;
             const shouldRequest =
@@ -8590,7 +8761,7 @@
                 continue;
             }
             phaseStarted = state.debug.solverProfile ? performance.now() : 0;
-            requestAgentPath(agent, rawStartNodeIndex, startNodeIndex, goalNodeIndex, now);
+            requestAgentPath(agent, rawStartNodeIndex, startNodeIndex, agentGoalNodeIndex, now);
             if (phaseStarted) recordSolverProfileSection("pathing: request submission", phaseStarted);
             requestsSent += 1;
             metrics.requests += 1;
@@ -9392,6 +9563,32 @@
             ctx.strokeStyle = "#ffffff";
             ctx.lineWidth = barrelWidth;
             ctx.stroke();
+            if (turret.muzzleFlashRemaining > 0) {
+                const flashProgress = Math.min(1, turret.muzzleFlashRemaining / TURRET_MUZZLE_FLASH_SECONDS);
+                const forwardX = Math.cos(heading);
+                const forwardY = Math.sin(heading);
+                const sideX = -forwardY;
+                const sideY = forwardX;
+                const muzzleX = point.x + forwardX * barrelLength;
+                const muzzleY = point.y + forwardY * barrelLength;
+                const flashLength = radius * (0.65 + flashProgress * 0.55);
+                const flashWidth = radius * (0.28 + flashProgress * 0.22);
+                ctx.fillStyle = `rgba(255,244,170,${flashProgress})`;
+                ctx.shadowColor = "#ff9d28";
+                ctx.shadowBlur = radius * 0.9;
+                ctx.beginPath();
+                ctx.moveTo(muzzleX + forwardX * flashLength, muzzleY + forwardY * flashLength);
+                ctx.lineTo(muzzleX + sideX * flashWidth, muzzleY + sideY * flashWidth);
+                ctx.lineTo(muzzleX - forwardX * flashLength * 0.18, muzzleY - forwardY * flashLength * 0.18);
+                ctx.lineTo(muzzleX - sideX * flashWidth, muzzleY - sideY * flashWidth);
+                ctx.closePath();
+                ctx.fill();
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = `rgba(255,255,238,${flashProgress})`;
+                ctx.beginPath();
+                ctx.arc(muzzleX, muzzleY, flashWidth * 0.55, 0, Math.PI * 2);
+                ctx.fill();
+            }
             if (Number.isFinite(turret.health) && turret.health < turret.maxHealth) {
                 const width = radius * 1.5;
                 const ratio = Math.max(0, Math.min(1, turret.health / turret.maxHealth));
@@ -9404,6 +9601,29 @@
         };
         for (const build of state.turretBuilds) {
             drawTurret(build, 0.5);
+            if (!Number.isFinite(build.age) || !Number.isFinite(build.duration) || !(build.duration > 0)) {
+                throw new Error("Wizard of Flatland turret construction progress requires finite build timing");
+            }
+            const point = worldToScreen(build.x, build.y);
+            const progress = Math.max(0, Math.min(1, build.age / build.duration));
+            const progressRadius = build.radius * state.view.scale * 1.35;
+            const startAngle = -Math.PI / 2;
+            ctx.save();
+            ctx.lineCap = "round";
+            ctx.lineWidth = Math.max(2.5, state.view.scale * 0.065);
+            ctx.strokeStyle = "rgba(255,255,255,0.2)";
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, progressRadius, 0, Math.PI * 2);
+            ctx.stroke();
+            if (progress > 0) {
+                ctx.strokeStyle = "rgba(255,255,255,0.95)";
+                ctx.shadowColor = "rgba(255,255,255,0.75)";
+                ctx.shadowBlur = Math.max(4, state.view.scale * 0.12);
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, progressRadius, startAngle, startAngle + Math.PI * 2 * progress);
+                ctx.stroke();
+            }
+            ctx.restore();
         }
         for (const turret of state.turrets) {
             drawTurret(turret, 1);
@@ -12630,6 +12850,7 @@
         if (!state.initialSpellChoiceRequired) hideSpellLevelPanel();
     });
     document.addEventListener("pointerdown", (event) => {
+        unlockWizardAudio();
         if (!spellLevelPanel || spellLevelPanel.classList.contains("hidden")) return;
         if (spellLevelPanel.contains(event.target)) return;
         if (expLevelUpButton && expLevelUpButton.contains(event.target)) return;
@@ -12637,6 +12858,7 @@
         hideSpellLevelPanel();
     });
     document.addEventListener("keydown", (event) => {
+        unlockWizardAudio();
         if (event.key === "Escape" && spellLevelPanel && !spellLevelPanel.classList.contains("hidden")) {
             if (state.initialSpellChoiceRequired) return;
             hideSpellLevelPanel();

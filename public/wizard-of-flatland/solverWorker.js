@@ -2,7 +2,7 @@
 
 importScripts("/wizard-of-flatland/orcaSolver.js?v=wizard-of-flatland-1");
 
-const STRIDE = 19;
+const STRIDE = 23;
 const OUT_STRIDE = 15;
 const WALL_STRIDE = 8;
 const STATE_MILLING = 1;
@@ -170,6 +170,11 @@ function solveStep(message) {
         const baseSpeed = agents[base + 4];
         const hitDamage = finiteNumber(agents[base + 18], `agent ${id} hit damage`);
         if (!(hitDamage > 0)) throw new Error(`agent ${id} hit damage must be positive`);
+        const lockedOnTurret = agents[base + 22] >= 0.5;
+        const targetX = finiteNumber(agents[base + 19], `agent ${id} target x`);
+        const targetY = finiteNumber(agents[base + 20], `agent ${id} target y`);
+        const targetRadius = Math.max(0.1, finiteNumber(agents[base + 21], `agent ${id} target radius`));
+        const agentRingRadius = lockedOnTurret ? ringRadius + targetRadius - params.targetRadius : ringRadius;
         const speed = baseSpeed * speedScale;
         const attackSpeed = getAttackLungeSpeed(baseSpeed, speedScale);
         const priority = agents[base + 5];
@@ -198,7 +203,7 @@ function solveStep(message) {
         let nextPhase = phase;
         let nextPhaseTime = phaseTime + dt;
         let outerMillingCanReverseAtWall = false;
-        const isDesignatedAttacker = attackSlots.has(i);
+        const isDesignatedAttacker = lockedOnTurret || attackSlots.has(i);
         const cooldown = isDesignatedAttacker && storedCooldown >= 0
             ? 0
             : (storedCooldown < 0 ? Math.max(0, -storedCooldown - 1) : Math.max(0, storedCooldown));
@@ -208,9 +213,11 @@ function solveStep(message) {
         const toTargetY = targetY - y;
         const targetDist = Math.hypot(toTargetX, toTargetY);
         const ownsRingSlot = isDesignatedAttacker;
-        const slotChoice = isDesignatedAttacker
-            ? (slotChoices[i] || chooseMillingSlot(targetX, targetY, ringRadius, homeAngle, radius))
-            : chooseMillingSlot(targetX, targetY, ringRadius, homeAngle, radius);
+        const slotChoice = lockedOnTurret
+            ? chooseRingSlot(targetX, targetY, agentRingRadius, homeAngle, radius, walls)
+            : isDesignatedAttacker
+                ? (slotChoices[i] || chooseMillingSlot(targetX, targetY, agentRingRadius, homeAngle, radius))
+                : chooseMillingSlot(targetX, targetY, agentRingRadius, homeAngle, radius);
         const slotPoint = slotChoice.point;
         const slotDx = slotPoint.x - x;
         const slotDy = slotPoint.y - y;
@@ -219,12 +226,12 @@ function solveStep(message) {
         let movementGoalY = slotPoint.y;
         const touchDistance = targetRadius + radius;
         const touchingTarget = targetDist <= touchDistance;
-        const attackTimeoutSeconds = getAttackTimeoutSeconds(ringRadius, radius, touchDistance, attackSpeed);
+        const attackTimeoutSeconds = getAttackTimeoutSeconds(agentRingRadius, radius, touchDistance, attackSpeed);
         const canHoldWaitingSlot = slotDist <= Math.max(radius * ATTACK_SLOT_ARRIVAL_RADIUS_SCALE, speed * dt * 0.25);
-        const canStartAttackFromHere = targetDist <= ringRadius + radius * ATTACK_READY_RANGE_RADIUS_SCALE;
-        const vacateReleaseRadius = ringRadius + radius * VACATE_ATTACK_RING_RELEASE_SCALE;
-        const recoverReleaseRadius = ringRadius + radius * RECOVER_ATTACK_RING_RELEASE_SCALE;
-        const mustVacateRing = !isDesignatedAttacker && (targetDist < ringRadius || (phase === PHASE_VACATING && targetDist < vacateReleaseRadius));
+        const canStartAttackFromHere = targetDist <= agentRingRadius + radius * ATTACK_READY_RANGE_RADIUS_SCALE;
+        const vacateReleaseRadius = agentRingRadius + radius * VACATE_ATTACK_RING_RELEASE_SCALE;
+        const recoverReleaseRadius = agentRingRadius + radius * RECOVER_ATTACK_RING_RELEASE_SCALE;
+        const mustVacateRing = !isDesignatedAttacker && (targetDist < agentRingRadius || (phase === PHASE_VACATING && targetDist < vacateReleaseRadius));
         const mustRecover = phase === PHASE_RECOVERING && remainingCooldown > 0;
         const seekingGoalX = followingWorkerPath ? pathGoalX : slotPoint.x;
         const seekingGoalY = followingWorkerPath ? pathGoalY : slotPoint.y;
@@ -678,9 +685,11 @@ function solveStep(message) {
                     nextPhaseTime = 0;
                     const resetCooldown = getAttackRecoveryCooldown(id);
                     nextCooldown = isDesignatedAttacker ? -(resetCooldown + 1) : resetCooldown;
-                    hits += 1;
-                    hitAgentIds.push(id);
-                    hitDamages.push(hitDamage);
+                    if (!lockedOnTurret) {
+                        hits += 1;
+                        hitAgentIds.push(id);
+                        hitDamages.push(hitDamage);
+                    }
                 }
             }
         } else if (!followingWorkerPath && (state === STATE_HOLDING || state === STATE_SEEKING || state === STATE_RECOVERING || state === STATE_VACATING)) {

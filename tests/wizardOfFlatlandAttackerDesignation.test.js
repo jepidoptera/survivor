@@ -97,7 +97,11 @@ function createPackedAgent(overrides = {}) {
         pathGoalX: 5,
         pathGoalY: 0,
         pathGoalWallBlocked: false,
-        hitDamage: 10
+        hitDamage: 10,
+        targetX: 0,
+        targetY: 0,
+        targetRadius: 0.5,
+        lockedOnTurret: false
     }, overrides);
     return Float32Array.from([
         values.id,
@@ -118,7 +122,11 @@ function createPackedAgent(overrides = {}) {
         values.pathGoalX,
         values.pathGoalY,
         values.pathGoalWallBlocked ? 1 : 0,
-        values.hitDamage
+        values.hitDamage,
+        values.targetX,
+        values.targetY,
+        values.targetRadius,
+        values.lockedOnTurret ? 1 : 0
     ]);
 }
 
@@ -146,6 +154,42 @@ test("Wizard of Flatland recovering attackers stay designated while backing away
     assert.equal(result.agents[7], PHASE_RECOVERING);
     assert.ok(result.agents[9] < 0, "designated recovery cooldown should keep its negative marker");
     assert.equal(result.stats.retreating, 1);
+});
+
+test("Wizard of Flatland turret-locked enemies ram their turret without damaging the wizard", () => {
+    const { solveStep } = loadSolverWorkerApi();
+    const result = solveStep({
+        type: "step",
+        requestId: 3,
+        worldVersion: 1,
+        dt: 0.05,
+        agents: createPackedAgent({
+            x: 1.35,
+            y: 0,
+            speed: 8,
+            phase: PHASE_ATTACKING,
+            phaseTime: 0,
+            heading: Math.PI,
+            targetX: 0,
+            targetY: 0,
+            targetRadius: 0.8,
+            lockedOnTurret: true
+        }),
+        walls: new Float32Array(0),
+        params: {
+            targetX: 20,
+            targetY: 20,
+            targetRadius: 0.5,
+            ringRadius: 5,
+            separationStrength: 1,
+            speedScale: 1,
+            targetMoved: false
+        }
+    });
+
+    assert.equal(result.agents[7], PHASE_RECOVERING);
+    assert.equal(result.stats.hits, 0);
+    assert.deepEqual(Array.from(result.stats.hitAgentIds), []);
 });
 
 test("Wizard of Flatland wall hits retain the solver request target segment", () => {

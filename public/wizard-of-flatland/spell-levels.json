@@ -593,7 +593,7 @@
               "hitpoints": 50,
               "spikeLevel": 1,
               "sizeScale": 1,
-              "firingRateScale": 0.5,
+              "firingRateScale": 0.25,
               "playerSafetyAngleDegrees": 5
             }
           }
@@ -619,7 +619,7 @@
               "hitpoints": 50,
               "spikeLevel": 2,
               "sizeScale": 1.1,
-              "firingRateScale": 0.5,
+              "firingRateScale": 0.25,
               "playerSafetyAngleDegrees": 5
             }
           }
@@ -645,7 +645,7 @@
               "hitpoints": 50,
               "spikeLevel": 3,
               "sizeScale": 1.21,
-              "firingRateScale": 0.5,
+              "firingRateScale": 0.25,
               "playerSafetyAngleDegrees": 5
             }
           }
@@ -671,7 +671,7 @@
               "hitpoints": 50,
               "spikeLevel": 4,
               "sizeScale": 1.331,
-              "firingRateScale": 0.5,
+              "firingRateScale": 0.25,
               "playerSafetyAngleDegrees": 5
             }
           }
@@ -697,7 +697,7 @@
               "hitpoints": 50,
               "spikeLevel": 5,
               "sizeScale": 1.4641,
-              "firingRateScale": 0.5,
+              "firingRateScale": 0.25,
               "playerSafetyAngleDegrees": 5
             }
           }
