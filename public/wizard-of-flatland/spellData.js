@@ -176,12 +176,61 @@
             };
         }
 
-        function getActiveHealingStats() {
-            const { level, levelData } = getActiveSpellLevelData("healing");
-            const healthPerSecond = requirePositiveSpellLevelNumber("healing", level, levelData, "healthPerSecond");
+        function getActiveFreezeStats() {
+            const { level, levelData } = getActiveSpellLevelData("freeze");
+            const costPerSecond = requirePositiveSpellLevelNumber("freeze", level, levelData, "costPerSecond");
+            const damagePerSecond = requirePositiveSpellLevelNumber("freeze", level, levelData, "damage");
+            const range = requirePositiveSpellLevelNumber("freeze", level, levelData, "range");
+            const coneAngleDegrees = requirePositiveSpellLevelNumber("freeze", level, levelData, "coneAngleDegrees");
+            if (!(coneAngleDegrees > 0 && coneAngleDegrees < 360)) {
+                throw new Error(`Wizard of Flatland freeze level ${level} requires coneAngleDegrees below 360`);
+            }
             return {
                 level,
-                healthPerSecond
+                costPerSecond,
+                damagePerSecond,
+                range,
+                coneAngleRadians: coneAngleDegrees * Math.PI / 180
+            };
+        }
+
+        function getActiveRelocateSprintStats() {
+            const definition = getLoadedSpellLevelDefinition("teleport");
+            const level = getWizardSpellLevel("teleport");
+            if (level < 1) throw new Error("Wizard of Flatland cannot sprint with unlearned spell teleport");
+            const sprintLevel = Math.min(level, 2);
+            const levelData = definition.levels[sprintLevel - 1];
+            const costPerSecond = requirePositiveSpellLevelNumber("teleport", sprintLevel, levelData, "costPerSecond");
+            const speedMultiplier = requirePositiveSpellLevelNumber("teleport", sprintLevel, levelData, "speedMultiplier");
+            return { level, sprintLevel, costPerSecond, speedMultiplier };
+        }
+
+        function getActiveHealingStats() {
+            const { level, levelData } = getActiveSpellLevelData("healing");
+            const secondsToFullHealth = requirePositiveSpellLevelNumber("healing", level, levelData, "secondsToFullHealth");
+            return {
+                level,
+                secondsToFullHealth
+            };
+        }
+
+        function getMagicRechargeStats() {
+            const level = getWizardSpellLevel("magicrecharge");
+            if (level < 1) {
+                const secondsToFullMagic = Number(constants.WIZARD_MAGIC_RECHARGE_SECONDS_LEVEL_0);
+                if (!(secondsToFullMagic > 0)) {
+                    throw new Error("Wizard of Flatland magic recharge level 0 requires positive secondsToFullMagic");
+                }
+                return {
+                    level,
+                    secondsToFullMagic
+                };
+            }
+            const { levelData } = getActiveSpellLevelData("magicrecharge");
+            const secondsToFullMagic = requirePositiveSpellLevelNumber("magicrecharge", level, levelData, "secondsToFullMagic");
+            return {
+                level,
+                secondsToFullMagic
             };
         }
 
@@ -197,7 +246,10 @@
             getActiveSpellLevelData,
             getActiveFireballStats,
             getActiveSpikeStats,
-            getActiveHealingStats
+            getActiveFreezeStats,
+            getActiveRelocateSprintStats,
+            getActiveHealingStats,
+            getMagicRechargeStats
         });
     }
 

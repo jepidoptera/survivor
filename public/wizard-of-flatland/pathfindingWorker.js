@@ -3,6 +3,8 @@
 let activeSnapshot = null;
 let adjacencyOffsets = new Int32Array(0);
 let adjacencyEdges = new Int32Array(0);
+let wallIndexByEdge = new Int32Array(0);
+let wallCostScales = new Float32Array(0);
 
 const SNAPSHOT_FORMAT = "wizard-flatland-packed-v1";
 const NODE_X = 0;
@@ -10,8 +12,10 @@ const NODE_Y = 1;
 const NODE_BLOCKED = 2;
 const NODE_CLEARANCE = 3;
 const NODE_BLOCKED_NEIGHBOR_COUNT = 7;
+const NODE_TEMPORARY_COST = 8;
 const EDGE_FROM = 0;
 const EDGE_TO = 1;
+const EDGE_WALL_BLOCKED = 3;
 const EDGE_STRIDE_FALLBACK = 4;
 
 self.postMessage({ type: "ready", version: null });
@@ -73,10 +77,79 @@ function installSnapshot(snapshot) {
     if (!(snapshot.edges instanceof Int32Array) || snapshot.edges.length % edgeStride !== 0) {
         throw new Error("Wizard of Flatland packed pathfinding snapshot edges are malformed");
     }
+    const edgeCount = snapshot.edges.length / edgeStride;
+    if (!(snapshot.wallIndexByEdge instanceof Int32Array) || snapshot.wallIndexByEdge.length !== edgeCount) {
+        throw new Error("Wizard of Flatland packed pathfinding snapshot edge wall indices are malformed");
+    }
+    if (!(snapshot.wallCostScales instanceof Float32Array)) {
+        throw new Error("Wizard of Flatland packed pathfinding snapshot wall cost scales are malformed");
+    }
 
     activeSnapshot = snapshot;
+    wallIndexByEdge = snapshot.wallIndexByEdge;
+    wallCostScales = snapshot.wallCostScales;
+    validateWallCostState(snapshot.edges, edgeStride);
     rebuildAdjacency(snapshot);
     self.postMessage({ type: "ready", version: snapshot.version });
+}
+
+function validateWallCostState(edges, edgeStride) {
+    for (let edgeIndex = 0; edgeIndex < wallIndexByEdge.length; edgeIndex++) {
+        const edgeBase = edgeIndex * edgeStride;
+        const wallIndex = wallIndexByEdge[edgeIndex];
+        if (edgeIsWallBlocked(edges, edgeStride, edgeBase)) {
+            if (!Number.isInteger(wallIndex) || wallIndex < 0 || wallIndex >= wallCostScales.length) {
+                throw new Error(`Wizard of Flatland wall-blocked pathfinding edge ${edgeIndex} has invalid wall index ${wallIndex}`);
+            }
+        } else if (wallIndex !== -1) {
+            throw new Error(`Wizard of Flatland open pathfinding edge ${edgeIndex} unexpectedly references wall ${wallIndex}`);
+        }
+    }
+    for (let wallIndex = 0; wallIndex < wallCostScales.length; wallIndex++) {
+        validateWallCostScale(wallCostScales[wallIndex], wallIndex);
+    }
+}
+
+function validateWallCostScale(value, wallIndex) {
+    if (!Number.isFinite(value) || value < 0.05 || value > 1) {
+        throw new Error(`Wizard of Flatland pathfinding wall ${wallIndex} has invalid cost scale ${value}`);
+    }
+}
+
+function applyDynamicCostPatch(message) {
+    if (!activeSnapshot) throw new Error("Wizard of Flatland pathfinding dynamic cost patch requires an active snapshot");
+    if (Number(message.mapVersion) !== Number(activeSnapshot.version)) return;
+    const wallIndices = message.wallIndices;
+    const wallCostScalesPatch = message.wallCostScales;
+    const nodeIndices = message.nodeIndices;
+    const nodeCosts = message.nodeCosts;
+    if (!(wallIndices instanceof Int32Array) || !(wallCostScalesPatch instanceof Float32Array) || wallIndices.length !== wallCostScalesPatch.length) {
+        throw new Error("Wizard of Flatland pathfinding dynamic wall cost patch is malformed");
+    }
+    if (!(nodeIndices instanceof Int32Array) || !(nodeCosts instanceof Float32Array) || nodeIndices.length !== nodeCosts.length) {
+        throw new Error("Wizard of Flatland pathfinding dynamic node cost patch is malformed");
+    }
+    for (let i = 0; i < wallIndices.length; i++) {
+        const wallIndex = wallIndices[i];
+        if (!Number.isInteger(wallIndex) || wallIndex < 0 || wallIndex >= wallCostScales.length) {
+            throw new Error(`Wizard of Flatland pathfinding wall cost patch references invalid wall ${wallIndex}`);
+        }
+        validateWallCostScale(wallCostScalesPatch[i], wallIndex);
+        wallCostScales[wallIndex] = wallCostScalesPatch[i];
+    }
+    const nodeStride = getNodeStride(activeSnapshot);
+    const nodeCount = activeSnapshot.nodes.length / nodeStride;
+    for (let i = 0; i < nodeIndices.length; i++) {
+        const nodeIndex = nodeIndices[i];
+        const cost = nodeCosts[i];
+        if (!Number.isInteger(nodeIndex) || nodeIndex < 0 || nodeIndex >= nodeCount) {
+            throw new Error(`Wizard of Flatland pathfinding node cost patch references invalid node ${nodeIndex}`);
+        }
+        if (!Number.isFinite(cost) || cost < 0) {
+            throw new Error(`Wizard of Flatland pathfinding node cost patch has invalid cost ${cost} for node ${nodeIndex}`);
+        }
+        activeSnapshot.nodes[nodeIndex * nodeStride + NODE_TEMPORARY_COST] = cost;
+    }
 }
 
 function rebuildAdjacency(snapshot) {
@@ -111,8 +184,8 @@ function rebuildAdjacency(snapshot) {
 
 function getNodeStride(snapshot) {
     const stride = Number(snapshot && snapshot.nodeStride);
-    if (!Number.isInteger(stride) || stride < 8) {
-        throw new Error("Wizard of Flatland packed pathfinding snapshot requires node stride >= 8");
+    if (!Number.isInteger(stride) || stride < 9) {
+        throw new Error("Wizard of Flatland packed pathfinding snapshot requires node stride >= 9");
     }
     return stride;
 }
@@ -127,6 +200,7 @@ function getEdgeStride(snapshot) {
 
 function emptyPathResult(message, reason) {
     const empty = new Int32Array(0);
+    const emptyWallBlockedEdges = new Uint8Array(0);
     const result = {
         type: "path_result",
         requestId: message.requestId,
@@ -134,11 +208,12 @@ function emptyPathResult(message, reason) {
         ok: false,
         reason,
         pathNodeIndices: empty,
+        wallBlockedPathEdges: emptyWallBlockedEdges,
         pathEdgeIds: [],
         plannedInteractions: [],
         stats: { iterations: 0, expanded: 0 }
     };
-    self.postMessage(result, [empty.buffer]);
+    self.postMessage(result, [empty.buffer, emptyWallBlockedEdges.buffer]);
 }
 
 function handleRequestPath(message) {
@@ -163,6 +238,7 @@ function handleRequestPath(message) {
     const requiredClearance = Number.isFinite(options.clearance) ? Math.max(0, Math.floor(options.clearance)) : 0;
     const wallAvoidance = Number.isFinite(options.wallAvoidance) ? Math.max(0, options.wallAvoidance) : 0;
     const blockedNeighborAvoidance = Number.isFinite(options.blockedNeighborAvoidance) ? Math.max(0, options.blockedNeighborAvoidance) : 0;
+    const wallBlockedConnectionCost = Number(options.wallBlockedConnectionCost);
     const maxPathLength = Number.isFinite(options.maxPathLength) ? Math.max(0, options.maxPathLength) : Infinity;
 
     if (!Number.isInteger(startIndex) || !Number.isInteger(goalIndex) || startIndex < 0 || startIndex >= nodeCount || goalIndex < 0 || goalIndex >= nodeCount) {
@@ -175,26 +251,30 @@ function handleRequestPath(message) {
     }
     if (startIndex === goalIndex) {
         const empty = new Int32Array(0);
+        const emptyWallBlockedEdges = new Uint8Array(0);
         self.postMessage({
             type: "path_result",
             requestId: message.requestId,
             mapVersion: activeSnapshot.version,
             ok: true,
             pathNodeIndices: empty,
+            wallBlockedPathEdges: emptyWallBlockedEdges,
             pathEdgeIds: [],
             plannedInteractions: [],
             stats: { iterations: 0, expanded: 0 }
-        }, [empty.buffer]);
+        }, [empty.buffer, emptyWallBlockedEdges.buffer]);
         return;
     }
 
     const openSet = new Set();
     const openQueue = new MinPriorityQueue();
     const cameFrom = new Int32Array(nodeCount);
+    const cameFromEdge = new Int32Array(nodeCount);
     const gScore = new Float64Array(nodeCount);
     const distanceScore = new Float64Array(nodeCount);
     const fScore = new Float64Array(nodeCount);
     cameFrom.fill(-1);
+    cameFromEdge.fill(-1);
     gScore.fill(Infinity);
     distanceScore.fill(Infinity);
     fScore.fill(Infinity);
@@ -217,16 +297,18 @@ function handleRequestPath(message) {
         const currentIndex = currentEntry.value;
         if (currentIndex === goalIndex) {
             const path = reconstructPath(cameFrom, currentIndex);
+            const wallBlockedPathEdges = reconstructWallBlockedPathEdges(cameFrom, cameFromEdge, edges, edgeStride, currentIndex);
             self.postMessage({
                 type: "path_result",
                 requestId: message.requestId,
                 mapVersion: activeSnapshot.version,
                 ok: true,
                 pathNodeIndices: path,
+                wallBlockedPathEdges,
                 pathEdgeIds: [],
                 plannedInteractions: [],
                 stats: { iterations, expanded }
-            }, [path.buffer]);
+            }, [path.buffer, wallBlockedPathEdges.buffer]);
             return;
         }
 
@@ -256,10 +338,18 @@ function handleRequestPath(message) {
             if (blockedNeighborAvoidance > 0) {
                 stepCost *= 1 + getNodeBlockedNeighborCount(nodes, nodeStride, toIndex) * blockedNeighborAvoidance;
             }
+            if (edgeIsWallBlocked(edges, edgeStride, edgeBase)) {
+                stepCost += getWallBlockedConnectionCost(
+                    wallBlockedConnectionCost,
+                    edgeIndex
+                );
+            }
+            stepCost += getNodeTemporaryCost(nodes, nodeStride, toIndex);
             const tentativeG = currentG + stepCost;
             if (tentativeG >= gScore[toIndex]) continue;
 
             cameFrom[toIndex] = currentIndex;
+            cameFromEdge[toIndex] = edgeIndex;
             gScore[toIndex] = tentativeG;
             distanceScore[toIndex] = tentativeDistance;
             fScore[toIndex] = tentativeG + nodeDistance(nodes, nodeStride, toIndex, goalIndex);
@@ -269,6 +359,7 @@ function handleRequestPath(message) {
     }
 
     const empty = new Int32Array(0);
+    const emptyWallBlockedEdges = new Uint8Array(0);
     self.postMessage({
         type: "path_result",
         requestId: message.requestId,
@@ -276,10 +367,26 @@ function handleRequestPath(message) {
         ok: false,
         reason: "no_path",
         pathNodeIndices: empty,
+        wallBlockedPathEdges: emptyWallBlockedEdges,
         pathEdgeIds: [],
         plannedInteractions: [],
         stats: { iterations, expanded }
-    }, [empty.buffer]);
+    }, [empty.buffer, emptyWallBlockedEdges.buffer]);
+}
+
+function getWallBlockedConnectionCost(defaultCost, edgeIndex) {
+    if (!Number.isInteger(edgeIndex) || edgeIndex < 0 || edgeIndex >= wallIndexByEdge.length) {
+        throw new Error(`pathfinding wall-blocked edge cost lookup received invalid edge ${edgeIndex}`);
+    }
+    const wallIndex = wallIndexByEdge[edgeIndex];
+    if (!Number.isInteger(wallIndex) || wallIndex < 0 || wallIndex >= wallCostScales.length) {
+        throw new Error(`pathfinding wall-blocked edge ${edgeIndex} is missing its wall cost scale`);
+    }
+    const cost = Number(defaultCost) * wallCostScales[wallIndex];
+    if (!Number.isFinite(cost) || cost < 0) {
+        throw new Error("pathfinding wall-blocked edge requires a finite non-negative wallBlockedConnectionCost");
+    }
+    return cost;
 }
 
 function popCurrent(openQueue, openSet, fScore) {
@@ -308,6 +415,24 @@ function getNodeBlockedNeighborCount(nodes, stride, index) {
     return count;
 }
 
+function getNodeTemporaryCost(nodes, stride, index) {
+    const cost = nodes[index * stride + NODE_TEMPORARY_COST];
+    if (!Number.isFinite(cost) || cost < 0) throw new Error(`pathfinding node ${index} has invalid temporary cost`);
+    return cost;
+}
+
+function edgeIsWallBlocked(edges, stride, edgeBase) {
+    if (!(edges instanceof Int32Array)) {
+        throw new Error("pathfinding wall-blocked edge lookup requires packed edges");
+    }
+    if (!Number.isInteger(stride) || stride <= EDGE_WALL_BLOCKED) {
+        throw new Error("pathfinding wall-blocked edge lookup requires edge flag data");
+    }
+    const value = edges[edgeBase + EDGE_WALL_BLOCKED];
+    if (value !== 0 && value !== 1) throw new Error(`pathfinding edge at ${edgeBase} has invalid wall-blocked flag`);
+    return value === 1;
+}
+
 function nodeDistance(nodes, stride, leftIndex, rightIndex) {
     const leftBase = leftIndex * stride;
     const rightBase = rightIndex * stride;
@@ -333,6 +458,27 @@ function reconstructPath(cameFrom, currentIndex) {
     return path;
 }
 
+function reconstructWallBlockedPathEdges(cameFrom, cameFromEdge, edges, edgeStride, currentIndex) {
+    const reversed = [];
+    let walkIndex = currentIndex;
+    const seen = new Set();
+    while (cameFrom[walkIndex] >= 0) {
+        const edgeIndex = cameFromEdge[walkIndex];
+        if (!Number.isInteger(edgeIndex) || edgeIndex < 0) {
+            throw new Error(`pathfinding node ${walkIndex} is missing its predecessor edge`);
+        }
+        reversed.push(edgeIsWallBlocked(edges, edgeStride, edgeIndex * edgeStride) ? 1 : 0);
+        walkIndex = cameFrom[walkIndex];
+        if (seen.has(walkIndex)) break;
+        seen.add(walkIndex);
+    }
+    const flags = new Uint8Array(reversed.length);
+    for (let i = 0; i < reversed.length; i++) {
+        flags[i] = reversed[reversed.length - 1 - i];
+    }
+    return flags;
+}
+
 self.addEventListener("message", (event) => {
     const message = event && event.data ? event.data : null;
     if (!message || typeof message.type !== "string") return;
@@ -343,8 +489,20 @@ self.addEventListener("message", (event) => {
         }
         if (message.type === "request_path") {
             handleRequestPath(message);
+            return;
+        }
+        if (message.type === "dynamic_cost_patch") {
+            applyDynamicCostPatch(message);
         }
     } catch (error) {
+        if (message.type !== "request_path") {
+            self.postMessage({
+                type: "error",
+                mapVersion: activeSnapshot ? activeSnapshot.version : message.mapVersion,
+                message: error && error.message ? error.message : String(error)
+            });
+            return;
+        }
         self.postMessage({
             type: "path_result",
             requestId: message.requestId,

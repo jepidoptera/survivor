@@ -410,7 +410,9 @@ const SpellSystem = (() => {
         { name: "vanish", icon: "/assets/images/thumbnails/vanish.png" },
         { name: "teleport", icon: "/assets/images/magic/teleport.png" },
         { name: "shield", icon: "/assets/images/thumbnails/aura.png" },
-        { name: "firewall", icon: "/assets/images/thumbnails/firewall.png" }
+        { name: "firewall", icon: "/assets/images/thumbnails/firewall.png" },
+        { name: "trap", icon: "/assets/images/thumbnails/trap.svg" },
+        { name: "destructobeam", icon: "/assets/images/thumbnails/wall.png", title: "Destructo Beam" }
     ];
     const EDITOR_TOOL_DEFS = [
         { name: "wall", icon: "/assets/images/thumbnails/wall.png" },
@@ -445,11 +447,13 @@ const SpellSystem = (() => {
     const SPELL_LEVEL_MAX = 7;
     const SPELL_LEVEL_UNLOCK_NAME_BY_ID = {
         iceball: "freeze",
-        squirrels: "attacksquirrel"
+        squirrels: "attacksquirrel",
+        construction: "trap"
     };
     const SPELL_LEVEL_ID_BY_MAGIC_NAME = {
         attacksquirrel: "squirrels",
-        moveobject: "telekinesis"
+        moveobject: "telekinesis",
+        trap: "construction"
     };
     const SPELL_LEVEL_CANONICAL_ID_BY_LEGACY_ID = {
         iceball: "freeze"
@@ -604,10 +608,12 @@ const SpellSystem = (() => {
         vanish: "Vanish",
         editorvanish: "EditorVanish",
         editscript: "EditScript",
-        triggerarea: "TriggerAreaSpell"
+        triggerarea: "TriggerAreaSpell",
+        destructobeam: "DestructoBeam"
     };
 
     let magicIntervalId = null;
+    let activeDestructoBeam = null;
     let lastMagicTickMs = 0;
     let editorMode = false;
     let spellMenuMode = "main";
@@ -1060,6 +1066,9 @@ const SpellSystem = (() => {
 
     function isSpellUnlocked(wizardRef, spellName) {
         if (typeof spellName !== "string" || spellName.length === 0) return false;
+        if (spellName === "destructobeam") {
+            return getWizardSpellLevel(wizardRef, "construction") >= 2;
+        }
         if (spellName === "lightning") {
             const inventory = (wizardRef && typeof wizardRef.getInventory === "function")
                 ? wizardRef.getInventory()
@@ -11198,6 +11207,11 @@ const SpellSystem = (() => {
             projectile = new globalThis.Rock();
         } else if (wizardRef.currentSpell === "fireball") {
             projectile = new globalThis.Fireball();
+        } else if (wizardRef.currentSpell === "trap") {
+            if (typeof globalThis.ConstructionTrap !== "function") {
+                throw new Error("build trap selected but ConstructionTrap is not loaded");
+            }
+            projectile = new globalThis.ConstructionTrap();
         } else if (wizardRef.currentSpell === "freeze") {
             projectile = new globalThis.Iceball();
         } else if (wizardRef.currentSpell === "lightning") {
@@ -11288,9 +11302,11 @@ const SpellSystem = (() => {
         const spells = SPELL_DEFS.filter(spell => isSpellUnlocked(wizardRef, spell.name)).map(spell => {
             const key = spell.name === "firewall"
                 ? "F+W"
-                : spell.name === "editscript"
-                    ? "E+T"
-                    : Object.keys(spellKeyBindings).find(k => spellKeyBindings[k] === spell.name);
+                : spell.name === "trap"
+                    ? "B+T"
+                    : spell.name === "editscript"
+                        ? "E+T"
+                        : Object.keys(spellKeyBindings).find(k => spellKeyBindings[k] === spell.name);
             if (spell.name === "treegrow") {
                 return {...spell, key, icon: getTreeSpellIcon(wizardRef)};
             }
@@ -11304,6 +11320,35 @@ const SpellSystem = (() => {
             key: aura.key
         }));
         return spells.concat(auraSpells);
+    }
+
+    function stopDestructoBeam() {
+        if (!activeDestructoBeam) return false;
+        activeDestructoBeam.stop();
+        activeDestructoBeam = null;
+        return true;
+    }
+
+    function updateDestructoBeam(wizardRef, worldX, worldY, active) {
+        if (!wizardRef || wizardRef.currentSpell !== "destructobeam" || active !== true) {
+            return stopDestructoBeam();
+        }
+        if (getWizardSpellLevel(wizardRef, "construction") < 2) {
+            throw new Error("destructo beam requires construction level 2");
+        }
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) {
+            if (activeDestructoBeam) activeDestructoBeam.clearTarget();
+            return false;
+        }
+        if (!activeDestructoBeam || activeDestructoBeam.gone) {
+            if (typeof globalThis.DestructoBeam !== "function") {
+                throw new Error("destructo beam selected but DestructoBeam is not loaded");
+            }
+            activeDestructoBeam = new globalThis.DestructoBeam();
+            projectiles.push(activeDestructoBeam);
+        }
+        const target = getObjectTargetAt(wizardRef, worldX, worldY);
+        return activeDestructoBeam.updateChannel(wizardRef, target, worldX, worldY, performance.now());
     }
 
     function shouldShowSpellSelector(wizardRef) {
@@ -13549,7 +13594,9 @@ const SpellSystem = (() => {
         clearFloorEditDiagnosticsLog,
         recordFloorEditDiagnostic,
         getSelectedFloorEditLevel,
-        setSelectedFloorEditLevel
+        setSelectedFloorEditLevel,
+        updateDestructoBeam,
+        stopDestructoBeam
     };
 })();
 

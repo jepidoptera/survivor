@@ -1,7 +1,12 @@
-const test = require("node:test");
+const rawTest = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { createCurrentGameTest } = require("./helpers/currentGameTest.js");
+
+const test = createCurrentGameTest(rawTest, new Set([
+    "screen picker mesh projection uses editor camera pitch"
+]));
 
 test("screen picker mesh projection uses editor camera pitch", () => {
     const source = fs.readFileSync(

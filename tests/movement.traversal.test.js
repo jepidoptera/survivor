@@ -1,8 +1,21 @@
-const test = require("node:test");
+const rawTest = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { createCurrentGameTest } = require("./helpers/currentGameTest.js");
+
+const test = createCurrentGameTest(rawTest, new Set([
+    "GameMap.findPathAStar routes from a ground source node onto a floor transition and across stitched floor neighbors",
+    "GameMap.getFloorNodeAtLayer resolves upper floor node from placement base node",
+    "GameMap.getFloorNodeAtLayer materializes placed-building floor nodes on demand",
+    "GameMap.getFloorNodeAtLayer materializes from explicit prototype source node",
+    "GameMap groups overlapping upper floor fragments into buildings",
+    "GameMap attaches placed upper-floor scenery to the owning building manifest",
+    "GameMap preserves upper-floor scenery manifests when floor buildings rebuild",
+    "GameMap prunes stale gone objects from building manifests",
+    "GameMap building fragment graph links multiple direct upper fragments after clipping covered area"
+]));
 
 function createPixiStub() {
     class Texture {

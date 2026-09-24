@@ -1,8 +1,14 @@
-const test = require("node:test");
+const rawTest = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { createCurrentGameTest } = require("./helpers/currentGameTest.js");
+
+const test = createCurrentGameTest(rawTest, new Set([
+    "wizard movement discovers blockers on the wizard's current floor layer",
+    "wizard movement only collision-tests each upper-layer blocker once"
+]));
 
 function loadMovementClasses() {
     const context = {

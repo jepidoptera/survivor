@@ -1,6 +1,8 @@
 (function () {
     "use strict";
 
+    const MAZE_WORKER_RETRY_DELAY_MS = 1000;
+
     function createMazeStreamingSystem(deps) {
         const state = deps && deps.state;
         const worker = deps && deps.worker;
@@ -17,6 +19,8 @@
         if (
             !constants ||
             !Number.isInteger(constants.MAZE_SECTION_CACHE_LIMIT) ||
+            !Number.isInteger(constants.MAZE_SECTION_CACHE_OVERFLOW_LIMIT) ||
+            !Number.isFinite(constants.MAZE_SECTION_UNLOAD_HYSTERESIS_MS) ||
             typeof constants.MAZE_WORKER_STATUS_PREFIX !== "string" ||
             !Number.isFinite(constants.TARGET_RADIUS) ||
             !Number.isInteger(constants.WALL_STRIDE)
@@ -41,6 +45,7 @@
             typeof callbacks.getRequiredMazeSectionKeys !== "function" ||
             typeof callbacks.removeFurthestGeneratedMazeSection !== "function" ||
             typeof callbacks.getPathfindingLayerBounds !== "function" ||
+            typeof callbacks.getSavedSectionWallOverrides !== "function" ||
             typeof callbacks.setWorkerStatus !== "function" ||
             typeof callbacks.installGeneratedMazeWorkerResult !== "function"
         ) {
@@ -48,12 +53,16 @@
         }
 
         function getMazeSignature(options, keys) {
+            if (!Array.isArray(state.brokenWallGaps)) {
+                throw new Error("Wizard of Flatland maze streaming requires broken wall gap tracking");
+            }
             return [
                 options.seed,
                 options.chunkSize,
                 options.roomScale.toFixed(3),
                 options.twistiness.toFixed(3),
-                keys.join(";")
+                keys.join(";"),
+                `broken-gaps:${state.brokenWallGaps.length}`
             ].join("|");
         }
 
@@ -62,19 +71,25 @@
             const options = callbacks.getMazeOptions();
             const requiredKeys = callbacks.getRequiredMazeSectionKeys(options);
             const requiredSet = new Set(requiredKeys);
+            const now = performance.now();
             let changed = force;
 
             if (!(state.generatedMazeChunkKeys instanceof Set)) {
                 state.generatedMazeChunkKeys = new Set();
                 changed = true;
             }
+            if (!(state.generatedMazeSectionLastRequiredAt instanceof Map)) {
+                state.generatedMazeSectionLastRequiredAt = new Map();
+            }
             for (const key of requiredKeys) {
+                state.generatedMazeSectionLastRequiredAt.set(key, now);
                 if (state.generatedMazeChunkKeys.has(key)) continue;
                 state.generatedMazeChunkKeys.add(key);
                 changed = true;
             }
             while (state.generatedMazeChunkKeys.size > constants.MAZE_SECTION_CACHE_LIMIT) {
-                const removed = callbacks.removeFurthestGeneratedMazeSection(options, requiredSet);
+                const forceEviction = state.generatedMazeChunkKeys.size > constants.MAZE_SECTION_CACHE_OVERFLOW_LIMIT;
+                const removed = callbacks.removeFurthestGeneratedMazeSection(options, requiredSet, now, forceEviction);
                 if (!removed) break;
                 changed = true;
             }
@@ -83,14 +98,48 @@
             const signature = getMazeSignature(options, keys);
             if (!changed && signature === state.generatedMazeSignature) return false;
             if (!changed && signature === state.generatedMazePendingSignature) return false;
+            if (
+                signature === state.generatedMazeFailedSignature
+                && Number.isFinite(state.generatedMazeRetryAt)
+                && now < state.generatedMazeRetryAt
+            ) {
+                return false;
+            }
 
             requestGeneratedMazeRefresh(options, keys, signature);
             return true;
         }
 
+        function failActiveMazeRequest(message, details = {}) {
+            const failedRequestId = state.generatedMazeActiveRequestId;
+            const failedSignature = state.generatedMazePendingSignature;
+            const errorMessage = typeof message === "string" && message.length > 0
+                ? message
+                : "maze worker failed";
+            state.generatedMazeLoading = false;
+            state.generatedMazeActiveRequestId = 0;
+            state.generatedMazePendingSignature = "";
+            state.generatedMazeFailedSignature = failedSignature;
+            state.generatedMazeRetryAt = performance.now() + MAZE_WORKER_RETRY_DELAY_MS;
+            state.generatedMazeLastError = {
+                at: performance.now(),
+                requestId: failedRequestId,
+                signature: failedSignature,
+                message: errorMessage,
+                ...details
+            };
+            callbacks.setWorkerStatus(errorMessage);
+            console.error("[wizard of flatland maze worker]", state.generatedMazeLastError);
+        }
+
         function requestGeneratedMazeRefresh(options, keys, signature) {
             const bounds = callbacks.getPathfindingLayerBounds();
             const manualWalls = wallBuffer.cloneWallBuffer(state.manualWalls, "manual walls");
+            const brokenWallGaps = state.brokenWallGaps.map((gap) => ({ ...gap }));
+            const savedSections = callbacks.getSavedSectionWallOverrides(keys);
+            if (!Array.isArray(savedSections)) {
+                throw new Error("Wizard of Flatland maze streaming requires saved section wall overrides");
+            }
             const requestId = state.generatedMazeRequestId++;
             state.generatedMazeActiveRequestId = requestId;
             state.generatedMazePendingSignature = signature;
@@ -98,6 +147,13 @@
             profiler.beginLoad({ requestId, signature, keys });
             callbacks.setWorkerStatus(`${constants.MAZE_WORKER_STATUS_PREFIX} loading`);
             profiler.span("post maze worker request", () => {
+                const transfer = [manualWalls.buffer];
+                for (const section of savedSections) {
+                    if (!section || typeof section.sectionKey !== "string" || !(section.walls instanceof Float32Array)) {
+                        throw new Error("Wizard of Flatland maze streaming found an invalid saved section wall override");
+                    }
+                    transfer.push(section.walls.buffer);
+                }
                 worker.postMessage({
                     type: "build_maze_sections",
                     requestId,
@@ -105,9 +161,11 @@
                     options,
                     keys,
                     manualWalls,
+                    savedSections,
+                    brokenWallGaps,
                     bounds,
                     targetRadius: constants.TARGET_RADIUS
-                }, [manualWalls.buffer]);
+                }, transfer);
             });
         }
 
@@ -117,8 +175,7 @@
             if (message.type === "ready") return;
             if (message.type === "error") {
                 if (Number(message.requestId) !== Number(state.generatedMazeActiveRequestId)) return;
-                state.generatedMazeLoading = false;
-                callbacks.setWorkerStatus(message.message || "maze error");
+                failActiveMazeRequest(message.message || "maze error", { source: "worker-message" });
                 return;
             }
             if (message.type !== "maze_sections_result") return;
@@ -133,11 +190,13 @@
                     : 0
             });
             callbacks.installGeneratedMazeWorkerResult(message);
+            state.generatedMazeFailedSignature = "";
+            state.generatedMazeRetryAt = 0;
+            state.generatedMazeLastError = null;
         }
 
         function handleMazeWorkerError(event) {
-            state.generatedMazeLoading = false;
-            callbacks.setWorkerStatus(event.message || "maze worker failed");
+            failActiveMazeRequest(event && event.message || "maze worker failed", { source: "worker-event" });
         }
 
         return Object.freeze({

@@ -13,8 +13,7 @@
         if (
             !math ||
             typeof math.hashString !== "function" ||
-            typeof math.seededRandom !== "function" ||
-            typeof math.pointSegmentDistance !== "function"
+            typeof math.seededRandom !== "function"
         ) {
             throw new Error("Wizard of Flatland maze population requires math helpers");
         }
@@ -72,7 +71,16 @@
             validateMazeRoomEnemyBudgetSectionKey(sectionKey);
             const coord = mazeSections.parseMazeSectionKey(sectionKey);
             const ring = mazeSections.getMazeSectionRing(coord.q, coord.r);
-            return Math.max(1, constants.MAZE_ROOM_BASE_ENEMY_CAP + ring - constants.MAZE_ROOM_BASE_ENEMY_CAP_RING);
+            const earlyCaps = constants.MAZE_ROOM_EARLY_ENEMY_CAPS;
+            if (!Array.isArray(earlyCaps) || earlyCaps.length === 0) {
+                throw new Error("Wizard of Flatland early enemy caps must be a non-empty array");
+            }
+            if (earlyCaps.some((cap) => !Number.isInteger(cap) || cap < 0)) {
+                throw new Error("Wizard of Flatland early enemy caps must be non-negative integers");
+            }
+            if (ring < earlyCaps.length) return earlyCaps[ring];
+            const finalEarlyRing = earlyCaps.length - 1;
+            return earlyCaps[finalEarlyRing] + ring - finalEarlyRing;
         }
 
         function getEnemyScaleForMazeSectionKey(sectionKey) {
@@ -82,14 +90,21 @@
             return 1 + Math.floor(ring / constants.ENEMY_SCALE_RING_INTERVAL) * constants.ENEMY_SCALE_INCREMENT;
         }
 
-        function createMazeCoinsForSection(sectionKey, options, existingCoins) {
-            if (mazeSections.isMazePyramidRoomSectionKey(sectionKey)) return [];
+        function getEnemyDamageScaleForMazeSectionKey(sectionKey) {
+            validateMazeRoomEnemyBudgetSectionKey(sectionKey);
+            const coord = mazeSections.parseMazeSectionKey(sectionKey);
+            const ring = mazeSections.getMazeSectionRing(coord.q, coord.r);
+            const zone = Math.floor(ring / constants.MAZE_RING_BOUNDARY_INTERVAL);
+            return constants.ENEMY_DAMAGE_BASE_SCALE * constants.ENEMY_DAMAGE_ZONE_MULTIPLIER ** zone;
+        }
+
+        function createMazeCoinsForSection(sectionKey, options) {
             const coord = mazeSections.parseMazeSectionKey(sectionKey);
             const count = getMazeCoinCount(sectionKey, options);
             const sectionPolygon = mazeSections.getMazeSectionPolygonForCoord(coord, options);
-            const eligibleWalls = getMazeCoinEligibleWallsForSection(sectionKey, sectionPolygon);
-            if (eligibleWalls.length === 0) {
-                throw new Error(`Wizard of Flatland coin placement found no eligible walls for section ${sectionKey}`);
+            const spanSelection = getMazeCoinSpanSelectionForSection(sectionKey);
+            if (!(spanSelection.totalLength > 0)) {
+                throw new Error(`Wizard of Flatland coin placement found no usable spans for section ${sectionKey}`);
             }
             const random = math.seededRandom(math.hashString(`${options.seed}|coin-position|${sectionKey}`));
             const coins = [];
@@ -98,12 +113,10 @@
                 const coin = createMazeCoinForSectionSlot(
                     sectionKey,
                     coord,
-                    coinIndex,
                     key,
-                    eligibleWalls,
+                    spanSelection,
                     random,
-                    sectionPolygon,
-                    existingCoins.concat(coins)
+                    sectionPolygon
                 );
                 coins.push(coin);
             }
@@ -113,6 +126,12 @@
         function getMazeCoinCount(sectionKey, options) {
             if (typeof sectionKey !== "string" || sectionKey.length === 0) {
                 throw new Error("Wizard of Flatland coin count requires a section key");
+            }
+            if (mazeSections.isMazePyramidRoomSectionKey(sectionKey)) {
+                if (!Number.isInteger(constants.MAZE_PYRAMID_COIN_COUNT) || constants.MAZE_PYRAMID_COIN_COUNT < 0) {
+                    throw new Error("Wizard of Flatland pyramid coin count must be a non-negative integer");
+                }
+                return constants.MAZE_PYRAMID_COIN_COUNT;
             }
             const random = math.seededRandom(math.hashString(`${options.seed}|coin-count|${sectionKey}`));
             const coord = mazeSections.parseMazeSectionKey(sectionKey);
@@ -155,66 +174,116 @@
                 activated: sectionKey === homeBaseSectionKey,
                 flashSeconds: 0,
                 blockedFlashSeconds: 0,
+                gameSavedPromptSeconds: 0,
                 touching: false
             };
         }
 
-        function getMazeCoinEligibleWallsForSection(sectionKey, sectionPolygon) {
-            if (typeof sectionKey !== "string" || sectionKey.length === 0) {
-                throw new Error("Wizard of Flatland coin wall lookup requires a section key");
+        function createMazeFountainForSection(sectionKey, options, activatedSectionKeys) {
+            validateMazeRoomEnemyBudgetSectionKey(sectionKey);
+            if (!(activatedSectionKeys instanceof Set)) {
+                throw new Error("Wizard of Flatland fountain creation requires activated fountain tracking");
             }
-            const walls = [];
-            for (let i = 0; i < state.generatedMazeWalls.length; i += constants.WALL_STRIDE) {
-                const ax = state.generatedMazeWalls[i + constants.WALL_X1];
-                const ay = state.generatedMazeWalls[i + constants.WALL_Y1];
-                const bx = state.generatedMazeWalls[i + constants.WALL_X2];
-                const by = state.generatedMazeWalls[i + constants.WALL_Y2];
-                if (!geometry.isPointInOrNearPolygon(ax, ay, sectionPolygon, constants.MAZE_COIN_SECTION_EDGE_EPSILON)) continue;
-                if (!geometry.isPointInOrNearPolygon(bx, by, sectionPolygon, constants.MAZE_COIN_SECTION_EDGE_EPSILON)) continue;
-                walls.push({
-                    wallIndex: i / constants.WALL_STRIDE,
-                    ax,
-                    ay,
-                    bx,
-                    by,
-                    length: Math.hypot(bx - ax, by - ay)
-                });
-            }
-            return walls;
+            if (mazeSections.isMazePyramidRoomSectionKey(sectionKey)) return null;
+            const random = math.seededRandom(math.hashString(`${options.seed}|fountain|${sectionKey}`));
+            if (random() >= 1 / constants.MAZE_FOUNTAIN_ROOM_FREQUENCY) return null;
+            const coord = mazeSections.parseMazeSectionKey(sectionKey);
+            const center = mazeSections.mazeSectionCenter(coord.q, coord.r, options);
+            return {
+                key: `fountain|${options.seed}|${sectionKey}`,
+                sectionKey,
+                q: coord.q,
+                r: coord.r,
+                x: center.x,
+                y: center.y,
+                radius: constants.MAZE_FOUNTAIN_RADIUS,
+                activated: activatedSectionKeys.has(sectionKey),
+                touching: false,
+                particleAccumulator: 0,
+                coinSprayRemaining: 0,
+                coinSprayAccumulator: 0,
+                phase: random() * Math.PI * 2
+            };
         }
 
-        function createMazeCoinForSectionSlot(sectionKey, coord, coinIndex, key, eligibleWalls, random, sectionPolygon, existingCoins) {
-            if (typeof random !== "function") throw new Error("Wizard of Flatland coin placement requires a random source");
-            const attempts = constants.MAZE_COIN_PLACEMENT_ATTEMPTS_PER_COIN;
-            for (let attempt = 0; attempt < attempts; attempt++) {
-                const wall = eligibleWalls[Math.floor(random() * eligibleWalls.length)];
-                if (!wall || !(wall.length > 0.001)) continue;
-                const candidate = createMazeCoinCandidateFromWall(wall, random);
-                if (!candidate) continue;
-                const validation = validateMazeCoinCandidate(candidate, wall, sectionPolygon, existingCoins);
-                if (!validation.ok) continue;
-                const trophy = shouldCreateMazeTrophyForCoin(sectionKey, key);
-                return {
-                    key,
-                    sectionKey,
-                    q: coord.q,
-                    r: coord.r,
-                    wallIndex: wall.wallIndex,
-                    x: candidate.x,
-                    y: candidate.y,
-                    homeX: candidate.x,
-                    homeY: candidate.y,
-                    radius: trophy ? constants.MAZE_TROPHY_RADIUS : constants.MAZE_COIN_RADIUS,
-                    kind: trophy ? "trophy" : "coin",
-                    value: trophy ? constants.MAZE_TROPHY_VALUE : constants.MAZE_COIN_VALUE,
-                    rushing: false,
-                    phase: random() * Math.PI * 2
-                };
+        function getMazeCoinSpanSelectionForSection(sectionKey) {
+            if (typeof sectionKey !== "string" || sectionKey.length === 0) {
+                throw new Error("Wizard of Flatland coin span lookup requires a section key");
             }
-            throw new Error(`Wizard of Flatland coin placement failed for section ${sectionKey} coin ${coinIndex} after ${attempts} attempts`);
+            const spans = state.generatedMazeCoinSpans;
+            const ranges = state.generatedMazeCoinSpanSectionRanges;
+            if (!(spans instanceof Float32Array) || spans.length % constants.COIN_SPAN_STRIDE !== 0) {
+                throw new Error("Wizard of Flatland coin span lookup requires a packed span buffer");
+            }
+            if (!Array.isArray(ranges)) {
+                throw new Error("Wizard of Flatland coin span lookup requires section ranges");
+            }
+            const range = ranges.find((candidate) => candidate.sectionKey === sectionKey);
+            if (!range) throw new Error(`Wizard of Flatland coin span lookup found no range for section ${sectionKey}`);
+            const entries = [];
+            let totalLength = 0;
+            const endSpanIndex = range.startSpanIndex + range.spanCount;
+            for (let spanIndex = range.startSpanIndex; spanIndex < endSpanIndex; spanIndex++) {
+                const base = spanIndex * constants.COIN_SPAN_STRIDE;
+                const length = Math.hypot(
+                    spans[base + constants.COIN_SPAN_X2] - spans[base + constants.COIN_SPAN_X1],
+                    spans[base + constants.COIN_SPAN_Y2] - spans[base + constants.COIN_SPAN_Y1]
+                );
+                if (!(length > 0)) throw new Error(`Wizard of Flatland coin span ${spanIndex} has invalid length`);
+                totalLength += length;
+                entries.push({ base, cumulativeLength: totalLength });
+            }
+            return { entries, totalLength };
+        }
+
+        function createMazeCoinForSectionSlot(sectionKey, coord, key, spanSelection, random, sectionPolygon) {
+            if (typeof random !== "function") throw new Error("Wizard of Flatland coin placement requires a random source");
+            if (!spanSelection || !(spanSelection.totalLength > 0) || !Array.isArray(spanSelection.entries)) {
+                throw new Error("Wizard of Flatland coin placement requires usable span selection");
+            }
+            const selectedDistance = random() * spanSelection.totalLength;
+            const entry = spanSelection.entries.find((candidate) => selectedDistance < candidate.cumulativeLength)
+                || spanSelection.entries[spanSelection.entries.length - 1];
+            if (!entry) throw new Error(`Wizard of Flatland coin placement failed to select a span for ${sectionKey}`);
+            const spans = state.generatedMazeCoinSpans;
+            const base = entry.base;
+            const t = random();
+            const wallDistance = constants.MAZE_COIN_MIN_WALL_DISTANCE
+                + random() * (spans[base + constants.COIN_SPAN_MAX_DISTANCE] - constants.MAZE_COIN_MIN_WALL_DISTANCE);
+            const x = spans[base + constants.COIN_SPAN_X1]
+                + (spans[base + constants.COIN_SPAN_X2] - spans[base + constants.COIN_SPAN_X1]) * t
+                + spans[base + constants.COIN_SPAN_NORMAL_X] * wallDistance;
+            const y = spans[base + constants.COIN_SPAN_Y1]
+                + (spans[base + constants.COIN_SPAN_Y2] - spans[base + constants.COIN_SPAN_Y1]) * t
+                + spans[base + constants.COIN_SPAN_NORMAL_Y] * wallDistance;
+            if (!geometry.isPointInOrNearPolygon(x, y, sectionPolygon, constants.MAZE_COIN_SECTION_EDGE_EPSILON)) {
+                throw new Error(`Wizard of Flatland coin span placed ${key} outside section ${sectionKey}`);
+            }
+            const wallIndex = spans[base + constants.COIN_SPAN_WALL_INDEX];
+            if (!Number.isInteger(wallIndex) || wallIndex < 0) {
+                throw new Error(`Wizard of Flatland coin span for ${key} has invalid wall index`);
+            }
+            const trophy = shouldCreateMazeTrophyForCoin(sectionKey, key);
+            return {
+                key,
+                sectionKey,
+                q: coord.q,
+                r: coord.r,
+                wallIndex,
+                x,
+                y,
+                homeX: x,
+                homeY: y,
+                radius: trophy ? constants.MAZE_TROPHY_RADIUS : constants.MAZE_COIN_RADIUS,
+                kind: trophy ? "trophy" : "coin",
+                value: trophy ? constants.MAZE_TROPHY_VALUE : constants.MAZE_COIN_VALUE,
+                rushing: false,
+                phase: random() * Math.PI * 2
+            };
         }
 
         function shouldCreateMazeTrophyForCoin(sectionKey, coinKey) {
+            if (mazeSections.isMazePyramidRoomSectionKey(sectionKey)) return false;
             const coord = mazeSections.parseMazeSectionKey(sectionKey);
             const roomDistance = mazeSections.getMazeSectionRing(coord.q, coord.r);
             const chance = getMazeTrophyChanceForRoomDistance(roomDistance);
@@ -233,74 +302,17 @@
             return 0.015 + Math.ceil((roomDistance - 14) / 7) * 0.005;
         }
 
-        function createMazeCoinCandidateFromWall(wall, random) {
-            const dx = wall.bx - wall.ax;
-            const dy = wall.by - wall.ay;
-            const length = Math.hypot(dx, dy);
-            if (!(length > constants.MAZE_COIN_WALL_ENDPOINT_MARGIN * 2)) return null;
-            const minT = constants.MAZE_COIN_WALL_ENDPOINT_MARGIN / length;
-            const maxT = 1 - minT;
-            const t = minT + random() * (maxT - minT);
-            const baseX = wall.ax + dx * t;
-            const baseY = wall.ay + dy * t;
-            const normalX = -dy / length;
-            const normalY = dx / length;
-            const side = random() < 0.5 ? -1 : 1;
-            return {
-                x: baseX + normalX * side * constants.MAZE_COIN_OWNING_WALL_DISTANCE,
-                y: baseY + normalY * side * constants.MAZE_COIN_OWNING_WALL_DISTANCE
-            };
-        }
-
-        function validateMazeCoinCandidate(candidate, owningWall, sectionPolygon, existingCoins) {
-            if (!candidate || !Number.isFinite(candidate.x) || !Number.isFinite(candidate.y)) {
-                throw new Error("Wizard of Flatland coin placement candidate requires finite coordinates");
-            }
-            const owningDistance = math.pointSegmentDistance(
-                candidate.x,
-                candidate.y,
-                owningWall.ax,
-                owningWall.ay,
-                owningWall.bx,
-                owningWall.by
-            );
-            if (Math.abs(owningDistance - constants.MAZE_COIN_OWNING_WALL_DISTANCE) > 0.001) {
-                return { ok: false, reason: "owning-wall-distance" };
-            }
-            if (!geometry.isPointInOrNearPolygon(candidate.x, candidate.y, sectionPolygon, constants.MAZE_COIN_SECTION_EDGE_EPSILON)) {
-                return { ok: false, reason: "outside-owner-section" };
-            }
-            for (let i = 0; i < state.walls.length; i += constants.WALL_STRIDE) {
-                if (i / constants.WALL_STRIDE === owningWall.wallIndex) continue;
-                const distance = math.pointSegmentDistance(
-                    candidate.x,
-                    candidate.y,
-                    state.walls[i + constants.WALL_X1],
-                    state.walls[i + constants.WALL_Y1],
-                    state.walls[i + constants.WALL_X2],
-                    state.walls[i + constants.WALL_Y2]
-                );
-                if (distance < constants.MAZE_COIN_OTHER_WALL_MIN_DISTANCE) {
-                    return { ok: false, reason: "other-wall-clearance" };
-                }
-            }
-            for (const coin of existingCoins) {
-                if (Math.hypot(coin.x - candidate.x, coin.y - candidate.y) < constants.MAZE_COIN_OTHER_WALL_MIN_DISTANCE) {
-                    return { ok: false, reason: "coin-clearance" };
-                }
-            }
-            return { ok: true };
-        }
-
         return Object.freeze({
             validateMazeRoomEnemyBudgetSectionKey,
             getMazeRoomEnemyCount,
             getMazeRoomMaxEnemyCount,
             getEnemyScaleForMazeSectionKey,
+            getEnemyDamageScaleForMazeSectionKey,
             createMazeCoinsForSection,
             getMazeCoinCount,
             getMazeCoinKey,
-            createMazeTalismanForSection
+            createMazeTalismanForSection,
+            createMazeFountainForSection
         });
     }
 

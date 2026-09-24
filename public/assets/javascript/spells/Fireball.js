@@ -3,8 +3,49 @@ class Fireball extends globalThis.Spell {
     static WALL_IMPACT_SPEED_MULTIPLIER = 0.1;
     static WALL_IMPACT_ANIMATION_MULTIPLIER = 10;
     static MAGIC_COST = 20;
+    static LEVEL_DAMAGE = Object.freeze([10, 14, 20, 29, 41, 72, 100]);
+    static LEVEL_EXPLOSION_RADIUS = Object.freeze([1, 1.1, 1.25, 1.4, 1.8, 2.3, 3]);
 
     static supportsObjectTargeting = true;
+
+    static createStationaryExplosion(x, y, level, visualBaseZ = 0) {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("stationary fireball explosion requires a finite location");
+        const normalizedLevel = Math.max(1, Math.min(7, Math.round(Number(level) || 0)));
+        const fireball = new Fireball(x, y);
+        const frames = Fireball.getFrames();
+        if (!Array.isArray(frames) || frames.length === 0) {
+            throw new Error("stationary fireball explosion requires loaded fireball frames");
+        }
+        fireball.x = x;
+        fireball.y = y;
+        fireball.z = 0;
+        fireball.visualBaseZ = Number.isFinite(visualBaseZ) ? Number(visualBaseZ) : 0;
+        fireball.level = normalizedLevel;
+        fireball.isFireballExplosion = true;
+        fireball.explosionRadius = Fireball.LEVEL_EXPLOSION_RADIUS[normalizedLevel - 1];
+        fireball.radius = fireball.explosionRadius;
+        fireball.damageRadius = fireball.explosionRadius;
+        fireball.damage = Fireball.LEVEL_DAMAGE[normalizedLevel - 1];
+        fireball.speed = 0;
+        fireball.visible = true;
+        fireball.explosionFrames = frames;
+        fireball.explosionFrame = 0;
+        let frame = 0;
+        fireball.land();
+        fireball.castInterval = setInterval(() => {
+            frame += 1;
+            fireball.explosionFrame = frame;
+            fireball.land();
+            if (frame >= frames.length - 1) {
+                clearInterval(fireball.castInterval);
+                fireball.castInterval = null;
+                fireball.visible = false;
+                fireball.gone = true;
+                fireball.detachPixiSprite();
+            }
+        }, 50);
+        return fireball;
+    }
 
     static isValidObjectTarget(target, _wizardRef = null) {
         if (!target || target.gone || target.vanishing || target.dead) return false;
@@ -101,6 +142,7 @@ class Fireball extends globalThis.Spell {
         this.explosionFrames = null;
         this.isAnimating = true;
         this.damageRadius = 0.25;
+        this.explosionRadius = Fireball.LEVEL_EXPLOSION_RADIUS[0];
         this.delayTime = 0.5;
         this.radius = this.damageRadius;
         this.z = Fireball.FLIGHT_Z;

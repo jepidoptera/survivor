@@ -1,5 +1,10 @@
-const test = require("node:test");
+const rawTest = require("node:test");
 const assert = require("node:assert/strict");
+const { createCurrentGameTest } = require("./helpers/currentGameTest.js");
+
+const test = createCurrentGameTest(rawTest, new Set([
+    "building editor grid draws steep pitch viewports across graphics chunks"
+]));
 
 async function loadRenderer() {
     return import("../public/building-editor/BuildingRenderer.js");

@@ -1,6 +1,9 @@
 (function () {
     "use strict";
 
+    const WALL_BLOCKED_CONNECTION_BASE_PATH_COST = 100;
+    const WALL_BLOCKED_CONNECTION_ZONE_COST_DIVISOR = 1.1;
+
     function createPathfindingClientSystem(deps) {
         const state = deps && deps.state;
         const worker = deps && deps.worker;
@@ -18,6 +21,7 @@
             typeof callbacks.getPathfindingNodeY !== "function" ||
             typeof callbacks.isValidPathfindingNodeIndex !== "function" ||
             typeof callbacks.getPathfindingNodeIndexForKey !== "function" ||
+            typeof callbacks.getPathfindingBlockedEdgeWallIndex !== "function" ||
             typeof callbacks.advanceAgentPathCursor !== "function" ||
             typeof callbacks.getAgentPathWaypoint !== "function"
         ) {
@@ -26,6 +30,7 @@
 
         function requestAgentPath(agent, rawStartNodeIndex, startNodeIndex, goalNodeIndex, now) {
             const requestId = state.pathfindingRequestId++;
+            const wallBlockedConnectionCost = getAgentWallBlockedConnectionPathCost(agent);
             const rawStartNodeKey = callbacks.getPathfindingNodeKey(rawStartNodeIndex);
             const startNodeKey = callbacks.getPathfindingNodeKey(startNodeIndex);
             const goalNodeKey = callbacks.getPathfindingNodeKey(goalNodeIndex);
@@ -53,15 +58,27 @@
                     maxPathLength: null,
                     wallAvoidance: 0.4,
                     blockedNeighborAvoidance: 0.12,
+                    wallBlockedConnectionCost,
                     includeBlockedPlan: false
                 }
             });
+        }
+
+        function getAgentWallBlockedConnectionPathCost(agent) {
+            const zoneLevel = Number(agent && agent.zoneLevel);
+            if (!Number.isInteger(zoneLevel) || zoneLevel < 0) {
+                throw new Error(`Wizard of Flatland pathfinding requires enemy ${agent && agent.id} to have a non-negative integer zone level`);
+            }
+            return WALL_BLOCKED_CONNECTION_BASE_PATH_COST / WALL_BLOCKED_CONNECTION_ZONE_COST_DIVISOR ** zoneLevel;
         }
 
         function handlePathfindingWorkerMessage(event) {
             const message = event && event.data ? event.data : null;
             if (!message || typeof message.type !== "string") return;
             if (message.type === "ready") return;
+            if (message.type === "error") {
+                throw new Error(`Wizard of Flatland pathfinding worker error: ${message.message || "unknown error"}`);
+            }
             if (message.type !== "path_result") return;
             const agent = state.agents.find((candidate) => candidate.pathRequestId === message.requestId);
             if (!agent) return;
@@ -73,23 +90,47 @@
                 agent.pathCursor = 0;
                 agent.pathGoalX = agent.x;
                 agent.pathGoalY = agent.y;
+                agent.pathGoalWallBlocked = false;
+                agent.wallBreakTargetEdgeKey = "";
+                agent.wallBreakTargetWallIndex = -1;
+                agent.wallBreakTargetSegmentId = "";
                 return;
             }
             if (!(message.pathNodeIndices instanceof Int32Array) && !Array.isArray(message.pathNodeIndices)) {
                 throw new Error("Wizard of Flatland pathfinding worker returned a malformed path");
             }
+            if (!(message.wallBlockedPathEdges instanceof Uint8Array) && !Array.isArray(message.wallBlockedPathEdges)) {
+                throw new Error("Wizard of Flatland pathfinding worker returned malformed wall-blocked path edge flags");
+            }
+            if (message.wallBlockedPathEdges.length !== message.pathNodeIndices.length) {
+                throw new Error("Wizard of Flatland pathfinding worker returned mismatched wall-blocked path edge flags");
+            }
             const pathNodeKeys = [];
             const pathWaypoints = [];
-            for (const pathIndex of message.pathNodeIndices) {
+            let previousPathIndex = callbacks.getPathfindingNodeIndexForKey(agent.pathRequestedStartKey);
+            if (!Number.isInteger(previousPathIndex)) {
+                throw new Error(`Wizard of Flatland pathfinding request start node is missing: ${agent.pathRequestedStartKey}`);
+            }
+            for (let i = 0; i < message.pathNodeIndices.length; i++) {
+                const pathIndex = message.pathNodeIndices[i];
                 if (!callbacks.isValidPathfindingNodeIndex(pathIndex)) {
                     throw new Error(`Wizard of Flatland pathfinding worker returned unknown node index ${pathIndex}`);
                 }
-                appendAgentPathWaypoint(pathNodeKeys, pathWaypoints, pathIndex);
+                const wallBlockedFromPrevious = message.wallBlockedPathEdges[i] === 1;
+                appendAgentPathWaypoint(
+                    pathNodeKeys,
+                    pathWaypoints,
+                    pathIndex,
+                    false,
+                    wallBlockedFromPrevious,
+                    previousPathIndex
+                );
+                previousPathIndex = pathIndex;
             }
             if (agent.pathRequestedStartKey !== agent.pathRequestedRawStartKey) {
                 const requestedStartIndex = callbacks.getPathfindingNodeIndexForKey(agent.pathRequestedStartKey);
                 if (Number.isInteger(requestedStartIndex) && pathNodeKeys[0] !== agent.pathRequestedStartKey) {
-                    appendAgentPathWaypoint(pathNodeKeys, pathWaypoints, requestedStartIndex, true);
+                    appendAgentPathWaypoint(pathNodeKeys, pathWaypoints, requestedStartIndex, true, false, null);
                 }
             }
             agent.pathNodeKeys = pathNodeKeys;
@@ -100,10 +141,14 @@
             if (waypoint) {
                 agent.pathGoalX = waypoint.x;
                 agent.pathGoalY = waypoint.y;
+                agent.pathGoalWallBlocked = waypoint.wallBlockedFromPrevious === true;
+                agent.wallBreakTargetEdgeKey = waypoint.wallBlockedFromPrevious === true ? waypoint.wallBlockedEdgeKey : "";
+                agent.wallBreakTargetWallIndex = waypoint.wallBlockedFromPrevious === true ? waypoint.wallBlockedWallIndex : -1;
+                agent.wallBreakTargetSegmentId = "";
             }
         }
 
-        function appendAgentPathWaypoint(pathNodeKeys, pathWaypoints, pathIndex, prepend = false) {
+        function appendAgentPathWaypoint(pathNodeKeys, pathWaypoints, pathIndex, prepend = false, wallBlockedFromPrevious = false, previousPathIndex = null) {
             if (!Array.isArray(pathNodeKeys) || !Array.isArray(pathWaypoints)) {
                 throw new Error("Wizard of Flatland path waypoint append requires path arrays");
             }
@@ -113,8 +158,21 @@
             const waypoint = {
                 key: callbacks.getPathfindingNodeKey(pathIndex),
                 x: callbacks.getPathfindingNodeX(pathIndex),
-                y: callbacks.getPathfindingNodeY(pathIndex)
+                y: callbacks.getPathfindingNodeY(pathIndex),
+                wallBlockedFromPrevious: wallBlockedFromPrevious === true,
+                wallBlockedFromKey: "",
+                wallBlockedEdgeKey: "",
+                wallBlockedWallIndex: -1
             };
+            if (wallBlockedFromPrevious === true) {
+                if (!Number.isInteger(previousPathIndex)) {
+                    throw new Error("Wizard of Flatland wall-blocked waypoint requires a previous path node");
+                }
+                const wallIndex = callbacks.getPathfindingBlockedEdgeWallIndex(previousPathIndex, pathIndex);
+                waypoint.wallBlockedFromKey = callbacks.getPathfindingNodeKey(previousPathIndex);
+                waypoint.wallBlockedEdgeKey = `${previousPathIndex}->${pathIndex}`;
+                waypoint.wallBlockedWallIndex = wallIndex;
+            }
             if (prepend) {
                 pathNodeKeys.unshift(waypoint.key);
                 pathWaypoints.unshift(waypoint);

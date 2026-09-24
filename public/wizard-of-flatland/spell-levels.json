@@ -9,11 +9,11 @@
           "level": 1,
           "headline": "Spitfire",
           "subtitle": "Pew! Pew!",
-          "manaCost": 20,
+          "manaCost": 8,
           "damage": 10,
           "range": 10,
           "explosionRadius": 1,
-          "castDelay": 0.75,
+          "castDelay": 0.7,
           "projectileRadius": 0.4,
           "projectileSpeed": 10
         },
@@ -21,73 +21,73 @@
           "level": 2,
           "headline": "Fireball I",
           "subtitle": "Snap crackle",
-          "manaCost": 19,
+          "manaCost": 9,
           "damage": 14,
           "explosionRadius": 1.1,
           "range": 11,
-          "castDelay": 0.7,
+          "castDelay": 0.65,
           "projectileRadius": 0.5,
-          "projectileSpeed": 11
+          "projectileSpeed": 10
         },
         {
           "level": 3,
           "headline": "Fireball II",
           "subtitle": "Pow!",
-          "manaCost": 17,
+          "manaCost": 10,
           "damage": 20,
           "explosionRadius": 1.25,
           "range": 12,
-          "castDelay": 0.65,
+          "castDelay": 0.6,
           "projectileRadius": 0.62,
-          "projectileSpeed": 12
+          "projectileSpeed": 10
         },
         {
           "level": 4,
           "headline": "Fireball III",
           "subtitle": "Bigger, better.",
-          "manaCost": 17,
+          "manaCost": 11,
           "damage": 29,
           "explosionRadius": 1.4,
           "range": 13,
-          "castDelay": 0.6,
+          "castDelay": 0.55,
           "projectileRadius": 0.75,
-          "projectileSpeed": 13
+          "projectileSpeed": 10
         },
         {
           "level": 5,
           "headline": "Fireball IV",
           "subtitle": "Boom.",
-          "manaCost": 16,
+          "manaCost": 12,
           "damage": 41,
           "explosionRadius": 1.8,
           "range": 14,
-          "castDelay": 0.55,
+          "castDelay": 0.5,
           "projectileRadius": 0.9,
-          "projectileSpeed": 14
+          "projectileSpeed": 10
         },
         {
           "level": 6,
           "headline": "Fireball V",
           "subtitle": "Faster, stronger.",
-          "manaCost": 15,
+          "manaCost": 13,
           "damage": 72,
           "explosionRadius": 2.3,
           "range": 15,
-          "castDelay": 0.5,
+          "castDelay": 0.45,
           "projectileRadius": 1.1,
-          "projectileSpeed": 15
+          "projectileSpeed": 10
         },
         {
           "level": 7,
           "headline": "Inferno",
           "subtitle": "Burn, baby.",
-          "manaCost": 12.5,
+          "manaCost": 14,
           "damage": 100,
           "explosionRadius": 3,
           "range": 16,
           "castDelay": 0.4,
           "projectileRadius": 1.37,
-          "projectileSpeed": 16
+          "projectileSpeed": 10
         }
       ]
     },
@@ -98,73 +98,66 @@
       "levels": [
         {
           "level": 1,
-          "headline": "Snowball",
-          "subtitle": "Might kill a squirrel.",
-          "manaCost": 20,
-          "damage": 5,
-          "range": 7,
-          "castDelay": 0.7,
-          "projectileSpeed": 8
+          "headline": "Chill",
+          "subtitle": "Hey. Slow down.",
+          "costPerSecond": 10,
+          "damage": 10.0,
+          "range": 3,
+          "coneAngleDegrees": 30
         },
         {
           "level": 2,
           "headline": "Frostbite",
-          "subtitle": "A cold spell with some teeth.",
-          "manaCost": 18,
-          "damage": 10,
-          "range": 8,
-          "castDelay": 0.65,
-          "projectileSpeed": 8.5
+          "subtitle": "Bit of a nip.",
+          "costPerSecond": 11,
+          "damage": 13,
+          "range": 4,
+          "coneAngleDegrees": 31
         },
         {
           "level": 3,
-          "headline": "Frostbite II",
-          "subtitle": "Follow up with spikes for bonus damage.",
-          "manaCost": 16,
-          "damage": 15,
-          "range": 9,
-          "castDelay": 0.6,
-          "projectileSpeed": 9
+          "headline": "Blizzard I",
+          "subtitle": "Frightful weather out there.",
+          "costPerSecond": 12,
+          "damage": 17,
+          "range": 4.5,
+          "coneAngleDegrees": 33
         },
         {
           "level": 4,
-          "headline": "Frozen Orb",
+          "headline": "Blizzard II",
           "subtitle": "Freeze them where they stand.",
-          "manaCost": 14,
-          "damage": 20,
-          "range": 10,
-          "castDelay": 0.55,
-          "projectileSpeed": 9.5
+          "costPerSecond": 13,
+          "damage": 22,
+          "range": 5,
+          "coneAngleDegrees": 35
         },
         {
           "level": 5,
-          "headline": "Frozen Orb II",
-          "subtitle": "End them where they freeze.",
-          "manaCost": 12,
-          "damage": 46,
-          "range": 11,
-          "castDelay": 0.5,
-          "projectileSpeed": 10
+          "headline": "Blizzard III",
+          "subtitle": "Blast them where they freeze.",
+          "costPerSecond": 15,
+          "damage": 29,
+          "range": 5.5,
+          "coneAngleDegrees": 37
         },
         {
           "level": 6,
-          "headline": "Frozen Orb III",
-          "subtitle": "A punishing blast of deep winter.",
-          "manaCost": 10,
-          "damage": 56,
-          "range": 12,
-          "castDelay": 0.45,
-          "projectileSpeed": 10.5
+          "headline": "Killing Frost",
+          "subtitle": "Shatter their frozen bones.",
+          "costPerSecond": 17,
+          "damage": 38,
+          "range": 6.5,
+          "coneAngleDegrees": 40
         },
         {
           "level": 7,
-          "headline": "Heart of Ice",
-          "subtitle": "A perfected bolt of freezing magic.",
-          "manaCost": 8,
-          "damage": 68,
-          "range": 13,
-          "castDelay": 0.4,
-          "projectileSpeed": 11
+          "headline": "Absolute Zero",
+          "subtitle": "Colder than the black of deep space.",
+          "costPerSecond": 20,
+          "damage": 50,
+          "range": 7.5,
+          "coneAngleDegrees": 45
         }
       ]
     },
@@ -176,8 +169,8 @@
         {
           "level": 1,
           "headline": "Splinter",
-          "subtitle": "You could put somebody's eye out with that thing.",
-          "manaCost": 17,
+          "subtitle": "Sharpshooter.",
+          "manaCost": 20,
           "damage": 20,
           "range": 14,
           "castDelay": 0.65,
@@ -187,9 +180,9 @@
         {
           "level": 2,
           "headline": "Spikes I",
-          "subtitle": "Combine with freeze for bonus damage.",
-          "manaCost": 11,
-          "damage": 22,
+          "subtitle": "Nails in their coffin.",
+          "manaCost": 17,
+          "damage": 21,
           "range": 15,
           "castDelay": 0.55,
           "projectileSpeed": 11
@@ -198,9 +191,9 @@
           "level": 3,
           "headline": "Spikes II",
           "subtitle": "Spikier spikes.",
-          "manaCost": 8,
+          "manaCost": 14,
           "damage": 22,
-          "range": 16,
+          "range": 16.5,
           "castDelay": 0.45,
           "projectileSpeed": 12
         },
@@ -208,9 +201,9 @@
           "level": 4,
           "headline": "Spikes III",
           "subtitle": "Spikier and spikier.",
-          "manaCost": 6,
+          "manaCost": 11,
           "damage": 24,
-          "range": 17,
+          "range": 18,
           "castDelay": 0.35,
           "projectileSpeed": 13
         },
@@ -218,19 +211,19 @@
           "level": 5,
           "headline": "Spikes IV",
           "subtitle": "The spikeiest.",
-          "manaCost": 4.5,
-          "damage": 25,
-          "range": 18,
+          "manaCost": 9,
+          "damage": 27,
+          "range": 20,
           "castDelay": 0.25,
           "projectileSpeed": 14
         },
         {
           "level": 6,
           "headline": "Spikes V",
-          "subtitle": "Wow. Such spikes.",
-          "manaCost": 3.5,
-          "damage": 26,
-          "range": 19,
+          "subtitle": "Such spikes.",
+          "manaCost": 8,
+          "damage": 32,
+          "range": 22,
           "castDelay": 0.15,
           "projectileSpeed": 15
         },
@@ -238,10 +231,10 @@
           "level": 7,
           "headline": "Storm of Blades",
           "subtitle": "Maximum carnage.",
-          "manaCost": 2.5,
-          "damage": 27,
-          "range": 20,
-          "castDelay": 0.05,
+          "manaCost": 7,
+          "damage": 40,
+          "range": 25,
+          "castDelay": 0.1,
           "projectileSpeed": 16
         }
       ]
@@ -254,88 +247,135 @@
         {
           "level": 1,
           "headline": "Regeneration",
-          "subtitle": "Restores a small amount of health over time.",
-          "healthPerSecond": 1
+          "subtitle": "Better than nothing.",
+          "secondsToFullHealth": 100
         },
         {
           "level": 2,
           "headline": "Healing II",
-          "subtitle": "A steadier restorative aura.",
-          "healthPerSecond": 1.4
+          "subtitle": "Starting to feel it now.",
+          "secondsToFullHealth": 64
         },
         {
           "level": 3,
           "headline": "Healing III",
-          "subtitle": "Recovery strengthens while the spell holds.",
-          "healthPerSecond": 1.9
+          "subtitle": "Recovery kicks in faster.",
+          "secondsToFullHealth": 41
         },
         {
           "level": 4,
           "headline": "Healing IV",
-          "subtitle": "Warm magic closes wounds quickly.",
-          "healthPerSecond": 2.6
+          "subtitle": "Healing comes swiftly.",
+          "secondsToFullHealth": 26
         },
         {
           "level": 5,
           "headline": "Healing V",
-          "subtitle": "A strong regenerative current.",
-          "healthPerSecond": 3.7
+          "subtitle": "Rapid regeneration.",
+          "secondsToFullHealth": 17
         },
         {
           "level": 6,
           "headline": "Healing VI",
           "subtitle": "Walk it off.",
-          "healthPerSecond": 5
+          "secondsToFullHealth": 11
         },
         {
           "level": 7,
           "headline": "Wolverine Mode",
           "subtitle": "Shrug it off.",
-          "healthPerSecond": 7
+          "secondsToFullHealth": 7
+        }
+      ]
+    },
+    {
+      "id": "magicrecharge",
+      "displayName": "Magic Recharge",
+      "icon": "/assets/images/magic/lightning.png",
+      "levels": [
+        {
+          "level": 1,
+          "headline": "Channeling I",
+          "subtitle": "Magic returns more quickly.",
+          "secondsToFullMagic": 13
+        },
+        {
+          "level": 2,
+          "headline": "Channeling II",
+          "subtitle": "A steadier inner current.",
+          "secondsToFullMagic": 8.5
+        },
+        {
+          "level": 3,
+          "headline": "Channeling III",
+          "subtitle": "Power gathers fast.",
+          "secondsToFullMagic": 5.5
+        },
+        {
+          "level": 4,
+          "headline": "Channeling IV",
+          "subtitle": "The reservoir fills sharply.",
+          "secondsToFullMagic": 3.5
+        },
+        {
+          "level": 5,
+          "headline": "Channeling V",
+          "subtitle": "Almost never dry.",
+          "secondsToFullMagic": 2.5
+        },
+        {
+          "level": 6,
+          "headline": "Channeling VI",
+          "subtitle": "Magic surges back.",
+          "secondsToFullMagic": 1.7
+        },
+        {
+          "level": 7,
+          "headline": "Arcane Conduit",
+          "subtitle": "A floodgate of power.",
+          "secondsToFullMagic": 1
         }
       ]
     },
     {
       "id": "teleport",
-      "displayName": "Teleport",
+      "displayName": "Relocation",
       "icon": "/assets/images/magic/teleport.png",
       "levels": [
         {
           "level": 1,
-          "headline": "Teleport I",
-          "subtitle": "Blink a short distance to safety.",
-          "manaCost": 30,
-          "range": 8,
-          "castDelay": 1
+          "headline": "Flash I",
+          "subtitle": "A burst of unnatural speed. Hold shift to activate.",
+          "costPerSecond": 15,
+          "speedMultiplier": 1.5
         },
         {
           "level": 2,
-          "headline": "Teleport II",
-          "subtitle": "Blink farther with better control.",
-          "manaCost": 28,
-          "range": 9,
-          "castDelay": 0.8
+          "headline": "Flash II",
+          "subtitle": "Farther, faster.",
+          "costPerSecond": 20,
+          "speedMultiplier": 2.25
         },
         {
           "level": 3,
-          "headline": "Teleport III",
-          "subtitle": "A faster fold through nearby space.",
-          "manaCost": 26,
-          "range": 10,
+          "headline": "Teleport I",
+          "subtitle": "Beam back to base. Press T, then H for (T)eleport (H)ome.",
+          "manaCost": 50,
+          "range": 0,
           "castDelay": 0.7
         },
         {
           "level": 4,
-          "headline": "Teleport IV",
-          "subtitle": "Reliable escape across a wider range.",
+          "headline": "Teleport II",
+          "subtitle": "Drop a waypoint and teleport back to it.",
           "manaCost": 24,
           "range": 11,
           "castDelay": 0.6
         },
         {
           "level": 5,
-          "headline": "Teleport V",
-          "subtitle": "Movement magic answers almost instantly.",
+          "headline": "Teleport III",
+          "subtitle": "Teleport anywhere you can see.",
           "manaCost": 22,
           "range": 12,
           "castDelay": 0.5
@@ -360,69 +400,69 @@
     },
     {
       "id": "invisibility",
-      "displayName": "Invisibility",
+      "displayName": "Stealth",
       "icon": "/assets/images/magic/invisible.png",
       "levels": [
         {
           "level": 1,
           "headline": "Sneakiness",
           "subtitle": "You can get past the guards, as long as they don't notice you.",
-          "costPerSecond": 20,
+          "costPerSecond": 0,
           "range": 10
         },
         {
           "level": 2,
           "headline": "Stealth",
           "subtitle": "They probably won't notice you.",
-          "costPerSecond": 18,
+          "costPerSecond": 4,
           "range": 7
         },
         {
           "level": 3,
           "headline": "Camouflage",
           "subtitle": "They'll think you're just part of the scenery.",
-          "costPerSecond": 16,
+          "costPerSecond": 5,
           "range": 5
         },
         {
           "level": 4,
           "headline": "Transparency",
           "subtitle": "As thin as air... almost.",
-          "costPerSecond": 14,
+          "costPerSecond": 6,
           "range": 3
         },
         {
           "level": 5,
           "headline": "Invisibility I",
           "subtitle": "Literally invisible. But you can still be heard.",
-          "costPerSecond": 12,
+          "costPerSecond": 7,
           "range": 1
         },
         {
           "level": 6,
           "headline": "Invisibility II",
           "subtitle": "Silent.",
-          "costPerSecond": 10,
+          "costPerSecond": 8,
           "range": 0
         },
         {
           "level": 7,
           "headline": "Ghost Form",
           "subtitle": "Total invisibility AND you can walk through walls.",
-          "costPerSecond": 8,
+          "costPerSecond": 10,
           "range": 0
         }
       ]
     },
     {
       "id": "omnivision",
-      "displayName": "Omnivision",
+      "displayName": "Perception",
       "icon": "/assets/images/thumbnails/eye.png",
       "levels": [
         {
           "level": 1,
-          "headline": "Omnivision I",
-          "subtitle": "See a little beyond ordinary sight.",
+          "headline": "Vision I",
+          "subtitle": "Sense how many enemies are active nearby.",
           "costPerSecond": 24,
           "damage": 0,
           "range": 8,
@@ -432,8 +472,8 @@
         },
         {
           "level": 2,
-          "headline": "Omnivision II",
-          "subtitle": "Awareness stretches farther outward.",
+          "headline": "Vision II",
+          "subtitle": "Points toward the nearest fountain and pyramid.",
           "costPerSecond": 22,
           "damage": 0,
           "range": 10,
@@ -443,8 +483,8 @@
         },
         {
           "level": 3,
-          "headline": "Omnivision III",
-          "subtitle": "Hidden movement becomes easier to read.",
+          "headline": "Vision III",
+          "subtitle": "Peripheral +2. Foward +4.",
           "costPerSecond": 20,
           "damage": 0,
           "range": 12,
@@ -454,8 +494,8 @@
         },
         {
           "level": 4,
-          "headline": "Omnivision IV",
-          "subtitle": "A wider window into nearby danger.",
+          "headline": "Seeing Beyond",
+          "subtitle": "Look further.",
           "costPerSecond": 18,
           "damage": 0,
           "range": 14,
@@ -465,8 +505,8 @@
         },
         {
           "level": 5,
-          "headline": "Omnivision V",
-          "subtitle": "The world answers your attention.",
+          "headline": "Astral Projection",
+          "subtitle": "See more.",
           "costPerSecond": 16,
           "damage": 0,
           "range": 16,
@@ -476,8 +516,8 @@
         },
         {
           "level": 6,
-          "headline": "Omnivision VI",
-          "subtitle": "Sight pierces deeper through uncertainty.",
+          "headline": "Omnivision",
+          "subtitle": "+2 peripheral. All walls transparent.",
           "costPerSecond": 14,
           "damage": 0,
           "range": 18,
@@ -488,13 +528,179 @@
         {
           "level": 7,
           "headline": "All-Seeing Eye",
-          "subtitle": "Mastered vision beyond the visible.",
+          "subtitle": "Limitless sight.",
           "costPerSecond": 12,
           "damage": 0,
           "range": 20,
           "castDelay": 0.1,
           "duration": 12,
           "projectileSpeed": 0
+        }
+      ]
+    },
+    {
+      "id": "construction",
+      "displayName": "Construction",
+      "icon": "/assets/images/thumbnails/trap.svg",
+      "levels": [
+        {
+          "level": 1,
+          "headline": "Trap",
+          "subtitle": "Build a one-coin trap in two seconds. It detonates as a level 1 fireball.",
+          "buildings": {
+            "trap": {
+              "coinCost": 1,
+              "manaCost": 10,
+              "buildTime": 2,
+              "fireballLevel": 1
+            }
+          }
+        },
+        {
+          "level": 2,
+          "headline": "Destructo Beam",
+          "subtitle": "Traps build in 1.6 seconds with level 2 fireballs. Channel five seconds to remove a wall section.",
+          "buildings": {
+            "trap": {
+              "coinCost": 1,
+              "manaCost": 10,
+              "buildTime": 1.6,
+              "fireballLevel": 2
+            }
+          },
+          "costPerSecond": 10,
+          "range": 10,
+          "duration": 5
+        },
+        {
+          "level": 3,
+          "headline": "Construction III",
+          "subtitle": "Build turrets that fire level 1 spikes without endangering you.",
+          "costPerSecond": 10,
+          "range": 10,
+          "duration": 2.5,
+          "buildings": {
+            "trap": {
+              "coinCost": 1,
+              "manaCost": 10,
+              "buildTime": 1.4,
+              "fireballLevel": 3
+            },
+            "turret": {
+              "coinCost": 20,
+              "manaCost": 50,
+              "buildTime": 10,
+              "hitpoints": 50,
+              "spikeLevel": 1,
+              "sizeScale": 1,
+              "firingRateScale": 0.25,
+              "playerSafetyAngleDegrees": 5
+            }
+          }
+        },
+        {
+          "level": 4,
+          "headline": "Construction IV",
+          "subtitle": "Traps detonate as level 4 fireballs.",
+          "costPerSecond": 10,
+          "range": 10,
+          "duration": 1.25,
+          "buildings": {
+            "trap": {
+              "coinCost": 1,
+              "manaCost": 10,
+              "buildTime": 1.2,
+              "fireballLevel": 4
+            },
+            "turret": {
+              "coinCost": 40,
+              "manaCost": 50,
+              "buildTime": 8,
+              "hitpoints": 50,
+              "spikeLevel": 2,
+              "sizeScale": 1.1,
+              "firingRateScale": 0.25,
+              "playerSafetyAngleDegrees": 5
+            }
+          }
+        },
+        {
+          "level": 5,
+          "headline": "Construction V",
+          "subtitle": "Traps detonate as level 5 fireballs.",
+          "costPerSecond": 10,
+          "range": 10,
+          "duration": 0.625,
+          "buildings": {
+            "trap": {
+              "coinCost": 1,
+              "manaCost": 10,
+              "buildTime": 1,
+              "fireballLevel": 5
+            },
+            "turret": {
+              "coinCost": 60,
+              "manaCost": 50,
+              "buildTime": 6,
+              "hitpoints": 50,
+              "spikeLevel": 3,
+              "sizeScale": 1.21,
+              "firingRateScale": 0.25,
+              "playerSafetyAngleDegrees": 5
+            }
+          }
+        },
+        {
+          "level": 6,
+          "headline": "Construction VI",
+          "subtitle": "Traps detonate as level 6 fireballs.",
+          "costPerSecond": 10,
+          "range": 10,
+          "duration": 0.3125,
+          "buildings": {
+            "trap": {
+              "coinCost": 1,
+              "manaCost": 10,
+              "buildTime": 0.8,
+              "fireballLevel": 6
+            },
+            "turret": {
+              "coinCost": 80,
+              "manaCost": 50,
+              "buildTime": 4,
+              "hitpoints": 50,
+              "spikeLevel": 4,
+              "sizeScale": 1.331,
+              "firingRateScale": 0.25,
+              "playerSafetyAngleDegrees": 5
+            }
+          }
+        },
+        {
+          "level": 7,
+          "headline": "Master Construction",
+          "subtitle": "Traps detonate as level 7 fireballs.",
+          "costPerSecond": 10,
+          "range": 10,
+          "duration": 0.15625,
+          "buildings": {
+            "trap": {
+              "coinCost": 1,
+              "manaCost": 10,
+              "buildTime": 0.6,
+              "fireballLevel": 7
+            },
+            "turret": {
+              "coinCost": 100,
+              "manaCost": 50,
+              "buildTime": 2,
+              "hitpoints": 50,
+              "spikeLevel": 5,
+              "sizeScale": 1.4641,
+              "firingRateScale": 0.25,
+              "playerSafetyAngleDegrees": 5
+            }
+          }
         }
       ]
     }

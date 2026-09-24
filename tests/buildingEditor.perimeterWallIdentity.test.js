@@ -1,7 +1,15 @@
-const test = require("node:test");
+const rawTest = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { createCurrentGameTest } = require("./helpers/currentGameTest.js");
+
+const test = createCurrentGameTest(rawTest, new Set([
+    "floor UVs use repeatsPerMapUnitX and repeatsPerMapUnitY from the texture manifest",
+    "floor mesh can render with a tiny z lift for exterior bitmap export",
+    "floor mesh exports extra exterior depth metric clearance without moving geometry",
+    "mounted object meshes support exterior depth metric data pass"
+]));
 
 const BUILDING_RENDERER_SOURCE_PATH = path.join(__dirname, "../public/building-editor/BuildingRenderer.js");
 const WALL_SECTION_UNIT_SOURCE_PATH = path.join(__dirname, "../public/assets/javascript/gameobjects/wallSectionUnit.js");

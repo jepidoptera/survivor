@@ -38,13 +38,21 @@
                 throw new Error("Wizard of Flatland pyramid room check requires integer section coordinates");
             }
             if (q === 0 && r === 0) return 0;
-            for (const dir of constants.MAZE_SECTION_DIRECTIONS) {
-                if (!dir) throw new Error("Wizard of Flatland pyramid direction is invalid");
-                const distance = dir.q !== 0 ? q / dir.q : r / dir.r;
-                if (!Number.isInteger(distance) || distance < constants.PYRAMID_FIRST_ROOM_DISTANCE) continue;
-                if (q !== dir.q * distance || r !== dir.r * distance) continue;
-                if ((distance - constants.PYRAMID_FIRST_ROOM_DISTANCE) % constants.PYRAMID_ROOM_DISTANCE_STEP !== 0) continue;
-                return distance;
+            const distance = getMazeSectionRing(q, r);
+            if (distance < constants.PYRAMID_FIRST_ROOM_DISTANCE) return null;
+            const distanceOffset = distance - constants.PYRAMID_FIRST_ROOM_DISTANCE;
+            if (distanceOffset % constants.PYRAMID_ROOM_DISTANCE_STEP !== 0) return null;
+            const pyramidsPerSide = distanceOffset / constants.PYRAMID_ROOM_DISTANCE_STEP + 1;
+            for (let side = 0; side < constants.MAZE_SECTION_DIRECTIONS.length; side += 1) {
+                const start = constants.MAZE_SECTION_DIRECTIONS[side];
+                const end = constants.MAZE_SECTION_DIRECTIONS[(side + 1) % constants.MAZE_SECTION_DIRECTIONS.length];
+                if (!start || !end) throw new Error("Wizard of Flatland pyramid direction is invalid");
+                for (let index = 0; index < pyramidsPerSide; index += 1) {
+                    const offset = Math.floor(index * distance / pyramidsPerSide);
+                    const candidateQ = start.q * distance + (end.q - start.q) * offset;
+                    const candidateR = start.r * distance + (end.r - start.r) * offset;
+                    if (q === candidateQ && r === candidateR) return distance;
+                }
             }
             return null;
         }
