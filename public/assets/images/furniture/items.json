@@ -1,0 +1,342 @@
+{
+  "category": "furniture",
+  "version": 1,
+  "defaults": {
+    "width": 1,
+    "height": 1,
+    "renderDepthOffset": 0,
+    "blocksTile": false,
+    "isPassable": true,
+    "castsLosShadows": false,
+    "anchor": {
+      "x": 0.5,
+      "y": 0.5
+    },
+    "shadowBox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffset": 0,
+      "radiusFromWidthMultiplier": 0.2,
+      "minRadius": 0.12
+    },
+    "touchBox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffsetFromHeightMultiplier": -0.25,
+      "radiusFromMaxDimensionMultiplier": 0.5
+    }
+  },
+  "items": [
+    {
+      "file": "bed.png",
+      "texturePath": "/assets/images/furniture/bed.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.2,
+        "minRadius": 0.12
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "bed2.jpg",
+      "texturePath": "/assets/images/furniture/bed2.jpg",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.2,
+        "minRadius": 0.12
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "table.png",
+      "texturePath": "/assets/images/furniture/table.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.5,
+        "minRadius": 0.12
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "chair.png",
+      "texturePath": "/assets/images/furniture/chair.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.2,
+        "minRadius": 0.12
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "crystal ball.png",
+      "texturePath": "/assets/images/furniture/crystal%20ball.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": false,
+      "castsLosShadows": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.3,
+        "minRadius": 0.12
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": 0,
+        "radiusFromMaxDimensionMultiplier": 0.3
+      }
+    },
+    {
+      "file": "mat.png",
+      "texturePath": "/assets/images/furniture/mat.png",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/furniture/lod/mat_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/furniture/lod/mat_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/furniture/mat.png"
+        }
+      ],
+      "width": 4,
+      "height": 3,
+      "baseSize": 4,
+      "maxSize": 20,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "rotationAxis": "ground",
+      "castsLosShadows": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "polygon",
+        "points": [
+          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier": -0.5 },
+          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier": -0.5 },
+          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier":  0.5 },
+          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier":  0.5 }
+        ]
+      }
+    },
+    {
+      "file": "redrug.png",
+      "texturePath": "/assets/images/furniture/redrug.png",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/furniture/lod/redrug_lod064.png",
+          "maxDistance": 80
+        },
+        {
+          "texturePath": "/assets/images/furniture/lod/redrug_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/furniture/lod/redrug_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/furniture/redrug.png"
+        }
+      ],
+      "width": 4,
+      "height": 3,
+      "baseSize": 4,
+      "maxSize": 20,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "rotationAxis": "ground",
+      "castsLosShadows": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "polygon",
+        "points": [
+          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier": -0.5 },
+          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier": -0.5 },
+          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier":  0.5 },
+          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier":  0.5 }
+        ]
+      }
+    },
+    {
+      "file": "hexrug.png",
+      "texturePath": "/assets/images/furniture/hexrug.png",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/furniture/lod/hexrug_lod064.png",
+          "maxDistance": 80
+        },
+        {
+          "texturePath": "/assets/images/furniture/lod/hexrug_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/furniture/lod/hexrug_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/furniture/hexrug.png"
+        }
+      ],
+      "width": 0.866,
+      "height": 1,
+      "baseSize": 4,
+      "maxSize": 20,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "rotationAxis": "ground",
+      "castsLosShadows": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "polygon",
+        "points": [
+          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier": -0.25 },
+          { "xFromWidthMultiplier":  0, "yFromHeightMultiplier": -0.5 },
+          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier": -0.25 },
+          { "xFromWidthMultiplier":  0.5, "yFromHeightMultiplier":  0.25 },
+          { "xFromWidthMultiplier":  0, "yFromHeightMultiplier":  0.5 },
+          { "xFromWidthMultiplier": -0.5, "yFromHeightMultiplier":  0.25 }
+        ]
+      }
+    },
+    {
+      "file": "circlerug.png",
+      "texturePath": "/assets/images/furniture/circlerug.png",
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/furniture/lod/circlerug_lod064.png",
+          "maxDistance": 80
+        },
+        {
+          "texturePath": "/assets/images/furniture/lod/circlerug_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/furniture/lod/circlerug_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/furniture/circlerug.png"
+        }
+      ],
+      "width": 1,
+      "height": 1,
+      "baseSize": 4,
+      "maxSize": 20,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "rotationAxis": "ground",
+      "castsLosShadows": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.5,
+        "minRadius": 0.12
+      }
+    },
+    {
+      "file": "armor.png",
+      "texturePath": "/assets/images/furniture/armor.png",
+      "width": 1,
+      "height": 1.5,
+      "baseSize": 1.5,
+      "maxSize": 8,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": false,
+      "rotationAxis": "none",
+      "castsLosShadows": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9
+      },
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.35,
+        "minRadius": 0.12
+      }
+    }
+  ]
+}

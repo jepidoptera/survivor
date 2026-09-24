@@ -1,0 +1,324 @@
+class Spell {
+    static supportsObjectTargeting = false;
+
+    static flashMagicBar() {
+        if (typeof $ !== "function") return;
+        const $magicBar = $("#magicBar");
+        if ($magicBar.length === 0) return;
+        const $magicBarBackground = $magicBar.parent();
+        const restartFlash = ($element, className, dataKey) => {
+            if (!$element || $element.length === 0) return;
+            const previousTimeout = $element.data(dataKey);
+            if (previousTimeout) {
+                clearTimeout(previousTimeout);
+            }
+            $element.removeClass(className);
+            void $element[0].offsetWidth;
+            $element.addClass(className);
+            const timeoutId = setTimeout(() => {
+                $element.removeClass(className);
+                $element.removeData(dataKey);
+            }, 240);
+            $element.data(dataKey, timeoutId);
+        };
+
+        restartFlash($magicBarBackground, "magicBarBackgroundFlash", "magicBarBackgroundFlashTimeout");
+        restartFlash($magicBar, "magicBarFlash", "magicBarFlashTimeout");
+    }
+
+    static ignoresMagicCosts(wizardRef = globalThis.wizard) {
+        return !!(
+            wizardRef &&
+            typeof wizardRef.isGodMode === "function" &&
+            wizardRef.isGodMode()
+        );
+    }
+
+    static canAffordMagicCost(cost, wizardRef = globalThis.wizard) {
+        const normalizedCost = Number.isFinite(cost) ? Math.max(0, Number(cost)) : 0;
+        if (normalizedCost <= 0) return true;
+        if (Spell.ignoresMagicCosts(wizardRef)) return true;
+        const currentMagic = Number.isFinite(wizardRef?.magic) ? wizardRef.magic : 0;
+        return currentMagic >= normalizedCost;
+    }
+
+    static spendMagicCost(cost, wizardRef = globalThis.wizard) {
+        const normalizedCost = Number.isFinite(cost) ? Math.max(0, Number(cost)) : 0;
+        if (normalizedCost <= 0) return true;
+        if (!wizardRef) return false;
+        if (Spell.ignoresMagicCosts(wizardRef)) return true;
+        const currentMagic = Number.isFinite(wizardRef.magic) ? wizardRef.magic : 0;
+        if (currentMagic < normalizedCost) return false;
+        wizardRef.magic = Math.max(0, currentMagic - normalizedCost);
+        return true;
+    }
+
+    static indicateInsufficientMagic() {
+        Spell.flashMagicBar();
+    }
+
+    static isValidObjectTarget(_target, _wizardRef = null) {
+        return false;
+    }
+
+    static isGroundLayerTarget(target) {
+        if (!target || target.gone || target.vanishing) return false;
+        if (target.type === "road" || target.type === "roadPath") return true;
+        if (target.type === "triggerArea" || target.isTriggerArea === true) return true;
+        return target.rotationAxis === "ground";
+    }
+
+    static getLayerBaseZForLevel(level) {
+        const n = Number(level);
+        if (!Number.isFinite(n)) return 0;
+        return Math.round(n) * 3;
+    }
+
+    static isWizardWorldZTarget(target) {
+        if (!target) return false;
+        if (typeof globalThis !== "undefined" && globalThis.wizard && target === globalThis.wizard) return true;
+        if (typeof wizard !== "undefined" && wizard && target === wizard) return true;
+        return false;
+    }
+
+    static isCharacterWorldZTarget(target) {
+        if (!target || Spell.isWizardWorldZTarget(target)) return false;
+        if (Array.isArray(globalThis.animals) && globalThis.animals.includes(target)) return true;
+        if (typeof target.getInterpolatedPosition !== "function") return false;
+        if (target.type === "human") return true;
+        if (typeof target.moveDirection === "function") return true;
+        if (typeof target.move === "function") return true;
+        if (Array.isArray(target.path)) return true;
+        return false;
+    }
+
+    static getCharacterWorldZ(target) {
+        if (!target) return NaN;
+        if (typeof target.getInterpolatedPosition === "function") {
+            const interpolated = target.getInterpolatedPosition();
+            if (interpolated && Number.isFinite(interpolated.z)) {
+                return Number(interpolated.z);
+            }
+        }
+        return Number.isFinite(target.z) ? Number(target.z) : NaN;
+    }
+
+    static getTargetWorldBaseZ(target) {
+        if (!target) return 0;
+        if (target.type === "wallSection" || target.type === "wall") {
+            if (Number.isFinite(target.bottomZ)) return Number(target.bottomZ);
+        }
+        if (target.type === "roof") {
+            if (Number.isFinite(target.z)) return Number(target.z);
+            if (Number.isFinite(target.heightFromGround)) return Number(target.heightFromGround);
+            if (Number.isFinite(target.baseZ)) return Number(target.baseZ);
+        }
+        if ((target.type === "road" || target.type === "roadPath") && Number.isFinite(target.z)) return Number(target.z);
+        if (Spell.isCharacterWorldZTarget(target)) {
+            const characterZ = Spell.getCharacterWorldZ(target);
+            if (Number.isFinite(characterZ)) return characterZ;
+        }
+        const support = target.currentMovementSupport && typeof target.currentMovementSupport === "object"
+            ? target.currentMovementSupport
+            : null;
+        if (support && Number.isFinite(support.baseZ)) {
+            return Number(support.baseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
+        }
+        if (Number.isFinite(target.currentLayerBaseZ)) {
+            return Number(target.currentLayerBaseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
+        }
+        if (Number.isFinite(target._renderLayerBaseZ)) {
+            return Number(target._renderLayerBaseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
+        }
+        const node = target.node || (typeof target.getNode === "function" ? target.getNode() : null);
+        if (node && Number.isFinite(node.baseZ)) {
+            return Number(node.baseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
+        }
+        const membership = (target._floorMembership && typeof target._floorMembership === "object")
+            ? target._floorMembership
+            : (target.floorMembership && typeof target.floorMembership === "object" ? target.floorMembership : null);
+        const fragmentId = typeof target.fragmentId === "string" && target.fragmentId.length > 0
+            ? target.fragmentId
+            : (typeof membership?.floorId === "string" && membership.floorId.length > 0
+                ? membership.floorId
+                : (typeof node?.fragmentId === "string" ? node.fragmentId : ""));
+        const mapRef = target.map || (node && node.map) || (typeof globalThis !== "undefined" ? globalThis.map : null);
+        let fragment = fragmentId && mapRef && mapRef.floorsById instanceof Map
+            ? mapRef.floorsById.get(fragmentId) || null
+            : null;
+        if (!fragment && membership && membership.ownerType === "building") {
+            const floorSupportApi = typeof globalThis !== "undefined" ? globalThis.FloorSupport : null;
+            if (floorSupportApi && typeof floorSupportApi.resolvePrototypeBuildingFloorFragment === "function") {
+                fragment = floorSupportApi.resolvePrototypeBuildingFloorFragment(mapRef, membership, { required: false });
+            }
+        }
+        if (fragment && Number.isFinite(Number(fragment.nodeBaseZ))) {
+            return Number(fragment.nodeBaseZ) + (Number.isFinite(target.z) ? Number(target.z) : 0);
+        }
+        const layer = Number.isFinite(target.traversalLayer)
+            ? Number(target.traversalLayer)
+            : (Number.isFinite(target.level)
+                ? Number(target.level)
+                : (Number.isFinite(target.currentLayer) ? Number(target.currentLayer) : 0));
+        return Spell.getLayerBaseZForLevel(layer) + (Number.isFinite(target.z) ? Number(target.z) : 0);
+    }
+
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.image = document.createElement('img');
+        this.image.src = "./assets/images/mokeball.png";
+        this.size = 6;
+        this.apparentSize = 16;
+        this.speed = 7;
+        this.range = 8;
+        this.bounced = 0;
+        this.bounces = 2;
+        this.gravity = .5;
+        this.bounceFactor = 1/3;
+        this.landed = false;
+        this.landedWorldX = 0;
+        this.landedWorldY = 0;
+        this.delayTime = 0;
+        this.radius = 0.25; // Default hitbox radius in hex units
+    }
+    canTrackForcedTarget(target) {
+        if (!target || target.gone || target.vanishing || target.dead) return false;
+        if (Array.isArray(animals) && animals.includes(target)) return true;
+        if (target.type === "human") return true;
+        if (typeof target.moveDirection === "function") return true;
+        if (typeof target.move === "function") return true;
+        return false;
+    }
+    getForcedTargetAimPoint() {
+        const target = this.forcedTarget;
+        if (!this.canTrackForcedTarget(target)) return null;
+        const resolver = (typeof globalThis.getSpellTargetAimPoint === "function")
+            ? globalThis.getSpellTargetAimPoint
+            : null;
+        if (resolver) {
+            const aim = resolver((typeof wizard !== "undefined") ? wizard : null, target);
+            if (aim && Number.isFinite(aim.x) && Number.isFinite(aim.y)) {
+                if (Number.isFinite(aim.z)) {
+                    this.visualTargetZ = Number(aim.z);
+                    return { x: Number(aim.x), y: Number(aim.y), z: Number(aim.z) };
+                }
+                return { x: Number(aim.x), y: Number(aim.y) };
+            }
+        }
+        if (!Number.isFinite(target.x) || !Number.isFinite(target.y)) return null;
+        const z = Spell.getTargetWorldBaseZ(target);
+        if (Number.isFinite(z)) {
+            this.visualTargetZ = Number(z);
+            return { x: Number(target.x), y: Number(target.y), z: Number(z) };
+        }
+        return { x: Number(target.x), y: Number(target.y) };
+    }
+    retargetMovementTo(point, speedPerFrame = null) {
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
+        const dx = point.x - this.x;
+        const dy = point.y - this.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 1e-6) return false;
+        const currentSpeed = Math.hypot(this.movement?.x || 0, this.movement?.y || 0);
+        const step = Number.isFinite(speedPerFrame)
+            ? Math.max(0, speedPerFrame)
+            : (currentSpeed > 1e-6 ? currentSpeed : (this.speed / frameRate));
+        this.movement.x = (dx / dist) * step;
+        this.movement.y = (dy / dist) * step;
+        return true;
+    }
+    cast(targetX, targetY) {
+        this.visible = true;
+        this.x = wizard.x;
+        this.y = wizard.y;
+        const casterWorldZ = Spell.getTargetWorldBaseZ(wizard);
+        if (!Number.isFinite(this.visualStartZ)) this.visualStartZ = casterWorldZ;
+        if (!Number.isFinite(this.visualBaseZ)) this.visualBaseZ = casterWorldZ;
+        this.z = 0;
+        
+        let xdist = (targetX - this.x);
+        let ydist = targetY - this.y;
+        let dist = Math.sqrt(xdist ** 2 + ydist ** 2);
+        
+        // Prevent division by zero
+        if (dist < 0.1) {
+            dist = 0.1;
+            xdist = 0.1;
+            ydist = 0;
+        }
+        
+        if (dist > this.range) {
+            let fraction = this.range / dist;
+            ydist *= fraction;
+            xdist *= fraction;
+            dist = this.range;
+        }
+        this.movement = {
+            x: xdist / dist * this.speed / frameRate,
+            y: ydist / dist * this.speed / frameRate,
+            z: (dist - 0.5) / this.speed / 2 * this.gravity,
+        }
+
+
+        this.castInterval = setInterval(() => {
+            if (paused) return;
+            const forcedAim = this.getForcedTargetAimPoint();
+            if (forcedAim) {
+                this.retargetMovementTo(forcedAim);
+            }
+            this.x += this.movement.x;
+            this.y += this.movement.y;
+            this.z += this.movement.z;
+            this.movement.z -= this.gravity / frameRate;
+
+            // this.z = Math.sqrt((this.movement.max / 2  - Math.abs(this.movement.max / 2 - this.movement.total)) / 2) || 0 ;
+            this.apparentSize = (this.size * (this.z + 1) / 2 + 10) * Math.max($(document).width(), $(document).height()) / 1280;
+
+            // Call land for continuous effects (like fireball damage)
+            if (this.z === 0 && this.bounces === 0) {
+                this.land();
+            }
+
+            if (this.z <= 0) {
+                this.z = 0;
+                this.land();
+                this.bounce();
+            }
+        }, 1000 / frameRate);
+        return this;
+    }
+    bounce() {
+        if (this.bounced < this.bounces) {
+            this.movement = {
+                x: this.movement.x * this.bounceFactor,
+                y: this.movement.y * this.bounceFactor,
+                z: -this.movement.z * this.bounceFactor,
+            }
+            this.bounced += 1;
+        }
+        else {
+            this.landed = true;
+            this.landedWorldX = this.x;
+            this.landedWorldY = this.y;
+            this.vanishTimeout = setTimeout(() => {
+                this.visible = false;
+                this.detachPixiSprite();
+            }, 3000);
+            clearInterval(this.castInterval);
+        }
+    }
+    land() {
+    }
+
+    detachPixiSprite() {
+        if (!this.pixiSprite) return;
+        if (this.pixiSprite.parent) {
+            this.pixiSprite.parent.removeChild(this.pixiSprite);
+        }
+        this.pixiSprite = null;
+    }
+}
+
+
+globalThis.Spell = Spell;

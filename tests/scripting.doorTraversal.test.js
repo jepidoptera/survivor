@@ -1,0 +1,481 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+
+const SCRIPTING_MODULE_PATH = require.resolve("../public/assets/javascript/spells/scripting.js");
+
+const GLOBAL_KEYS = [
+    "Scripting",
+    "FloorSupport",
+    "gameObject",
+    "gameObjectState",
+    "namedGameObjects"
+];
+
+const savedGlobals = new Map();
+for (const key of GLOBAL_KEYS) {
+    savedGlobals.set(key, globalThis[key]);
+}
+
+function restoreGlobals() {
+    for (const [key, value] of savedGlobals.entries()) {
+        if (typeof value === "undefined") {
+            delete globalThis[key];
+        } else {
+            globalThis[key] = value;
+        }
+    }
+}
+
+function loadScripting() {
+    delete require.cache[SCRIPTING_MODULE_PATH];
+    require(SCRIPTING_MODULE_PATH);
+    return globalThis.Scripting;
+}
+
+function createRectHitbox(left, top, right, bottom) {
+    return {
+        containsPoint(x, y) {
+            return x >= left && x <= right && y >= top && y <= bottom;
+        },
+        intersects(probe) {
+            if (!probe || probe.type !== "circle") return false;
+            const nearestX = Math.max(left, Math.min(right, Number(probe.x) || 0));
+            const nearestY = Math.max(top, Math.min(bottom, Number(probe.y) || 0));
+            const dx = (Number(probe.x) || 0) - nearestX;
+            const dy = (Number(probe.y) || 0) - nearestY;
+            const radius = Math.max(0, Number(probe.radius) || 0);
+            return (dx * dx) + (dy * dy) <= radius * radius;
+        }
+    };
+}
+
+test.afterEach(() => {
+    delete require.cache[SCRIPTING_MODULE_PATH];
+    restoreGlobals();
+});
+
+test("object playerTouches fires for non-door scripted objects", () => {
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerTouches", (payload) => {
+        events.push(payload);
+    });
+
+    const statue = {
+        type: "placedObject",
+        category: "furniture",
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "floor:room-a",
+        gone: false,
+        script: {
+            playerTouches: "healPlayer(1)"
+        }
+    };
+    const hitbox = createRectHitbox(-1, -1, 1, 1);
+    statue.shadowBox = hitbox;
+
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "floor:room-a",
+        map: null,
+        _scriptTouchedObjectsById: new Map()
+    };
+
+    scripting.processObjectTouchEvents(
+        wizard,
+        [{ obj: statue, hitbox }],
+        0
+    );
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0].target, statue);
+    assert.equal(events[0].eventName, "playerTouches");
+});
+
+test("object playerTouches prefers touchBox over shadowBox", () => {
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerTouches", (payload) => {
+        events.push(payload);
+    });
+
+    const flower = {
+        type: "flower",
+        category: "flowers",
+        x: 0,
+        y: 0,
+        traversalLayer: 0,
+        gone: false,
+        script: {
+            playerTouches: "healPlayer(1)"
+        }
+    };
+    flower.shadowBox = createRectHitbox(5, 5, 6, 6);
+    flower.touchBox = createRectHitbox(-1, -1, 1, 1);
+
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 0,
+        map: null,
+        _scriptTouchedObjectsById: new Map()
+    };
+
+    scripting.processObjectTouchEvents(
+        wizard,
+        [{ obj: flower, hitbox: flower.shadowBox }],
+        0
+    );
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0].target, flower);
+    assert.equal(events[0].eventName, "playerTouches");
+});
+
+test("object playerTouches does not fire across floor fragments", () => {
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerTouches", (payload) => {
+        events.push(payload);
+    });
+
+    const statue = {
+        type: "placedObject",
+        category: "furniture",
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "floor:room-a",
+        gone: false,
+        script: {
+            playerTouches: "healPlayer(1)"
+        }
+    };
+    const hitbox = createRectHitbox(-1, -1, 1, 1);
+    statue.shadowBox = hitbox;
+
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "floor:room-b",
+        map: null,
+        _scriptTouchedObjectsById: new Map()
+    };
+
+    scripting.processObjectTouchEvents(
+        wizard,
+        [{ obj: statue, hitbox }],
+        0
+    );
+
+    assert.equal(events.length, 0);
+});
+
+test("object playerTouches fires for matching upper-floor membership", () => {
+    globalThis.FloorSupport = require("../public/assets/javascript/shared/FloorSupport.js");
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerTouches", (payload) => {
+        events.push(payload);
+    });
+
+    const objectMembership = {
+        ownerType: "building",
+        ownerId: "building:house-a",
+        floorId: "floor-1",
+        level: 1
+    };
+    const statue = {
+        type: "placedObject",
+        category: "furniture",
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "stale-runtime-fragment",
+        _floorMembership: objectMembership,
+        gone: false,
+        script: {
+            playerTouches: "healPlayer(1)"
+        }
+    };
+    const hitbox = createRectHitbox(-1, -1, 1, 1);
+    statue.shadowBox = hitbox;
+
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "building:house-a:floor:floor-1",
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:house-a",
+            floorId: "floor-1",
+            level: 1
+        },
+        map: null,
+        _scriptTouchedObjectsById: new Map()
+    };
+
+    scripting.processObjectTouchEvents(
+        wizard,
+        [{ obj: statue, hitbox }],
+        0
+    );
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0].target, statue);
+    assert.equal(events[0].eventName, "playerTouches");
+});
+
+test("object playerTouches does not fire across upper-floor membership", () => {
+    globalThis.FloorSupport = require("../public/assets/javascript/shared/FloorSupport.js");
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerTouches", (payload) => {
+        events.push(payload);
+    });
+
+    const statue = {
+        type: "placedObject",
+        category: "furniture",
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "building:house-a:floor:floor-2",
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:house-a",
+            floorId: "floor-2",
+            level: 1
+        },
+        gone: false,
+        script: {
+            playerTouches: "healPlayer(1)"
+        }
+    };
+    const hitbox = createRectHitbox(-1, -1, 1, 1);
+    statue.shadowBox = hitbox;
+
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "building:house-a:floor:floor-1",
+        _floorMembership: {
+            ownerType: "building",
+            ownerId: "building:house-a",
+            floorId: "floor-1",
+            level: 1
+        },
+        map: null,
+        _scriptTouchedObjectsById: new Map()
+    };
+
+    scripting.processObjectTouchEvents(
+        wizard,
+        [{ obj: statue, hitbox }],
+        0
+    );
+
+    assert.equal(events.length, 0);
+});
+
+test("trigger area playerEnters fires for registry trigger without fragment id", () => {
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerEnters", (payload) => {
+        events.push(payload);
+    });
+
+    const triggerArea = {
+        id: 41,
+        type: "triggerArea",
+        objectType: "triggerArea",
+        isTriggerArea: true,
+        gone: false,
+        script: {
+            playerEnters: "mazeMode=true"
+        }
+    };
+    const hitbox = createRectHitbox(-1, -1, 1, 1);
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 0,
+        fragmentId: "section:0,0:ground",
+        map: null,
+        _triggerAreaTraversalStateById: new Map()
+    };
+
+    scripting.processTriggerAreaTraversalEvents(
+        wizard,
+        -2,
+        0,
+        0,
+        0,
+        [{ obj: triggerArea, hitbox }],
+        0
+    );
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0].target, triggerArea);
+    assert.equal(events[0].eventName, "playerEnters");
+});
+
+test("trigger area playerEnters does not fire when default ground layer differs from actor layer", () => {
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerEnters", (payload) => {
+        events.push(payload);
+    });
+
+    const triggerArea = {
+        id: 42,
+        type: "triggerArea",
+        objectType: "triggerArea",
+        isTriggerArea: true,
+        gone: false,
+        script: {
+            playerEnters: "mazeMode=true"
+        }
+    };
+    const hitbox = createRectHitbox(-1, -1, 1, 1);
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 1,
+        fragmentId: "section:0,0:upper",
+        map: null,
+        _triggerAreaTraversalStateById: new Map()
+    };
+
+    scripting.processTriggerAreaTraversalEvents(
+        wizard,
+        -2,
+        0,
+        0,
+        0,
+        [{ obj: triggerArea, hitbox }],
+        0
+    );
+
+    assert.equal(events.length, 0);
+});
+
+test("door exit still fires after the door drops out of the nearby query", () => {
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("door:playerExits", (payload) => {
+        events.push(payload);
+    });
+
+    const door = {
+        type: "placedObject",
+        category: "doors",
+        x: 0,
+        y: 0,
+        placementRotation: 0,
+        map: null,
+        gone: false,
+        vanishing: false,
+        playerEnters: "",
+        playerExits: "",
+        _learnedEnterSign: -1
+    };
+    const hitbox = createRectHitbox(-4, -1, 4, 1);
+    door.shadowBox = hitbox;
+
+    const wizard = {
+        map: null,
+        _doorTraversalStateById: new Map()
+    };
+
+    scripting.processDoorTraversalEvents(
+        wizard,
+        3,
+        -2,
+        3,
+        0,
+        [{ obj: door, hitbox }],
+        0
+    );
+
+    scripting.processDoorTraversalEvents(
+        wizard,
+        3,
+        0,
+        3,
+        2,
+        [],
+        0
+    );
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0].eventName, "playerExits");
+    assert.equal(events[0].door, door);
+    assert.equal(wizard._doorTraversalStateById.get(door._doorRuntimeId).inside, false);
+});
+
+test("definition-backed trigger fires one enter and one exit during continuous traversal", () => {
+    const scripting = loadScripting();
+    const events = [];
+    scripting.on("script:playerEnters", (payload) => {
+        events.push(payload);
+    });
+    scripting.on("script:playerExits", (payload) => {
+        events.push(payload);
+    });
+
+    const triggerArea = {
+        id: 43,
+        type: "triggerArea",
+        objectType: "triggerArea",
+        isTriggerArea: true,
+        gone: false,
+        script: {
+            playerEnters: "mazeMode=true",
+            playerExits: "mazeMode=false"
+        }
+    };
+    const hitbox = createRectHitbox(-1, -1, 1, 1);
+    const wizard = {
+        x: 0,
+        y: 0,
+        traversalLayer: 0,
+        fragmentId: "section:0,0:ground",
+        map: null,
+        _triggerAreaTraversalStateById: new Map()
+    };
+    const entries = [{ obj: triggerArea, hitbox }];
+
+    scripting.processTriggerAreaTraversalEvents(wizard, -2, 0, -0.5, 0, entries, 0);
+    scripting.processTriggerAreaTraversalEvents(wizard, -0.5, 0, 0.5, 0, entries, 0);
+    scripting.processTriggerAreaTraversalEvents(wizard, 0.5, 0, 2, 0, entries, 0);
+    scripting.processTriggerAreaTraversalEvents(wizard, 2, 0, 3, 0, entries, 0);
+
+    assert.deepEqual(events.map(event => event.eventName), ["playerEnters", "playerExits"]);
+    assert.equal(events[0].target, triggerArea);
+    assert.equal(events[1].target, triggerArea);
+    assert.equal(wizard._triggerAreaTraversalStateById.get("trigger:43").inside, false);
+});
+
+test("player.hurt aliases hurtPlayer for backward-compatible scripting", async () => {
+    const scripting = loadScripting();
+    const wizard = {
+        hp: 20,
+        maxHp: 20
+    };
+
+    const legacyResult = await scripting.runScript("hurtPlayer(3)", { wizard });
+    assert.equal(legacyResult.changed, true);
+    assert.equal(wizard.hp, 17);
+
+    const aliasResult = await scripting.runScript("player.hurt(4)", { wizard });
+    assert.equal(aliasResult.changed, true);
+    assert.equal(wizard.hp, 13);
+});

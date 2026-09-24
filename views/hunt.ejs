@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <script src="jquery/jquery.min.js"></script>
+    <script src="pixi.js/pixi.js"></script>
+    <script src="/vendor/polygon-clipping/dist/polygon-clipping.umd.min.js"></script>
+    <script src="assets/javascript/terrain-bubble-deterministic-solver-runtime.js"></script>
+    <script src="assets/javascript/common.js"></script>
+    <script src="assets/javascript/components.js"></script>
+    <script src="assets/javascript/gameobjects/hitbox.js"></script>
+    <script src="assets/javascript/gameobjects/powerup.js"></script>
+    <script src="assets/javascript/shared/FloorSupport.js"></script>
+    <script src="assets/javascript/shared/StairTraversal.js"></script>
+    <script src="assets/javascript/Map.js"></script>
+    <script src="assets/javascript/gameobjects/staticObjects.js"></script>
+    <script src="assets/javascript/wallGeometry.js"></script>
+    <script src="assets/javascript/gameobjects/wallSectionUnit.js"></script>
+    <script src="assets/javascript/placeObjectPlacement.js"></script>
+    <script src="assets/javascript/los.js"></script>
+    <script src="assets/javascript/gameobjects/roof.js"></script>
+    <script src="/vendor/lz-string/libs/lz-string.min.js"></script>
+    <script src="assets/javascript/filesystem.js"></script>
+    <script src="assets/javascript/pathfinding/PathfindingSnapshot.js"></script>
+    <script src="assets/javascript/pathfinding/PathfindingService.js"></script>
+    <script src="assets/javascript/spells/Spell.js"></script>
+    <script src="assets/javascript/spells/Grenade.js"></script>
+    <script src="assets/javascript/spells/Rock.js"></script>
+    <script src="assets/javascript/spells/Fireball.js"></script>
+    <script src="assets/javascript/spells/Iceball.js"></script>
+    <script src="assets/javascript/spells/Lightning.js"></script>
+    <script src="assets/javascript/spells/Spikes.js"></script>
+    <script src="assets/javascript/spells/Vanish.js"></script>
+    <script src="assets/javascript/spells/Teleport.js"></script>
+    <script src="assets/javascript/spells/Arrow.js"></script>
+    <script src="assets/javascript/spells/editor/TreeGrow.js"></script>
+    <script src="assets/javascript/spells/Telekinesis.js"></script>
+    <script src="assets/javascript/spells/editor/BuildRoad.js"></script>
+    <script src="assets/javascript/spells/editor/EditScript.js"></script>
+    <script src="assets/javascript/spells/editor/TriggerArea.js"></script>
+    <script src="assets/javascript/spells/editor/PlaceObject.js"></script>
+    <script
+        src="/assets/javascript/spells/AttackSquirrel.js"
+        onload="console.log('[AttackSquirrelTag] onload', typeof window.AttackSquirrel)"
+        onerror="console.error('[AttackSquirrelTag] onerror')"
+    ></script>
+    <script>console.log('[AttackSquirrelTag] after-tag', typeof window.AttackSquirrel);</script>
+    <script src="assets/javascript/spells/editor/SpawnAnimal.js"></script>
+    <script src="assets/javascript/spells/editor/NodeInspector.js"></script>
+    <script src="assets/javascript/spells/editor/FloorFragmentEdit.js"></script>
+    <script src="assets/javascript/spells/editor/FloorStairs.js"></script>
+    <script src="assets/javascript/spells/SpellSystem.js"></script>
+    <script src="assets/javascript/debug.js"></script>
+    <script src="assets/javascript/rendering/RenderRuntime.js"></script>
+    <script src="assets/javascript/trading.js"></script>
+    <script src="assets/javascript/spells/scripting.js"></script>
+    <script src="assets/javascript/gameobjects/Inventory.js"></script>
+    <script src="assets/javascript/gameobjects/Character.js"></script>
+    <script src="assets/javascript/gameobjects/Wizard.js"></script>
+    <script src="assets/javascript/gameobjects/NpcCharacter.js"></script>
+    <script src="assets/javascript/runaround.js"></script>
+    <script src="assets/javascript/minimap.js"></script>
+    <script src="assets/javascript/rendering/Camera.js"></script>
+    <script src="assets/javascript/rendering/Layers.js"></script>
+    <script src="assets/javascript/rendering/mazeMode.js"></script>
+    <script src="assets/javascript/rendering/ScenePicker.js"></script>
+    <script src="assets/javascript/rendering/BuildingInteriorView.js"></script>
+    <script src="assets/javascript/rendering/TerrainPaintDebugRendering.js"></script>
+    <script src="assets/javascript/rendering/grassBlades/GrassBladeShaders.js"></script>
+    <script src="assets/javascript/rendering/grassBlades/GrassBladeRenderer.js"></script>
+    <script src="assets/javascript/rendering/Rendering.js"></script>
+    <link rel="icon" type="image/png" href="assets/images/wizard-hat-favicon.png">
+    <link rel="stylesheet" href="assets/css/survivor.css">
+    <link rel="stylesheet" href="assets/css/dialogBoxes.css">
+</head>
+<body>
+    <div id="msgbox" class="hidden dialogBox"><div id="msgbuttons"></div></div>
+    <div id="time"></div>
+    <div id="statusBars">
+        <div class="statusBar">
+            <div class="statusIcon"><img src="assets/images/red heart.png"></div>
+            <div class="statusBar-background">
+                <div id="healthBar" class="statusBar-fill"></div>
+            </div>
+        </div>
+        <div class="statusBar">
+            <div class="statusIcon"><img src="assets/images/beaker.png"></div>
+            <div class="statusBar-background">
+                <div id="magicBar" class="statusBar-fill"></div>
+            </div>
+        </div>
+    </div>
+    <div id="auraSelector">
+        <div id="selectedAura"></div>
+        <div id="activeAuraIcons" class="hidden"></div>
+        <div id="auraMenu" class="hidden">
+            <div id="auraGrid"></div>
+        </div>
+    </div>
+    <div id="editorSelector" class="hidden">
+        <div id="selectedEditor"></div>
+        <div id="editorMenu" class="hidden">
+            <div id="editorGrid"></div>
+        </div>
+    </div>
+    <div id="spellSelector">
+        <div id="selectedSpell"></div>
+        <div id="spellMenu" class="hidden">
+            <div id="spellGrid"></div>
+        </div>
+    </div>
+    <div id="inventorySelector">
+        <div id="selectedInventory" title="inventory"></div>
+    </div>
+    <div id="spellLevelSelector" class="hidden">
+        <div id="selectedSpellLevel" title="spell levels"></div>
+        <div id="spellLevelPanel" class="hidden">
+            <div id="spellLevelHeader"></div>
+            <div id="spellLevelList"></div>
+            <div id="spellLevelDetails"></div>
+        </div>
+    </div>
+
+    <div id="display"></div>
+    <div id="msg"></div>
+</body>

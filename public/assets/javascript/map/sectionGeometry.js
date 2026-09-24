@@ -1,0 +1,339 @@
+(function (globalScope) {
+    "use strict";
+
+    const SECTION_DIRECTIONS = [
+        { q: 1, r: 0 },
+        { q: 1, r: -1 },
+        { q: 0, r: -1 },
+        { q: -1, r: 0 },
+        { q: -1, r: 1 },
+        { q: 0, r: 1 }
+    ];
+
+    function evenQOffsetToAxial(x, y) {
+        return {
+            q: x,
+            r: y - ((x + (x & 1)) / 2)
+        };
+    }
+
+    function axialToEvenQOffset(coord) {
+        const q = Number(coord.q) || 0;
+        const r = Number(coord.r) || 0;
+        return {
+            x: q,
+            y: r + ((q + (q & 1)) / 2)
+        };
+    }
+
+    function offsetToWorld(offsetCoord) {
+        const x = Number(offsetCoord && offsetCoord.x) || 0;
+        const y = Number(offsetCoord && offsetCoord.y) || 0;
+        return {
+            x: x * 0.866,
+            y: y + (x % 2 === 0 ? 0.5 : 0)
+        };
+    }
+
+    const SECTION_HEXAGON_CORNER_CACHE_LIMIT = 4096;
+    const sectionHexagonCornerCache = new Map();
+
+    function getSectionHexagonCornerCacheKey(centerAxial, basis) {
+        const numberKey = value => String(Math.round((Number(value) || 0) * 1000000));
+        return [
+            numberKey(centerAxial && centerAxial.q),
+            numberKey(centerAxial && centerAxial.r),
+            numberKey(basis && basis.qAxis && basis.qAxis.q),
+            numberKey(basis && basis.qAxis && basis.qAxis.r),
+            numberKey(basis && basis.rAxis && basis.rAxis.q),
+            numberKey(basis && basis.rAxis && basis.rAxis.r)
+        ].join(":");
+    }
+
+    function cloneSectionPolygon(points) {
+        return points.map(point => ({
+            x: Number(point.x),
+            y: Number(point.y)
+        }));
+    }
+
+    function rememberSectionHexagonCorners(cacheKey, corners) {
+        if (sectionHexagonCornerCache.size >= SECTION_HEXAGON_CORNER_CACHE_LIMIT) {
+            const firstKey = sectionHexagonCornerCache.keys().next().value;
+            if (firstKey !== undefined) sectionHexagonCornerCache.delete(firstKey);
+        }
+        sectionHexagonCornerCache.set(cacheKey, cloneSectionPolygon(corners));
+    }
+
+    function axialDistance(a, b) {
+        const dq = Number(a.q) - Number(b.q);
+        const dr = Number(a.r) - Number(b.r);
+        const ds = (-Number(a.q) - Number(a.r)) - (-Number(b.q) - Number(b.r));
+        return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(ds));
+    }
+
+    function getSectionStride(radius) {
+        return Math.max(1, Math.floor(Number(radius) || 1) * 2 - 1);
+    }
+
+    function getSectionBasisVectors(radius) {
+        const sectionRadius = Math.max(1, Math.floor(Number(radius)) || 1);
+        return {
+            qAxis: {
+                q: getSectionStride(sectionRadius),
+                r: -(sectionRadius - 1)
+            },
+            rAxis: {
+                q: sectionRadius - 1,
+                r: sectionRadius
+            }
+        };
+    }
+
+    function computeSectionCenterAxial(sectionCoord, basis, anchorCenter) {
+        return {
+            q: (Number(anchorCenter && anchorCenter.q) || 0)
+                + ((Number(sectionCoord && sectionCoord.q) || 0) * (Number(basis && basis.qAxis && basis.qAxis.q) || 0))
+                + ((Number(sectionCoord && sectionCoord.r) || 0) * (Number(basis && basis.rAxis && basis.rAxis.q) || 0)),
+            r: (Number(anchorCenter && anchorCenter.r) || 0)
+                + ((Number(sectionCoord && sectionCoord.q) || 0) * (Number(basis && basis.qAxis && basis.qAxis.r) || 0))
+                + ((Number(sectionCoord && sectionCoord.r) || 0) * (Number(basis && basis.rAxis && basis.rAxis.r) || 0))
+        };
+    }
+
+    function estimateOffsetCoordFromWorld(worldX, worldY) {
+        const x = Math.round((Number(worldX) || 0) / 0.866);
+        const y = Math.round((Number(worldY) || 0) - (x % 2 === 0 ? 0.5 : 0));
+        return { x, y };
+    }
+
+    function makeSectionKey(coord) {
+        return `${Number(coord.q) || 0},${Number(coord.r) || 0}`;
+    }
+
+    function parseSectionKey(sectionKey) {
+        const [qRaw, rRaw] = String(sectionKey || "").split(",");
+        return {
+            q: Number(qRaw) || 0,
+            r: Number(rRaw) || 0
+        };
+    }
+
+    function addSectionCoords(a, b) {
+        return {
+            q: (Number(a.q) || 0) + (Number(b.q) || 0),
+            r: (Number(a.r) || 0) + (Number(b.r) || 0)
+        };
+    }
+
+    function getSectionCenterWorldForCoord(state, sectionCoord) {
+        if (!state || !sectionCoord) return { x: 0, y: 0 };
+        const key = makeSectionKey(sectionCoord);
+        const existingSection = state.sectionsByKey instanceof Map ? state.sectionsByKey.get(key) : null;
+        if (existingSection && existingSection.centerWorld && typeof existingSection.centerWorld === "object") {
+            return {
+                x: Number(existingSection.centerWorld.x) || 0,
+                y: Number(existingSection.centerWorld.y) || 0
+            };
+        }
+        const basis = state.basis || getSectionBasisVectors(state.radius);
+        const anchorCenter = state.anchorCenter || { q: 0, r: 0 };
+        const centerAxial = computeSectionCenterAxial(sectionCoord, basis, anchorCenter);
+        return offsetToWorld(axialToEvenQOffset(centerAxial));
+    }
+
+    function addNearestSectionCandidate(candidates, state, coord, required) {
+        if (!coord) return;
+        const key = makeSectionKey(coord);
+        if (candidates.has(key)) {
+            if (required === true) candidates.get(key).required = true;
+            return;
+        }
+        candidates.set(key, {
+            key,
+            coord: {
+                q: Number(coord.q) || 0,
+                r: Number(coord.r) || 0
+            },
+            centerWorld: getSectionCenterWorldForCoord(state, coord),
+            required: required === true
+        });
+    }
+
+    function getNearestSectionKeysForWorldPosition(state, worldX, worldY, limit = 3, requiredKeys = null) {
+        if (!state) return new Set();
+        const maxKeys = Math.max(1, Math.floor(Number(limit) || 3));
+        const requiredKeySet = requiredKeys instanceof Set
+            ? requiredKeys
+            : new Set(Array.isArray(requiredKeys) ? requiredKeys.filter(key => typeof key === "string" && key.length > 0) : []);
+        const candidates = new Map();
+
+        if (state.sectionsByKey instanceof Map) {
+            state.sectionsByKey.forEach((section, key) => {
+                const coord = (section && section.coord && typeof section.coord === "object")
+                    ? section.coord
+                    : parseSectionKey(key);
+                addNearestSectionCandidate(candidates, state, coord, requiredKeySet.has(key));
+            });
+        }
+
+        requiredKeySet.forEach((key) => {
+            const coord = parseSectionKey(key);
+            addNearestSectionCandidate(candidates, state, coord, true);
+            for (let i = 0; i < SECTION_DIRECTIONS.length; i++) {
+                addNearestSectionCandidate(candidates, state, addSectionCoords(coord, SECTION_DIRECTIONS[i]), false);
+            }
+        });
+
+        if (candidates.size === 0) return new Set();
+        const x = Number(worldX) || 0;
+        const y = Number(worldY) || 0;
+        const ordered = Array.from(candidates.values()).sort((a, b) => {
+            const ar = a.required === true ? 0 : 1;
+            const br = b.required === true ? 0 : 1;
+            if (ar !== br) return ar - br;
+            const ad = Math.hypot(x - Number(a.centerWorld.x || 0), y - Number(a.centerWorld.y || 0));
+            const bd = Math.hypot(x - Number(b.centerWorld.x || 0), y - Number(b.centerWorld.y || 0));
+            if (ad !== bd) return ad - bd;
+            return String(a.key).localeCompare(String(b.key));
+        });
+
+        const keys = new Set();
+        for (let i = 0; i < ordered.length && keys.size < maxKeys; i++) {
+            keys.add(ordered[i].key);
+        }
+        return keys;
+    }
+
+    function getBubbleKeysForCenter(state, centerKey) {
+        if (!state || !(state.sectionsByKey instanceof Map) || !state.sectionsByKey.has(centerKey)) {
+            return new Set();
+        }
+        const centerSection = state.sectionsByKey.get(centerKey);
+        const limit = Math.max(1, Math.floor(Number(state.activeSectionLimit) || 3));
+        if (limit >= 7) {
+            const keys = new Set([centerKey]);
+            for (let i = 0; i < SECTION_DIRECTIONS.length; i++) {
+                const neighborCoord = addSectionCoords(centerSection.coord, SECTION_DIRECTIONS[i]);
+                keys.add(makeSectionKey(neighborCoord));
+            }
+            return keys;
+        }
+        const focus = Number.isFinite(state.bubbleFocusWorldX) && Number.isFinite(state.bubbleFocusWorldY)
+            ? { x: Number(state.bubbleFocusWorldX), y: Number(state.bubbleFocusWorldY) }
+            : (centerSection.centerWorld && typeof centerSection.centerWorld === "object"
+                ? centerSection.centerWorld
+                : getSectionCenterWorldForCoord(state, centerSection.coord));
+        return getNearestSectionKeysForWorldPosition(state, focus.x, focus.y, limit, [centerKey]);
+    }
+
+    function resolvePrototypeSectionCoordForWorldPosition(state, worldX, worldY) {
+        if (!state) return null;
+        const basis = state.basis || getSectionBasisVectors(state.radius);
+        const anchorCenter = state.anchorCenter || { q: 0, r: 0 };
+        const offsetCoord = estimateOffsetCoordFromWorld(worldX, worldY);
+        const axial = evenQOffsetToAxial(offsetCoord.x, offsetCoord.y);
+        const localQ = Number(axial.q) - Number(anchorCenter.q || 0);
+        const localR = Number(axial.r) - Number(anchorCenter.r || 0);
+        const qAxis = basis && basis.qAxis ? basis.qAxis : { q: 0, r: 0 };
+        const rAxis = basis && basis.rAxis ? basis.rAxis : { q: 0, r: 0 };
+        const det = (Number(qAxis.q) * Number(rAxis.r)) - (Number(rAxis.q) * Number(qAxis.r));
+
+        let approxSectionQ = 0;
+        let approxSectionR = 0;
+        if (Math.abs(det) > 1e-6) {
+            approxSectionQ = ((localQ * Number(rAxis.r)) - (localR * Number(rAxis.q))) / det;
+            approxSectionR = ((Number(qAxis.q) * localR) - (Number(qAxis.r) * localQ)) / det;
+        }
+
+        const baseQ = Math.round(approxSectionQ);
+        const baseR = Math.round(approxSectionR);
+        let bestCoord = { q: baseQ, r: baseR };
+        let bestAxialDistance = Infinity;
+        let bestWorldDistance = Infinity;
+
+        for (let dq = -1; dq <= 1; dq++) {
+            for (let dr = -1; dr <= 1; dr++) {
+                const candidate = { q: baseQ + dq, r: baseR + dr };
+                const centerAxial = computeSectionCenterAxial(candidate, basis, anchorCenter);
+                const centerOffset = axialToEvenQOffset(centerAxial);
+                const centerWorld = offsetToWorld(centerOffset);
+                const candidateAxialDistance = axialDistance(axial, centerAxial);
+                const candidateWorldDistance = Math.hypot(
+                    Number(worldX) - Number(centerWorld.x),
+                    Number(worldY) - Number(centerWorld.y)
+                );
+                if (
+                    candidateAxialDistance < bestAxialDistance ||
+                    (candidateAxialDistance === bestAxialDistance && candidateWorldDistance < bestWorldDistance)
+                ) {
+                    bestCoord = candidate;
+                    bestAxialDistance = candidateAxialDistance;
+                    bestWorldDistance = candidateWorldDistance;
+                }
+            }
+        }
+
+        return bestCoord;
+    }
+
+    // Returns the 6 world-space corner vertices of the section hexagon for the section
+    // whose center is at `centerAxial` (tile-axial coords), given the meta-grid `basis`.
+    // Each corner is the centroid of this section's center and its two adjacent neighbor
+    // section centers, guaranteeing exact shared edges with no gap or overlap.
+    function getSectionHexagonCorners(centerAxial, basis) {
+        const cacheKey = getSectionHexagonCornerCacheKey(centerAxial, basis);
+        const cached = sectionHexagonCornerCache.get(cacheKey);
+        if (cached) return cloneSectionPolygon(cached);
+        const cq = Number(centerAxial && centerAxial.q) || 0;
+        const cr = Number(centerAxial && centerAxial.r) || 0;
+        const qaq = Number(basis && basis.qAxis && basis.qAxis.q) || 0;
+        const qar = Number(basis && basis.qAxis && basis.qAxis.r) || 0;
+        const raq = Number(basis && basis.rAxis && basis.rAxis.q) || 0;
+        const rar = Number(basis && basis.rAxis && basis.rAxis.r) || 0;
+
+        const neighborAxials = SECTION_DIRECTIONS.map(d => ({
+            q: cq + d.q * qaq + d.r * raq,
+            r: cr + d.q * qar + d.r * rar
+        }));
+        const selfWorld = offsetToWorld(axialToEvenQOffset({ q: cq, r: cr }));
+        const neighborWorlds = neighborAxials.map(a => offsetToWorld(axialToEvenQOffset(a)));
+        const corners = SECTION_DIRECTIONS.map((_, index) => {
+            const n1 = neighborWorlds[index];
+            const n2 = neighborWorlds[(index + 1) % neighborWorlds.length];
+            return {
+                x: (Number(selfWorld.x) + Number(n1.x) + Number(n2.x)) / 3,
+                y: (Number(selfWorld.y) + Number(n1.y) + Number(n2.y)) / 3
+            };
+        });
+        rememberSectionHexagonCorners(cacheKey, corners);
+        return cloneSectionPolygon(corners);
+    }
+
+    const api = {
+        SECTION_DIRECTIONS,
+        evenQOffsetToAxial,
+        axialToEvenQOffset,
+        offsetToWorld,
+        axialDistance,
+        getSectionStride,
+        getSectionBasisVectors,
+        computeSectionCenterAxial,
+        getSectionCenterWorldForCoord,
+        estimateOffsetCoordFromWorld,
+        resolvePrototypeSectionCoordForWorldPosition,
+        makeSectionKey,
+        parseSectionKey,
+        addSectionCoords,
+        getNearestSectionKeysForWorldPosition,
+        getBubbleKeysForCenter,
+        getSectionHexagonCorners
+    };
+
+    globalScope.__sectionGeometry = api;
+    globalScope.__twoSectionPrototypeSectionGeometry = api;
+})(typeof globalThis !== "undefined" ? globalThis : window);
+
+if (typeof module !== "undefined" && module.exports) {
+    module.exports = globalThis.__sectionGeometry;
+}

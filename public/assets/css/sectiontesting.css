@@ -1,0 +1,150 @@
+html,
+body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #11161a;
+    color: #eef4f6;
+    font-family: Georgia, "Times New Roman", serif;
+}
+
+body {
+    overflow: hidden;
+}
+
+.sectiontesting-shell {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    width: 100%;
+    height: 100%;
+}
+
+.sectiontesting-panel {
+    box-sizing: border-box;
+    padding: 20px 18px 22px;
+    background:
+        linear-gradient(180deg, rgba(38, 54, 62, 0.98), rgba(17, 22, 26, 0.98)),
+        radial-gradient(circle at top left, rgba(231, 197, 93, 0.14), transparent 45%);
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    overflow-y: auto;
+}
+
+.sectiontesting-panel h1,
+.sectiontesting-panel h2 {
+    margin: 0 0 12px;
+    font-weight: normal;
+}
+
+.lede {
+    margin: 0 0 18px;
+    line-height: 1.4;
+    color: rgba(238, 244, 246, 0.84);
+}
+
+.control-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin: 0 0 12px;
+    flex-wrap: wrap;
+}
+
+.control-row.compact {
+    gap: 12px;
+}
+
+.control-row label {
+    font-size: 14px;
+}
+
+.control-row input[type="number"] {
+    width: 64px;
+}
+
+.control-row input[type="number"],
+.control-row button {
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: rgba(255, 255, 255, 0.08);
+    color: inherit;
+    padding: 7px 10px;
+    border-radius: 8px;
+}
+
+.control-row button {
+    cursor: pointer;
+}
+
+.control-row button:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.control-row button.active {
+    background: rgba(231, 197, 93, 0.24);
+    border-color: rgba(231, 197, 93, 0.52);
+}
+
+.stats,
+.instructions {
+    margin-top: 18px;
+    padding: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.stats p,
+.instructions p {
+    margin: 0 0 8px;
+    line-height: 1.35;
+}
+
+.stats p:last-child,
+.instructions p:last-child {
+    margin-bottom: 0;
+}
+
+.sectiontesting-stage {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    background:
+        radial-gradient(circle at 20% 20%, rgba(95, 133, 148, 0.16), transparent 28%),
+        radial-gradient(circle at 80% 30%, rgba(224, 170, 63, 0.09), transparent 25%),
+        linear-gradient(180deg, #182126, #0f1417);
+}
+
+#sectiontesting-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.banner {
+    position: absolute;
+    left: 18px;
+    bottom: 18px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(11, 15, 17, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.9);
+    pointer-events: none;
+    font-size: 14px;
+}
+
+code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+@media (max-width: 960px) {
+    .sectiontesting-shell {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+    }
+
+    .sectiontesting-panel {
+        border-right: 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+}

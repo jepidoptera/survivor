@@ -1,5 +1,9 @@
 /* no scrollbar.  if scrolling happens it will be 'virtual' (javascript) */
-html, body {margin: 0; height: 100%; overflow: hidden}
+html, body {margin: 0; height: 100%; overflow: hidden;}
+
+html, body, * {
+    cursor: none !important;
+}
 
 body {
     background-color: black;
@@ -16,6 +20,123 @@ body {
     width: 100%;
 }
 
+#prototypeLoadingOverlay {
+    position: fixed;
+    inset: 0;
+    z-index: 20000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background:
+        radial-gradient(circle at 50% 45%, rgba(70, 128, 184, 0.16), rgba(2, 6, 12, 0.96) 48%),
+        linear-gradient(180deg, rgba(4, 8, 16, 0.94), rgba(1, 3, 8, 0.98));
+    opacity: 1;
+    transition: opacity 180ms ease;
+    pointer-events: all;
+}
+
+#prototypeLoadingOverlay.hidden {
+    display: none;
+}
+
+#prototypeLoadingOverlay.is-fading {
+    opacity: 0;
+}
+
+.prototypeLoadingCard {
+    position: relative;
+    width: min(50vw, 360px);
+    height: min(50vw, 360px);
+    min-width: 240px;
+    min-height: 240px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.prototypeLoadingOrbit {
+    position: absolute;
+    width: 220px;
+    height: 220px;
+    max-width: 72%;
+    max-height: 72%;
+    animation: prototypeLoadingOrbitSpin 2.2s linear infinite;
+}
+
+.prototypeLoadingOrbitRing {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 1px solid rgba(164, 212, 255, 0.09);
+    box-shadow: 0 0 18px rgba(87, 153, 232, 0.06);
+}
+
+.prototypeLoadingComet {
+    position: absolute;
+    inset: 0;
+}
+
+.prototypeLoadingCometTail {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background:
+        conic-gradient(
+            from 0deg,
+            rgba(132, 210, 255, 0) 0deg,
+            rgba(132, 210, 255, 0) 188deg,
+            rgba(132, 210, 255, 0.02) 224deg,
+            rgba(132, 210, 255, 0.05) 258deg,
+            rgba(132, 210, 255, 0.12) 292deg,
+            rgba(132, 210, 255, 0.24) 324deg,
+            rgba(180, 226, 255, 0.48) 348deg,
+            rgba(224, 243, 255, 0.72) 356deg,
+            rgba(244, 247, 255, 0.96) 360deg,
+            rgba(132, 210, 255, 0) 360deg
+        );
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 10px), #000 calc(100% - 8px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 10px), #000 calc(100% - 8px));
+    filter: blur(0.45px);
+}
+
+.prototypeLoadingStar {
+    position: absolute;
+    left: 50%;
+    top: -12px;
+    width: 36px;
+    height: 36px;
+    transform: translateX(-50%);
+    z-index: 2;
+    background: linear-gradient(180deg, #fff7cf, #ffe38c 54%, #f7bb58);
+    clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 92%, 50% 70%, 21% 92%, 32% 57%, 2% 35%, 39% 35%);
+    box-shadow:
+        0 0 10px rgba(255, 245, 174, 0.95),
+        0 0 22px rgba(128, 201, 255, 0.4);
+}
+
+.prototypeLoadingLabel {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    color: rgba(239, 247, 255, 0.92);
+    font-size: clamp(18px, 2vw, 28px);
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.68);
+    user-select: none;
+}
+
+@keyframes prototypeLoadingOrbitSpin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 .outline {
     text-shadow:
         -1px -1px 0 #000,
@@ -24,29 +145,551 @@ body {
         1px 1px 0 #000;
 }
 
-#time, #ammoSelect {
+#time {
     position: absolute;
     display: block;
     color: white;
     z-index: 2;
     background: transparent;
-}
-
-#time {
     right: 0;
 }
 
-#ammoSelect {
-    left: 0;
-    text-shadow: 
-        -1px 1px 0 #000,
-        1px 1px 0 #000,
-        1px -1px 0 #000,
-        -1px -1px 0 #000;
-    cursor: pointer;
-    text-align: right;
+#statusBars {
+    position: absolute;
+    left: 10px;
+    top: 10px;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
+#auraSelector {
+    position: absolute;
+    left: 10px;
+    top: 74px;
+    z-index: 2;
+    cursor: default !important;
+}
+
+#spellSelector {
+    position: absolute;
+    left: 248px;
+    top: 10px;
+    z-index: 2;
+    cursor: default !important;
+}
+
+#inventorySelector {
+    position: absolute;
+    left: 318px;
+    top: 10px;
+    z-index: 2;
+    cursor: default !important;
+}
+
+#spellLevelSelector {
+    position: absolute;
+    left: 388px;
+    top: 10px;
+    z-index: 2;
+    cursor: default !important;
+}
+
+#editorSelector {
+    display: none !important;
+}
+
+#selectedAura,
+#selectedInventory,
+#selectedSpellLevel,
+#selectedEditor,
+#selectedSpell {
+    width: 60px;
+    height: 60px;
+    cursor: pointer !important;
+    border: 3px solid #FFD700;
+    border-radius: 8px;
+    background-size: cover;
+    background-position: center;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
+    transition: transform 0.1s;
+}
+
+#selectedAura {
+    background-image: url("/assets/images/thumbnails/aura.png");
+}
+
+#selectedEditor {
+    background-image: url("/assets/images/thumbnails/edit.png");
+}
+
+#selectedInventory {
+    background-image: url("/assets/images/thumbnails/backpack.png");
+}
+
+#selectedSpellLevel {
+    background-image: url("/assets/images/powerups/spellbook2.png");
+}
+
+#activeAuraIcons {
+    position: absolute;
+    left: 68px;
+    top: 16px;
+    display: flex;
+    gap: 4px;
+    align-items: flex-start;
+}
+
+.activeAuraIconBadge {
+    width: 30px;
+    height: 30px;
+    border: 2px solid #FFD700;
+    border-radius: 6px;
+    background-size: cover;
+    background-position: center;
+    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.45);
+    pointer-events: none;
+}
+
+#selectedAura:hover,
+#selectedInventory:hover,
+#selectedSpellLevel:hover,
+#selectedEditor:hover,
+#selectedSpell:hover {
+    transform: scale(1.05);
+}
+
+#auraMenu,
+#editorMenu,
+#spellMenu {
+    position: absolute;
+    left: 0;
+    top: 70px;
+    z-index: 10000;
+    background: rgba(0, 0, 0, 0.85);
+    border: 2px solid #FFD700;
+    border-radius: 8px;
+    padding: 10px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.7);
+    cursor: default !important;
+}
+
+#spellMenu {
+    position: fixed;
+    left: 10px;
+    top: 80px;
+}
+
+#spellLevelPanel {
+    position: absolute;
+    left: 0;
+    top: 70px;
+    z-index: 10000;
+    display: grid;
+    grid-template-columns: 176px 420px;
+    grid-template-rows: auto minmax(0, 1fr);
+    width: 596px;
+    min-height: 440px;
+    max-height: min(660px, calc(100vh - 92px));
+    background: rgba(7, 11, 16, 0.94);
+    border: 2px solid #FFD700;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.7);
+    overflow: hidden;
+    cursor: default !important;
+}
+
+#spellLevelHeader {
+    grid-column: 1 / -1;
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255, 215, 0, 0.45);
+    background: rgba(255, 215, 0, 0.1);
+    font-size: 20px;
+    font-weight: bold;
+    line-height: 1.2;
+}
+
+#spellLevelPanel,
+#spellLevelPanel * {
+    color: #ffffff;
+    cursor: auto !important;
+}
+
+#spellLevelPanel button,
+#spellLevelPanel .spellLevelListItem {
+    cursor: pointer !important;
+}
+
+#spellLevelList {
+    grid-column: 1;
+    grid-row: 2;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px;
+    border-right: 1px solid rgba(255, 215, 0, 0.35);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.spellLevelListItem {
+    display: grid;
+    grid-template-columns: 42px 1fr;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+    min-height: 50px;
+    padding: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    margin-bottom: 8px;
+}
+
+.spellLevelListItem:hover,
+.spellLevelListItem.selected {
+    border-color: #FFD700;
+    background: rgba(255, 215, 0, 0.12);
+}
+
+.spellLevelListIcon {
+    width: 42px;
+    height: 42px;
+    border-radius: 5px;
+    background-size: cover;
+    background-position: center;
+    background-color: rgba(0, 0, 0, 0.45);
+}
+
+.spellLevelListText {
+    min-width: 0;
+}
+
+.spellLevelListName {
+    font-size: 14px;
+    font-weight: bold;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+}
+
+.spellLevelListLevel {
+    margin-top: 2px;
+    font-size: 12px;
+    color: #9fd5ff !important;
+}
+
+#spellLevelDetails {
+    grid-column: 2;
+    grid-row: 2;
+    position: relative;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) 1px minmax(0, 1fr);
+    min-height: 0;
+}
+
+.spellLevelSection {
+    min-height: 0;
+    overflow-y: auto;
+    padding: 18px 22px;
+}
+
+.spellLevelCurrentText,
+.spellLevelNextText {
+    font-size: 16px;
+    font-weight: bold;
+    color: #9fd5ff !important;
+    line-height: 1.25;
+}
+
+.spellLevelHeadline {
+    margin-top: 14px;
+    font-size: 26px;
+    font-weight: bold;
+    line-height: 1.1;
+    overflow-wrap: anywhere;
+}
+
+.spellLevelSubtitle {
+    margin-top: 8px;
+    font-size: 15px;
+    line-height: 1.35;
+    color: #ece6d4 !important;
+}
+
+.spellLevelStats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.spellLevelStat {
+    min-width: 0;
+    padding: 7px 8px;
+    border: 1px solid rgba(159, 213, 255, 0.28);
+    border-radius: 6px;
+    background: rgba(159, 213, 255, 0.08);
+    font-size: 13px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.spellLevelDivider {
+    position: relative;
+    height: 1px;
+    background: rgba(255, 215, 0, 0.55);
+}
+
+.spellLevelUpButton {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    z-index: 1;
+    transform: translate(-50%, -50%);
+    min-width: 108px;
+    height: 34px;
+    padding: 0 14px;
+    border: 2px solid #FFD700;
+    border-radius: 6px;
+    background: #1f6f78;
+    color: #ffffff !important;
+    font-size: 14px;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+}
+
+.spellLevelUpButton:hover {
+    background: #258892;
+}
+
+.spellLevelUpButton:disabled {
+    cursor: default !important;
+    background: #263338;
+    border-color: #9b9050;
+    color: #aebabe !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+
+.spellLevelMastered {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    padding: 24px;
+    font-size: 22px;
+    font-weight: bold;
+    line-height: 1.25;
+    text-align: center;
+    color: #FFD700 !important;
+}
+
+#auraMenu,
+#auraMenu *,
+#editorMenu,
+#editorMenu *,
+#spellMenu,
+#spellMenu * {
+    color: #ffffff;
+    cursor: auto !important;
+}
+
+#auraMenu button,
+#auraMenu .auraIcon,
+#auraMenu input[type="range"],
+#editorMenu button,
+#editorMenu .spellIcon,
+#editorMenu input[type="range"],
+#spellMenu button,
+#spellMenu .spellIcon,
+#spellMenu input[type="range"] {
+    cursor: pointer !important;
+}
+
+#scriptEditorPanel,
+#scriptEditorPanel * {
+    cursor: auto !important;
+}
+
+#scriptEditorHelpPanel,
+#scriptEditorHelpPanel * {
+    cursor: auto !important;
+}
+
+#triggerAreaHelpPanel,
+#triggerAreaHelpPanel * {
+    cursor: auto !important;
+}
+
+#scriptEditorPanel textarea {
+    cursor: text !important;
+}
+
+#scriptEditorPanel button {
+    cursor: pointer !important;
+}
+
+#scriptEditorHelpPanel button {
+    cursor: pointer !important;
+}
+
+#triggerAreaHelpPanel button {
+    cursor: pointer !important;
+}
+
+#auraMenu.hidden,
+#editorMenu.hidden,
+#spellMenu.hidden {
+    display: none;
+}
+
+#spellLevelPanel.hidden {
+    display: none;
+}
+
+#editorSelector.hidden {
+    display: none;
+}
+
+#spellSelector.hidden {
+    display: none;
+}
+
+#inventorySelector.hidden {
+    display: none;
+}
+
+#spellLevelSelector.hidden {
+    display: none;
+}
+
+#spellGrid {
+    display: grid;
+    grid-template-columns: repeat(4, 60px);
+    gap: 10px;
+}
+
+#editorGrid {
+    display: grid;
+    grid-template-columns: repeat(4, 60px);
+    gap: 10px;
+}
+
+#auraGrid {
+    display: grid;
+    grid-template-columns: repeat(2, 60px);
+    gap: 10px;
+}
+
+.auraIcon,
+.spellIcon {
+    width: 60px;
+    height: 60px;
+    cursor: pointer !important;
+    border: 2px solid #888;
+    border-radius: 6px;
+    background-size: cover;
+    background-position: center;
+    transition: border-color 0.2s, transform 0.1s;
+}
+
+.auraIcon:hover,
+.spellIcon:hover {
+    border-color: #FFD700;
+    transform: scale(1.1);
+}
+
+.auraIcon.selected,
+.spellIcon.selected {
+    border-color: #FFD700;
+    box-shadow: 0 0 10px #FFD700;
+}
+
+.inactiveAura {
+    filter: grayscale(1);
+    opacity: 0.65;
+}
+
+.spellIcon.keyboard-nav-focus {
+    border-color: #66c2ff;
+    box-shadow: 0 0 10px rgba(102, 194, 255, 0.9);
+}
+
+#spellGrid button.keyboard-nav-focus {
+    border-color: #66c2ff !important;
+    box-shadow: 0 0 10px rgba(102, 194, 255, 0.9);
+}
+
+.statusBar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.statusIcon {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+}
+
+.statusIcon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.statusBar-background {
+    width: 200px;
+    height: 20px;
+    background-color: rgba(68, 68, 68, 0.8);
+    border: 1px solid #666;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+#healthBar {
+    height: 100%;
+    width: 100%;
+    background-color: #FF0000;
+    transition: width 0.1s ease;
+}
+
+#magicBar {
+    height: 100%;
+    width: 100%;
+    background-color: #0000FF;
+    transition: width 0.1s ease;
+}
+
+.magicBarFlash {
+    animation: magicBarFlashWhite 0.24s ease-out;
+}
+
+.magicBarBackgroundFlash {
+    animation: magicBarBackgroundFlashWhite 0.24s ease-out;
+}
+
+@keyframes magicBarFlashWhite {
+    0% {
+        background-color: #ffffff;
+    }
+    100% {
+        background-color: #0000FF;
+    }
+}
+
+@keyframes magicBarBackgroundFlashWhite {
+    0% {
+        background-color: rgba(255, 255, 255, 0.95);
+        border-color: rgba(255, 255, 255, 1);
+        box-shadow: 0 0 14px rgba(255, 255, 255, 0.9);
+    }
+    100% {
+        background-color: rgba(68, 68, 68, 0.8);
+        border-color: #666;
+        box-shadow: none;
+    }
+}
 
 .msgBox {
     background-color: whitesmoke;
@@ -57,6 +700,7 @@ body {
     height: 100%;
     display: block;
     position: absolute;
+    cursor: none;
 }
 #display {
     width: 100vmin;

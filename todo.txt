@@ -1,0 +1,205 @@
+X inside furniture
+X dangerous monsters
+X 3d / textured walls
+X animal creation spells
+X render depth determines spell targeting priority
+X refactor: debug functions
+X refactor: character class
+X windows and doors snap to walls
+X rugs rotate on ground plane
+X buildable roofs
+X refactor walls
+X refactor rendering
+X minimap
+X add editor panel
+X add scripting for objects
+X maze mode
+X hovering messages
+X yetis in maze
+X walls should split when built across each other
+X validate and auto-format scripting
+X objects should have scripting names that can be referred to in other scripts
+X maze solver should aim down the center of the path
+X mega bear knocks down tress
+X debug mode should show hext tiles and animal hex radii
+X blodia knocks down a wall in the maze
+X code completion in scripting
+X animals can knock down doors to attack
+X walls can go from any midpoint to any midpoint
+X animals don't go into attack mode unless they have line of sight
+X animals have health bars
+X fireballs should stop on walls
+X doors should have separate frame and door sprites
+X ice ball trails snow and explodes on impact
+X god mode/ adventure mode
+X treasures in the maze
+X choose spells from menu on startup
+  spell upgrade path
+   -fireball
+    level 1:
+     .5x speed
+     2x mana cost
+     1/2 damage
+
+    level 7:
+     2x speed
+     1/2 mana cost
+     5x damage
+     
+   -iceball
+   -health
+   -teleport
+   -vanish
+   -spikes
+   -shield
+   -maze
+   -invisibility:
+      level 1: 
+   -omnivision
+   /squirrels?
+    phase through walls
+   /telekinesis
+    flying:
+    X level 1: swimming
+    X level 2: walking on water
+      level 3: super jump
+      level 4: gravity cushion
+      level 5: falling with style
+      level 6: gliding
+      level 7: flying
+
+
+X invisibility aura
+X shield spell
+X unify spells and auras
+X animals have magic points that protect them from spells
+X trees popping in and out of view
+X startup message
+X dialogs in scripting
+X player dies
+X thunderbolts from fragglegod
+X see-through windows
+X revamp close combat - use hitboxes instead of hex tiles
+X infinite map extent
+
+
+X wizard drowns if he can't swim
+X placing a roof should designate a building
+X new building menu toolset
+X when a building is created, make a new floor fragment at the ground level.
+X stairs
+  height-aware LOS shadows
+  make omnivision use a floating eye
+  see over short walls or objects
+/ incremental, non-lagging load
+  upgradable spells
+X multiple floors!
+  shop sells magic items
+  holding the spell hotkey works to cast the spell just like spacebar
+  mind control spells
+  time-slowing aura
+  trees should be transparent when the player is behind them
+/ checkpoints
+  undo system for editor
+X refactor renderer
+  revamp maze mode
+    -acute wall corners clip to sight lines - no false corners in visible space.
+    -walls transition from upright to flat as the player changes angle to the wall
+
+building editor:
+X sliders should also have text input
+X click to move/ drag corners to resize windows/doors
+X include all window textures
+X keep size and aspect ratio settings in localstorage
+X copy default settings from last clicked object
+X deselect object when tool is selected.
+X make roofs optional
+X dedicated wall tool
+X multiple roof types
+/ add and subtract polygon tools are editable until you hit finalize. they can be resized without changing shape, rotated, and the edges are draggable.
+/ "snap direction" option
+X multiple save slots
+/ posts and beams
+  multiple floor fragments allowed on the same continuous level
+  reduce to one building model.
+
+problems:
+X animals running through walls (some node link blocks were missing)
+X windows visible through roof
+X rugs don't place correctly
+X walls don't always connect
+X animals don't correctly vanish
+X animals and spells are invisible inside house.
+X wizard's min-radius sight circle should only go behind him
+X wizard and animals jitter as they move
+X can't cancel trigger area
+X playerExits doesn't fire on teleport
+X all fallen trees save as burned, even when they weren't
+X fireball shouldn't target non-flammable things
+X rugs don't rotate right in preview
+X fallen trees have incorrect hitboxes
+X roof textures don't scale right
+X large trigger area which activates maze mode seems to create dead zones for rendering
+X animals keep lunging for way too far
+X roofs phasing through walls
+X item messages not showing
+X spell images don't scale with zoom
+X walls sometimes connect sideways and get totally screwy
+X blodia fails to attack when you stand near a wall
+X bears chase for a very long time
+X creatures escape from walls when their section leaves the active bubble
+X walls disappear when their section leaves the active bubble (separate problem)
+X built walls disappear on save
+X trigger areas disappear
+X doors on lower levels don't work
+X walls on level != 0 don't merge
+X character can't be placed on levels != 0
+X spells don't aim correctly
+X wizard draws on top of hat
+X partly cut off nodes at the edge of fragments shouldn't count for pathfinding (clearance -1)
+X cutting a hole in a floor causes walls to stop working
+X floor fragment edges slow but don't stop movement
+X rugs on an upper floor are visible in the building overlay
+X inside and outside doors have opposite handles
+X trees can't place within building footprint rectangle
+X wizard gets stuck at bottom of wall-adjacent stairs
+X flicker when interior render plan changes
+  yetis don't stay aggro or knock down doors
+  megabear sometimes gets stuck. (this may be because it's in hitbox mode!)
+  level editing (and probably other stuff) shouldn't be in spells.js
+/ section loading is too slow
+X save generated building-owned floor nodes in building files so startup can reuse the graph instead of rebuilding it
+  npcs can't cross fragments
+  powerups come back once you leave the area
+/ delete legacy top-level saveData.staticObjects path; section-world saves should have one object persistence source, not duplicate old/prototype payloads (remove legacy loading capability, don't need it)
+X animals running through walls into buildings
+X npcs can't cross bridges
+  npcs are unreliable on upper floors (and maybe other places too)
+  loaded sections aren't determined right
+X grass flickers while moving or zooming
+  significant discontinuity when going into a building through a door.
+
+
+
+
+large trigger area architecture checklist:
+  [x] add stable trigger ids to saved trigger-area records
+  [x] add prototype trigger-definition registry state on map
+  [x] build trigger registry from section asset records, not runtime objects
+  [x] compute trigger bounds and coverage section keys from polygon footprints
+  [x] invalidate and rebuild trigger coverage when trigger areas are created, moved, edited, loaded, or saved
+  [x] change trigger traversal candidate gathering to query the trigger registry
+  [x] allow trigger traversal to use definition-backed hitboxes when no runtime object exists
+  [x] preserve enter/exit state by stable trigger id instead of runtime-object residency
+  [ ] decide script policy: metadata-safe immediate execution vs hydrate/materialize-on-demand
+  [ ] add temporary trigger script target materialization for `this` if needed
+  [ ] keep ownerSectionKey as persistence home, separate from coverage authority
+  [x] keep editor/rendering trigger objects optional and independent from gameplay trigger authority
+  [ ] test: player enters trigger before owner section loads
+  [ ] test: player exits trigger after owner section unloads
+  [x] test: multi-section trigger coverage lookup returns the trigger from any covered section
+  [x] test: large trigger does not double-fire enter or exit during continuous traversal
+  [ ] test: trigger scripts using `this` still work when the owner section is not materialized
+
+
+66-fa-23-1826

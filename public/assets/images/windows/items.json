@@ -1,0 +1,73 @@
+{
+  "category": "windows",
+  "version": 1,
+  "defaults": {
+    "width": 1,
+    "height": 1,
+    "renderDepthOffset": 0,
+    "rotationAxis": "spatial",
+    "isOpen": true,
+    "blocksTile": false,
+    "isPassable": true,
+    "castsLosShadows": false,
+    "anchor": {
+      "x": 0.5,
+      "y": 0.5
+    },
+    "shadowBox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffset": 0,
+      "radiusFromWidthMultiplier": 0.2,
+      "minRadius": 0.12
+    },
+    "touchBox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffsetFromHeightMultiplier": -0.25,
+      "radiusFromMaxDimensionMultiplier": 0.5
+    }
+  },
+  "items": [
+    {
+      "file": "window.png",
+      "texturePath": "/assets/images/windows/window.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "isOpen": true,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffset": 0,
+        "radiusFromWidthMultiplier": 0.2,
+        "minRadius": 0.12
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      },
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/windows/lod/window_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/windows/lod/window_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/windows/window.png"
+        }
+      ]
+    }
+  ]
+}

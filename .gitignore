@@ -6,3 +6,9 @@ public/assets/images/pokemon
 public/assets/javascript/unused
 public/assets/css/unused
 public/assets/images/land tiles/forestPalette.png
+docs/terrain-bubble-learned-model.json
+docs/terrain-bubble-learned-report.json
+docs/terrain-bubble-learning-errors.json
+docs/terrain-bubble-ruleset-report.json
+docs/terrain-bubble-trained-binary-vertex-model.json
+docs/terrain-bubble-trained-iso-contour-model.json

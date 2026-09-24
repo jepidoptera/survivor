@@ -1,0 +1,300 @@
+{
+  "category": "flowers",
+  "version": 1,
+  "defaults": {
+    "width": 1,
+    "height": 1,
+    "renderDepthOffset": 0,
+    "blocksTile": false,
+    "isPassable": true,
+    "castsLosShadows": false,
+    "rotationAxis": "none",
+    "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+    "spellTargetPoint": [0.5, 0.5],
+    "shadowBox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffsetFromHeightMultiplier": -0.4,
+      "radiusFromMaxDimensionMultiplier": 0.24
+    },
+    "touchBox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffsetFromHeightMultiplier": -0.4,
+      "radiusFromMaxDimensionMultiplier": 0.5
+    }
+  },
+  "items": [
+    {
+      "file": "blue flower bush.png",
+      "texturePath": "/assets/images/flowers/blue%20flower%20bush.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "none"
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "fairytale flowers.png",
+      "texturePath": "/assets/images/flowers/fairytale%20flowers.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "castsLosShadows": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.24
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "lily plant.png",
+      "texturePath": "/assets/images/flowers/lily%20plant.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "none"
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "fireflower.png",
+      "texturePath": "/assets/images/flowers/fireflower.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "castsLosShadows": true,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.24
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "red flower bush.png",
+      "texturePath": "/assets/images/flowers/red%20flower%20bush.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.24
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "red flower.png",
+      "texturePath": "/assets/images/flowers/red%20flower.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "none"
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "thornflowers.png",
+      "texturePath": "/assets/images/flowers/thornflowers.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": true,
+      "isPassable": false,
+      "castsLosShadows": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.24
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.4,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "white flower bush.png",
+      "texturePath": "/assets/images/flowers/white%20flower%20bush.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": false,
+      "castsLosShadows": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.5,
+        "radiusFromMaxDimensionMultiplier": 0.25
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.5,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "white rosebush.png",
+      "texturePath": "/assets/images/flowers/white%20rosebush.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": false,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.5,
+        "radiusFromMaxDimensionMultiplier": 0.24
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.5,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "yellow flower.png",
+      "texturePath": "/assets/images/flowers/yellow%20flower.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "none"
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    },
+    {
+      "file": "yellow rosebush.png",
+      "texturePath": "/assets/images/flowers/yellow%20rosebush.png",
+      "width": 1,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "castsLosShadows": true,
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "shadowBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.5,
+        "radiusFromMaxDimensionMultiplier": 0.24
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.5,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      }
+    }
+  ]
+}

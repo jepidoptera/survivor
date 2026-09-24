@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Section Testing</title>
+    <link rel="stylesheet" href="/assets/css/sectiontesting.css">
+</head>
+<body>
+    <div class="sectiontesting-shell">
+        <aside class="sectiontesting-panel">
+            <h1>Section Testing</h1>
+            <p class="lede">
+                A standalone sandbox for validating fixed-radius hex sections, seam stitching,
+                active 7-section loading, and cross-section pathfinding.
+            </p>
+
+            <div class="control-row">
+                <label for="section-radius">Section radius</label>
+                <input id="section-radius" type="number" min="3" max="20" step="1" value="10">
+                <button id="rebuild-world" type="button">Rebuild</button>
+            </div>
+
+            <div class="control-row">
+                <button id="random-destination" type="button">Random destination</button>
+                <button id="toggle-obstacles" type="button">Regenerate obstacles</button>
+            </div>
+
+            <div class="control-row">
+                <button id="wall-draw-mode" type="button">Draw walls</button>
+                <button id="clear-walls" type="button">Clear walls</button>
+            </div>
+
+            <div class="control-row compact">
+                <label>
+                    <input id="show-section-centers" type="checkbox" checked>
+                    Show section centers
+                </label>
+                <label>
+                    <input id="show-global-coords" type="checkbox">
+                    Show hovered coords
+                </label>
+                <label>
+                    <input id="show-wall-blockers" type="checkbox" checked>
+                    Show wall blockers
+                </label>
+            </div>
+
+            <div id="sectiontesting-stats" class="stats"></div>
+
+            <div class="instructions">
+                <h2>Controls</h2>
+                <p>In path mode, click a tile to path there.</p>
+                <p>In wall mode, drag from one tile to another to place a wall segment.</p>
+                <p>Use <code>W E D S A Q</code> to step between adjacent hexes.</p>
+                <p>Use <code>R</code> to recenter the active 7-section bubble on the player.</p>
+                <p>Use the mouse wheel to zoom.</p>
+            </div>
+        </aside>
+
+        <main class="sectiontesting-stage">
+            <canvas id="sectiontesting-canvas"></canvas>
+            <div id="sectiontesting-banner" class="banner"></div>
+        </main>
+    </div>
+
+    <script type="module" src="/assets/javascript/sectiontesting/main.js"></script>
+</body>
+</html>

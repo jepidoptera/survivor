@@ -1,0 +1,528 @@
+{
+  "category": "doors",
+  "version": 1,
+  "defaults": {
+    "width": 0.75,
+    "height": 1,
+    "renderDepthOffset": 0,
+    "rotationAxis": "spatial",
+    "blocksTile": false,
+    "isPassable": true,
+    "castsLosShadows": true,
+    "anchor": {
+      "x": 0.5,
+      "y": 1
+    },
+    "shadowBox": {
+      "type": "polygon",
+      "points": [
+        {
+          "x": -0.4,
+          "y": -0.25
+        },
+        {
+          "x": 0.4,
+          "y": -0.25
+        },
+        {
+          "x": 0.4,
+          "y": -0.5
+        },
+        {
+          "x": -0.4,
+          "y": -0.5
+        }
+      ]
+    },
+    "touchBox": {
+      "type": "circle",
+      "xOffset": 0,
+      "yOffsetFromHeightMultiplier": -0.25,
+      "radiusFromMaxDimensionMultiplier": 0.5
+    },
+    "compositeLayers": [
+      {
+        "name": "arch",
+        "uRegion": [0, 0.5]
+      },
+      {
+        "name": "door",
+        "uRegion": [0.5, 1]
+      }
+    ]
+  },
+  "items": [
+    {
+      "file": "door1.png",
+      "texturePath": "/assets/images/doors/door1.png",
+      "width": 0.75,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "shadowBox": {
+        "type": "polygon",
+        "points": [
+          {
+            "x": -0.4,
+            "y": -0.25
+          },
+          {
+            "x": 0.4,
+            "y": -0.25
+          },
+          {
+            "x": 0.4,
+            "y": -0.5
+          },
+          {
+            "x": -0.4,
+            "y": -0.5
+          }
+        ]
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/doors/lod/door1_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/doors/lod/door1_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/doors/door1.png"
+        }
+      ]
+    },
+    {
+      "file": "door2.png",
+      "texturePath": "/assets/images/doors/door2.png",
+      "width": 0.75,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "shadowBox": {
+        "type": "polygon",
+        "points": [
+          {
+            "x": -0.4,
+            "y": -0.25
+          },
+          {
+            "x": 0.4,
+            "y": -0.25
+          },
+          {
+            "x": 0.4,
+            "y": -0.5
+          },
+          {
+            "x": -0.4,
+            "y": -0.5
+          }
+        ]
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/doors/lod/door2_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/doors/lod/door2_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/doors/door2.png"
+        }
+      ]
+    },
+    {
+      "file": "door3.png",
+      "texturePath": "/assets/images/doors/door3.png",
+      "width": 0.75,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "shadowBox": {
+        "type": "polygon",
+        "points": [
+          {
+            "x": -0.4,
+            "y": 0.0
+          },
+          {
+            "x": 0.4,
+            "y": 0.0
+          },
+          {
+            "x": 0.4,
+            "y": -0.75
+          },
+          {
+            "x": -0.4,
+            "y": -0.75
+          }
+        ]
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.375,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/doors/lod/door3_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/doors/lod/door3_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/doors/door3.png"
+        }
+      ]
+    },
+    {
+      "file": "door4.png",
+      "texturePath": "/assets/images/doors/door4.png",
+      "width": 0.75,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "shadowBox": {
+        "type": "polygon",
+        "points": [
+          {
+            "x": -0.4,
+            "y": 0.0
+          },
+          {
+            "x": 0.4,
+            "y": 0.0
+          },
+          {
+            "x": 0.4,
+            "y": -0.75
+          },
+          {
+            "x": -0.4,
+            "y": -0.75
+          }
+        ]
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.375,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/doors/lod/door4_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/doors/lod/door4_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/doors/door4.png"
+        }
+      ]
+    },
+    {
+      "file": "door5.png",
+      "texturePath": "/assets/images/doors/door5.png",
+      "width": 0.75,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "shadowBox": {
+        "type": "polygon",
+        "points": [
+          {
+            "x": -0.4,
+            "y": 0.0
+          },
+          {
+            "x": 0.4,
+            "y": 0.0
+          },
+          {
+            "x": 0.4,
+            "y": -0.75
+          },
+          {
+            "x": -0.4,
+            "y": -0.75
+          }
+        ]
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.375,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/doors/lod/door5_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/doors/lod/door5_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/doors/door5.png"
+        }
+      ]
+    },
+    {
+      "file": "door6.png",
+      "texturePath": "/assets/images/doors/door6.png",
+      "width": 0.75,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "shadowBox": {
+        "type": "polygon",
+        "points": [
+          {
+            "x": -0.4,
+            "y": 0.0
+          },
+          {
+            "x": 0.4,
+            "y": 0.0
+          },
+          {
+            "x": 0.4,
+            "y": -0.75
+          },
+          {
+            "x": -0.4,
+            "y": -0.75
+          }
+        ]
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.375,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/doors/lod/door6_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/doors/lod/door6_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/doors/door6.png"
+        }
+      ]
+    },
+    {
+      "file": "tree door 2.jpg",
+      "texturePath": "/assets/images/doors/tree%20door%202.jpg",
+      "width": 0.75,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+      "shadowBox": {
+        "type": "polygon",
+        "points": [
+          {
+            "x": -0.4,
+            "y": -0.25
+          },
+          {
+            "x": 0.4,
+            "y": -0.25
+          },
+          {
+            "x": 0.4,
+            "y": -0.5
+          },
+          {
+            "x": -0.4,
+            "y": -0.5
+          }
+        ]
+      },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/doors/lod/tree%20door%202_lod096.jpg",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/doors/lod/tree%20door%202_lod192.jpg",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/doors/tree%20door%202.jpg"
+        }
+      ]
+    },
+    {
+      "file": "tree door.png",
+      "texturePath": "/assets/images/doors/tree%20door.png",
+      "width": 0.75,
+      "height": 1,
+      "renderDepthOffset": 0,
+      "blocksTile": false,
+      "isPassable": true,
+    "shadowBox": {
+      "type": "polygon",
+      "points": [
+        {
+          "x": -0.4,
+          "y": -0.1
+        },
+        {
+          "x": 0.4,
+          "y": -0.1
+        },
+        {
+          "x": 0.4,
+          "y": -0.4
+        },
+        {
+          "x": -0.4,
+          "y": -0.4
+        }
+      ]
+    },
+      "touchBox": {
+        "type": "circle",
+        "xOffset": 0,
+        "yOffsetFromHeightMultiplier": -0.25,
+        "radiusFromMaxDimensionMultiplier": 0.5
+      },
+      "compositeLayers": [
+        {
+          "name": "arch",
+          "uRegion": [0, 0.5]
+        },
+        {
+          "name": "door",
+          "uRegion": [0.5, 1]
+        }
+      ],
+      "lodTextures": [
+        {
+          "texturePath": "/assets/images/doors/lod/tree%20door_lod096.png",
+          "maxDistance": 120
+        },
+        {
+          "texturePath": "/assets/images/doors/lod/tree%20door_lod192.png",
+          "maxDistance": 260
+        },
+        {
+          "texturePath": "/assets/images/doors/tree%20door.png"
+        }
+      ]
+    }
+  ]
+}

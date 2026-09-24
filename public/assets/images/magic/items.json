@@ -1,0 +1,32 @@
+{
+  "category": "magic",
+  "version": 1,
+  "sourceDirectory": "/assets/images/magic",
+  "defaults": {
+    "framecount": {
+      "x": 1,
+      "y": 1
+    },
+    "animated_fps": 0
+  },
+  "items": [
+    {
+      "file": "hi fi fireball.png",
+      "texturePath": "/assets/images/magic/hi%20fi%20fireball.png",
+      "framecount": {
+        "x": 5,
+        "y": 2
+      },
+      "animated_fps": 12
+    },
+    {
+      "file": "fire.png",
+      "texturePath": "/assets/images/magic/fire.png",
+      "framecount": {
+        "x": 5,
+        "y": 5
+      },
+      "animated_fps": 30
+    }
+  ]
+}

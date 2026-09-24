@@ -1,0 +1,4191 @@
+const CHARACTER_FREEZE_TEMPERATURE_DEGREES = -20;
+const CHARACTER_FIRE_WARM_RATE_DEGREES_PER_SECOND = 10;
+
+class FrozenDeathBurstEffect {
+    static PARTICLE_COUNT = 60;
+
+    constructor(config = {}) {
+        this.type = "frozenDeathBurst";
+        this.visible = true;
+        this.hideProjectileSprite = true;
+        this.x = Number(config.x) || 0;
+        this.y = Number(config.y) || 0;
+        this.z = Math.max(0, Number(config.z) || 0);
+        this.size = Math.max(0.5, Number(config.size) || 1);
+        this.height = Math.max(0.6, Number(config.height) || this.size);
+        this.width = Math.max(0.4, Number(config.width) || this.size);
+        this.snowParticles = [];
+        this.particleGraphics = null;
+        this.gone = false;
+        this._lastUpdateTime = 0;
+        this._pausedAt = null;
+    }
+
+    spawnParticles() {
+        const count = Math.max(8, Math.round(FrozenDeathBurstEffect.PARTICLE_COUNT * Math.max(0.6, this.size)));
+        const centerZ = this.z + (this.height * 0.5);
+        for (let i = 0; i < count; i++) {
+            const spawnHeight = Math.random() * this.height;
+            const lateralX = (Math.random() - 0.5) * this.width;
+            const lateralY = (Math.random() - 0.5) * this.width * 0.45;
+            const spawnX = this.x + lateralX;
+            const spawnY = this.y + lateralY;
+            const spawnZ = this.z + spawnHeight;
+            let burstX = lateralX;
+            let burstY = lateralY;
+            let burstZ = spawnZ - centerZ;
+            const burstLength = Math.hypot(burstX, burstY, burstZ);
+            if (!(burstLength > 1e-6)) {
+                const fallbackAngle = Math.random() * Math.PI * 2;
+                burstX = Math.cos(fallbackAngle);
+                burstY = Math.sin(fallbackAngle) * 0.45;
+                burstZ = (Math.random() - 0.5) * 0.75;
+            }
+            const burstNorm = Math.max(1e-6, Math.hypot(burstX, burstY, burstZ));
+            const burstSpeed = 0.9 + Math.random() * (1.8 * this.size);
+            this.snowParticles.push({
+                x: spawnX,
+                y: spawnY,
+                z: spawnZ,
+                vx: (burstX / burstNorm) * burstSpeed,
+                vy: (burstY / burstNorm) * burstSpeed,
+                vz: (burstZ / burstNorm) * burstSpeed,
+                lifeMs: 450 + Math.random() * 450,
+                ageMs: 0,
+                size: 1.8 + Math.random() * (3.4 * this.size),
+                color: Math.random() < 0.2 ? 0xffffff : (Math.random() < 0.65 ? 0x9fd8ff : 0x4f9dff),
+                alpha: 0.7 + Math.random() * 0.28,
+                shrink: 0.45 + Math.random() * 0.25,
+                gravity: 3.6 + Math.random() * 1.8,
+                fadeDelayMs: Math.random() * 120,
+                airDrag: 0.22 + Math.random() * 0.18,
+                groundDrag: 6 + Math.random() * 2.5,
+                grounded: false
+            });
+        }
+    }
+
+    updateParticles(deltaSec) {
+        if (!Array.isArray(this.snowParticles) || this.snowParticles.length === 0) return;
+        const deltaMs = Math.max(0, deltaSec * 1000);
+        for (let i = this.snowParticles.length - 1; i >= 0; i--) {
+            const particle = this.snowParticles[i];
+            if (!particle) {
+                this.snowParticles.splice(i, 1);
+                continue;
+            }
+            particle.ageMs += deltaMs;
+            if (particle.ageMs >= particle.lifeMs) {
+                this.snowParticles.splice(i, 1);
+                continue;
+            }
+            const gravity = Number.isFinite(particle.gravity) ? Number(particle.gravity) : 0;
+            const airDrag = Math.max(0, Math.min(0.999, (Number(particle.airDrag) || 0) * deltaSec));
+            const groundDrag = Math.max(0, Math.min(0.999, (Number(particle.groundDrag) || 0) * deltaSec));
+            if (!particle.grounded) {
+                particle.vz = (Number(particle.vz) || 0) - (gravity * deltaSec);
+            }
+            particle.x += (Number(particle.vx) || 0) * deltaSec;
+            particle.y += (Number(particle.vy) || 0) * deltaSec;
+            const nextZ = (Number(particle.z) || 0) + ((Number(particle.vz) || 0) * deltaSec);
+            if (nextZ <= 0) {
+                particle.z = 0;
+                particle.vz = 0;
+                particle.grounded = true;
+                particle.vx *= Math.max(0, 1 - groundDrag);
+                particle.vy *= Math.max(0, 1 - groundDrag);
+            } else {
+                particle.z = nextZ;
+                particle.vx *= Math.max(0, 1 - airDrag);
+                particle.vy *= Math.max(0, 1 - airDrag);
+            }
+        }
+    }
+
+    cast() {
+        this.spawnParticles();
+        this._lastUpdateTime = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        this.castInterval = setInterval(() => {
+            if (paused) {
+                if (!this._pausedAt) {
+                    this._pausedAt = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                        ? performance.now()
+                        : Date.now();
+                }
+                return;
+            }
+            const now = (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+                ? performance.now()
+                : Date.now();
+            if (this._pausedAt) {
+                this._lastUpdateTime += now - this._pausedAt;
+                this._pausedAt = null;
+            }
+            const deltaMs = Math.max(0, now - (this._lastUpdateTime || now));
+            this._lastUpdateTime = now;
+            this.updateParticles(deltaMs / 1000);
+            if (!this.snowParticles.length) {
+                this.finish();
+            }
+        }, 1000 / Math.max(1, Number(frameRate) || 60));
+        return this;
+    }
+
+    finish() {
+        this.gone = true;
+        if (this.castInterval) {
+            clearInterval(this.castInterval);
+            this.castInterval = null;
+        }
+        if (this.pixiSprite && this.pixiSprite.parent) {
+            this.pixiSprite.parent.removeChild(this.pixiSprite);
+        }
+        this.pixiSprite = null;
+        if (this.particleGraphics && this.particleGraphics.parent) {
+            this.particleGraphics.parent.removeChild(this.particleGraphics);
+        }
+        this.particleGraphics = null;
+    }
+}
+
+class Character {
+    constructor(type, location, size, map, options = {}) {
+        const constructorOptions = (options && typeof options === "object") ? options : {};
+        this.type = type;
+        this.map = map;
+        this.size = Number.isFinite(size) ? size : 1;
+        this.z = 0;
+        this.travelFrames = 0;
+        this.travelZ = 0;
+        this.moving = false;
+        this.useExternalScheduler = constructorOptions.useExternalScheduler === true;
+        this.isOnFire = false;
+        this.fireSprite = null;
+        this.fireFrameIndex = 1;
+        this.fireDamageScale = 1;
+        this.healRate = 0.005; // Fraction of max HP restored per second
+        this.healRateMultiplier = 1;
+        this.groundRadius = this.size / 3; // Default hitbox radius in hex units
+        this.visualRadius = this.size / 2; // Default visual hitbox radius in hex units
+        this.frameRate = 1;
+        this.moveTimeout = null;
+        this.attackTimeout = null;
+        this.acceleration = 50;
+        this.movementVector = {x: 0, y: 0};
+        this.currentMaxSpeed = 0;
+        this._closeCombatState = null;
+        this._hitboxCollisionDebug = null;
+        this._scriptFrozenUntilMs = 0;
+        this.baselineTemperature = 0;
+        this.temperature = this.baselineTemperature;
+        this.nodeVisitLogLimit = 200;
+        this.nodeVisitLog = [];
+        this._tracePathState = null;
+        /** @type {Inventory} */
+        this.inventory = new Inventory();
+
+        // Try to get node - if coords look like array indices (integers in map range), use them directly
+        let node;
+        if (
+            location &&
+            Number.isFinite(location.xindex) &&
+            Number.isFinite(location.yindex) &&
+            Number.isFinite(location.x) &&
+            Number.isFinite(location.y)
+        ) {
+            node = location;
+        } else if (Number.isInteger(location.x) && Number.isInteger(location.y) && location.x >= 0 && location.x < map.width && location.y >= 0 && location.y < map.height) {
+            // Treat as array indices
+            node = map.nodes[location.x][location.y];
+        } else {
+            // Treat as world coordinates
+            node = map.worldToNode(location.x, location.y);
+        }
+        
+        this.node = node;
+        this.syncTraversalLayerFromNode(this.node);
+        this.x = this.node.x;
+        this.y = this.node.y;
+        this.z = this.getNodeStandingZ(this.node);
+        this.prevX = this.x;
+        this.prevY = this.y;
+        this.prevZ = this.z;
+        this.destination = null;
+        this.path = []; // Array of MapNodes or traversal steps to follow
+        this.nextNode = null;
+        this.currentPathStep = null;
+        this.useAStarPathfinding = false;
+
+        // Pathfinding clearance — how many hex-ring steps around each tile
+        // on the path must be obstacle-free for this character to fit.
+        // Computed dynamically via getter from current this.size.
+        
+        // Create hitboxes
+        this.touchBox = new CircleHitbox(this.x, this.y, this.visualRadius);
+        this.shadowBox = new CircleHitbox(this.x, this.y, this.groundRadius);
+        this._recordVisitedNode(this.node, "spawn");
+
+        if (this.map && typeof this.map.registerGameObject === "function") {
+            this.map.registerGameObject(this);
+        }
+
+        const suppressAutoScriptingName = !!constructorOptions.suppressAutoScriptingName;
+        const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
+            ? globalThis.Scripting
+            : null;
+        if (!suppressAutoScriptingName && scriptingApi && typeof scriptingApi.ensureObjectScriptingName === "function") {
+            scriptingApi.ensureObjectScriptingName(this, { map: this.map });
+        }
+
+        if (!this.useExternalScheduler && constructorOptions.startMoveLoop !== false) {
+            this.moveTimeout = this.nextMove();
+        }
+    }
+
+    getNodeTraversalLayer(node = this.node) {
+        if (Number.isFinite(node && node.traversalLayer)) {
+            return Math.round(Number(node.traversalLayer));
+        }
+        if (Number.isFinite(node && node.level)) {
+            return Math.round(Number(node.level));
+        }
+        if (Number.isFinite(this.traversalLayer)) {
+            return Math.round(Number(this.traversalLayer));
+        }
+        if (Number.isFinite(this.currentLayer)) {
+            return Math.round(Number(this.currentLayer));
+        }
+        return 0;
+    }
+
+    syncTraversalLayerFromNode(node = this.node) {
+        const layer = this.getNodeTraversalLayer(node);
+        this.traversalLayer = layer;
+        this.currentLayer = layer;
+        const baseZ = this.getNodeStandingZ(node);
+        if (!Number.isFinite(baseZ)) {
+            throw new Error(`character ${this.id || this.name || this.type || "(unknown)"} traversal layer sync requires node standing Z`);
+        }
+        this.currentLayerBaseZ = Number(baseZ);
+        if (node && typeof node.surfaceId === "string") {
+            this.surfaceId = node.surfaceId;
+        }
+        if (node && typeof node.fragmentId === "string") {
+            this.fragmentId = node.fragmentId;
+        }
+        if (this.map && typeof this.map.setActorCurrentMovementSupport === "function") {
+            if (layer === 0 && !(node && typeof node.fragmentId === "string" && node.fragmentId.length > 0)) {
+                this.map.setActorCurrentMovementSupport(this, { type: "ground", layer: 0, baseZ: 0, node }, {
+                    suppressLayerTransition: true
+                });
+            } else {
+                const fragment = node && typeof node.fragmentId === "string" && this.map.floorsById instanceof Map
+                    ? this.map.floorsById.get(node.fragmentId) || null
+                    : null;
+                if (fragment) {
+                    this.map.setActorCurrentMovementSupport(this, {
+                        type: "floor",
+                        layer,
+                        baseZ: this.currentLayerBaseZ,
+                        fragment,
+                        fragmentId: node.fragmentId,
+                        surfaceId: typeof node.surfaceId === "string" ? node.surfaceId : "",
+                        node
+                    }, {
+                        suppressLayerTransition: true
+                    });
+                }
+            }
+        }
+        return layer;
+    }
+
+    getFloorNodeResolutionOptions(options = {}) {
+        const opts = (options && typeof options === "object") ? options : {};
+        const currentSupport = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        const currentMembership = this._floorMembership && typeof this._floorMembership === "object"
+            ? this._floorMembership
+            : (this.floorMembership && typeof this.floorMembership === "object" ? this.floorMembership : null);
+        const currentNode = this.node && typeof this.node === "object" ? this.node : null;
+        const fragmentId = (typeof opts.fragmentId === "string" && opts.fragmentId.length > 0)
+            ? opts.fragmentId
+            : (currentSupport && typeof currentSupport.fragmentId === "string" && currentSupport.fragmentId.length > 0)
+                ? currentSupport.fragmentId
+                : (typeof this.fragmentId === "string" && this.fragmentId.length > 0)
+                    ? this.fragmentId
+                    : (currentNode && typeof currentNode.fragmentId === "string" ? currentNode.fragmentId : "");
+        const surfaceId = (typeof opts.surfaceId === "string" && opts.surfaceId.length > 0)
+            ? opts.surfaceId
+            : (currentSupport && typeof currentSupport.surfaceId === "string" && currentSupport.surfaceId.length > 0)
+                ? currentSupport.surfaceId
+                : (typeof this.surfaceId === "string" && this.surfaceId.length > 0)
+                    ? this.surfaceId
+                    : (currentNode && typeof currentNode.surfaceId === "string" ? currentNode.surfaceId : "");
+        const sectionKey = (typeof opts.sectionKey === "string" && opts.sectionKey.length > 0)
+            ? opts.sectionKey
+            : (currentSupport && typeof currentSupport.sectionKey === "string" && currentSupport.sectionKey.length > 0)
+                ? currentSupport.sectionKey
+                : (currentSupport && currentSupport.ownerType === "building" && typeof currentSupport.ownerId === "string")
+                    ? currentSupport.ownerId
+                    : (currentNode && typeof currentNode.ownerSectionKey === "string" && currentNode.ownerSectionKey.length > 0)
+                        ? currentNode.ownerSectionKey
+                        : (currentNode && typeof currentNode._prototypeSectionKey === "string" ? currentNode._prototypeSectionKey : "");
+        const ownerType = (typeof opts.ownerType === "string" && opts.ownerType.length > 0)
+            ? opts.ownerType
+            : (currentSupport && typeof currentSupport.ownerType === "string" && currentSupport.ownerType.length > 0)
+                ? currentSupport.ownerType
+                : (currentMembership && typeof currentMembership.ownerType === "string" ? currentMembership.ownerType : "");
+        const ownerId = (typeof opts.ownerId === "string" && opts.ownerId.length > 0)
+            ? opts.ownerId
+            : (currentSupport && typeof currentSupport.ownerId === "string" && currentSupport.ownerId.length > 0)
+                ? currentSupport.ownerId
+                : (currentMembership && typeof currentMembership.ownerId === "string" ? currentMembership.ownerId : "");
+        return {
+            sectionKey,
+            surfaceId,
+            fragmentId,
+            ownerType,
+            ownerId
+        };
+    }
+
+    resolveNodeForTraversalLayer(x, y, options = {}) {
+        if (!this.map || typeof this.map.worldToNode !== "function") return null;
+        const baseNode = this.map.worldToNode(x, y);
+        if (!baseNode) return null;
+        const layer = Number.isFinite(options && options.traversalLayer)
+            ? Math.round(Number(options.traversalLayer))
+            : this.getNodeTraversalLayer();
+        if (layer === 0) return baseNode;
+        if (typeof this.map.getFloorNodeAtLayer !== "function") return null;
+        const floorOptions = this.getFloorNodeResolutionOptions(options);
+        const sectionKey = (typeof floorOptions.sectionKey === "string" && floorOptions.sectionKey.length > 0)
+            ? floorOptions.sectionKey
+            : (typeof baseNode._prototypeSectionKey === "string"
+                ? baseNode._prototypeSectionKey
+                : ((typeof this.map.getPrototypeSectionKeyForWorldPoint === "function")
+                    ? this.map.getPrototypeSectionKeyForWorldPoint(x, y)
+                    : ""));
+        return this.map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
+            sectionKey,
+            surfaceId: floorOptions.surfaceId,
+            fragmentId: floorOptions.fragmentId,
+            ownerType: floorOptions.ownerType,
+            ownerId: floorOptions.ownerId,
+            worldX: x,
+            worldY: y,
+            allowScan: !(options && options.allowScan === false)
+        });
+    }
+
+    dropPowerup(powerupType, options = {}) {
+        if (typeof globalThis.dropPowerupNearSource !== "function") return null;
+        return globalThis.dropPowerupNearSource(this, powerupType, options);
+    }
+
+    get onfire() {
+        return !!this.isOnFire;
+    }
+
+    set onfire(value) {
+        this.isOnFire = !!value;
+        if (this.isOnFire && !Number.isFinite(this.fireDuration)) {
+            this.fireDuration = Number.POSITIVE_INFINITY;
+        }
+        if (!this.isOnFire) {
+            this.fireDamageScale = 1;
+            if (this.fireAnimationInterval) {
+                clearInterval(this.fireAnimationInterval);
+                this.fireAnimationInterval = null;
+            }
+            if (this.fireSprite && this.fireSprite.parent) {
+                this.fireSprite.parent.removeChild(this.fireSprite);
+            }
+            if (this.fireSprite && typeof this.fireSprite.destroy === "function") {
+                this.fireSprite.destroy({ children: true, texture: false, baseTexture: false });
+            }
+            this.fireSprite = null;
+        }
+    }
+
+    /**
+     * Pathfinding clearance — always derived from current size so it
+     * stays correct after save-load rescaling or runtime resizing.
+     * Size ≤1 → 0,  1.1–2.0 → 1,  2.1–4.0 → 2,  4.1–6.0 → 3, etc.
+     */
+    get pathfindingClearance() {
+        return Math.max(0, Math.ceil(this.size / 2) - 1);
+    }
+    
+    updateHitboxes() {
+        // Update hitbox positions to match character position
+        if (this.touchBox) {
+            this.touchBox.x = this.x;
+            this.touchBox.y = this.y;
+            if (Number.isFinite(this.visualRadius)) {
+                this.touchBox.radius = this.visualRadius;
+            }
+        }
+        if (this.shadowBox) {
+            this.shadowBox.x = this.x;
+            this.shadowBox.y = this.y;
+            if (Number.isFinite(this.groundRadius)) {
+                this.shadowBox.radius = this.groundRadius;
+            }
+        }
+    }
+
+    _getHitboxDebugLabel(entity) {
+        if (!entity || typeof entity !== "object") return "unknown";
+        if (typeof entity.scriptingName === "string" && entity.scriptingName.trim()) {
+            return entity.scriptingName.trim();
+        }
+        if (typeof entity.name === "string" && entity.name.trim()) {
+            return entity.name.trim();
+        }
+        if (typeof entity.type === "string" && entity.type.trim()) {
+            return entity.type.trim();
+        }
+        if (entity.constructor && typeof entity.constructor.name === "string" && entity.constructor.name) {
+            return entity.constructor.name;
+        }
+        return "unknown";
+    }
+
+    _emitCloseCombatLifecycleLog(eventName, target = null, details = {}) {
+        if (typeof console === "undefined" || typeof console.log !== "function") return;
+        const actorLabel = this._getHitboxDebugLabel(this);
+        const targetLabel = this._getHitboxDebugLabel(target);
+        const payload = {
+            actor: actorLabel,
+            target: targetLabel,
+            phase: details.phase || null,
+            reason: details.reason || null,
+            x: Number(this.x),
+            y: Number(this.y)
+        };
+        console.log(`[CloseCombat] ${eventName}`, payload);
+    }
+
+    _buildHitboxDebugCandidateSummary(entity, sampleX, sampleY, sampleRadius, options = {}) {
+        if (!entity) return null;
+        const hitbox = entity.shadowBox || entity.touchBox || entity.hitbox || null;
+        const entityRadius = Number.isFinite(entity.groundRadius)
+            ? Math.max(0, Number(entity.groundRadius))
+            : (Number.isFinite(entity.visualRadius) ? Math.max(0, Number(entity.visualRadius)) : 0);
+        const centerDistance = (this.map && typeof this.map.distanceBetweenPoints === "function")
+            ? this.map.distanceBetweenPoints(sampleX, sampleY, Number(entity.x) || 0, Number(entity.y) || 0)
+            : Math.hypot((Number(entity.x) || 0) - sampleX, (Number(entity.y) || 0) - sampleY);
+        const edgeGap = centerDistance - (sampleRadius + entityRadius);
+        const sampleHitbox = this._hitboxDebugSampleHitbox || {
+            type: "circle",
+            x: sampleX,
+            y: sampleY,
+            radius: sampleRadius
+        };
+        sampleHitbox.x = sampleX;
+        sampleHitbox.y = sampleY;
+        sampleHitbox.radius = sampleRadius;
+        this._hitboxDebugSampleHitbox = sampleHitbox;
+        const collision = (hitbox && typeof hitbox.intersects === "function")
+            ? hitbox.intersects(sampleHitbox)
+            : null;
+        const overlapMagnitude = (collision && Number.isFinite(collision.pushX) && Number.isFinite(collision.pushY))
+            ? Math.hypot(collision.pushX, collision.pushY)
+            : Math.max(0, -edgeGap);
+        return {
+            label: this._getHitboxDebugLabel(entity),
+            type: entity.type || (entity.constructor && entity.constructor.name) || "unknown",
+            x: Number(entity.x),
+            y: Number(entity.y),
+            radius: entityRadius,
+            centerDistance,
+            edgeGap,
+            overlap: overlapMagnitude,
+            intersects: !!collision,
+            pushX: collision && Number.isFinite(collision.pushX) ? Number(collision.pushX) : 0,
+            pushY: collision && Number.isFinite(collision.pushY) ? Number(collision.pushY) : 0,
+            isTarget: entity === options.target,
+            isHitboxMode: typeof entity.isUsingHitboxMovement === "function"
+                ? !!entity.isUsingHitboxMovement()
+                : !!(entity._closeCombatState && typeof entity._closeCombatState === "object")
+        };
+    }
+
+    _updateHitboxCollisionDebugSnapshot(patch = {}) {
+        const previous = (this._hitboxCollisionDebug && typeof this._hitboxCollisionDebug === "object")
+            ? this._hitboxCollisionDebug
+            : {};
+        this._hitboxCollisionDebug = {
+            ...previous,
+            ...patch,
+            updatedAt: Date.now()
+        };
+        return this._hitboxCollisionDebug;
+    }
+
+    getHitboxCollisionDebugInfo() {
+        if (!this._hitboxCollisionDebug || typeof this._hitboxCollisionDebug !== "object") {
+            return null;
+        }
+        try {
+            return JSON.parse(JSON.stringify(this._hitboxCollisionDebug));
+        } catch (_err) {
+            return { ...this._hitboxCollisionDebug };
+        }
+    }
+
+    distanceToPoint(x, y) {
+        if (this.map && typeof this.map.distanceBetweenPoints === "function") {
+            return this.map.distanceBetweenPoints(this.x, this.y, x, y);
+        }
+        return Math.hypot((x - this.x), (y - this.y));
+    }
+
+    getStrikeDistance(target = null, baseRange = null) {
+        const baseDistance = Number.isFinite(baseRange)
+            ? Number(baseRange)
+            : (Number.isFinite(this.strikeRange) ? Number(this.strikeRange) : 0);
+        const selfRadius = Number.isFinite(this.groundRadius)
+            ? this.groundRadius
+            : (Number.isFinite(this.visualRadius) ? this.visualRadius : 0);
+        const targetRadius = (target && Number.isFinite(target.groundRadius))
+            ? target.groundRadius
+            : ((target && Number.isFinite(target.visualRadius)) ? target.visualRadius : 0);
+        return Math.max(baseDistance, selfRadius + targetRadius);
+    }
+
+    _getLocalWrappedDelta(fromX, fromY, toX, toY) {
+        return {
+            x: (this.map && typeof this.map.shortestDeltaX === "function")
+                ? this.map.shortestDeltaX(fromX, toX)
+                : (toX - fromX),
+            y: (this.map && typeof this.map.shortestDeltaY === "function")
+                ? this.map.shortestDeltaY(fromY, toY)
+                : (toY - fromY)
+        };
+    }
+
+    _distanceFromPointToLocalSegment(point, segStart, segEnd) {
+        const segDx = segEnd.x - segStart.x;
+        const segDy = segEnd.y - segStart.y;
+        const segLenSq = segDx * segDx + segDy * segDy;
+        if (segLenSq <= 1e-9) {
+            return Math.hypot(point.x - segStart.x, point.y - segStart.y);
+        }
+        const t = Math.max(
+            0,
+            Math.min(
+                1,
+                ((point.x - segStart.x) * segDx + (point.y - segStart.y) * segDy) / segLenSq
+            )
+        );
+        const closestX = segStart.x + segDx * t;
+        const closestY = segStart.y + segDy * t;
+        return Math.hypot(point.x - closestX, point.y - closestY);
+    }
+
+    isTargetWithinStrikeContact(target, options = {}) {
+        if (!target || target.gone || target.dead) return false;
+
+        const strikeDistance = Number.isFinite(options.strikeDistance)
+            ? Number(options.strikeDistance)
+            : this.getStrikeDistance(target, options.strikeRange);
+        if (!Number.isFinite(strikeDistance) || strikeDistance < 0) return false;
+
+        const ownHitbox = this.shadowBox || this.touchBox || null;
+        const targetHitbox = target.shadowBox || target.touchBox || null;
+        if (
+            ownHitbox &&
+            targetHitbox &&
+            typeof ownHitbox.intersects === "function" &&
+            ownHitbox.intersects(targetHitbox)
+        ) {
+            return true;
+        }
+
+        const targetPositions = [{ x: target.x, y: target.y }];
+        if (
+            Number.isFinite(target.prevX) &&
+            Number.isFinite(target.prevY) &&
+            (Math.abs(target.prevX - target.x) > 1e-6 || Math.abs(target.prevY - target.y) > 1e-6)
+        ) {
+            targetPositions.push({ x: Number(target.prevX), y: Number(target.prevY) });
+        }
+
+        for (let i = 0; i < targetPositions.length; i++) {
+            const pos = targetPositions[i];
+            if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y)) continue;
+
+            const currentDelta = this._getLocalWrappedDelta(this.x, this.y, pos.x, pos.y);
+            if (Math.hypot(currentDelta.x, currentDelta.y) <= strikeDistance) {
+                return true;
+            }
+
+            if (Number.isFinite(this.prevX) && Number.isFinite(this.prevY)) {
+                const prevLocal = this._getLocalWrappedDelta(this.x, this.y, this.prevX, this.prevY);
+                const sweptDistance = this._distanceFromPointToLocalSegment(
+                    currentDelta,
+                    prevLocal,
+                    { x: 0, y: 0 }
+                );
+                if (sweptDistance <= strikeDistance) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    cancelPathMovement() {
+        this.destination = null;
+        this.path = [];
+        this.nextNode = null;
+        this.currentPathStep = null;
+        this.travelFrames = 0;
+        this.travelX = 0;
+        this.travelY = 0;
+        this.travelZ = 0;
+    }
+
+    _describeMovementNode(node) {
+        if (!node || typeof node !== "object") return null;
+        let active = null;
+        if (this.map && typeof this.map.isPrototypeNodeActive === "function") {
+            try {
+                active = this.map.isPrototypeNodeActive(node);
+            } catch (_err) {
+                active = "error";
+            }
+        }
+        return {
+            id: typeof node.id === "string" ? node.id : "",
+            xindex: Number.isFinite(node.xindex) ? Number(node.xindex) : null,
+            yindex: Number.isFinite(node.yindex) ? Number(node.yindex) : null,
+            x: Number.isFinite(node.x) ? Number(node.x) : null,
+            y: Number.isFinite(node.y) ? Number(node.y) : null,
+            traversalLayer: Number.isFinite(node.traversalLayer) ? Math.round(Number(node.traversalLayer)) : null,
+            level: Number.isFinite(node.level) ? Math.round(Number(node.level)) : null,
+            baseZ: Number.isFinite(node.baseZ) ? Number(node.baseZ) : null,
+            fragmentId: typeof node.fragmentId === "string" ? node.fragmentId : "",
+            surfaceId: typeof node.surfaceId === "string" ? node.surfaceId : "",
+            ownerSectionKey: typeof node.ownerSectionKey === "string" ? node.ownerSectionKey : "",
+            sectionKey: this.map && typeof this.map.getNodeSectionKey === "function"
+                ? this.map.getNodeSectionKey(node)
+                : (typeof node._prototypeSectionKey === "string" ? node._prototypeSectionKey : ""),
+            active,
+            blocked: !!node.blocked,
+            blockedByObjects: Number.isFinite(node.blockedByObjects) ? Number(node.blockedByObjects) : null,
+            objects: Array.isArray(node.objects) ? node.objects.length : null,
+            neighbors: Array.isArray(node.neighbors) ? node.neighbors.filter(Boolean).length : null
+        };
+    }
+
+    _describeMovementSupport(support = null) {
+        const value = support || (this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null);
+        if (!value || typeof value !== "object") return null;
+        return {
+            type: typeof value.type === "string" ? value.type : "",
+            layer: Number.isFinite(value.layer) ? Math.round(Number(value.layer)) : null,
+            baseZ: Number.isFinite(value.baseZ) ? Number(value.baseZ) : null,
+            fragmentId: typeof value.fragmentId === "string" ? value.fragmentId : "",
+            surfaceId: typeof value.surfaceId === "string" ? value.surfaceId : "",
+            ownerType: typeof value.ownerType === "string" ? value.ownerType : "",
+            ownerId: typeof value.ownerId === "string" ? value.ownerId : "",
+            sectionKey: typeof value.sectionKey === "string" ? value.sectionKey : "",
+            stairId: typeof value.stairId === "string" ? value.stairId : "",
+            localZ: Number.isFinite(value.localZ) ? Number(value.localZ) : null,
+            continuousLocalZ: Number.isFinite(value.continuousLocalZ) ? Number(value.continuousLocalZ) : null
+        };
+    }
+
+    _describeMovementPathItem(pathItem) {
+        if (!pathItem) return null;
+        const toNode = this.getPathItemDestinationNode(pathItem);
+        return {
+            type: typeof pathItem.type === "string" ? pathItem.type : (pathItem.toNode ? "step" : "node"),
+            directionIndex: Number.isInteger(pathItem.directionIndex) ? Number(pathItem.directionIndex) : null,
+            toNode: this._describeMovementNode(toNode)
+        };
+    }
+
+    _getMovementDiagnosticSnapshot(extra = {}) {
+        const nodeLayer = this.getNodeTraversalLayer(this.node);
+        const support = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        return {
+            type: this.type || (this.constructor && this.constructor.name) || "character",
+            name: typeof this.scriptingName === "string" ? this.scriptingName : (typeof this.name === "string" ? this.name : ""),
+            x: Number.isFinite(this.x) ? Number(this.x) : null,
+            y: Number.isFinite(this.y) ? Number(this.y) : null,
+            z: Number.isFinite(this.z) ? Number(this.z) : null,
+            prevX: Number.isFinite(this.prevX) ? Number(this.prevX) : null,
+            prevY: Number.isFinite(this.prevY) ? Number(this.prevY) : null,
+            prevZ: Number.isFinite(this.prevZ) ? Number(this.prevZ) : null,
+            currentLayer: Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : null,
+            traversalLayer: Number.isFinite(this.traversalLayer) ? Math.round(Number(this.traversalLayer)) : null,
+            nodeTraversalLayer: Number.isFinite(nodeLayer) ? Math.round(Number(nodeLayer)) : null,
+            currentLayerBaseZ: Number.isFinite(this.currentLayerBaseZ) ? Number(this.currentLayerBaseZ) : null,
+            moving: !!this.moving,
+            destination: this._describeMovementNode(this.destination),
+            pathLength: Array.isArray(this.path) ? this.path.length : null,
+            nextNode: this._describeMovementNode(this.nextNode),
+            currentPathStep: this._describeMovementPathItem(this.currentPathStep),
+            travelFrames: Number.isFinite(this.travelFrames) ? Number(this.travelFrames) : null,
+            travelX: Number.isFinite(this.travelX) ? Number(this.travelX) : null,
+            travelY: Number.isFinite(this.travelY) ? Number(this.travelY) : null,
+            travelZ: Number.isFinite(this.travelZ) ? Number(this.travelZ) : null,
+            speed: Number.isFinite(this.speed) ? Number(this.speed) : null,
+            node: this._describeMovementNode(this.node),
+            support: this._describeMovementSupport(support),
+            floorMembership: this._floorMembership && typeof this._floorMembership === "object"
+                ? { ...this._floorMembership }
+                : (this.floorMembership && typeof this.floorMembership === "object" ? { ...this.floorMembership } : null),
+            ...extra
+        };
+    }
+
+    _recordMovementDiagnostic(event, details = {}, options = {}) {
+        if (typeof event !== "string" || event.length === 0) return null;
+        const capture = typeof globalThis !== "undefined" ? globalThis.animalMovementDiagnosticCapture : null;
+        const captureMatches = !!(
+            capture &&
+            capture.active === true &&
+            capture.animal === this &&
+            (!capture.eventSet || capture.eventSet.has(event))
+        );
+        const passiveEnabled = !!(
+            typeof globalThis !== "undefined" &&
+            globalThis.animalMovementDiagnosticsPassive === true
+        );
+        if (!captureMatches && !passiveEnabled && options.force !== true) {
+            return null;
+        }
+        if (!Array.isArray(this.movementDiagnosticLog)) {
+            this.movementDiagnosticLog = [];
+        }
+        const now = Date.now();
+        const dedupeKey = typeof options.dedupeKey === "string" ? options.dedupeKey : "";
+        if (dedupeKey) {
+            const last = this._lastMovementDiagnosticByKey && this._lastMovementDiagnosticByKey[dedupeKey];
+            const minIntervalMs = Number.isFinite(options.minIntervalMs)
+                ? Math.max(0, Number(options.minIntervalMs))
+                : 500;
+            if (last && last.event === event && (now - last.time) < minIntervalMs) {
+                return last.entry || null;
+            }
+            if (!this._lastMovementDiagnosticByKey || typeof this._lastMovementDiagnosticByKey !== "object") {
+                this._lastMovementDiagnosticByKey = {};
+            }
+        }
+        const entry = {
+            time: now,
+            event,
+            ...this._getMovementDiagnosticSnapshot(details)
+        };
+        this.movementDiagnosticLog.push(entry);
+        const limit = Number.isFinite(this.movementDiagnosticLogLimit)
+            ? Math.max(1, Math.floor(this.movementDiagnosticLogLimit))
+            : 300;
+        if (this.movementDiagnosticLog.length > limit) {
+            this.movementDiagnosticLog.splice(0, this.movementDiagnosticLog.length - limit);
+        }
+        if (dedupeKey) {
+            this._lastMovementDiagnosticByKey[dedupeKey] = { event, time: now, entry };
+        }
+        if (captureMatches) {
+            if (!Array.isArray(capture.entries)) {
+                capture.entries = [];
+            }
+            const captureLimit = Number.isFinite(capture.limit) ? Math.max(1, Math.floor(capture.limit)) : 100;
+            if (capture.entries.length < captureLimit) {
+                capture.entries.push(entry);
+            } else {
+                capture.truncated = (Number.isFinite(capture.truncated) ? capture.truncated : 0) + 1;
+            }
+        }
+        return entry;
+    }
+
+    _checkMovementLayerDiagnostics(context = "movement") {
+        const nodeLayer = this.getNodeTraversalLayer(this.node);
+        const currentLayer = Number.isFinite(this.currentLayer)
+            ? Math.round(Number(this.currentLayer))
+            : (Number.isFinite(this.traversalLayer) ? Math.round(Number(this.traversalLayer)) : null);
+        if (Number.isFinite(nodeLayer) && Number.isFinite(currentLayer) && nodeLayer !== currentLayer) {
+            this._recordMovementDiagnostic("layer-node-mismatch", {
+                context,
+                expectedLayer: currentLayer,
+                nodeLayer
+            }, {
+                dedupeKey: `layer-node-mismatch:${currentLayer}:${nodeLayer}`,
+                minIntervalMs: 1000
+            });
+        }
+        const support = this.currentMovementSupport && typeof this.currentMovementSupport === "object"
+            ? this.currentMovementSupport
+            : null;
+        const supportLayer = Number.isFinite(support && support.layer) ? Math.round(Number(support.layer)) : null;
+        if (Number.isFinite(supportLayer) && Number.isFinite(currentLayer) && supportLayer !== currentLayer) {
+            this._recordMovementDiagnostic("support-layer-mismatch", {
+                context,
+                expectedLayer: currentLayer,
+                supportLayer
+            }, {
+                dedupeKey: `support-layer-mismatch:${currentLayer}:${supportLayer}`,
+                minIntervalMs: 1000
+            });
+        }
+    }
+
+    getMovementDiagnostics() {
+        return Array.isArray(this.movementDiagnosticLog)
+            ? this.movementDiagnosticLog.map(entry => ({ ...entry }))
+            : [];
+    }
+
+    clearMovementDiagnostics(reason = "reset") {
+        this.movementDiagnosticLog = [];
+        this._lastMovementDiagnosticByKey = {};
+        this._recordMovementDiagnostic("diagnostics-cleared", { reason }, { force: true });
+        return this.getMovementDiagnostics();
+    }
+
+    getNodeStandingZ(node) {
+        if (this.map && typeof this.map.getNodeBaseZ === "function") {
+            return this.map.getNodeBaseZ(node);
+        }
+        if (node && Number.isFinite(node.baseZ)) {
+            return Number(node.baseZ);
+        }
+        return 0;
+    }
+
+    getPathItemDestinationNode(pathItem) {
+        if (!pathItem) return null;
+        if (pathItem.toNode) return pathItem.toNode;
+        return pathItem;
+    }
+
+    getTraversalStepWorldPosition(step, progress = 1) {
+        if (!step) return null;
+        if (typeof step.getWorldPositionAt === "function") {
+            const sampledPosition = step.getWorldPositionAt(progress);
+            if (
+                sampledPosition
+                && Number.isFinite(sampledPosition.x)
+                && Number.isFinite(sampledPosition.y)
+            ) {
+                return {
+                    x: Number(sampledPosition.x),
+                    y: Number(sampledPosition.y),
+                    z: Number.isFinite(sampledPosition.z)
+                        ? Number(sampledPosition.z)
+                        : this.getNodeStandingZ(step.toNode || null)
+                };
+            }
+        }
+        const fromNode = step.fromNode || this.node || null;
+        const toNode = step.toNode || null;
+        if (!toNode) return null;
+        const clampedProgress = Number.isFinite(progress) ? Math.max(0, Math.min(1, Number(progress))) : 1;
+        if (!fromNode) {
+            return {
+                x: Number(toNode.x),
+                y: Number(toNode.y),
+                z: this.getNodeStandingZ(toNode)
+            };
+        }
+        const x = fromNode.x + ((this.map && typeof this.map.shortestDeltaX === "function")
+            ? this.map.shortestDeltaX(fromNode.x, toNode.x)
+            : (toNode.x - fromNode.x)) * clampedProgress;
+        const y = fromNode.y + ((this.map && typeof this.map.shortestDeltaY === "function")
+            ? this.map.shortestDeltaY(fromNode.y, toNode.y)
+            : (toNode.y - fromNode.y)) * clampedProgress;
+        const fromZ = this.getNodeStandingZ(fromNode);
+        const toZ = this.getNodeStandingZ(toNode);
+        return {
+            x,
+            y,
+            z: fromZ + (toZ - fromZ) * clampedProgress
+        };
+    }
+
+    resolvePathStep(pathItem, fromNode = null) {
+        if (!pathItem) return null;
+        if (pathItem.toNode) return pathItem;
+
+        const originNode = fromNode || this.node || null;
+        const destinationNode = pathItem;
+        const directionIndex = (
+            originNode
+            && Array.isArray(originNode.neighbors)
+            && originNode.neighbors.indexOf(destinationNode) >= 0
+        )
+            ? originNode.neighbors.indexOf(destinationNode)
+            : null;
+
+        return {
+            fromNode: originNode,
+            toNode: destinationNode,
+            type: "planar",
+            directionIndex,
+            getWorldPositionAt: (progress = 1) => this.getTraversalStepWorldPosition({
+                fromNode: originNode,
+                toNode: destinationNode
+            }, progress)
+        };
+    }
+
+    getVectorMovementInputSpeedMultiplier(options = {}) {
+        return Number.isFinite(options.speedMultiplier)
+            ? Math.max(0, Number(options.speedMultiplier))
+            : 1;
+    }
+
+    getVectorMovementEnvironmentSpeedMultiplier(_options = {}) {
+        return 1;
+    }
+
+    getVectorMovementMaxSpeed(options = {}) {
+        const baseSpeed = this.getEffectiveMovementSpeed(this.speed);
+        const inputSpeedMultiplier = this.getVectorMovementInputSpeedMultiplier(options);
+        const environmentSpeedMultiplier = this.getVectorMovementEnvironmentSpeedMultiplier(options);
+        return baseSpeed * inputSpeedMultiplier * environmentSpeedMultiplier;
+    }
+
+    getVectorMovementCollisionRadius(_options = {}) {
+        return Number.isFinite(this.groundRadius)
+            ? Math.max(0, Number(this.groundRadius))
+            : 0;
+    }
+
+    getVectorMovementSearchPadding(radius, _options = {}) {
+        const resolvedRadius = Number.isFinite(radius) ? Math.max(0, Number(radius)) : 0;
+        return Math.max(2, resolvedRadius + 1.5);
+    }
+
+    getVectorMovementSearchNodes(newX, newY, padding) {
+        if (!this.map || typeof this.map.worldToNode !== "function") {
+            return [];
+        }
+
+        const sampledNodes = [
+            this.map.worldToNode(newX, newY),
+            this.map.worldToNode(newX - padding, newY - padding),
+            this.map.worldToNode(newX - padding, newY + padding),
+            this.map.worldToNode(newX + padding, newY - padding),
+            this.map.worldToNode(newX + padding, newY + padding)
+        ];
+
+        const layer = this.getCurrentMovementLayer();
+        const needsLayerResolution = layer !== 0 && this.map && (
+            typeof this.map.getFloorNodeAtLayer === "function" ||
+            typeof this.map.getNode === "function"
+        );
+
+        const uniqueNodes = [];
+        const seen = new Set();
+        for (let i = 0; i < sampledNodes.length; i++) {
+            const baseNode = sampledNodes[i];
+            if (!baseNode) continue;
+            let node = baseNode;
+            if (needsLayerResolution) {
+                const sectionKey = typeof baseNode._prototypeSectionKey === "string"
+                    ? baseNode._prototypeSectionKey : "";
+                let layeredNode = null;
+                if (typeof this.map.getFloorNodeAtLayer === "function") {
+                    layeredNode = this.map.getFloorNodeAtLayer(baseNode.xindex, baseNode.yindex, layer, {
+                        sectionKey, allowScan: false
+                    });
+                }
+                if (!layeredNode && layer === 0 && typeof this.map.getNode === "function") {
+                    layeredNode = this.map.getNode(baseNode.xindex, baseNode.yindex, layer);
+                }
+                node = layeredNode || baseNode;
+            }
+            const key = `${Number(node.xindex)}:${Number(node.yindex)}:${Number.isFinite(node.traversalLayer) ? Number(node.traversalLayer) : layer}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            uniqueNodes.push(node);
+        }
+        return uniqueNodes;
+    }
+
+    doesObjectBlockVectorMovement(obj, _options = {}) {
+        if (!obj || obj === this || obj.gone || !obj.shadowBox) return false;
+        if (typeof globalThis !== "undefined" && typeof globalThis.doesObjectBlockPassage === "function") {
+            return !!globalThis.doesObjectBlockPassage(obj);
+        }
+        const sinkState = (obj && typeof obj === "object" && obj._scriptSinkState && typeof obj._scriptSinkState === "object")
+            ? obj._scriptSinkState
+            : null;
+        return !!(obj.isPassable === false && (!sinkState || sinkState.nonBlocking === false));
+    }
+
+    collectNearbyBlockingObjects(newX, newY, radius, options = {}) {
+        const nearbyObjects = [];
+        if (!this.map || typeof this.map.worldToNode !== "function") {
+            return nearbyObjects;
+        }
+        const padding = this.getVectorMovementSearchPadding(radius, options);
+        const searchNodes = this.getVectorMovementSearchNodes(newX, newY, padding);
+        if (searchNodes.length === 0) return nearbyObjects;
+
+        const xIndices = searchNodes.map(node => Number(node.xindex));
+        const yIndices = searchNodes.map(node => Number(node.yindex));
+        const minXIndex = Math.min(...xIndices);
+        const maxXIndex = Math.max(...xIndices);
+        const minYIndex = Math.min(...yIndices);
+        const maxYIndex = Math.max(...yIndices);
+
+        const movementLayer = this.getCurrentMovementLayer(options);
+        const useLayerFilter = this.isUsingHitboxMovement() && movementLayer !== 0;
+        const getNodeLayer = (node) => Number.isFinite(node && node.traversalLayer)
+            ? Math.round(Number(node.traversalLayer))
+            : (Number.isFinite(node && node.level) ? Math.round(Number(node.level)) : 0);
+        const seen = useLayerFilter ? new Set() : null;
+        const addExtraBlockers = () => {
+            if (!this.map || typeof this.map.collectStairFootprintMovementBlockersInBounds !== "function") return;
+            const currentX = Number.isFinite(Number(this.x)) ? Number(this.x) : newX;
+            const currentY = Number.isFinite(Number(this.y)) ? Number(this.y) : newY;
+            const queryBounds = {
+                minX: Math.min(currentX, newX) - padding,
+                minY: Math.min(currentY, newY) - padding,
+                maxX: Math.max(currentX, newX) + padding,
+                maxY: Math.max(currentY, newY) + padding
+            };
+            const extraSeen = seen || new Set(nearbyObjects);
+            const stairBlockers = this.map.collectStairFootprintMovementBlockersInBounds(queryBounds, this, {
+                ...options,
+                candidateX: newX,
+                candidateY: newY
+            });
+            for (let i = 0; i < stairBlockers.length; i++) {
+                const obj = stairBlockers[i];
+                if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
+                if (extraSeen.has(obj)) continue;
+                extraSeen.add(obj);
+                nearbyObjects.push(obj);
+            }
+        };
+
+        const collectFromNode = (node) => {
+            if (!node || !Array.isArray(node.objects)) return;
+            if (useLayerFilter && getNodeLayer(node) !== movementLayer) return;
+            for (const obj of node.objects) {
+                if (useLayerFilter) {
+                    if (!obj || obj.gone) continue;
+                    const objLayer = Number.isFinite(obj.traversalLayer)
+                        ? Math.round(Number(obj.traversalLayer))
+                        : (Number.isFinite(obj.level) ? Math.round(Number(obj.level)) : getNodeLayer(node));
+                    if (objLayer !== movementLayer) continue;
+                    if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
+                    if (seen.has(obj)) continue;
+                    seen.add(obj);
+                } else {
+                    if (!this.doesObjectBlockVectorMovement(obj, options)) continue;
+                }
+                nearbyObjects.push(obj);
+            }
+        };
+
+        if (typeof this.map.getNodesInIndexWindow === "function") {
+            const nearbyNodes = this.map.getNodesInIndexWindow(minXIndex - 1, maxXIndex + 1, minYIndex - 1, maxYIndex + 1);
+            for (let i = 0; i < nearbyNodes.length; i++) {
+                const node = useLayerFilter
+                    ? this.resolveNodeForMovementLayer(nearbyNodes[i])
+                    : nearbyNodes[i];
+                collectFromNode(node);
+            }
+            addExtraBlockers();
+            return nearbyObjects;
+        }
+
+        const mapWidth = Number.isFinite(this.map.width) ? this.map.width : 0;
+        const mapHeight = Number.isFinite(this.map.height) ? this.map.height : 0;
+        const xStart = Math.max(minXIndex - 1, 0);
+        const xEnd = Math.min(maxXIndex + 1, Math.max(0, mapWidth - 1));
+        const yStart = Math.max(minYIndex - 1, 0);
+        const yEnd = Math.min(maxYIndex + 1, Math.max(0, mapHeight - 1));
+        for (let x = xStart; x <= xEnd; x++) {
+            for (let y = yStart; y <= yEnd; y++) {
+                const rawNode = this.map.nodes[x] && this.map.nodes[x][y];
+                if (!rawNode || !rawNode.objects) continue;
+                const node = useLayerFilter ? this.resolveNodeForMovementLayer(rawNode) : rawNode;
+                collectFromNode(node);
+            }
+        }
+        addExtraBlockers();
+        return nearbyObjects;
+    }
+
+    doesCharacterBlockVectorMovement(otherCharacter, options = {}) {
+        if (!otherCharacter || otherCharacter === this) return false;
+        if (otherCharacter === options.target || otherCharacter === options.ignoreCharacter) return false;
+        if (otherCharacter.gone || otherCharacter.dead) return false;
+        return !!otherCharacter.shadowBox;
+    }
+
+    isUsingHitboxMovement() {
+        return !!(this._closeCombatState && typeof this._closeCombatState === "object" && !this.gone && !this.dead);
+    }
+
+    shouldConstrainHitboxMovementToFloorSupport(options = {}) {
+        if (!this.isUsingHitboxMovement()) return false;
+        if (options.allowUnsupportedPosition === true) return false;
+        if (this.isJumping === true) return false;
+        if (this._floorFallState && this._floorFallState.active === true) return false;
+        const layer = Number.isFinite(this.currentLayer) ? Math.round(Number(this.currentLayer)) : 0;
+        return layer !== 0;
+    }
+
+    getCurrentMovementLayer(_options = {}) {
+        if (Number.isFinite(this.currentLayer)) return Math.round(Number(this.currentLayer));
+        if (Number.isFinite(this.traversalLayer)) return Math.round(Number(this.traversalLayer));
+        if (this.node && Number.isFinite(this.node.traversalLayer)) return Math.round(Number(this.node.traversalLayer));
+        if (this.node && Number.isFinite(this.node.level)) return Math.round(Number(this.node.level));
+        return 0;
+    }
+
+    resolveNodeForMovementLayer(node) {
+        if (!node || !this.map) return node;
+        const layer = this.getCurrentMovementLayer();
+        const nodeLayer = Number.isFinite(node.traversalLayer)
+            ? Math.round(Number(node.traversalLayer))
+            : (Number.isFinite(node.level) ? Math.round(Number(node.level)) : 0);
+        if (nodeLayer === layer) return node;
+        const xindex = Number(node.xindex);
+        const yindex = Number(node.yindex);
+        if (!Number.isFinite(xindex) || !Number.isFinite(yindex)) return null;
+        if (typeof this.map.resolveNodeAtLayer === "function") {
+            return this.map.resolveNodeAtLayer(node, layer, { allowScan: false });
+        }
+        return null;
+    }
+
+    getCharacterVectorMovementCandidates() {
+        const candidates = [];
+        const seen = new Set();
+
+        const maybeAdd = (candidate) => {
+            if (!candidate || seen.has(candidate)) return;
+            seen.add(candidate);
+            candidates.push(candidate);
+        };
+
+        const wizardCandidates = [
+            (typeof globalThis !== "undefined" && globalThis.wizard) ? globalThis.wizard : null,
+            (typeof wizard !== "undefined" && wizard) ? wizard : null
+        ];
+        for (let i = 0; i < wizardCandidates.length; i++) {
+            maybeAdd(wizardCandidates[i]);
+        }
+
+        const animalCandidates = [
+            (typeof globalThis !== "undefined" && Array.isArray(globalThis.animals)) ? globalThis.animals : null,
+            (typeof animals !== "undefined" && Array.isArray(animals)) ? animals : null
+        ];
+        for (let i = 0; i < animalCandidates.length; i++) {
+            const list = animalCandidates[i];
+            if (!Array.isArray(list)) continue;
+            list.forEach(maybeAdd);
+        }
+
+        return candidates;
+    }
+
+    collectNearbyBlockingCharacters(newX, newY, radius, options = {}) {
+        const nearbyCharacters = [];
+        const candidates = this.getCharacterVectorMovementCandidates();
+        const resolvedRadius = Number.isFinite(radius) ? Math.max(0, Number(radius)) : 0;
+        for (let i = 0; i < candidates.length; i++) {
+            const candidate = candidates[i];
+            if (!this.doesCharacterBlockVectorMovement(candidate, options)) continue;
+            const candidateRadius = Number.isFinite(candidate.groundRadius)
+                ? Math.max(0, Number(candidate.groundRadius))
+                : (Number.isFinite(candidate.visualRadius) ? Math.max(0, Number(candidate.visualRadius)) : 0);
+            const distance = (this.map && typeof this.map.distanceBetweenPoints === "function")
+                ? this.map.distanceBetweenPoints(newX, newY, candidate.x, candidate.y)
+                : Math.hypot(candidate.x - newX, candidate.y - newY);
+            const maxDistance = resolvedRadius + candidateRadius + this.getVectorMovementSearchPadding(radius, options);
+            if (distance <= maxDistance) {
+                nearbyCharacters.push(candidate);
+            }
+        }
+        return nearbyCharacters;
+    }
+
+    prepareVectorMovementContext(newX, newY, radius, options = {}) {
+        const forceTouchedObjects = (this._movementForceTouchedObjects instanceof Set)
+            ? this._movementForceTouchedObjects
+            : new Set();
+        forceTouchedObjects.clear();
+        this._movementForceTouchedObjects = forceTouchedObjects;
+        const nearbyObjects = this.collectNearbyBlockingObjects(newX, newY, radius, options);
+        const nearbyCharacters = options.includeCharacterBlockers === true
+            ? this.collectNearbyBlockingCharacters(newX, newY, radius, options)
+            : [];
+        let nearbyBridgeRoads = [];
+        if (
+            this.map &&
+            typeof this.map.collectGroundBridgeRoadsInBounds === "function" &&
+            this.getCurrentMovementLayer(options) === 0
+        ) {
+            const resolvedRadius = Math.max(0, Number(radius) || 0);
+            nearbyBridgeRoads = this.map.collectGroundBridgeRoadsInBounds({
+                minX: Math.min(Number(this.x) || 0, Number(newX) || 0) - resolvedRadius,
+                minY: Math.min(Number(this.y) || 0, Number(newY) || 0) - resolvedRadius,
+                maxX: Math.max(Number(this.x) || 0, Number(newX) || 0) + resolvedRadius,
+                maxY: Math.max(Number(this.y) || 0, Number(newY) || 0) + resolvedRadius
+            });
+        }
+        let nearbyBridgeBarrierSegments = [];
+        if (
+            nearbyBridgeRoads.length > 0 &&
+            this.map &&
+            typeof this.map.getGroundBridgeMovementBarrierSegments === "function"
+        ) {
+            nearbyBridgeBarrierSegments = this.map.getGroundBridgeMovementBarrierSegments(
+                this,
+                Number(this.x) || 0,
+                Number(this.y) || 0,
+                Number(newX) || 0,
+                Number(newY) || 0,
+                Math.max(0, Number(radius) || 0),
+                {
+                    ...options,
+                    actor: this,
+                    bridgeRoads: nearbyBridgeRoads
+                }
+            );
+        }
+        let nearbyTerrainPolygons = [];
+        if (
+            this.map &&
+            typeof this.map.collectGroundTerrainCollisionPolygons === "function" &&
+            this.getCurrentMovementLayer(options) === 0 &&
+            options.ignoreTerrainPassability !== true
+        ) {
+            const resolvedRadius = Math.max(0, Number(radius) || 0);
+            nearbyTerrainPolygons = this.map.collectGroundTerrainCollisionPolygons({
+                minX: Math.min(Number(this.x) || 0, Number(newX) || 0) - resolvedRadius,
+                minY: Math.min(Number(this.y) || 0, Number(newY) || 0) - resolvedRadius,
+                maxX: Math.max(Number(this.x) || 0, Number(newX) || 0) + resolvedRadius,
+                maxY: Math.max(Number(this.y) || 0, Number(newY) || 0) + resolvedRadius
+            }, options);
+        }
+        this._updateHitboxCollisionDebugSnapshot({
+            actor: this._getHitboxDebugLabel(this),
+            actorType: this.type || (this.constructor && this.constructor.name) || "unknown",
+            currentPosition: { x: Number(this.x), y: Number(this.y) },
+            candidatePosition: { x: Number(newX), y: Number(newY) },
+            movementVector: {
+                x: Number(this.movementVector && this.movementVector.x) || 0,
+                y: Number(this.movementVector && this.movementVector.y) || 0
+            },
+            frameRate: Number(this.frameRate) || 0,
+            radius: Number(radius) || 0,
+            includeCharacterBlockers: options.includeCharacterBlockers === true,
+            closeCombatPhase: this._closeCombatState && this._closeCombatState.phase ? this._closeCombatState.phase : null,
+            nearbyObjectBlockers: nearbyObjects.map(obj => this._buildHitboxDebugCandidateSummary(obj, newX, newY, radius, options)),
+            nearbyCharacterBlockers: nearbyCharacters.map(char => this._buildHitboxDebugCandidateSummary(char, newX, newY, radius, options)),
+            nearbyTerrainBlockers: nearbyTerrainPolygons.map(entry => ({
+                terrainType: entry && entry.terrainType ? entry.terrainType : "",
+                sourceKey: entry && entry.sourceKey ? entry.sourceKey : "",
+                index: Number.isInteger(entry && entry.index) ? entry.index : null
+            })),
+            nearbyBridgeBlockers: nearbyBridgeRoads.map(entry => ({
+                type: entry && entry.road && entry.road.type ? entry.road.type : "",
+                scriptingName: entry && entry.road && entry.road.scriptingName ? entry.road.scriptingName : ""
+            })),
+            nearbyBridgeBarrierSegments: nearbyBridgeBarrierSegments.length,
+            staticCollisions: [],
+            dynamicCharacterInteractions: [],
+            dynamicResolutionIterations: 0
+        });
+        return {
+            nearbyObjects,
+            nearbyCharacters,
+            nearbyTerrainPolygons,
+            nearbyBridgeRoads,
+            nearbyBridgeBarrierSegments,
+            forceTouchedObjects
+        };
+    }
+
+    canBypassVectorMovementCollisions(_currentX, _currentY, _newX, _newY, _radius, _context, _options = {}) {
+        return false;
+    }
+
+    onVectorMovementApplied(_movementResult, _options = {}) {
+    }
+
+    _setVectorMovementPositionRaw(targetX, targetY) {
+        const wrappedX = this.map && typeof this.map.wrapWorldX === "function"
+            ? this.map.wrapWorldX(targetX)
+            : targetX;
+        const wrappedY = this.map && typeof this.map.wrapWorldY === "function"
+            ? this.map.wrapWorldY(targetY)
+            : targetY;
+        this.x = wrappedX;
+        this.y = wrappedY;
+        this.updateHitboxes();
+        return { targetX, targetY, wrappedX, wrappedY };
+    }
+
+    resolveDynamicCharacterHitboxInteractions(movementContext = {}, options = {}) {
+        const nearbyCharacters = Array.isArray(movementContext.nearbyCharacters)
+            ? movementContext.nearbyCharacters
+            : [];
+        if (nearbyCharacters.length === 0 || !this.shadowBox) return;
+
+        let changed = false;
+        const interactionLog = (this._hitboxCollisionDebug && Array.isArray(this._hitboxCollisionDebug.dynamicCharacterInteractions))
+            ? this._hitboxCollisionDebug.dynamicCharacterInteractions
+            : [];
+
+        for (let i = 0; i < nearbyCharacters.length; i++) {
+            const other = nearbyCharacters[i];
+            if (!this.doesCharacterBlockVectorMovement(other, options) || !other.shadowBox) continue;
+
+            const collision = other.shadowBox.intersects(this.shadowBox);
+            if (!collision || collision.pushX === undefined || collision.pushY === undefined) continue;
+
+            const overlap = Math.hypot(collision.pushX, collision.pushY);
+            if (!(overlap > 0)) continue;
+
+            const normalX = collision.pushX / overlap;
+            const normalY = collision.pushY / overlap;
+            const otherDynamic = typeof other.isUsingHitboxMovement === "function"
+                ? other.isUsingHitboxMovement()
+                : !!(other._closeCombatState && typeof other._closeCombatState === "object");
+            const selfShare = otherDynamic ? 0.5 : 1;
+            const otherShare = otherDynamic ? 0.5 : 0;
+            const separation = overlap + 0.01;
+            changed = true;
+            const selfVector = this.movementVector && typeof this.movementVector === "object"
+                ? this.movementVector
+                : { x: 0, y: 0 };
+            const otherVector = (other.movementVector && typeof other.movementVector === "object")
+                ? other.movementVector
+                : { x: 0, y: 0 };
+            const relativeNormalSpeed = (Number(selfVector.x) - Number(otherVector.x)) * normalX
+                + (Number(selfVector.y) - Number(otherVector.y)) * normalY;
+            interactionLog.push({
+                label: this._getHitboxDebugLabel(other),
+                overlap,
+                normalX,
+                normalY,
+                relativeNormalSpeed,
+                selfShare,
+                otherShare,
+                otherDynamic
+            });
+
+            this._setVectorMovementPositionRaw(
+                this.x + normalX * separation * selfShare,
+                this.y + normalY * separation * selfShare
+            );
+
+            if (otherShare > 0 && typeof other._setVectorMovementPositionRaw === "function") {
+                other._setVectorMovementPositionRaw(
+                    other.x - normalX * separation * otherShare,
+                    other.y - normalY * separation * otherShare
+                );
+                if (
+                    typeof other.prepareVectorMovementContext === "function" &&
+                    typeof other.getVectorMovementCollisionRadius === "function" &&
+                    typeof other._resolveStaticVectorMovementCandidate === "function"
+                ) {
+                    const otherRadius = other.getVectorMovementCollisionRadius(options);
+                    const otherContext = other.prepareVectorMovementContext(other.x, other.y, otherRadius, {
+                        ...options,
+                        includeCharacterBlockers: false,
+                        ignoreCharacter: this
+                    }) || {};
+                    const otherResolved = other._resolveStaticVectorMovementCandidate(
+                        other.x,
+                        other.y,
+                        otherRadius,
+                        otherContext,
+                        {
+                            ...options,
+                            includeCharacterBlockers: false,
+                            ignoreCharacter: this
+                        }
+                    );
+                    other._setVectorMovementPositionRaw(otherResolved.x, otherResolved.y);
+                }
+            }
+
+            if (relativeNormalSpeed < 0) {
+                if (otherDynamic) {
+                    const halfImpulse = relativeNormalSpeed * 0.5;
+                    this.movementVector.x -= normalX * halfImpulse;
+                    this.movementVector.y -= normalY * halfImpulse;
+                    other.movementVector.x += normalX * halfImpulse;
+                    other.movementVector.y += normalY * halfImpulse;
+                } else {
+                    this.movementVector.x -= normalX * relativeNormalSpeed;
+                    this.movementVector.y -= normalY * relativeNormalSpeed;
+                }
+            }
+
+        }
+
+        return changed;
+    }
+
+    _getFloorFragmentBoundaryPush(cx, cy, radius) {
+        const movementPerfEnabled = typeof globalThis !== "undefined" &&
+            globalThis.movementPerfBreakdownState &&
+            globalThis.movementPerfBreakdownState.enabled === true &&
+            typeof globalThis.recordMovementPerfSection === "function";
+        const movementPerfStartMs = movementPerfEnabled ? performance.now() : 0;
+        try {
+            if (this.getCurrentMovementLayer() === 0) return null;
+            if (!this.shouldConstrainHitboxMovementToFloorSupport()) return null;
+            if (!this.map || !(this.map.floorsById instanceof Map)) return null;
+            const resolvedRadius = Math.max(0, Number(radius) || 0);
+            if (!(resolvedRadius > 0)) return null;
+            const layer = this.getCurrentMovementLayer();
+            const fragments = typeof this.map.getFloorFragmentsForLayer === "function"
+                ? this.map.getFloorFragmentsForLayer(layer)
+                : Array.from(this.map.floorsById.values());
+            for (const fragment of fragments) {
+                const fragmentLayer = Number.isFinite(fragment.level) ? Math.round(Number(fragment.level)) : 0;
+                if (fragmentLayer !== layer) continue;
+                const poly = Array.isArray(fragment.outerPolygon) ? fragment.outerPolygon : null;
+                if (!poly || poly.length < 3) continue;
+                let nearestDistSq = Infinity;
+                let nearestCloseX = cx;
+                let nearestCloseY = cy;
+                for (let i = 0; i < poly.length; i++) {
+                    const a = poly[i];
+                    const b = poly[(i + 1) % poly.length];
+                    const ax = Number(a.x), ay = Number(a.y), bx = Number(b.x), by = Number(b.y);
+                    if (!Number.isFinite(ax + ay + bx + by)) continue;
+                    const abx = bx - ax, aby = by - ay;
+                    const lenSq = abx * abx + aby * aby;
+                    const t = lenSq > 1e-12 ? Math.max(0, Math.min(1, ((cx - ax) * abx + (cy - ay) * aby) / lenSq)) : 0;
+                    const closeX = ax + abx * t;
+                    const closeY = ay + aby * t;
+                    const dSq = (cx - closeX) * (cx - closeX) + (cy - closeY) * (cy - closeY);
+                    if (dSq < nearestDistSq) {
+                        nearestDistSq = dSq;
+                        nearestCloseX = closeX;
+                        nearestCloseY = closeY;
+                    }
+                }
+                const dist = Math.sqrt(nearestDistSq);
+                if (!(dist > 1e-6)) continue;
+                const isInside = typeof this.map.isPointSupportedByFloorFragment === "function"
+                    ? this.map.isPointSupportedByFloorFragment(fragment, cx, cy)
+                    : true;
+                if (isInside) {
+                    // Normal: circle overlaps boundary from inside — push center away from edge.
+                    const overlap = resolvedRadius - dist;
+                    if (!(overlap > 1e-6)) continue;
+                    return {
+                        pushX: (cx - nearestCloseX) / dist * overlap,
+                        pushY: (cy - nearestCloseY) / dist * overlap
+                    };
+                } else {
+                    // Recovery: center overshot past the boundary — pull it back inside by resolvedRadius.
+                    const pullMagnitude = dist + resolvedRadius;
+                    return {
+                        pushX: (nearestCloseX - cx) / dist * pullMagnitude,
+                        pushY: (nearestCloseY - cy) / dist * pullMagnitude
+                    };
+                }
+            }
+            return null;
+        } finally {
+            if (movementPerfEnabled) globalThis.recordMovementPerfSection("character.floorBoundaryPush", performance.now() - movementPerfStartMs);
+        }
+    }
+
+    _resolveStaticVectorMovementCandidate(candidateX, candidateY, movementRadius, movementContext = {}, options = {}) {
+        let testX = candidateX;
+        let testY = candidateY;
+        let iteration = 0;
+        const maxIterations = 3;
+        const nearbyObjects = Array.isArray(movementContext.nearbyObjects) ? movementContext.nearbyObjects : [];
+        const nearbyTerrainPolygons = Array.isArray(movementContext.nearbyTerrainPolygons)
+            ? movementContext.nearbyTerrainPolygons
+            : [];
+        const nearbyBridgeRoads = Array.isArray(movementContext.nearbyBridgeRoads)
+            ? movementContext.nearbyBridgeRoads
+            : [];
+        const nearbyBridgeBarrierSegments = Array.isArray(movementContext.nearbyBridgeBarrierSegments)
+            ? movementContext.nearbyBridgeBarrierSegments
+            : [];
+        let collided = false;
+        const staticCollisionLog = (this._hitboxCollisionDebug && Array.isArray(this._hitboxCollisionDebug.staticCollisions))
+            ? this._hitboxCollisionDebug.staticCollisions
+            : [];
+        const shouldTestObjectHitbox = (obj, hitbox) => {
+            if (!obj || !obj.shadowBox || typeof obj.shadowBox.intersects !== "function") return false;
+            if (typeof obj.shadowBox.getBounds !== "function") return true;
+            const bounds = obj.shadowBox.getBounds();
+            if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y) ||
+                !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) {
+                return true;
+            }
+            const radius = Math.max(0, Number(hitbox.radius) || 0);
+            return !(
+                hitbox.x + radius < bounds.x ||
+                hitbox.x - radius > bounds.x + bounds.width ||
+                hitbox.y + radius < bounds.y ||
+                hitbox.y - radius > bounds.y + bounds.height
+            );
+        };
+        const fallbackCollisionPush = (obj, hitbox) => {
+            const velocityX = Number(this.movementVector && this.movementVector.x) || 0;
+            const velocityY = Number(this.movementVector && this.movementVector.y) || 0;
+            const velocityLen = Math.hypot(velocityX, velocityY);
+            if (velocityLen > 1e-6) {
+                return {
+                    pushX: -(velocityX / velocityLen) * 0.05,
+                    pushY: -(velocityY / velocityLen) * 0.05
+                };
+            }
+            if (obj && obj.shadowBox && typeof obj.shadowBox.getBounds === "function") {
+                const bounds = obj.shadowBox.getBounds();
+                if (bounds && Number.isFinite(bounds.x) && Number.isFinite(bounds.y) &&
+                    Number.isFinite(bounds.width) && Number.isFinite(bounds.height)) {
+                    const centerX = bounds.x + bounds.width * 0.5;
+                    const centerY = bounds.y + bounds.height * 0.5;
+                    const dx = Number(hitbox.x) - centerX;
+                    const dy = Number(hitbox.y) - centerY;
+                    const len = Math.hypot(dx, dy);
+                    if (len > 1e-6) {
+                        return { pushX: (dx / len) * 0.05, pushY: (dy / len) * 0.05 };
+                    }
+                }
+            }
+            const dx = Number(hitbox.x) - Number(this.x);
+            const dy = Number(hitbox.y) - Number(this.y);
+            const len = Math.hypot(dx, dy);
+            if (len > 1e-6) {
+                return { pushX: -(dx / len) * 0.05, pushY: -(dy / len) * 0.05 };
+            }
+            return { pushX: 0.05, pushY: 0 };
+        };
+        const resolveCollision = (obj, hitbox) => {
+            if (!shouldTestObjectHitbox(obj, hitbox)) return null;
+            const collision = obj.shadowBox.intersects(hitbox);
+            if (!collision || collision.pushX === undefined) return null;
+            let pushX = Number(collision.pushX) || 0;
+            let pushY = Number(collision.pushY) || 0;
+            if (Math.hypot(pushX, pushY) <= 1e-9) {
+                const fallback = fallbackCollisionPush(obj, hitbox);
+                pushX = Number(fallback.pushX) || 0;
+                pushY = Number(fallback.pushY) || 0;
+            }
+            return { pushX, pushY };
+        };
+        const resolveTerrainCollision = (hitbox) => {
+            if (
+                nearbyTerrainPolygons.length === 0 ||
+                !this.map ||
+                typeof this.map.resolveGroundTerrainHitboxCollision !== "function"
+            ) {
+                return null;
+            }
+            return this.map.resolveGroundTerrainHitboxCollision(hitbox, {
+                ...options,
+                actor: this,
+                traversalLayer: this.getCurrentMovementLayer(options),
+                terrainCollisionPolygons: nearbyTerrainPolygons,
+                bridgeRoads: nearbyBridgeRoads
+            });
+        };
+        const addTerrainCollision = (collision, iteration, sampleX, sampleY) => {
+            if (!collision) return { pushX: 0, pushY: 0, pushLen: 0 };
+            const pushX = Number(collision.pushX) || 0;
+            const pushY = Number(collision.pushY) || 0;
+            const pushLen = Math.hypot(pushX, pushY);
+            if (!(pushLen > 0)) return { pushX: 0, pushY: 0, pushLen: 0 };
+            staticCollisionLog.push({
+                label: `terrain:${collision.terrainType || "impassable"}`,
+                iteration,
+                sampleX,
+                sampleY,
+                pushX,
+                pushY,
+                overlap: pushLen
+            });
+            return { pushX, pushY, pushLen };
+        };
+        const resolveBridgeCollision = (hitbox) => {
+            if (
+                nearbyBridgeRoads.length === 0 ||
+                !this.map ||
+                typeof this.map.resolveGroundBridgeHitboxCollision !== "function"
+            ) {
+                return null;
+            }
+            return this.map.resolveGroundBridgeHitboxCollision(hitbox, {
+                ...options,
+                actor: this,
+                bridgeRoads: nearbyBridgeRoads
+            });
+        };
+        const addBridgeCollision = (collision, iteration, sampleX, sampleY) => {
+            if (!collision) return { pushX: 0, pushY: 0, pushLen: 0 };
+            const pushX = Number(collision.pushX) || 0;
+            const pushY = Number(collision.pushY) || 0;
+            const pushLen = Math.hypot(pushX, pushY);
+            if (!(pushLen > 0)) return { pushX: 0, pushY: 0, pushLen: 0 };
+            staticCollisionLog.push({
+                label: `bridge:${collision.bridgeMode || "edge"}`,
+                iteration,
+                sampleX,
+                sampleY,
+                pushX,
+                pushY,
+                overlap: pushLen
+            });
+            return { pushX, pushY, pushLen };
+        };
+        const resolveBridgeMovementSegmentCollision = (fromX, fromY, toX, toY) => {
+            if (
+                nearbyBridgeBarrierSegments.length === 0 ||
+                !this.map ||
+                typeof this.map.resolveGroundBridgeMovementSegmentCollision !== "function"
+            ) {
+                return null;
+            }
+            return this.map.resolveGroundBridgeMovementSegmentCollision(
+                fromX,
+                fromY,
+                toX,
+                toY,
+                movementRadius,
+                {
+                    ...options,
+                    actor: this,
+                    bridgeRoads: nearbyBridgeRoads,
+                    bridgeBarrierSegments: nearbyBridgeBarrierSegments
+                }
+            );
+        };
+        const returnBridgeMovementSegmentCollision = (collision) => {
+            if (!collision) return null;
+            const pushX = Number(collision.pushX) || 0;
+            const pushY = Number(collision.pushY) || 0;
+            const pushLen = Math.hypot(pushX, pushY);
+            staticCollisionLog.push({
+                label: `bridge:${collision.bridgeMode || "segment"}`,
+                iteration: "segment",
+                sampleX: Number(collision.x),
+                sampleY: Number(collision.y),
+                pushX,
+                pushY,
+                overlap: pushLen
+            });
+            const normalX = Number.isFinite(Number(collision.normalX))
+                ? Number(collision.normalX)
+                : (pushLen > 0 ? pushX / pushLen : 0);
+            const normalY = Number.isFinite(Number(collision.normalY))
+                ? Number(collision.normalY)
+                : (pushLen > 0 ? pushY / pushLen : 0);
+            if (this.movementVector && typeof this.movementVector === "object") {
+                const vectorX = Number(this.movementVector.x) || 0;
+                const vectorY = Number(this.movementVector.y) || 0;
+                const normalComponent = vectorX * normalX + vectorY * normalY;
+                if (normalComponent < 0) {
+                    this.movementVector.x = vectorX - normalX * normalComponent;
+                    this.movementVector.y = vectorY - normalY * normalComponent;
+                }
+            }
+            return {
+                x: Number.isFinite(Number(collision.x)) ? Number(collision.x) : this.x,
+                y: Number.isFinite(Number(collision.y)) ? Number(collision.y) : this.y,
+                collided: true
+            };
+        };
+        const isStaticCollisionAt = (x, y) => {
+            if (!nearbyObjects.length && !nearbyTerrainPolygons.length && !nearbyBridgeRoads.length) return false;
+            const hitbox = this._movementStartHitbox || { type: "circle", x, y, radius: movementRadius };
+            hitbox.x = x;
+            hitbox.y = y;
+            hitbox.radius = movementRadius;
+            this._movementStartHitbox = hitbox;
+            for (const obj of nearbyObjects) {
+                if (resolveCollision(obj, hitbox)) return true;
+            }
+            if (resolveBridgeCollision(hitbox)) return true;
+            return !!resolveTerrainCollision(hitbox);
+        };
+        const findSweptCollision = (fromX, fromY, toX, toY) => {
+            if (!nearbyObjects.length && !nearbyTerrainPolygons.length && !nearbyBridgeRoads.length) return null;
+            const dx = toX - fromX;
+            const dy = toY - fromY;
+            const distance = Math.hypot(dx, dy);
+            if (!(distance > 1e-6)) return null;
+
+            const radius = Math.max(0, Number(movementRadius) || 0);
+            const stepSize = Math.max(0.03, Math.min(0.12, radius > 0 ? radius * 0.25 : 0.05));
+            const steps = Math.min(32, Math.max(1, Math.ceil(distance / stepSize)));
+            const sweepHitbox = this._movementSweepHitbox || { type: "circle", x: fromX, y: fromY, radius };
+            sweepHitbox.radius = radius;
+            this._movementSweepHitbox = sweepHitbox;
+
+            let lastClearX = fromX;
+            let lastClearY = fromY;
+            for (let i = 1; i <= steps; i++) {
+                const t = i / steps;
+                sweepHitbox.x = fromX + dx * t;
+                sweepHitbox.y = fromY + dy * t;
+
+                let totalPushX = 0;
+                let totalPushY = 0;
+                let maxPushLen = 0;
+                let hasCollision = false;
+
+                for (const obj of nearbyObjects) {
+                    const collision = resolveCollision(obj, sweepHitbox);
+                    if (!collision) continue;
+                    hasCollision = true;
+                    totalPushX += collision.pushX;
+                    totalPushY += collision.pushY;
+                    const pushLen = Math.hypot(collision.pushX, collision.pushY);
+                    maxPushLen = Math.max(maxPushLen, pushLen);
+                    if (movementContext.forceTouchedObjects instanceof Set) {
+                        movementContext.forceTouchedObjects.add(obj);
+                    }
+                    staticCollisionLog.push({
+                        label: this._getHitboxDebugLabel(obj),
+                        iteration: "sweep",
+                        sampleX: sweepHitbox.x,
+                        sampleY: sweepHitbox.y,
+                        pushX: Number(collision.pushX) || 0,
+                        pushY: Number(collision.pushY) || 0,
+                        overlap: pushLen
+                    });
+                }
+                const terrainCollision = addTerrainCollision(
+                    resolveTerrainCollision(sweepHitbox),
+                    "sweep",
+                    sweepHitbox.x,
+                    sweepHitbox.y
+                );
+                if (terrainCollision.pushLen > 0) {
+                    hasCollision = true;
+                    totalPushX += terrainCollision.pushX;
+                    totalPushY += terrainCollision.pushY;
+                    maxPushLen = Math.max(maxPushLen, terrainCollision.pushLen);
+                }
+                const bridgeCollision = addBridgeCollision(
+                    resolveBridgeCollision(sweepHitbox),
+                    "sweep",
+                    sweepHitbox.x,
+                    sweepHitbox.y
+                );
+                if (bridgeCollision.pushLen > 0) {
+                    hasCollision = true;
+                    totalPushX += bridgeCollision.pushX;
+                    totalPushY += bridgeCollision.pushY;
+                    maxPushLen = Math.max(maxPushLen, bridgeCollision.pushLen);
+                }
+
+                if (hasCollision) {
+                    return {
+                        x: lastClearX,
+                        y: lastClearY,
+                        pushX: totalPushX,
+                        pushY: totalPushY,
+                        maxPushLen
+                    };
+                }
+
+                lastClearX = sweepHitbox.x;
+                lastClearY = sweepHitbox.y;
+            }
+
+            return null;
+        };
+
+        while (iteration < maxIterations) {
+            iteration++;
+            const testHitbox = this._movementTestHitbox || { type: "circle", x: testX, y: testY, radius: movementRadius };
+            testHitbox.x = testX;
+            testHitbox.y = testY;
+            testHitbox.radius = movementRadius;
+            this._movementTestHitbox = testHitbox;
+
+            let totalPushX = 0;
+            let totalPushY = 0;
+            let maxPushLen = 0;
+            let hasCollision = false;
+
+            for (const obj of nearbyObjects) {
+                const collision = resolveCollision(obj, testHitbox);
+                if (collision) {
+                    hasCollision = true;
+                    totalPushX += collision.pushX;
+                    totalPushY += collision.pushY;
+                    const pushLen = Math.hypot(collision.pushX, collision.pushY);
+                    maxPushLen = Math.max(maxPushLen, pushLen);
+                    if (movementContext.forceTouchedObjects instanceof Set) {
+                        movementContext.forceTouchedObjects.add(obj);
+                    }
+                    staticCollisionLog.push({
+                        label: this._getHitboxDebugLabel(obj),
+                        iteration,
+                        sampleX: testX,
+                        sampleY: testY,
+                        pushX: Number(collision.pushX) || 0,
+                        pushY: Number(collision.pushY) || 0,
+                        overlap: pushLen
+                    });
+                }
+            }
+            const terrainCollision = addTerrainCollision(resolveTerrainCollision(testHitbox), iteration, testX, testY);
+            if (terrainCollision.pushLen > 0) {
+                hasCollision = true;
+                totalPushX += terrainCollision.pushX;
+                totalPushY += terrainCollision.pushY;
+                maxPushLen = Math.max(maxPushLen, terrainCollision.pushLen);
+            }
+            const bridgeCollision = addBridgeCollision(resolveBridgeCollision(testHitbox), iteration, testX, testY);
+            if (bridgeCollision.pushLen > 0) {
+                hasCollision = true;
+                totalPushX += bridgeCollision.pushX;
+                totalPushY += bridgeCollision.pushY;
+                maxPushLen = Math.max(maxPushLen, bridgeCollision.pushLen);
+            }
+            const boundaryPush = this._getFloorFragmentBoundaryPush(testX, testY, movementRadius);
+            if (boundaryPush) {
+                hasCollision = true;
+                totalPushX += boundaryPush.pushX;
+                totalPushY += boundaryPush.pushY;
+                maxPushLen = Math.max(maxPushLen, Math.hypot(boundaryPush.pushX, boundaryPush.pushY));
+            }
+
+            if (!hasCollision) {
+                const bridgeSegmentCollision = resolveBridgeMovementSegmentCollision(this.x, this.y, testX, testY);
+                const bridgeSegmentResolution = returnBridgeMovementSegmentCollision(bridgeSegmentCollision);
+                if (bridgeSegmentResolution) return bridgeSegmentResolution;
+                if (!isStaticCollisionAt(this.x, this.y)) {
+                    const sweptCollision = findSweptCollision(this.x, this.y, testX, testY);
+                    if (sweptCollision) {
+                        collided = true;
+                        let pushLen = Math.hypot(sweptCollision.pushX, sweptCollision.pushY);
+                        if (pushLen > sweptCollision.maxPushLen && sweptCollision.maxPushLen > 0) {
+                            const scale = sweptCollision.maxPushLen / pushLen;
+                            sweptCollision.pushX *= scale;
+                            sweptCollision.pushY *= scale;
+                            pushLen = sweptCollision.maxPushLen;
+                        }
+                        if (pushLen > 0) {
+                            const normalX = sweptCollision.pushX / pushLen;
+                            const normalY = sweptCollision.pushY / pushLen;
+                            if (this.movementVector && typeof this.movementVector === "object") {
+                                const vectorX = Number(this.movementVector.x) || 0;
+                                const vectorY = Number(this.movementVector.y) || 0;
+                                const normalComponent = vectorX * normalX + vectorY * normalY;
+                                if (normalComponent < 0) {
+                                    this.movementVector.x = vectorX - normalX * normalComponent;
+                                    this.movementVector.y = vectorY - normalY * normalComponent;
+                                }
+                            }
+                            const backoff = Math.max(0.005, Math.min(0.02, movementRadius * 0.05));
+                            return {
+                                x: sweptCollision.x + normalX * backoff,
+                                y: sweptCollision.y + normalY * backoff,
+                                collided
+                            };
+                        }
+                        return { x: sweptCollision.x, y: sweptCollision.y, collided };
+                    }
+                }
+                return { x: testX, y: testY, collided };
+            }
+
+            collided = true;
+            let pushLen = Math.hypot(totalPushX, totalPushY);
+            if (pushLen > maxPushLen && maxPushLen > 0) {
+                const scale = maxPushLen / pushLen;
+                totalPushX *= scale;
+                totalPushY *= scale;
+                pushLen = maxPushLen;
+            }
+
+            if (pushLen <= 0) break;
+
+            const normalX = totalPushX / pushLen;
+            const normalY = totalPushY / pushLen;
+            const compressionThreshold = 0.15;
+            const compression = Math.max(0, pushLen - compressionThreshold);
+
+            if (compression > 0) {
+                const resistanceFactor = Math.min(1, compression / 0.1);
+                const normalComponent = this.movementVector.x * normalX + this.movementVector.y * normalY;
+                if (normalComponent > 0) {
+                    this.movementVector.x -= normalX * normalComponent * resistanceFactor;
+                    this.movementVector.y -= normalY * normalComponent * resistanceFactor;
+                }
+            } else {
+                const dampingFactor = 1 - (pushLen / compressionThreshold) * 0.4;
+                this.movementVector.x *= dampingFactor;
+                this.movementVector.y *= dampingFactor;
+                const normalComponent = this.movementVector.x * normalX + this.movementVector.y * normalY;
+                if (normalComponent > 0) {
+                    this.movementVector.x -= normalX * normalComponent * 0.2;
+                    this.movementVector.y -= normalY * normalComponent * 0.2;
+                }
+            }
+
+            const pushOutDistance = pushLen + 0.01;
+            testX = this.x + normalX * pushOutDistance + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
+            testY = this.y + normalY * pushOutDistance + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
+        }
+
+        const testHitbox = this._movementTestHitbox || { type: "circle", x: testX, y: testY, radius: movementRadius };
+        testHitbox.x = testX;
+        testHitbox.y = testY;
+        testHitbox.radius = movementRadius;
+        this._movementTestHitbox = testHitbox;
+
+        let totalPushX = 0;
+        let totalPushY = 0;
+        let maxPushLen = 0;
+        for (const obj of nearbyObjects) {
+            const collision = resolveCollision(obj, testHitbox);
+            if (collision) {
+                totalPushX += collision.pushX;
+                totalPushY += collision.pushY;
+                const pushLen = Math.hypot(collision.pushX, collision.pushY);
+                maxPushLen = Math.max(maxPushLen, pushLen);
+                if (movementContext.forceTouchedObjects instanceof Set) {
+                    movementContext.forceTouchedObjects.add(obj);
+                }
+                staticCollisionLog.push({
+                    label: this._getHitboxDebugLabel(obj),
+                    iteration: "final",
+                    sampleX: testX,
+                    sampleY: testY,
+                    pushX: Number(collision.pushX) || 0,
+                    pushY: Number(collision.pushY) || 0,
+                    overlap: pushLen
+                });
+            }
+        }
+        const terrainCollisionFinal = addTerrainCollision(resolveTerrainCollision(testHitbox), "final", testX, testY);
+        if (terrainCollisionFinal.pushLen > 0) {
+            totalPushX += terrainCollisionFinal.pushX;
+            totalPushY += terrainCollisionFinal.pushY;
+            maxPushLen = Math.max(maxPushLen, terrainCollisionFinal.pushLen);
+        }
+        const bridgeCollisionFinal = addBridgeCollision(resolveBridgeCollision(testHitbox), "final", testX, testY);
+        if (bridgeCollisionFinal.pushLen > 0) {
+            totalPushX += bridgeCollisionFinal.pushX;
+            totalPushY += bridgeCollisionFinal.pushY;
+            maxPushLen = Math.max(maxPushLen, bridgeCollisionFinal.pushLen);
+        }
+        const boundaryPushFinal = this._getFloorFragmentBoundaryPush(testX, testY, movementRadius);
+        if (boundaryPushFinal) {
+            totalPushX += boundaryPushFinal.pushX;
+            totalPushY += boundaryPushFinal.pushY;
+            maxPushLen = Math.max(maxPushLen, Math.hypot(boundaryPushFinal.pushX, boundaryPushFinal.pushY));
+        }
+
+        if (maxPushLen > 0) {
+            collided = true;
+            const pushLen = Math.hypot(totalPushX, totalPushY);
+            if (pushLen > maxPushLen && maxPushLen > 0) {
+                const scale = maxPushLen / pushLen;
+                totalPushX *= scale;
+                totalPushY *= scale;
+            }
+            const normalMag = Math.hypot(totalPushX, totalPushY);
+            if (normalMag > 0) {
+                const normalX = totalPushX / normalMag;
+                const normalY = totalPushY / normalMag;
+                const pushOutDistance = maxPushLen + 0.01;
+                return {
+                    x: this.x + normalX * pushOutDistance,
+                    y: this.y + normalY * pushOutDistance,
+                    collided
+                };
+            }
+        }
+
+        return {
+            x: collided ? testX : candidateX,
+            y: collided ? testY : candidateY,
+            collided
+        };
+    }
+
+    _resolveHitboxMovementConstraints(candidateX, candidateY, movementRadius, movementContext = {}, options = {}) {
+        let resolved = this._resolveStaticVectorMovementCandidate(candidateX, candidateY, movementRadius, movementContext, options);
+        this._setVectorMovementPositionRaw(resolved.x, resolved.y);
+        let dynamicIterations = 0;
+
+        if (options.includeCharacterBlockers !== true) {
+            this._updateHitboxCollisionDebugSnapshot({
+                resolvedPosition: { x: Number(resolved.x), y: Number(resolved.y) },
+                dynamicResolutionIterations: dynamicIterations
+            });
+            return resolved;
+        }
+
+        const maxConstraintIterations = Number.isFinite(options.hitboxConstraintIterations)
+            ? Math.max(1, Math.floor(options.hitboxConstraintIterations))
+            : 4;
+
+        for (let i = 0; i < maxConstraintIterations; i++) {
+            dynamicIterations = i + 1;
+            const dynamicChanged = !!this.resolveDynamicCharacterHitboxInteractions(movementContext, options);
+            const staticResolved = this._resolveStaticVectorMovementCandidate(this.x, this.y, movementRadius, movementContext, options);
+            this._setVectorMovementPositionRaw(staticResolved.x, staticResolved.y);
+            resolved = {
+                x: staticResolved.x,
+                y: staticResolved.y,
+                collided: resolved.collided || staticResolved.collided || dynamicChanged
+            };
+            if (!dynamicChanged && !staticResolved.collided) {
+                break;
+            }
+        }
+
+        this._updateHitboxCollisionDebugSnapshot({
+            resolvedPosition: { x: Number(resolved.x), y: Number(resolved.y) },
+            dynamicResolutionIterations: dynamicIterations
+        });
+
+        return resolved;
+    }
+
+    _checkOccupancy(targetX, targetY, options) {
+        if (!this.map) return true;
+        if (this._pendingVectorMovementSupport && typeof this._pendingVectorMovementSupport === "object") {
+            return true;
+        }
+        if (typeof this.map.resolveActorStairMovementOccupancy === "function") {
+            const stairOccupancy = this.map.resolveActorStairMovementOccupancy(targetX, targetY, this, options);
+            const movementSupportCache = options &&
+                options._movementSupportCache &&
+                options._movementSupportCache.actor === this
+                ? options._movementSupportCache
+                : null;
+            if (movementSupportCache) {
+                movementSupportCache.lastCheckedOccupancy = {
+                    x: Number(targetX),
+                    y: Number(targetY),
+                    result: stairOccupancy || null
+                };
+            }
+            if (stairOccupancy && stairOccupancy.handled === true) {
+                if (stairOccupancy.allowed === true) {
+                    this._pendingVectorMovementSupport = stairOccupancy.support || null;
+                }
+                return stairOccupancy.allowed === true;
+            }
+        }
+        if (this.shouldConstrainHitboxMovementToFloorSupport(options)) {
+            if (typeof this.map.isActorFootprintSupportedAtWorldPosition !== "function") {
+                throw new Error("hitbox floor movement requires isActorFootprintSupportedAtWorldPosition");
+            }
+            // Hitbox actors: check center-point containment only (radius=0), not circle-in-polygon.
+            // This allows positions near walls (where the circle extends outside the polygon)
+            // while still blocking off-edge positions where the center itself leaves the polygon.
+            // Boundary push in _resolveStaticVectorMovementCandidate handles smooth wall sliding.
+            const supportOptions = this.isUsingHitboxMovement()
+                ? { ...options, supportRadius: 0 }
+                : options;
+            return this.map.isActorFootprintSupportedAtWorldPosition(
+                targetX,
+                targetY,
+                this.getCurrentMovementLayer(options),
+                this,
+                supportOptions
+            ) === true;
+        }
+        if (this.isUsingHitboxMovement()) return true;
+        return typeof this.map.canOccupyWorldPosition !== "function" ||
+            this.map.canOccupyWorldPosition(targetX, targetY, this, options) === true;
+    }
+
+    _applyVectorMovementPosition(targetX, targetY, options = {}, movementContext = null) {
+        if (options.allowUnsupportedPosition !== true && !this._checkOccupancy(targetX, targetY, options)) {
+            if (this.movementVector && typeof this.movementVector === "object") {
+                this.movementVector.x = 0;
+                this.movementVector.y = 0;
+            }
+            // _resolveHitboxMovementConstraints already moved this.x/y; undo that.
+            if (Number.isFinite(this.prevX) && Number.isFinite(this.prevY)) {
+                this.x = this.prevX;
+                this.y = this.prevY;
+                this.updateHitboxes();
+            }
+            return false;
+        }
+        const supportPoint = this._pendingVectorMovementSupport &&
+            this._pendingVectorMovementSupport.point &&
+            Number.isFinite(Number(this._pendingVectorMovementSupport.point.x)) &&
+            Number.isFinite(Number(this._pendingVectorMovementSupport.point.y))
+            ? this._pendingVectorMovementSupport.point
+            : null;
+        if (supportPoint) {
+            targetX = Number(supportPoint.x);
+            targetY = Number(supportPoint.y);
+        }
+        const position = this._setVectorMovementPositionRaw(targetX, targetY);
+        if (this.map && typeof this.map.applyActorResolvedMovementSupport === "function") {
+            this.map.applyActorResolvedMovementSupport(this, position.wrappedX, position.wrappedY, options);
+        }
+        if (this.map && typeof this.map.applyActorBridgeMovementState === "function") {
+            this.map.applyActorBridgeMovementState(this, position.wrappedX, position.wrappedY, options);
+        }
+        this.onVectorMovementApplied({
+            previousX: this.prevX,
+            previousY: this.prevY,
+            ...position
+        }, options);
+        return true;
+    }
+
+    _projectMovementVectorAlongCollisionNormal(collision) {
+        if (
+            !this.movementVector ||
+            typeof this.movementVector !== "object" ||
+            !collision ||
+            collision.hasNormal !== true
+        ) {
+            return false;
+        }
+        const normalX = Number(collision.normalX);
+        const normalY = Number(collision.normalY);
+        const normalLen = Math.hypot(normalX, normalY);
+        if (!(normalLen > 1e-9)) return false;
+        const nx = normalX / normalLen;
+        const ny = normalY / normalLen;
+        const vectorX = Number(this.movementVector.x) || 0;
+        const vectorY = Number(this.movementVector.y) || 0;
+        const intoWallComponent = vectorX * nx + vectorY * ny;
+        if (!(intoWallComponent < -1e-6)) return false;
+        this.movementVector.x = vectorX - nx * intoWallComponent;
+        this.movementVector.y = vectorY - ny * intoWallComponent;
+        return true;
+    }
+
+    moveDirection(vector, options = {}) {
+        const movementPerfEnabled = typeof globalThis !== "undefined" &&
+            globalThis.movementPerfBreakdownState &&
+            globalThis.movementPerfBreakdownState.enabled === true &&
+            typeof globalThis.recordMovementPerfSection === "function";
+        const movementPerfNow = () => (
+            movementPerfEnabled &&
+            typeof performance !== "undefined" &&
+            performance &&
+            typeof performance.now === "function"
+        ) ? performance.now() : 0;
+        const movementPerfRecord = (name, startMs) => {
+            if (!movementPerfEnabled) return;
+            globalThis.recordMovementPerfSection(name, performance.now() - startMs);
+        };
+        const movementTotalStartMs = movementPerfNow();
+        let movementSectionStartMs = movementTotalStartMs;
+        if (this.isFrozen()) {
+            this.applyFrozenState({ clearMoveTimeout: false });
+            movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+            return false;
+        }
+        const lockMovementVector = !!options.lockMovementVector;
+        options._movementSupportCache = {
+            actor: this,
+            floorSupportByKey: new Map(),
+            stairOccupancyByKey: new Map()
+        };
+        const maxSpeed = this.getVectorMovementMaxSpeed(options);
+        this.currentMaxSpeed = maxSpeed;
+        this.isMovingBackward = !!options.animateBackward;
+
+        const inputLen = vector ? Math.hypot(vector.x || 0, vector.y || 0) : 0;
+        if (lockMovementVector) {
+            // Preserve momentum and ignore steering/braking input.
+        } else if (vector && inputLen > 1e-6) {
+            const nx = vector.x / inputLen;
+            const ny = vector.y / inputLen;
+
+            const desiredDot = this.movementVector.x * nx + this.movementVector.y * ny;
+            if (desiredDot < 0) {
+                this.movementVector.x -= nx * desiredDot;
+                this.movementVector.y -= ny * desiredDot;
+                this.movementVector.x *= 0.5;
+                this.movementVector.y *= 0.5;
+            }
+
+            const accelerationFactor = (Number.isFinite(this.acceleration) ? this.acceleration : 0) / Math.max(1, Number(this.frameRate) || 1);
+            this.movementVector.x += nx * accelerationFactor;
+            this.movementVector.y += ny * accelerationFactor;
+
+            const facingVector = options.facingVector;
+            if (
+                typeof this.turnToward === "function" &&
+                facingVector &&
+                Number.isFinite(facingVector.x) &&
+                Number.isFinite(facingVector.y) &&
+                Math.hypot(facingVector.x, facingVector.y) > 1e-6
+            ) {
+                const facingTurnStrength = Number.isFinite(options.facingTurnStrength)
+                    ? Math.max(0, Math.min(1, options.facingTurnStrength))
+                    : 1;
+                this.turnToward(facingVector.x, facingVector.y, facingTurnStrength);
+            } else if (typeof this.turnToward === "function") {
+                this.turnToward(nx, ny);
+            }
+        } else {
+            this.isMovingBackward = false;
+            const currentMag = Math.hypot(this.movementVector.x, this.movementVector.y);
+            if (currentMag > 0) {
+                const decelerationFactor = (Number.isFinite(this.acceleration) ? this.acceleration : 0) / Math.max(1, Number(this.frameRate) || 1);
+                const newMag = Math.max(0, currentMag - decelerationFactor);
+                if (newMag === 0) {
+                    this.movementVector.x = 0;
+                    this.movementVector.y = 0;
+                } else {
+                    const scale = newMag / currentMag;
+                    this.movementVector.x *= scale;
+                    this.movementVector.y *= scale;
+                }
+            }
+        }
+
+        const currentMag = Math.hypot(this.movementVector.x, this.movementVector.y);
+        if (currentMag > maxSpeed && currentMag > 0) {
+            const scale = maxSpeed / currentMag;
+            this.movementVector.x *= scale;
+            this.movementVector.y *= scale;
+        }
+
+        if (Math.hypot(this.movementVector.x, this.movementVector.y) < 0.001) {
+            this.moving = false;
+            movementPerfRecord("character.moveDirection.steering", movementSectionStartMs);
+            movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+            return false;
+        }
+        movementPerfRecord("character.moveDirection.steering", movementSectionStartMs);
+
+        this.moving = true;
+        this.prevX = this.x;
+        this.prevY = this.y;
+        this.prevZ = this.z;
+
+        let newX = this.x + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
+        let newY = this.y + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
+        const movementRadius = this.getVectorMovementCollisionRadius(options);
+
+        if (
+            options._movementSupportCache &&
+            options._movementSupportCache.actor === this &&
+            this.map &&
+            typeof this.map.getActorFloorSupportForStairEntry === "function"
+        ) {
+            const layer = this.getCurrentMovementLayer(options);
+            const knownSupport = typeof this.map.getActorKnownFloorSupport === "function"
+                ? this.map.getActorKnownFloorSupport(this, layer, options)
+                : null;
+            options._movementSupportCache.currentFloorSupport = knownSupport || this.map.getActorFloorSupportForStairEntry(
+                    this,
+                    newX,
+                    newY,
+                    layer,
+                    options
+                );
+            options._movementSupportCache.currentFloorSupportLayer = layer;
+        }
+
+        if (this.map && typeof this.map.resolveActorStairMovementOccupancy === "function") {
+            let stairSlideRetryCount = 0;
+            while (stairSlideRetryCount < 2) {
+                movementSectionStartMs = movementPerfNow();
+                const stairOccupancy = this.map.resolveActorStairMovementOccupancy(newX, newY, this, options);
+                movementPerfRecord("character.moveDirection.stairOccupancy", movementSectionStartMs);
+                if (stairOccupancy && stairOccupancy.handled === true) {
+                    if (stairOccupancy.allowed === true) {
+                        this._pendingVectorMovementSupport = stairOccupancy.support || null;
+                        if (stairOccupancy.slidByBuildingMovement === true) {
+                            this._projectMovementVectorAlongCollisionNormal(stairOccupancy.buildingBlockerCollision);
+                        }
+                        const supportPoint = stairOccupancy.support &&
+                            stairOccupancy.support.point &&
+                            Number.isFinite(Number(stairOccupancy.support.point.x)) &&
+                            Number.isFinite(Number(stairOccupancy.support.point.y))
+                            ? stairOccupancy.support.point
+                            : null;
+                        movementSectionStartMs = movementPerfNow();
+                        const applied = this._applyVectorMovementPosition(
+                            supportPoint ? Number(supportPoint.x) : newX,
+                            supportPoint ? Number(supportPoint.y) : newY,
+                            options
+                        );
+                        movementPerfRecord("character.moveDirection.applyPosition", movementSectionStartMs);
+                        movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+                        return applied;
+                    }
+                    if (
+                        stairOccupancy.blockedByBuildingMovement === true &&
+                        stairSlideRetryCount === 0 &&
+                        stairOccupancy.buildingBlockerCollision &&
+                        stairOccupancy.buildingBlockerCollision.hasNormal === true
+                    ) {
+                        if (this._projectMovementVectorAlongCollisionNormal(stairOccupancy.buildingBlockerCollision)) {
+                            if (Math.hypot(this.movementVector.x, this.movementVector.y) >= 0.001) {
+                                newX = this.x + this.movementVector.x / Math.max(1, Number(this.frameRate) || 1);
+                                newY = this.y + this.movementVector.y / Math.max(1, Number(this.frameRate) || 1);
+                                stairSlideRetryCount++;
+                                continue;
+                            }
+                        }
+                    }
+                    const canResolveAsSlide = stairOccupancy.slideAlongStairFootprint === true ||
+                        stairOccupancy.blockedByBuildingMovement === true;
+                    if (!canResolveAsSlide) {
+                        if (this.movementVector && typeof this.movementVector === "object") {
+                            this.movementVector.x = 0;
+                            this.movementVector.y = 0;
+                        }
+                        this.moving = false;
+                        movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+                        return false;
+                    }
+                }
+                break;
+            }
+        }
+
+        movementSectionStartMs = movementPerfNow();
+        const movementContext = this.prepareVectorMovementContext(newX, newY, movementRadius, options) || {};
+        movementPerfRecord("character.moveDirection.prepareContext", movementSectionStartMs);
+
+        movementSectionStartMs = movementPerfNow();
+        if (this.canBypassVectorMovementCollisions(this.x, this.y, newX, newY, movementRadius, movementContext, options)) {
+            movementPerfRecord("character.moveDirection.bypassCollision", movementSectionStartMs);
+            movementSectionStartMs = movementPerfNow();
+            const applied = this._applyVectorMovementPosition(newX, newY, options, movementContext);
+            movementPerfRecord("character.moveDirection.applyPosition", movementSectionStartMs);
+            movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+            return applied;
+        }
+        movementPerfRecord("character.moveDirection.bypassCollision", movementSectionStartMs);
+
+        movementSectionStartMs = movementPerfNow();
+        const resolved = this._resolveHitboxMovementConstraints(newX, newY, movementRadius, movementContext, options);
+        movementPerfRecord("character.moveDirection.resolveHitbox", movementSectionStartMs);
+        movementSectionStartMs = movementPerfNow();
+        const applied = this._applyVectorMovementPosition(resolved.x, resolved.y, options, movementContext);
+        movementPerfRecord("character.moveDirection.applyPosition", movementSectionStartMs);
+        movementPerfRecord("character.moveDirection.total", movementTotalStartMs);
+        return applied;
+    }
+
+    getTargetMovementVelocity(target) {
+        if (!target) return { x: 0, y: 0 };
+        if (
+            target.movementVector &&
+            Number.isFinite(target.movementVector.x) &&
+            Number.isFinite(target.movementVector.y)
+        ) {
+            return {
+                x: Number(target.movementVector.x),
+                y: Number(target.movementVector.y)
+            };
+        }
+        if (Number.isFinite(target.prevX) && Number.isFinite(target.prevY)) {
+            const delta = this._getLocalWrappedDelta(target.prevX, target.prevY, target.x, target.y);
+            const velocityFrameRate = Number.isFinite(target.frameRate) && target.frameRate > 0
+                ? Number(target.frameRate)
+                : Math.max(1, Number(this.frameRate) || 1);
+            return {
+                x: delta.x * velocityFrameRate,
+                y: delta.y * velocityFrameRate
+            };
+        }
+        return { x: 0, y: 0 };
+    }
+
+    predictTargetPosition(target, lookaheadSeconds = 0) {
+        if (!target) return null;
+        const lookahead = Number.isFinite(lookaheadSeconds) ? Math.max(0, Number(lookaheadSeconds)) : 0;
+        const velocity = this.getTargetMovementVelocity(target);
+        let x = Number(target.x) || 0;
+        let y = Number(target.y) || 0;
+        if (lookahead > 0) {
+            x += velocity.x * lookahead;
+            y += velocity.y * lookahead;
+        }
+        if (this.map && typeof this.map.wrapWorldX === "function") {
+            x = this.map.wrapWorldX(x);
+        }
+        if (this.map && typeof this.map.wrapWorldY === "function") {
+            y = this.map.wrapWorldY(y);
+        }
+        return { x, y, velocityX: velocity.x, velocityY: velocity.y };
+    }
+
+    getPredictedCloseCombatTargetPoint(target, options = {}) {
+        if (!target) return null;
+        const lungeRadius = Number.isFinite(options.lungeRadius)
+            ? Math.max(0, Number(options.lungeRadius))
+            : Math.max(0, Number(this.lungeRadius) || 0);
+        const approachSpeed = Number.isFinite(options.approachSpeed)
+            ? Math.max(1e-4, Number(options.approachSpeed))
+            : Math.max(1e-4, this.getEffectiveMovementSpeed(this.runSpeed));
+        const currentDistance = this.distanceToPoint(target.x, target.y);
+        const timeToClose = Math.max(0, currentDistance - lungeRadius) / approachSpeed;
+        const extraLeadSeconds = Number.isFinite(options.predictionLeadSeconds)
+            ? Math.max(0, Number(options.predictionLeadSeconds))
+            : 0;
+        return this.predictTargetPosition(target, timeToClose + extraLeadSeconds);
+    }
+
+    getCloseCombatInterceptPoint(target, options = {}) {
+        if (!target) return null;
+        const interceptSpeed = Number.isFinite(options.interceptSpeed)
+            ? Math.max(1e-4, Number(options.interceptSpeed))
+            : Math.max(
+                1e-4,
+                Number(options.lungeSpeed)
+                || Number(options.approachSpeed)
+                || Number(this.lungeSpeed)
+                || Number(this.runSpeed)
+                || 1
+            );
+        const strikeDistance = Number.isFinite(options.strikeDistance)
+            ? Math.max(0, Number(options.strikeDistance))
+            : this.getStrikeDistance(target, options.strikeRange);
+        const maxDistance = Number.isFinite(options.maxDistance)
+            ? Math.max(0, Number(options.maxDistance))
+            : Number.POSITIVE_INFINITY;
+        const maxTimeSeconds = Number.isFinite(options.maxTimeSeconds)
+            ? Math.max(0, Number(options.maxTimeSeconds))
+            : Number.POSITIVE_INFINITY;
+        const relative = this._getLocalWrappedDelta(this.x, this.y, target.x, target.y);
+        const velocity = this.getTargetMovementVelocity(target);
+        const relativeDistance = Math.hypot(relative.x, relative.y);
+
+        let interceptTimeSeconds = null;
+        if (relativeDistance <= strikeDistance) {
+            interceptTimeSeconds = 0;
+        } else {
+            const a = (velocity.x * velocity.x + velocity.y * velocity.y) - (interceptSpeed * interceptSpeed);
+            const b = 2 * ((relative.x * velocity.x) + (relative.y * velocity.y) - (interceptSpeed * strikeDistance));
+            const c = (relativeDistance * relativeDistance) - (strikeDistance * strikeDistance);
+            const epsilon = 1e-8;
+
+            if (Math.abs(a) <= epsilon) {
+                if (Math.abs(b) <= epsilon) {
+                    interceptTimeSeconds = c <= 0 ? 0 : null;
+                } else {
+                    const linearRoot = -c / b;
+                    interceptTimeSeconds = linearRoot >= 0 ? linearRoot : null;
+                }
+            } else {
+                const discriminant = (b * b) - (4 * a * c);
+                if (discriminant >= 0) {
+                    const sqrtDiscriminant = Math.sqrt(discriminant);
+                    const candidateRoots = [
+                        (-b - sqrtDiscriminant) / (2 * a),
+                        (-b + sqrtDiscriminant) / (2 * a)
+                    ].filter(root => Number.isFinite(root) && root >= 0);
+                    if (candidateRoots.length > 0) {
+                        interceptTimeSeconds = Math.min(...candidateRoots);
+                    }
+                }
+            }
+        }
+
+        if (!Number.isFinite(interceptTimeSeconds) || interceptTimeSeconds < 0) {
+            return null;
+        }
+        if (interceptTimeSeconds > maxTimeSeconds) {
+            return null;
+        }
+
+        let x = Number(target.x) + velocity.x * interceptTimeSeconds;
+        let y = Number(target.y) + velocity.y * interceptTimeSeconds;
+        if (this.map && typeof this.map.wrapWorldX === "function") {
+            x = this.map.wrapWorldX(x);
+        }
+        if (this.map && typeof this.map.wrapWorldY === "function") {
+            y = this.map.wrapWorldY(y);
+        }
+
+        const travelDistance = this.distanceToPoint(x, y);
+        if (travelDistance > maxDistance) {
+            return null;
+        }
+
+        return {
+            x,
+            y,
+            timeSeconds: interceptTimeSeconds,
+            travelDistance,
+            velocityX: velocity.x,
+            velocityY: velocity.y,
+            strikeDistance
+        };
+    }
+
+    resolveCloseCombatLungeTargetPoint(target, state = null, options = {}) {
+        if (!target) return null;
+        if (typeof options.lungeTargetResolver === "function") {
+            const resolvedPoint = options.lungeTargetResolver(target, state, this, options);
+            if (
+                resolvedPoint &&
+                Number.isFinite(resolvedPoint.x) &&
+                Number.isFinite(resolvedPoint.y)
+            ) {
+                return resolvedPoint;
+            }
+            return null;
+        }
+        if (options.useCloseCombatInterceptPoint === true || options.requireCommittedLungeTarget === true) {
+            return this.getCloseCombatInterceptPoint(target, {
+                ...options,
+                interceptSpeed: Number.isFinite(options.interceptSpeed)
+                    ? Number(options.interceptSpeed)
+                    : (Number.isFinite(options.lungeSpeed) ? Number(options.lungeSpeed) : Number(this.lungeSpeed) || Number(this.runSpeed) || 1),
+                maxDistance: Number.isFinite(options.maxDistance)
+                    ? Number(options.maxDistance)
+                    : (Number.isFinite(options.lungeRadius) ? Number(options.lungeRadius) : Number(this.lungeRadius) || 0)
+            });
+        }
+        return null;
+    }
+
+    isTargetCloseEnoughToLunge(target, options = {}) {
+        if (!target) return false;
+        const lungeRadius = Number.isFinite(options.lungeRadius)
+            ? Math.max(0, Number(options.lungeRadius))
+            : Math.max(0, Number(this.lungeRadius) || 0);
+        if (!(lungeRadius > 0)) return false;
+
+        if (
+            options.targetPoint &&
+            Number.isFinite(options.targetPoint.x) &&
+            Number.isFinite(options.targetPoint.y)
+        ) {
+            return this.distanceToPoint(options.targetPoint.x, options.targetPoint.y) <= lungeRadius;
+        }
+
+        const approachSpeed = Number.isFinite(options.approachSpeed)
+            ? Math.max(1e-4, Number(options.approachSpeed))
+            : Math.max(1e-4, this.getEffectiveMovementSpeed(this.runSpeed));
+        const currentDistance = this.distanceToPoint(target.x, target.y);
+        if (currentDistance <= lungeRadius) return true;
+
+        const predictedTarget = this.getPredictedCloseCombatTargetPoint(target, {
+            ...options,
+            lungeRadius,
+            approachSpeed
+        });
+        if (!predictedTarget) return false;
+        return this.distanceToPoint(predictedTarget.x, predictedTarget.y) <= lungeRadius;
+    }
+
+    hasDirectCloseCombatCorridor(target, options = {}) {
+        if (!target) return false;
+        const targetPoint = options.targetPoint || this.getPredictedCloseCombatTargetPoint(target, options);
+        if (!targetPoint || !Number.isFinite(targetPoint.x) || !Number.isFinite(targetPoint.y)) {
+            return false;
+        }
+        const strikeDistance = Number.isFinite(options.strikeDistance)
+            ? Math.max(0, Number(options.strikeDistance))
+            : this.getStrikeDistance(target, options.strikeRange);
+
+        const corridorRadius = Number.isFinite(options.corridorRadius)
+            ? Math.max(0.05, Number(options.corridorRadius))
+            : Math.max(0.05, this.getVectorMovementCollisionRadius(options));
+        const localDelta = this._getLocalWrappedDelta(this.x, this.y, targetPoint.x, targetPoint.y);
+        const corridorDistanceToTarget = Math.hypot(localDelta.x, localDelta.y);
+        if (corridorDistanceToTarget <= 1e-6) return true;
+        const desiredDirX = localDelta.x / corridorDistanceToTarget;
+        const desiredDirY = localDelta.y / corridorDistanceToTarget;
+        const corridorSweepDistance = Math.max(0, corridorDistanceToTarget - strikeDistance);
+        if (corridorSweepDistance <= 1e-6) return true;
+
+        const sampleStep = Number.isFinite(options.corridorSampleStep)
+            ? Math.max(0.05, Number(options.corridorSampleStep))
+            : Math.max(0.15, corridorRadius * 0.5);
+        const sampleCount = Math.max(1, Math.ceil(corridorSweepDistance / sampleStep));
+        const testHitbox = this._closeCombatCorridorHitbox || {
+            type: "circle",
+            x: this.x,
+            y: this.y,
+            radius: corridorRadius
+        };
+        testHitbox.radius = corridorRadius;
+        this._closeCombatCorridorHitbox = testHitbox;
+
+        for (let i = 1; i <= sampleCount; i++) {
+            const t = i / sampleCount;
+            let sampleX = this.x + desiredDirX * corridorSweepDistance * t;
+            let sampleY = this.y + desiredDirY * corridorSweepDistance * t;
+            if (this.map && typeof this.map.wrapWorldX === "function") {
+                sampleX = this.map.wrapWorldX(sampleX);
+            }
+            if (this.map && typeof this.map.wrapWorldY === "function") {
+                sampleY = this.map.wrapWorldY(sampleY);
+            }
+            testHitbox.x = sampleX;
+            testHitbox.y = sampleY;
+
+            const nearbyObjects = this.collectNearbyBlockingObjects(sampleX, sampleY, corridorRadius, {
+                ...options,
+                includeCharacterBlockers: options.includeCharacterBlockers !== false,
+                target
+            });
+            if (options.includeCharacterBlockers !== false) {
+                nearbyObjects.push(...this.collectNearbyBlockingCharacters(sampleX, sampleY, corridorRadius, {
+                    ...options,
+                    target
+                }));
+            }
+            for (let j = 0; j < nearbyObjects.length; j++) {
+                const obj = nearbyObjects[j];
+                if (!obj || !obj.shadowBox) continue;
+                const collision = obj.shadowBox.intersects(testHitbox);
+                if (collision && collision.pushX !== undefined) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    shouldCloseCombatCorridorIncludeCharacterBlockers(options = {}) {
+        if (Object.prototype.hasOwnProperty.call(options, "corridorIncludesCharacterBlockers")) {
+            return options.corridorIncludesCharacterBlockers === true;
+        }
+        if (Object.prototype.hasOwnProperty.call(options, "closeCombatIgnoreCharacterBlockers")) {
+            return options.closeCombatIgnoreCharacterBlockers !== true;
+        }
+        return false;
+    }
+
+    hasCloseCombatLineOfSight(target, _options = {}) {
+        if (!target || !this.map || typeof this.map.worldToNode !== "function") return true;
+        if (typeof this.map.hasLineOfSight !== "function") return true;
+        const actorNode = this.map.worldToNode(this.x, this.y);
+        const targetNode = this.map.worldToNode(target.x, target.y);
+        if (!actorNode || !targetNode) return true;
+        return !!this.map.hasLineOfSight(actorNode, targetNode);
+    }
+
+    evaluateCloseCombatOpportunity(target, options = {}) {
+        if (!target) {
+            return {
+                canEngage: false,
+                targetPoint: null,
+                withinLungeRange: false,
+                lineOfSightClear: false,
+                corridorClear: false,
+                includeCharacterBlockers: this.shouldCloseCombatCorridorIncludeCharacterBlockers(options),
+                failReason: "no-target"
+            };
+        }
+
+        const targetPoint = (
+            options.targetPoint &&
+            Number.isFinite(options.targetPoint.x) &&
+            Number.isFinite(options.targetPoint.y)
+        )
+            ? options.targetPoint
+            : this.getPredictedCloseCombatTargetPoint(target, options);
+        if (!targetPoint) {
+            return {
+                canEngage: false,
+                targetPoint: null,
+                withinLungeRange: false,
+                lineOfSightClear: false,
+                corridorClear: false,
+                includeCharacterBlockers: this.shouldCloseCombatCorridorIncludeCharacterBlockers(options),
+                failReason: "no-target-point"
+            };
+        }
+
+        const withinLungeRange = this.isTargetCloseEnoughToLunge(target, { ...options, targetPoint });
+        const lineOfSightClear = withinLungeRange && this.hasCloseCombatLineOfSight(target, options);
+        const includeCharacterBlockers = this.shouldCloseCombatCorridorIncludeCharacterBlockers(options);
+        const corridorClear = lineOfSightClear && this.hasDirectCloseCombatCorridor(target, {
+            ...options,
+            targetPoint,
+            includeCharacterBlockers,
+            target
+        });
+
+        return {
+            canEngage: withinLungeRange && lineOfSightClear && corridorClear,
+            targetPoint,
+            withinLungeRange,
+            lineOfSightClear,
+            corridorClear,
+            includeCharacterBlockers,
+            failReason: !withinLungeRange
+                ? "out-of-lunge-range"
+                : (!lineOfSightClear
+                    ? "line-of-sight-blocked"
+                    : (corridorClear ? null : "corridor-blocked"))
+        };
+    }
+
+    canEnterCloseCombat(target, options = {}) {
+        return this.evaluateCloseCombatOpportunity(target, options).canEngage;
+    }
+
+    shouldReengageCloseCombat(target, options = {}) {
+        return this.evaluateCloseCombatOpportunity(target, options).canEngage;
+    }
+
+    shouldAbortCloseCombat(target, state = null, options = {}) {
+        if (!target) return true;
+        if (!state) return true;
+        if (
+            state.phase === "lunge" &&
+            Number.isFinite(state.lungeTargetX) &&
+            Number.isFinite(state.lungeTargetY)
+        ) {
+            return false;
+        }
+        const now = Number.isFinite(options.nowMs) ? Number(options.nowMs) : Date.now();
+        const abortGraceMs = Number.isFinite(options.closeCombatAbortGraceMs)
+            ? Math.max(0, Number(options.closeCombatAbortGraceMs))
+            : 250;
+
+        if (this.isTargetWithinStrikeContact(target, {
+            strikeDistance: Number.isFinite(options.strikeDistance)
+                ? Number(options.strikeDistance)
+                : this.getStrikeDistance(target, options.strikeRange)
+        })) {
+            state.abortBlockedSinceMs = null;
+            state.abortReason = null;
+            return false;
+        }
+
+        const opportunity = this.evaluateCloseCombatOpportunity(target, options);
+        const canContinue = opportunity.canEngage;
+
+        if (canContinue) {
+            state.abortBlockedSinceMs = null;
+            state.abortReason = null;
+            return false;
+        }
+
+        if (!Number.isFinite(state.abortBlockedSinceMs)) {
+            state.abortBlockedSinceMs = now;
+            state.abortReason = opportunity.failReason || "close-combat-invalid";
+        } else if (!state.abortReason) {
+            state.abortReason = opportunity.failReason || "close-combat-invalid";
+        }
+
+        return (now - state.abortBlockedSinceMs) >= abortGraceMs;
+    }
+
+    resetCloseCombatState(reason = null) {
+        if (this._closeCombatState && this._closeCombatState.target) {
+            this._emitCloseCombatLifecycleLog("exit", this._closeCombatState.target, {
+                phase: this._closeCombatState.phase,
+                reason: reason || "reset"
+            });
+        }
+        this._closeCombatState = null;
+        return null;
+    }
+
+    onCloseCombatStateUpdated(_state, _target, _options = {}) {
+    }
+
+    getCloseCombatState() {
+        return this._closeCombatState && typeof this._closeCombatState === "object"
+            ? { ...this._closeCombatState }
+            : null;
+    }
+
+    beginCloseCombat(target, options = {}) {
+        if (!target || target.gone || target.dead) {
+            return this.resetCloseCombatState("invalid-target");
+        }
+        const now = Number.isFinite(options.nowMs) ? Number(options.nowMs) : Date.now();
+        if (this._closeCombatState && this._closeCombatState.target && this._closeCombatState.target !== target) {
+            this.resetCloseCombatState("retarget");
+        }
+        if (!this._closeCombatState || this._closeCombatState.target !== target) {
+            this._closeCombatState = {
+                target,
+                phase: "approach",
+                phaseStartedMs: now,
+                abortBlockedSinceMs: null,
+                abortReason: null,
+                lungeStartedMs: null,
+                lungeOriginX: null,
+                lungeOriginY: null,
+                lungeTargetX: null,
+                lungeTargetY: null,
+                lungeTargetTimeSeconds: null,
+                lastAttackResolvedMs: null,
+                lastAttackResult: null,
+                attackCount: 0,
+                lastDistance: this.distanceToPoint(target.x, target.y),
+                options: { ...options }
+            };
+            this._emitCloseCombatLifecycleLog("enter", target, {
+                phase: this._closeCombatState.phase,
+                reason: options.reason || "engage"
+            });
+        } else if (options && typeof options === "object") {
+            this._closeCombatState.options = {
+                ...(this._closeCombatState.options && typeof this._closeCombatState.options === "object"
+                    ? this._closeCombatState.options
+                    : {}),
+                ...options
+            };
+        }
+        return this._closeCombatState;
+    }
+
+    _setCloseCombatPhase(state, phase, now = Date.now()) {
+        if (!state) return null;
+        state.phase = phase;
+        state.phaseStartedMs = now;
+        state.abortBlockedSinceMs = null;
+        state.abortReason = null;
+        if (phase === "lunge") {
+            state.lungeStartedMs = now;
+            state.lungeOriginX = Number(this.x);
+            state.lungeOriginY = Number(this.y);
+        } else if (phase !== "backoff") {
+            state.lungeStartedMs = null;
+            state.lungeOriginX = null;
+            state.lungeOriginY = null;
+        }
+        if (phase !== "lunge") {
+            state.lungeTargetX = null;
+            state.lungeTargetY = null;
+            state.lungeTargetTimeSeconds = null;
+        }
+        return state;
+    }
+
+    _getCloseCombatLungeTravelDistance(state) {
+        if (!state || !Number.isFinite(state.lungeOriginX) || !Number.isFinite(state.lungeOriginY)) {
+            return 0;
+        }
+        if (this.map && typeof this.map.distanceBetweenPoints === "function") {
+            return this.map.distanceBetweenPoints(state.lungeOriginX, state.lungeOriginY, this.x, this.y);
+        }
+        const delta = this._getLocalWrappedDelta(state.lungeOriginX, state.lungeOriginY, this.x, this.y);
+        return Math.hypot(delta.x, delta.y);
+    }
+
+    _resolveCloseCombatStrike(target, state, options = {}) {
+        const resolver = typeof options.resolveStrike === "function"
+            ? options.resolveStrike
+            : null;
+        const rawResult = resolver ? resolver(target, state, this) : { hit: true };
+        if (rawResult && typeof rawResult === "object") {
+            return {
+                ...rawResult,
+                resolved: rawResult.resolved !== false,
+                hit: rawResult.hit !== false
+            };
+        }
+        return { resolved: true, hit: rawResult !== false };
+    }
+
+    _getCloseCombatVectorToTarget(target) {
+        if (!target) return { x: 0, y: 0 };
+        return this._getLocalWrappedDelta(this.x, this.y, target.x, target.y);
+    }
+
+    _getCloseCombatBackoffVector(target) {
+        const toward = this._getCloseCombatVectorToTarget(target);
+        if (Math.hypot(toward.x, toward.y) > 1e-6) {
+            return { x: -toward.x, y: -toward.y };
+        }
+        if (Math.hypot(this.movementVector.x, this.movementVector.y) > 1e-6) {
+            return { x: -this.movementVector.x, y: -this.movementVector.y };
+        }
+        return { x: -1, y: 0 };
+    }
+
+    updateCloseCombat(target = null, options = {}) {
+        const mergedOptions = {
+            ...(this._closeCombatState && this._closeCombatState.options && typeof this._closeCombatState.options === "object"
+                ? this._closeCombatState.options
+                : {}),
+            ...(options && typeof options === "object" ? options : {})
+        };
+        const state = this.beginCloseCombat(target || this._closeCombatState?.target, mergedOptions);
+        if (!state) return null;
+
+        const targetRef = state.target;
+        if (!targetRef || targetRef.gone || targetRef.dead) {
+            return this.resetCloseCombatState("target-lost");
+        }
+
+        const now = Number.isFinite(mergedOptions.nowMs) ? Number(mergedOptions.nowMs) : Date.now();
+        const approachSpeed = Number.isFinite(mergedOptions.approachSpeed)
+            ? Math.max(1e-4, Number(mergedOptions.approachSpeed))
+            : Math.max(1e-4, Number(this.runSpeed) || this.getEffectiveMovementSpeed(this.speed));
+        const lungeSpeed = Number.isFinite(mergedOptions.lungeSpeed)
+            ? Math.max(1e-4, Number(mergedOptions.lungeSpeed))
+            : Math.max(approachSpeed, Number(this.lungeSpeed) || approachSpeed);
+        const lungeRadius = Number.isFinite(mergedOptions.lungeRadius)
+            ? Math.max(0, Number(mergedOptions.lungeRadius))
+            : Math.max(0, Number(this.lungeRadius) || 0);
+        const strikeDistance = Number.isFinite(mergedOptions.strikeDistance)
+            ? Math.max(0, Number(mergedOptions.strikeDistance))
+            : this.getStrikeDistance(targetRef, mergedOptions.strikeRange);
+        const backoffRadius = Number.isFinite(mergedOptions.backoffRadius)
+            ? Math.max(0, Number(mergedOptions.backoffRadius))
+            : lungeRadius;
+        const backoffSpeed = Number.isFinite(mergedOptions.backoffSpeed)
+            ? Math.max(1e-4, Number(mergedOptions.backoffSpeed))
+            : approachSpeed;
+        const lungeTravelLimit = Number.isFinite(mergedOptions.lungeTravelLimit)
+            ? Math.max(0, Number(mergedOptions.lungeTravelLimit))
+            : lungeRadius;
+        const lungeMaxMs = Number.isFinite(mergedOptions.lungeMaxMs)
+            ? Math.max(0, Number(mergedOptions.lungeMaxMs))
+            : ((Math.max(lungeRadius, strikeDistance) * 2 / Math.max(1e-4, lungeSpeed)) * 1000);
+        const canStartLunge = typeof mergedOptions.canStartLunge === "function"
+            ? (mergedOptions.canStartLunge(targetRef, state, this) !== false)
+            : (mergedOptions.canStartLunge !== false);
+        const requireCommittedLungeTarget = mergedOptions.requireCommittedLungeTarget === true;
+
+        state.target = targetRef;
+        state.lastDistance = this.distanceToPoint(targetRef.x, targetRef.y);
+
+        if (this.shouldAbortCloseCombat(targetRef, state, mergedOptions)) {
+            return this.resetCloseCombatState(state.abortReason || "close-combat-invalid");
+        }
+
+        this.cancelPathMovement();
+
+        if (state.phase === "approach" && canStartLunge) {
+            const resolvedLungeTargetPoint = this.resolveCloseCombatLungeTargetPoint(targetRef, state, {
+                ...mergedOptions,
+                lungeRadius,
+                lungeSpeed,
+                strikeDistance
+            });
+            const lungeEntryOptions = {
+                ...mergedOptions,
+                lungeRadius,
+                approachSpeed
+            };
+            if (resolvedLungeTargetPoint) {
+                lungeEntryOptions.targetPoint = resolvedLungeTargetPoint;
+            }
+            if ((!requireCommittedLungeTarget || resolvedLungeTargetPoint) && this.canEnterCloseCombat(targetRef, lungeEntryOptions)) {
+                this._setCloseCombatPhase(state, "lunge", now);
+                if (resolvedLungeTargetPoint) {
+                    state.lungeTargetX = Number(resolvedLungeTargetPoint.x);
+                    state.lungeTargetY = Number(resolvedLungeTargetPoint.y);
+                    state.lungeTargetTimeSeconds = Number.isFinite(resolvedLungeTargetPoint.timeSeconds)
+                        ? Number(resolvedLungeTargetPoint.timeSeconds)
+                        : null;
+                }
+                if (mergedOptions.resetMovementVectorOnLunge === true && this.movementVector) {
+                    this.movementVector.x = 0;
+                    this.movementVector.y = 0;
+                }
+            }
+        }
+
+        if (state.phase === "lunge" && !Number.isFinite(state.lungeStartedMs)) {
+            state.lungeStartedMs = now;
+            state.lungeOriginX = Number(this.x);
+            state.lungeOriginY = Number(this.y);
+        }
+
+        if (state.phase === "approach") {
+            const towardVector = this._getCloseCombatVectorToTarget(targetRef);
+            this.speed = approachSpeed;
+            this.moveDirection(towardVector, {
+                ...mergedOptions,
+                target: targetRef,
+                facingVector: towardVector
+            });
+            this.onCloseCombatStateUpdated(state, targetRef, mergedOptions);
+            return { ...state, strikeDistance, lungeRadius, backoffRadius };
+        }
+
+        if (state.phase === "lunge") {
+            const lungeTargetPoint = (
+                Number.isFinite(state.lungeTargetX) &&
+                Number.isFinite(state.lungeTargetY)
+            )
+                ? { x: Number(state.lungeTargetX), y: Number(state.lungeTargetY) }
+                : targetRef;
+            const towardVector = this._getLocalWrappedDelta(this.x, this.y, lungeTargetPoint.x, lungeTargetPoint.y);
+            this.speed = lungeSpeed;
+            this.moveDirection(towardVector, {
+                ...mergedOptions,
+                target: targetRef,
+                targetPoint: lungeTargetPoint,
+                facingVector: towardVector
+            });
+
+            const lungeTravelDistance = this._getCloseCombatLungeTravelDistance(state);
+            if (lungeTravelDistance >= lungeTravelLimit) {
+                state.attackCount += 1;
+                state.lastAttackResolvedMs = now;
+                state.lastAttackResult = "miss";
+                if (typeof mergedOptions.onMiss === "function") {
+                    mergedOptions.onMiss(targetRef, state, {
+                        hit: false,
+                        reason: "range-exceeded",
+                        travelDistance: lungeTravelDistance,
+                        travelLimit: lungeTravelLimit,
+                        nowMs: now
+                    }, this);
+                }
+                this._setCloseCombatPhase(state, "backoff", now);
+                this.onCloseCombatStateUpdated(state, targetRef, mergedOptions);
+                return { ...state, strikeDistance, lungeRadius, backoffRadius, lungeTravelDistance, lungeTravelLimit };
+            }
+
+            if (this.isTargetWithinStrikeContact(targetRef, { strikeDistance })) {
+                const result = this._resolveCloseCombatStrike(targetRef, state, mergedOptions);
+                if (result.resolved === false) {
+                    this.onCloseCombatStateUpdated(state, targetRef, mergedOptions);
+                    return { ...state, strikeDistance, lungeRadius, backoffRadius };
+                }
+                state.attackCount += 1;
+                state.lastAttackResolvedMs = now;
+                state.lastAttackResult = result.hit ? "hit" : "miss";
+                if (result.hit) {
+                    if (typeof mergedOptions.onHit === "function") {
+                        mergedOptions.onHit(targetRef, state, result, this);
+                    }
+                    const postHitPhase = typeof mergedOptions.postHitPhase === "string"
+                        ? mergedOptions.postHitPhase
+                        : "backoff";
+                    if (postHitPhase === "retreat" && typeof this.beginRetreat === "function") {
+                        this.beginRetreat(targetRef, {
+                            holdAttackAnimation: mergedOptions.holdAttackAnimationOnHit === true
+                        });
+                        return {
+                            ...state,
+                            strikeDistance,
+                            lungeRadius,
+                            backoffRadius,
+                            transitionedTo: "retreat"
+                        };
+                    }
+                } else if (typeof mergedOptions.onMiss === "function") {
+                    mergedOptions.onMiss(targetRef, state, result, this);
+                }
+                this._setCloseCombatPhase(state, "backoff", now);
+                this.onCloseCombatStateUpdated(state, targetRef, mergedOptions);
+                return { ...state, strikeDistance, lungeRadius, backoffRadius };
+            }
+
+            if ((now - state.lungeStartedMs) >= lungeMaxMs) {
+                state.attackCount += 1;
+                state.lastAttackResolvedMs = now;
+                state.lastAttackResult = "miss";
+                if (typeof mergedOptions.onMiss === "function") {
+                    mergedOptions.onMiss(targetRef, state, { hit: false, reason: "timeout" }, this);
+                }
+                this._setCloseCombatPhase(state, "backoff", now);
+            }
+
+            this.onCloseCombatStateUpdated(state, targetRef, mergedOptions);
+            return { ...state, strikeDistance, lungeRadius, backoffRadius, lungeTravelDistance, lungeTravelLimit };
+        }
+
+        const backoffVector = this._getCloseCombatBackoffVector(targetRef);
+        this.speed = backoffSpeed;
+        if (state.lastDistance >= backoffRadius) {
+            this._setCloseCombatPhase(state, "approach", now);
+        } else {
+            this.moveDirection(backoffVector, {
+                ...mergedOptions,
+                target: targetRef,
+                facingVector: this._getCloseCombatVectorToTarget(targetRef)
+            });
+        }
+
+        this.onCloseCombatStateUpdated(state, targetRef, mergedOptions);
+        return { ...state, strikeDistance, lungeRadius, backoffRadius };
+    }
+
+    _recordVisitedNode(node, reason = "move") {
+        if (!node) return null;
+        if (!Array.isArray(this.nodeVisitLog)) {
+            this.nodeVisitLog = [];
+        }
+        const lastEntry = this.nodeVisitLog.length > 0
+            ? this.nodeVisitLog[this.nodeVisitLog.length - 1]
+            : null;
+        if (lastEntry && lastEntry.xindex === node.xindex && lastEntry.yindex === node.yindex) {
+            if (typeof reason === "string" && reason && !lastEntry.reason) {
+                lastEntry.reason = reason;
+            }
+            return lastEntry;
+        }
+        const entry = {
+            node,
+            xindex: node.xindex,
+            yindex: node.yindex,
+            x: node.x,
+            y: node.y,
+            reason,
+            time: Date.now(),
+        };
+        this.nodeVisitLog.push(entry);
+        const limit = Number.isFinite(this.nodeVisitLogLimit)
+            ? Math.max(1, Math.floor(this.nodeVisitLogLimit))
+            : 200;
+        if (this.nodeVisitLog.length > limit) {
+            this.nodeVisitLog.splice(0, this.nodeVisitLog.length - limit);
+        }
+        return entry;
+    }
+
+    getNodeVisitLog() {
+        return Array.isArray(this.nodeVisitLog)
+            ? this.nodeVisitLog.map(entry => ({ ...entry }))
+            : [];
+    }
+
+    clearNodeVisitLog(reason = "reset") {
+        this.nodeVisitLog = [];
+        if (this.node) {
+            this._recordVisitedNode(this.node, reason);
+        }
+        return this.getNodeVisitLog();
+    }
+
+    getInventory() {
+        if (!(this.inventory instanceof Inventory)) {
+            const existing = (this.inventory && typeof this.inventory === "object") ? this.inventory : {};
+            this.inventory = new Inventory(existing);
+        }
+        return this.inventory;
+    }
+
+    serializeInventory() {
+        const inventory = this.getInventory();
+        return inventory && typeof inventory.toJSON === "function"
+            ? inventory.toJSON()
+            : {};
+    }
+
+    loadInventory(data) {
+        const inventory = this.getInventory();
+        if (inventory && typeof inventory.load === "function") {
+            inventory.load(data);
+        }
+        return inventory;
+    }
+
+    tracePath(seconds = 0) {
+        const durationMs = Math.max(0, Number(seconds) || 0) * 1000;
+        if (!durationMs) {
+            this._tracePathState = null;
+            return false;
+        }
+        this._tracePathState = {
+            remainingMs: durationMs,
+            lastUpdateMs: null
+        };
+        return true;
+    }
+
+    getTracePathState() {
+        return (this._tracePathState && typeof this._tracePathState === "object")
+            ? { ...this._tracePathState }
+            : null;
+    }
+
+    updateTracePathLifetime(nowMs = null, isPaused = false) {
+        const traceState = (this._tracePathState && typeof this._tracePathState === "object")
+            ? this._tracePathState
+            : null;
+        if (!traceState) return null;
+        const resolvedNowMs = Number.isFinite(nowMs) ? Number(nowMs) : Date.now();
+        if (!Number.isFinite(resolvedNowMs)) return traceState;
+        if (!isPaused && Number.isFinite(traceState.lastUpdateMs)) {
+            traceState.remainingMs = Math.max(0, Number(traceState.remainingMs) - Math.max(0, resolvedNowMs - traceState.lastUpdateMs));
+        }
+        traceState.lastUpdateMs = resolvedNowMs;
+        if (!(Number(traceState.remainingMs) > 0)) {
+            this._tracePathState = null;
+            return null;
+        }
+        return traceState;
+    }
+    
+    nextMove() {
+        return setTimeout(() => {this.move()}, 1000 / this.frameRate);
+    }
+    regenerateHealth(deltaSeconds = null) {
+        if (
+            this.dead ||
+            !Number.isFinite(this.maxHp) ||
+            this.maxHp <= 0 ||
+            !Number.isFinite(this.hp) ||
+            this.hp >= this.maxHp
+        ) {
+            return 0;
+        }
+        const dtSec = Number.isFinite(deltaSeconds)
+            ? Math.max(0, Number(deltaSeconds))
+            : (1 / Math.max(1, Number(this.frameRate) || 1));
+        const healRate = Number.isFinite(this.healRate) ? Math.max(0, Number(this.healRate)) : 0;
+        const healMult = Number.isFinite(this.healRateMultiplier) ? Math.max(0, Number(this.healRateMultiplier)) : 1;
+        const healPerSecond = this.maxHp * healRate * healMult;
+        if (!(dtSec > 0) || !(healPerSecond > 0)) {
+            return 0;
+        }
+        const previousHp = this.hp;
+        this.hp = Math.min(this.maxHp, this.hp + healPerSecond * dtSec);
+        const healed = Math.max(0, this.hp - previousHp);
+        if (healed > 0 && typeof this.updateStatusBars === "function") {
+            this.updateStatusBars();
+        }
+        return healed;
+    }
+    ensureMagicPointsInitialized(resetCurrent = false) {
+        const fallbackHp = Number.isFinite(this.hp) ? Number(this.hp) : 0;
+        const fallbackMaxHp = Math.max(
+            fallbackHp,
+            Number.isFinite(this.maxHp)
+                ? Number(this.maxHp)
+                : (Number.isFinite(this.maxHP) ? Number(this.maxHP) : 0)
+        );
+        if (!Number.isFinite(this.maxHp) || this.maxHp < fallbackHp) {
+            this.maxHp = fallbackMaxHp;
+        }
+        if (!Number.isFinite(this.maxHP) || this.maxHP < this.maxHp) {
+            this.maxHP = this.maxHp;
+        }
+        if (resetCurrent || !Number.isFinite(this.mp)) {
+            this.mp = fallbackHp;
+        }
+        const existingMaxMp = Number.isFinite(this.maxMp)
+            ? Number(this.maxMp)
+            : (Number.isFinite(this.maxMP) ? Number(this.maxMP) : null);
+        const normalizedMaxMp = Number.isFinite(existingMaxMp)
+            ? Math.max(0, existingMaxMp)
+            : fallbackMaxHp;
+        this.maxMp = resetCurrent ? fallbackMaxHp : normalizedMaxMp;
+        this.maxMP = this.maxMp;
+        if (Number.isFinite(this.mp)) {
+            this.mp = Math.max(0, Math.min(Number(this.mp), this.maxMp));
+        }
+        return this.mp;
+    }
+    getTemperatureBaseline() {
+        return Number.isFinite(this.baselineTemperature) ? Number(this.baselineTemperature) : 0;
+    }
+    getTemperature() {
+        return Number.isFinite(this.temperature) ? Number(this.temperature) : this.getTemperatureBaseline();
+    }
+    getFreezeTemperatureThreshold() {
+        return CHARACTER_FREEZE_TEMPERATURE_DEGREES;
+    }
+    setTemperature(nextTemperature) {
+        this.temperature = Number.isFinite(nextTemperature)
+            ? Number(nextTemperature)
+            : this.getTemperatureBaseline();
+        return this.temperature;
+    }
+    changeTemperature(deltaDegrees = 0) {
+        const delta = Number(deltaDegrees);
+        if (!Number.isFinite(delta) || delta === 0) return this.getTemperature();
+        return this.setTemperature(this.getTemperature() + delta);
+    }
+    dropTemperature(deltaDegrees = 0) {
+        const delta = Number(deltaDegrees);
+        if (!Number.isFinite(delta) || delta <= 0) return this.getTemperature();
+        return this.changeTemperature(-delta);
+    }
+    getDegreesBelowBaseline() {
+        return Math.max(0, this.getTemperatureBaseline() - this.getTemperature());
+    }
+    isTemperatureFrozen() {
+        return this.getTemperature() <= this.getFreezeTemperatureThreshold();
+    }
+    isFrozen(nowMs = null) {
+        return this.isTemperatureFrozen() || this.isScriptFrozen(nowMs);
+    }
+    applyFrozenState(options = {}) {
+        if (options.clearMoveTimeout && this.moveTimeout) {
+            clearTimeout(this.moveTimeout);
+            this.moveTimeout = null;
+        }
+        if (options.clearAttackTimeout !== false && this.attackTimeout) {
+            clearTimeout(this.attackTimeout);
+            this.attackTimeout = null;
+        }
+        this.moving = false;
+        this.destination = null;
+        this.path = [];
+        this.nextNode = null;
+        this.travelFrames = 0;
+        this.travelX = 0;
+        this.travelY = 0;
+        this.currentMaxSpeed = 0;
+        this.isMovingBackward = false;
+        if (this.movementVector && typeof this.movementVector === "object") {
+            this.movementVector.x = 0;
+            this.movementVector.y = 0;
+        }
+        if (typeof this.resetAttackState === "function") {
+            this.resetAttackState();
+        }
+        this.attackTarget = null;
+        this.attacking = false;
+        this.spriteDirectionLock = null;
+        if (typeof this.updateHitboxes === "function") {
+            this.updateHitboxes();
+        }
+    }
+    getTemperatureSpeedMultiplier() {
+        if (this.isTemperatureFrozen()) return 0;
+        const degreesBelow = this.getDegreesBelowBaseline();
+        if (!(degreesBelow > 0)) return 1;
+        return 1 / (2 ** (degreesBelow / 10));
+    }
+    getEffectiveMovementSpeed(baseSpeed = null) {
+        const fallbackSpeed = Number.isFinite(this.speed) ? Number(this.speed) : 0;
+        const normalizedBaseSpeed = Number.isFinite(baseSpeed) ? Number(baseSpeed) : fallbackSpeed;
+        return normalizedBaseSpeed * this.getTemperatureSpeedMultiplier();
+    }
+    recoverTemperature(deltaSeconds = 0) {
+        const dt = Number(deltaSeconds);
+        if (!Number.isFinite(dt) || dt <= 0) return this.getTemperature();
+        const baseline = this.getTemperatureBaseline();
+        const current = this.getTemperature();
+        if (current >= baseline) return current;
+        return this.setTemperature(Math.min(baseline, current + dt));
+    }
+    freeze(seconds) {
+        this.applyFrozenState({ clearMoveTimeout: true });
+
+        if (arguments.length === 0 || typeof seconds === "undefined") {
+            this._scriptFrozenUntilMs = Infinity;
+            return;
+        }
+        const durationSec = Number(seconds);
+        if (!Number.isFinite(durationSec)) return;
+        if (durationSec <= 0) {
+            this._scriptFrozenUntilMs = 0;
+            return;
+        }
+        const nowMs = Date.now();
+        const existingUntilMs = Number(this._scriptFrozenUntilMs);
+        const nextUntilMs = nowMs + (durationSec * 1000);
+        this._scriptFrozenUntilMs = existingUntilMs > 0
+            ? Math.max(existingUntilMs, nextUntilMs)
+            : nextUntilMs;
+    }
+    unFreeze() {
+        this._scriptFrozenUntilMs = 0;
+        if (!this.useExternalScheduler && !this.gone && !this.moveTimeout && !this.isTemperatureFrozen()) {
+            this.moveTimeout = this.nextMove();
+        }
+    }
+    isScriptFrozen(nowMs = null) {
+        const frozenUntilMs = Number(this._scriptFrozenUntilMs);
+        if (!(frozenUntilMs > 0)) return false;
+        if (frozenUntilMs === Infinity) return true;
+        const now = Number.isFinite(nowMs) ? Number(nowMs) : Date.now();
+        if (now < frozenUntilMs) return true;
+        this._scriptFrozenUntilMs = 0;
+        return false;
+    }
+    removeFromGame() {
+        this.gone = true;
+        this.destination = null;
+        this.path = [];
+        this.nextNode = null;
+        this._scriptFrozenUntilMs = 0;
+        this.freeze();
+
+        if (this.attackTimeout) {
+            clearTimeout(this.attackTimeout);
+            this.attackTimeout = null;
+        }
+        if (this.dieAnimation) {
+            clearInterval(this.dieAnimation);
+            this.dieAnimation = null;
+        }
+        if (this.fireAnimationInterval) {
+            clearInterval(this.fireAnimationInterval);
+            this.fireAnimationInterval = null;
+        }
+
+        if (this.pixiSprite && this.pixiSprite.parent) {
+            this.pixiSprite.parent.removeChild(this.pixiSprite);
+        }
+        if (this.pixiSprite && typeof this.pixiSprite.destroy === "function") {
+            this.pixiSprite.destroy({ children: true, texture: false, baseTexture: false });
+        }
+        this.pixiSprite = null;
+        if (this._depthBillboardMesh && this._depthBillboardMesh.parent) {
+            this._depthBillboardMesh.parent.removeChild(this._depthBillboardMesh);
+        }
+        if (this._depthBillboardMesh && typeof this._depthBillboardMesh.destroy === "function") {
+            this._depthBillboardMesh.destroy({ children: false, texture: false, baseTexture: false });
+        }
+        this._depthBillboardMesh = null;
+        if (this.fireSprite && this.fireSprite.parent) {
+            this.fireSprite.parent.removeChild(this.fireSprite);
+        }
+        if (this.fireSprite && typeof this.fireSprite.destroy === "function") {
+            this.fireSprite.destroy({ children: true, texture: false, baseTexture: false });
+        }
+        this.fireSprite = null;
+        if (this.hatGraphics && this.hatGraphics.parent) {
+            this.hatGraphics.parent.removeChild(this.hatGraphics);
+        }
+        if (this.hatGraphics && typeof this.hatGraphics.destroy === "function") {
+            this.hatGraphics.destroy();
+        }
+        this.hatGraphics = null;
+        if (this._healthBarGraphics && this._healthBarGraphics.parent) {
+            this._healthBarGraphics.parent.removeChild(this._healthBarGraphics);
+        }
+        if (this._healthBarGraphics && typeof this._healthBarGraphics.destroy === "function") {
+            this._healthBarGraphics.destroy();
+        }
+        this._healthBarGraphics = null;
+        if (this._tracePathGraphics && this._tracePathGraphics.parent) {
+            this._tracePathGraphics.parent.removeChild(this._tracePathGraphics);
+        }
+        if (this._tracePathGraphics && typeof this._tracePathGraphics.destroy === "function") {
+            this._tracePathGraphics.destroy();
+        }
+        this._tracePathGraphics = null;
+        this._tracePathState = null;
+        if (Array.isArray(animals)) {
+            const idx = animals.indexOf(this);
+            if (idx >= 0) animals.splice(idx, 1);
+        }
+        if (this.map && typeof this.map.unregisterGameObject === "function") {
+            this.map.unregisterGameObject(this);
+        }
+    }
+    remove() {
+        this.removeFromGame();
+    }
+    delete() {
+        // Backward compatibility: use unified removal API.
+        this.removeFromGame();
+    }
+    getDirectionRow() {
+        if (!this.direction) return 0;
+        return (this.direction.x > 0 || (this.direction.x === 0 && this.direction.y > 0)) ? 1 : 0;
+    }
+    goto(destinationNode) {
+        if (!destinationNode) return;
+        const startLayer = this.getNodeTraversalLayer();
+        const resolvedStartNode = this.resolveNodeForTraversalLayer(this.x, this.y, this.getFloorNodeResolutionOptions());
+        this.node = resolvedStartNode || (startLayer === 0 ? this.map.worldToNode(this.x, this.y) : null);
+        this._checkMovementLayerDiagnostics("goto");
+        if (!this.node) {
+            this._recordMovementDiagnostic("goto-no-start-node", {
+                requestedDestination: this._describeMovementNode(destinationNode),
+                startLayer,
+                resolvedStartNode: this._describeMovementNode(resolvedStartNode)
+            });
+            this.destination = null;
+            this.path = [];
+            this.travelFrames = 0;
+            this.travelZ = 0;
+            this.nextNode = null;
+            this.currentPathStep = null;
+            this.moving = false;
+            return;
+        }
+        this.destination = destinationNode;
+        const pathOptions = {};
+        if (this.pathfindingClearance > 0) {
+            pathOptions.clearance = this.pathfindingClearance;
+        }
+        pathOptions.returnPathSteps = true;
+        this.path = (this.useAStarPathfinding && typeof this.map.findPathAStar === "function")
+            ? this.map.findPathAStar(this.node, destinationNode, pathOptions)
+            : this.map.findPath(this.node, destinationNode, pathOptions);
+        if (!Array.isArray(this.path)) {
+            this.path = [];
+        }
+        this._recordMovementDiagnostic("goto-path", {
+            startNode: this._describeMovementNode(this.node),
+            requestedDestination: this._describeMovementNode(destinationNode),
+            pathLength: this.path.length,
+            pathBlockedCount: Array.isArray(this.path.blockers) ? this.path.blockers.length : 0,
+            pathOptions: {
+                clearance: Number.isFinite(pathOptions.clearance) ? Number(pathOptions.clearance) : 0,
+                returnPathSteps: pathOptions.returnPathSteps === true,
+                aStar: !!(this.useAStarPathfinding && typeof this.map.findPathAStar === "function")
+            }
+        });
+        this.travelFrames = 0;
+        this.travelZ = 0;
+        this.nextNode = null;
+        this.currentPathStep = null;
+    }
+    move() {
+        if (!this.useExternalScheduler) {
+            this.moveTimeout = this.nextMove();
+        } else {
+            this.moveTimeout = null;
+        }
+        
+        if (paused) {
+            return;
+        }
+        const dtSeconds = 1 / Math.max(1, Number(this.frameRate) || 1);
+        const temperatureFrozen = this.isTemperatureFrozen();
+        const scriptFrozen = this.isScriptFrozen();
+        if (temperatureFrozen || scriptFrozen) {
+            this.applyFrozenState({ clearMoveTimeout: false });
+            if (temperatureFrozen && !scriptFrozen) {
+                this.recoverTemperature(dtSeconds);
+            }
+            return;
+        }
+        this.recoverTemperature(dtSeconds);
+        
+        if (this.isOnFire) {
+            this.burn();
+        }
+
+        this.regenerateHealth(dtSeconds);
+
+        if (this._closeCombatState && this._closeCombatState.target) {
+            this.updateCloseCombat();
+            return;
+        }
+        this._checkMovementLayerDiagnostics("move");
+
+        // Check if we have a destination to move toward
+        if (!this.destination) {
+            this.moving = false;
+            return;
+        }
+
+        const currentNodeIsActive = (
+            this.map &&
+            typeof this.map.isPrototypeNodeActive === "function" &&
+            this.node
+        )
+            ? this.map.isPrototypeNodeActive(this.node)
+            : !!this.node;
+        if (!currentNodeIsActive) {
+            this._recordMovementDiagnostic("current-node-inactive", {
+                beforeResolveNode: this._describeMovementNode(this.node)
+            }, {
+                dedupeKey: "current-node-inactive",
+                minIntervalMs: 1000
+            });
+            if (this.map && typeof this.map.worldToNode === "function") {
+                const layer = this.getNodeTraversalLayer();
+                const resolvedNode = this.resolveNodeForTraversalLayer(this.x, this.y, this.getFloorNodeResolutionOptions());
+                this.node = resolvedNode || (layer === 0 ? this.map.worldToNode(this.x, this.y) : null);
+                this._recordMovementDiagnostic("current-node-resolved", {
+                    layer,
+                    resolvedNode: this._describeMovementNode(resolvedNode),
+                    nextNode: this._describeMovementNode(this.node)
+                }, {
+                    dedupeKey: "current-node-resolved",
+                    minIntervalMs: 1000
+                });
+            }
+        }
+        if (!this.node) {
+            this._recordMovementDiagnostic("movement-suspended-no-node", {
+                destinationBeforeClear: this._describeMovementNode(this.destination)
+            });
+            this._movementSuspendedByStreaming = true;
+            this.destination = null;
+            this.path = [];
+            this.nextNode = null;
+            this.travelFrames = 0;
+            this.moving = false;
+            return;
+        }
+        
+        this.moving = true;
+        const moveStartX = this.x;
+        const moveStartY = this.y;
+        this.prevX = this.x;
+        this.prevY = this.y;
+        this.prevZ = this.z;
+        
+        if (this.travelFrames === 0) {
+            this.casting = false;
+            
+            // If we've reached the nextNode, update our position and request next step
+            if (this.nextNode) {
+                const arrivalPosition = this.getTraversalStepWorldPosition(this.currentPathStep, 1);
+                this.node = this.nextNode;
+                this.syncTraversalLayerFromNode(this.node);
+                this.x = arrivalPosition && Number.isFinite(arrivalPosition.x) ? arrivalPosition.x : this.node.x;
+                this.y = arrivalPosition && Number.isFinite(arrivalPosition.y) ? arrivalPosition.y : this.node.y;
+                this.z = arrivalPosition && Number.isFinite(arrivalPosition.z) ? arrivalPosition.z : this.getNodeStandingZ(this.node);
+                this._recordVisitedNode(this.node);
+                this.currentPathStep = null;
+            }
+            
+            // Get next step from path
+            const nextPathItem = this.path.shift();
+            if (!nextPathItem) {
+                this._recordMovementDiagnostic("path-empty-before-step", {
+                    destinationBeforeClear: this._describeMovementNode(this.destination)
+                });
+            }
+            this.currentPathStep = this.resolvePathStep(nextPathItem, this.node);
+            this.nextNode = this.getPathItemDestinationNode(this.currentPathStep);
+            if (!this.nextNode) {
+                this._recordMovementDiagnostic("path-step-missing-next-node", {
+                    nextPathItem: this._describeMovementPathItem(nextPathItem),
+                    destinationBeforeClear: this._describeMovementNode(this.destination)
+                });
+                // Reached destination
+                this.destination = null;
+                this.moving = false;
+                return;
+            }
+            if (
+                this.map &&
+                typeof this.map.isPrototypeNodeActive === "function" &&
+                !this.map.isPrototypeNodeActive(this.nextNode)
+            ) {
+                this._recordMovementDiagnostic("next-node-inactive", {
+                    rejectedNextNode: this._describeMovementNode(this.nextNode),
+                    destinationBeforeClear: this._describeMovementNode(this.destination)
+                });
+                this._movementSuspendedByStreaming = true;
+                this.destination = null;
+                this.path = [];
+                this.nextNode = null;
+                this.travelFrames = 0;
+                this.moving = false;
+                return;
+            }
+            this.directionIndex = Number.isInteger(this.currentPathStep && this.currentPathStep.directionIndex)
+                ? Number(this.currentPathStep.directionIndex)
+                : (Array.isArray(this.node.neighbors)
+                    ? this.node.neighbors.indexOf(this.nextNode)
+                    : -1);
+            
+            // Calculate travel parameters using world coordinates
+            const targetPosition = this.getTraversalStepWorldPosition(this.currentPathStep, 1) || {
+                x: this.nextNode.x,
+                y: this.nextNode.y,
+                z: this.getNodeStandingZ(this.nextNode)
+            };
+            let xdist = (this.map && typeof this.map.shortestDeltaX === "function")
+                ? this.map.shortestDeltaX(this.x, targetPosition.x)
+                : (targetPosition.x - this.x);
+            let ydist = (this.map && typeof this.map.shortestDeltaY === "function")
+                ? this.map.shortestDeltaY(this.y, targetPosition.y)
+                : (targetPosition.y - this.y);
+            const zdist = (Number.isFinite(targetPosition.z) ? targetPosition.z : this.getNodeStandingZ(this.nextNode)) - this.z;
+            let direction_distance = Math.sqrt(xdist ** 2 + ydist ** 2);
+            const effectiveSpeed = this.getEffectiveMovementSpeed(this.speed);
+            if (!(effectiveSpeed > 0)) {
+                this.applyFrozenState({ clearMoveTimeout: false });
+                return;
+            }
+            this.travelFrames = Math.max(1, Math.ceil(direction_distance / effectiveSpeed * this.frameRate));
+            this.travelX = xdist / this.travelFrames;
+            this.travelY = ydist / this.travelFrames;
+            this.travelZ = zdist / this.travelFrames;
+            this.direction = {x: xdist, y: ydist};
+            this._recordMovementDiagnostic("movement-step-start", {
+                targetPosition,
+                xdist,
+                ydist,
+                zdist,
+                directionDistance: direction_distance,
+                effectiveSpeed,
+                frameRate: Number(this.frameRate) || null,
+                stepFrames: this.travelFrames
+            });
+        }
+        
+        this.travelFrames--;
+        this.x += this.travelX;
+        this.y += this.travelY;
+        this.z += this.travelZ;
+        if (this.map && typeof this.map.wrapWorldX === "function") {
+            this.x = this.map.wrapWorldX(this.x);
+        }
+        if (this.map && typeof this.map.wrapWorldY === "function") {
+            this.y = this.map.wrapWorldY(this.y);
+        }
+        
+        // Update hitboxes after movement
+        this.updateHitboxes();
+    }
+    ignite(duration = 8, damageScale = null) {
+        this.isOnFire = true;
+        const durationSec = Number(duration);
+        this.fireDuration = (Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 8) * frameRate;
+        if (Number.isFinite(damageScale)) {
+            this.fireDamageScale = Math.max(0, damageScale);
+        } else {
+            this.fireDamageScale = 1;
+        }
+        if (!this.fireAnimationInterval) {
+            this.fireAnimationInterval = setInterval(() => {
+                if (paused) return;
+                this.burn();
+            }, 1000 / frameRate);
+        }
+    }
+    extinguish() {
+        this.onfire = false;
+        if (Number.isFinite(this.fireDuration)) {
+            this.fireDuration = 0;
+        }
+        return true;
+    }
+    burn() {
+        this.fireDuration--;
+        if (this.fireDuration <= 0) {
+            this.extinguish();
+            return;
+        }
+        if (this.hp <= 0 && !this.dead) {
+            this.die();
+        } else {
+            const warmAmount = CHARACTER_FIRE_WARM_RATE_DEGREES_PER_SECOND / Math.max(1, Number(frameRate) || 1);
+            if (typeof this.setTemperature === "function" && typeof this.getTemperature === "function") {
+                this.setTemperature(Math.min(0, this.getTemperature() + warmAmount));
+            } else if (typeof this.changeTemperature === "function") {
+                this.changeTemperature(warmAmount);
+                if (Number.isFinite(this.temperature) && this.temperature > 0) {
+                    this.temperature = 0;
+                }
+            }
+            const damageScale = Number.isFinite(this.fireDamageScale) ? this.fireDamageScale : 1;
+            const burnDamage = 0.05 * Math.max(0, damageScale);
+            if (typeof this.takeDamage === "function") {
+                this.takeDamage(burnDamage);
+            } else {
+                this.hp -= burnDamage; // Fire damage over time
+            }
+        }
+    }
+    triggerDieScriptEvent(context = null) {
+        if (this._scriptDieEventFired) return false;
+        this._scriptDieEventFired = true;
+        const scriptingApi = (typeof Scripting !== "undefined" && Scripting)
+            ? Scripting
+            : ((typeof globalThis !== "undefined" && globalThis.Scripting) ? globalThis.Scripting : null);
+        if (!scriptingApi || typeof scriptingApi.fireObjectScriptEvent !== "function") return false;
+        const wizardRef = (typeof wizard !== "undefined" && wizard)
+            ? wizard
+            : ((typeof globalThis !== "undefined" && globalThis.wizard) ? globalThis.wizard : null);
+        return !!scriptingApi.fireObjectScriptEvent(this, "die", wizardRef, context);
+    }
+    triggerVanishDieEventIfAdventureMode(context = null) {
+        const wizardRef = (typeof wizard !== "undefined" && wizard)
+            ? wizard
+            : ((typeof globalThis !== "undefined" && globalThis.wizard) ? globalThis.wizard : null);
+        if (!wizardRef || typeof wizardRef.isAdventureMode !== "function" || !wizardRef.isAdventureMode()) {
+            return false;
+        }
+        if (this.gone || this.dead) return false;
+
+        if (this === wizardRef) {
+            if (typeof this.die === "function") {
+                this.die();
+            } else {
+                this.dead = true;
+                this.triggerDieScriptEvent(context || { cause: "vanish" });
+            }
+            this.hp = 0;
+            if (typeof this.updateAdventureDeathState === "function") {
+                this.updateAdventureDeathState();
+            }
+            return true;
+        }
+
+        return this.triggerDieScriptEvent(context || { cause: "vanish" });
+    }
+    spawnFrozenDeathBurst() {
+        const projectileList = (typeof projectiles !== "undefined" && Array.isArray(projectiles))
+            ? projectiles
+            : ((typeof globalThis !== "undefined" && Array.isArray(globalThis.projectiles)) ? globalThis.projectiles : null);
+        if (!projectileList) return null;
+        const burst = new FrozenDeathBurstEffect({
+            x: this.x,
+            y: this.y,
+            z: Math.max(0, Number(this.z) || 0),
+            size: Math.max(0.6, Number(this.size) || 1),
+            width: Math.max(
+                0.4,
+                Number(this.width) || 0,
+                Number(this.size) || 1,
+                Number(this.visualRadius) * 2 || 0
+            ),
+            height: Math.max(
+                0.6,
+                Number(this.height) || Number(this.size) || 1,
+                Number(this.visualRadius) * 2 || 0
+            )
+        });
+        projectileList.push(burst.cast());
+        return burst;
+    }
+    shatterFrozenDeath(options = {}) {
+        if (this.gone || this._frozenSpikeShattered) return false;
+        this._frozenSpikeShattered = true;
+        this.dead = true;
+        this.rotation = 0;
+        this.triggerDieScriptEvent({
+            cause: (options && typeof options.cause === "string" && options.cause.length > 0)
+                ? options.cause
+                : "spikes-frozen-shatter",
+            source: options && options.source ? options.source : null
+        });
+        this.spawnFrozenDeathBurst();
+        this.removeFromGame();
+        return true;
+    }
+    die() {
+        this.dead = true;
+        this.rotation = 180;
+        this.triggerDieScriptEvent({ cause: "die" });
+    }
+
+    getInterpolatedPosition(alpha = null) {
+        const clampedAlpha = Number.isFinite(alpha)
+            ? Math.max(0, Math.min(1, alpha))
+            : ((typeof renderAlpha === "number") ? Math.max(0, Math.min(1, renderAlpha)) : 1);
+
+        const prevX = Number.isFinite(this.prevX) ? this.prevX : this.x;
+        const prevY = Number.isFinite(this.prevY) ? this.prevY : this.y;
+        const prevZ = Number.isFinite(this.prevZ) ? this.prevZ : this.z;
+        const currX = Number.isFinite(this.x) ? this.x : prevX;
+        const currY = Number.isFinite(this.y) ? this.y : prevY;
+        const currZ = Number.isFinite(this.z) ? this.z : prevZ;
+
+        const x = (this.map && typeof this.map.shortestDeltaX === "function")
+            ? (prevX + this.map.shortestDeltaX(prevX, currX) * clampedAlpha)
+            : (prevX + (currX - prevX) * clampedAlpha);
+        const y = (this.map && typeof this.map.shortestDeltaY === "function")
+            ? (prevY + this.map.shortestDeltaY(prevY, currY) * clampedAlpha)
+            : (prevY + (currY - prevY) * clampedAlpha);
+        const z = prevZ + (currZ - prevZ) * clampedAlpha;
+
+        return { x, y, z };
+    }
+
+    get interpolatedX() {
+        return this.getInterpolatedPosition().x;
+    }
+
+    get interpolatedY() {
+        return this.getInterpolatedPosition().y;
+    }
+
+    get interpolatedZ() {
+        return this.getInterpolatedPosition().z;
+    }
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.FrozenDeathBurstEffect = FrozenDeathBurstEffect;
+}
+
+function getAnimalMoveLogCollection() {
+    if (typeof animals !== "undefined" && Array.isArray(animals)) {
+        return animals;
+    }
+    if (typeof globalThis !== "undefined" && Array.isArray(globalThis.animals)) {
+        return globalThis.animals;
+    }
+    return [];
+}
+
+function resolveAnimalMoveLogTarget(target = 0) {
+    if (target && typeof target.getNodeVisitLog === "function") {
+        return target;
+    }
+
+    const collection = getAnimalMoveLogCollection();
+    if (typeof target === "number" && Number.isInteger(target)) {
+        return collection[target] || null;
+    }
+    if (typeof target === "string") {
+        const needle = target.trim().toLowerCase();
+        if (!needle) return null;
+        return collection.find(animal => {
+            const scriptingName = typeof animal?.scriptingName === "string"
+                ? animal.scriptingName.trim().toLowerCase()
+                : "";
+            const animalType = typeof animal?.type === "string"
+                ? animal.type.trim().toLowerCase()
+                : "";
+            return scriptingName === needle || animalType === needle;
+        }) || null;
+    }
+    return collection[0] || null;
+}
+
+function getHitboxDebugCollection() {
+    const collection = [];
+    if (typeof globalThis !== "undefined" && globalThis.wizard) {
+        collection.push(globalThis.wizard);
+    } else if (typeof wizard !== "undefined" && wizard) {
+        collection.push(wizard);
+    }
+
+    const animalCollection = getAnimalMoveLogCollection();
+    for (let i = 0; i < animalCollection.length; i++) {
+        if (animalCollection[i]) collection.push(animalCollection[i]);
+    }
+    return collection;
+}
+
+function resolveHitboxDebugTarget(target = 0) {
+    if (target && typeof target.getHitboxCollisionDebugInfo === "function") {
+        return target;
+    }
+
+    const collection = getHitboxDebugCollection();
+    if (typeof target === "number" && Number.isInteger(target)) {
+        return collection[target] || null;
+    }
+    if (typeof target === "string") {
+        const needle = target.trim().toLowerCase();
+        if (!needle) return null;
+        return collection.find(entry => {
+            const label = typeof entry?._getHitboxDebugLabel === "function"
+                ? entry._getHitboxDebugLabel(entry).toLowerCase()
+                : "";
+            const type = typeof entry?.type === "string" ? entry.type.toLowerCase() : "";
+            const name = typeof entry?.name === "string" ? entry.name.toLowerCase() : "";
+            return label === needle || type === needle || name === needle;
+        }) || null;
+    }
+    return collection[0] || null;
+}
+
+function summarizeAnimalMovementDiagnosticsLog(log, startedAt = null) {
+    return (Array.isArray(log) ? log : []).map(entry => ({
+        elapsedMs: Number.isFinite(startedAt) && Number.isFinite(entry.time) ? entry.time - startedAt : null,
+        time: entry.time,
+        event: entry.event,
+        type: entry.type,
+        name: entry.name,
+        layer: entry.currentLayer,
+        traversalLayer: entry.traversalLayer,
+        nodeLayer: entry.nodeTraversalLayer,
+        supportLayer: entry.support && Number.isFinite(entry.support.layer) ? entry.support.layer : null,
+        moving: entry.moving,
+        pathLength: entry.pathLength,
+        pathBlockedCount: Number.isFinite(entry.pathBlockedCount) ? entry.pathBlockedCount : null,
+        startActive: entry.startNode ? entry.startNode.active : null,
+        destActive: entry.requestedDestination ? entry.requestedDestination.active : null,
+        destLayer: entry.requestedDestination && Number.isFinite(entry.requestedDestination.traversalLayer)
+            ? entry.requestedDestination.traversalLayer
+            : null,
+        nextNodeLayer: entry.nextNode && Number.isFinite(entry.nextNode.traversalLayer) ? entry.nextNode.traversalLayer : null,
+        reason: entry.reason || "",
+        context: entry.context || "",
+        source: entry.source || entry.routeSource || "",
+        routePathLength: Number.isFinite(entry.routePathLength) ? entry.routePathLength : null
+    }));
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.dumpAnimalMoveLog = function(target = 0) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal.getNodeVisitLog !== "function") {
+            console.warn("No animal move log target found.");
+            return [];
+        }
+        const log = animal.getNodeVisitLog();
+        console.table(log);
+        return log;
+    };
+
+    globalThis.clearAnimalMoveLog = function(target = 0) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal.clearNodeVisitLog !== "function") {
+            console.warn("No animal move log target found.");
+            return [];
+        }
+        return animal.clearNodeVisitLog();
+    };
+
+    globalThis.dumpAnimalMovementDiagnostics = function(target = 0) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal.getMovementDiagnostics !== "function") {
+            console.warn("No animal movement diagnostics target found.");
+            return [];
+        }
+        const log = animal.getMovementDiagnostics();
+        console.table(summarizeAnimalMovementDiagnosticsLog(log));
+        return log;
+    };
+
+    globalThis.clearAnimalMovementDiagnostics = function(target = 0) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal.clearMovementDiagnostics !== "function") {
+            console.warn("No animal movement diagnostics target found.");
+            return [];
+        }
+        return animal.clearMovementDiagnostics("console");
+    };
+
+    globalThis.diagnoseAnimalMovement = function(target = 0) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal._getMovementDiagnosticSnapshot !== "function") {
+            console.warn("No animal movement diagnostics target found.");
+            return null;
+        }
+        const snapshot = animal._getMovementDiagnosticSnapshot({
+            target: typeof target === "string" || typeof target === "number" ? target : "",
+            activeSimObject: typeof globalThis !== "undefined" && globalThis.activeSimObjects instanceof Set
+                ? globalThis.activeSimObjects.has(animal)
+                : null,
+            onScreen: typeof animal._onScreen === "boolean" ? animal._onScreen : null
+        });
+        console.log("Animal movement diagnostic snapshot:", snapshot);
+        return snapshot;
+    };
+
+    globalThis.stopAnimalMovementDiagnostics = function() {
+        const capture = globalThis.animalMovementDiagnosticCapture;
+        if (!capture || capture.active !== true) {
+            console.warn("No animal movement diagnostic capture is active.");
+            return [];
+        }
+        capture.active = false;
+        if (capture.timerId) {
+            clearTimeout(capture.timerId);
+            capture.timerId = null;
+        }
+        const entries = Array.isArray(capture.entries) ? capture.entries.slice() : [];
+        const label = capture.animal && (capture.animal.scriptingName || capture.animal.name || capture.animal.type) || "animal";
+        console.log(
+            `Animal movement capture for ${label}: ${entries.length} event(s)` +
+            `${capture.truncated ? `, ${capture.truncated} truncated` : ""}.`
+        );
+        console.table(summarizeAnimalMovementDiagnosticsLog(entries, capture.startedAt));
+        globalThis.animalMovementDiagnosticCapture = null;
+        return entries;
+    };
+
+    globalThis.captureAnimalMovementDiagnostics = function(target = 0, durationMs = 1000, options = {}) {
+        const animal = resolveAnimalMoveLogTarget(target);
+        if (!animal || typeof animal.getMovementDiagnostics !== "function") {
+            console.warn("No animal movement diagnostics target found.");
+            return null;
+        }
+        const normalizedOptions = options && typeof options === "object" ? options : {};
+        const duration = Number.isFinite(durationMs)
+            ? Math.max(1, Math.min(10000, Math.floor(durationMs)))
+            : 1000;
+        const limit = Number.isFinite(normalizedOptions.limit)
+            ? Math.max(1, Math.min(1000, Math.floor(normalizedOptions.limit)))
+            : 150;
+        const eventSet = Array.isArray(normalizedOptions.events) && normalizedOptions.events.length > 0
+            ? new Set(normalizedOptions.events.filter(eventName => typeof eventName === "string" && eventName.length > 0))
+            : null;
+
+        const previousCapture = globalThis.animalMovementDiagnosticCapture;
+        if (previousCapture && previousCapture.timerId) {
+            clearTimeout(previousCapture.timerId);
+        }
+        if (normalizedOptions.clear !== false && typeof animal.clearMovementDiagnostics === "function") {
+            animal.clearMovementDiagnostics("capture-start");
+        }
+
+        const capture = {
+            active: true,
+            animal,
+            entries: [],
+            startedAt: Date.now(),
+            durationMs: duration,
+            limit,
+            eventSet,
+            truncated: 0,
+            timerId: null
+        };
+        globalThis.animalMovementDiagnosticCapture = capture;
+        capture.timerId = setTimeout(() => {
+            if (globalThis.animalMovementDiagnosticCapture === capture) {
+                globalThis.stopAnimalMovementDiagnostics();
+            }
+        }, duration);
+
+        const label = animal.scriptingName || animal.name || animal.type || "animal";
+        console.log(`Capturing animal movement diagnostics for ${label} for ${duration} ms.`);
+        return {
+            animal,
+            durationMs: duration,
+            limit,
+            events: eventSet ? Array.from(eventSet) : null
+        };
+    };
+
+    globalThis.setAnimalMovementDiagnosticsLive = function(enabled = true, target = 0, durationMs = 1000) {
+        if (enabled !== true) {
+            const capture = globalThis.animalMovementDiagnosticCapture;
+            if (capture && capture.active === true) {
+                return globalThis.stopAnimalMovementDiagnostics();
+            }
+            return [];
+        }
+        console.warn("Broad live animal movement logging has been removed. Starting a bounded one-animal capture instead.");
+        return globalThis.captureAnimalMovementDiagnostics(target, durationMs);
+    };
+
+    globalThis.dumpHitboxCollisionDebug = function(target = 0) {
+        const character = resolveHitboxDebugTarget(target);
+        if (!character || typeof character.getHitboxCollisionDebugInfo !== "function") {
+            console.warn("No hitbox collision debug target found.");
+            return null;
+        }
+        const snapshot = character.getHitboxCollisionDebugInfo();
+        if (!snapshot) {
+            console.warn("No hitbox collision debug snapshot available.");
+            return null;
+        }
+        console.log("Hitbox collision debug snapshot:", snapshot);
+        if (Array.isArray(snapshot.nearbyCharacterBlockers) && snapshot.nearbyCharacterBlockers.length > 0) {
+            console.table(snapshot.nearbyCharacterBlockers);
+        }
+        if (Array.isArray(snapshot.nearbyObjectBlockers) && snapshot.nearbyObjectBlockers.length > 0) {
+            console.table(snapshot.nearbyObjectBlockers);
+        }
+        if (Array.isArray(snapshot.dynamicCharacterInteractions) && snapshot.dynamicCharacterInteractions.length > 0) {
+            console.table(snapshot.dynamicCharacterInteractions);
+        }
+        if (Array.isArray(snapshot.staticCollisions) && snapshot.staticCollisions.length > 0) {
+            console.table(snapshot.staticCollisions);
+        }
+        return snapshot;
+    };
+}

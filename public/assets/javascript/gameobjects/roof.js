@@ -1,0 +1,1787 @@
+class Roof {
+    static _depthMeshState = null;
+    static _depthShaderDisabled = false;
+    static DEFAULT_TEXTURE = "/assets/images/roofs/smallshingles.png";
+    static DEFAULT_TEXTURE_REPEAT = 0.125;
+    static DEPTH_NEAR_METRIC = -128;
+    static DEPTH_FAR_METRIC = 256;
+    static _depthVs = `
+precision mediump float;
+attribute vec2 aVertexPosition;
+attribute vec3 aDepthWorld;
+attribute vec2 aUvs;
+uniform vec2 uScreenSize;
+uniform vec2 uCameraWorld;
+uniform float uCameraZ;
+uniform float uViewScale;
+uniform float uXyRatio;
+uniform vec2 uDepthRange;
+uniform vec3 uModelOrigin;
+uniform vec2 uWorldSize;
+uniform vec2 uWrapEnabled;
+uniform vec2 uWrapAnchorWorld;
+uniform float uBuildingCutawayProjectionPass;
+uniform float uBuildingCutawayPresentationXyRatio;
+varying vec2 vUvs;
+varying float vWorldZ;
+
+float shortestDelta(float fromV, float toV, float sizeV, float wrapEnabled) {
+    if (wrapEnabled < 0.5 || sizeV <= 0.0) return toV - fromV;
+    float d = toV - fromV;
+    float halfSize = sizeV * 0.5;
+    if (d > halfSize) d -= sizeV;
+    else if (d < -halfSize) d += sizeV;
+    return d;
+}
+
+void main(void) {
+    float anchorWrappedX = uWrapAnchorWorld.x + shortestDelta(uWrapAnchorWorld.x, uModelOrigin.x, uWorldSize.x, uWrapEnabled.x);
+    float anchorWrappedY = uWrapAnchorWorld.y + shortestDelta(uWrapAnchorWorld.y, uModelOrigin.y, uWorldSize.y, uWrapEnabled.y);
+    float anchorCamDx = shortestDelta(uCameraWorld.x, anchorWrappedX, uWorldSize.x, uWrapEnabled.x);
+    float anchorCamDy = shortestDelta(uCameraWorld.y, anchorWrappedY, uWorldSize.y, uWrapEnabled.y);
+
+    float worldX = uModelOrigin.x + aDepthWorld.x;
+    float worldY = uModelOrigin.y + aDepthWorld.y;
+    float worldZ = uModelOrigin.z + aDepthWorld.z;
+
+    float wrappedX = uWrapAnchorWorld.x + shortestDelta(uWrapAnchorWorld.x, worldX, uWorldSize.x, uWrapEnabled.x);
+    float wrappedY = uWrapAnchorWorld.y + shortestDelta(uWrapAnchorWorld.y, worldY, uWorldSize.y, uWrapEnabled.y);
+    float camDx = shortestDelta(uCameraWorld.x, wrappedX, uWorldSize.x, uWrapEnabled.x);
+    float camDy = shortestDelta(uCameraWorld.y, wrappedY, uWorldSize.y, uWrapEnabled.y);
+    float camDz = worldZ - uCameraZ;
+
+    float screenX = anchorCamDx * uViewScale + aVertexPosition.x * uViewScale;
+    float screenY = (anchorCamDy - uModelOrigin.z + uCameraZ) * uViewScale * uXyRatio + aVertexPosition.y * uViewScale;
+    if (uBuildingCutawayProjectionPass > 0.5) {
+        float presentationXyRatio = max(1e-6, abs(uBuildingCutawayPresentationXyRatio));
+        screenX = camDx * uViewScale;
+        screenY = (anchorCamDy - uModelOrigin.z + uCameraZ + (aVertexPosition.y / presentationXyRatio)) * uViewScale;
+    }
+
+    float sx = max(1.0, uScreenSize.x);
+    float sy = max(1.0, uScreenSize.y);
+    float depthMetric = camDy + camDz;
+    float farMetric = uDepthRange.x;
+    float invSpan = max(1e-6, uDepthRange.y);
+    float nd = clamp((farMetric - depthMetric) * invSpan, 0.0, 1.0);
+
+    vec2 clip = vec2(
+        (screenX / sx) * 2.0 - 1.0,
+        1.0 - (screenY / sy) * 2.0
+    );
+    gl_Position = vec4(clip, nd * 2.0 - 1.0, 1.0);
+    vUvs = aUvs;
+    vWorldZ = worldZ;
+}
+`;
+
+    static _depthFs = `
+precision mediump float;
+varying vec2 vUvs;
+varying float vWorldZ;
+uniform sampler2D uSampler;
+uniform vec4 uTint;
+uniform float uAlphaCutoff;
+uniform float uBuildingCutawayDataPass;
+uniform vec2 uBuildingCutawayDataZRange;
+void main(void) {
+    vec4 tex = texture2D(uSampler, vUvs) * uTint;
+    if (tex.a < uAlphaCutoff) discard;
+    if (uBuildingCutawayDataPass > 0.5) {
+        float minZ = uBuildingCutawayDataZRange.x;
+        float invSpan = uBuildingCutawayDataZRange.y;
+        float encodedZ = clamp((vWorldZ - minZ) * invSpan, 0.0, 1.0);
+        gl_FragColor = vec4(encodedZ, 0.0, 0.0, 1.0);
+        return;
+    }
+    gl_FragColor = tex;
+}
+`;
+
+    static _ensureDepthMeshState() {
+        if (typeof PIXI === "undefined" || !PIXI.State) return null;
+        if (Roof._depthMeshState) return Roof._depthMeshState;
+        const state = new PIXI.State();
+        state.depthTest = true;
+        state.depthMask = true;
+        state.blend = false;
+        state.culling = false;
+        Roof._depthMeshState = state;
+        return state;
+    }
+
+    static normalizeTexturePath(texturePath) {
+        if (typeof texturePath !== "string" || texturePath.length === 0) return Roof.DEFAULT_TEXTURE;
+        let path = texturePath.trim();
+        if (path.length === 0) return Roof.DEFAULT_TEXTURE;
+        if (!path.startsWith("/")) path = `/${path}`;
+
+        // Backward compatibility for older saves that used the pre-roofs location.
+        if (path === "/assets/images/smallshingles.png") return Roof.DEFAULT_TEXTURE;
+        return path;
+    }
+
+    static normalizeTextureRepeat(textureRepeat) {
+        const value = Number(textureRepeat);
+        if (!Number.isFinite(value)) return Roof.DEFAULT_TEXTURE_REPEAT;
+        return Math.max(0.0625, Math.min(1, value));
+    }
+
+    static computeFaceUvs(faceVertices, repeatsPerUnit) {
+        if (!Array.isArray(faceVertices) || faceVertices.length !== 3) {
+            return new Float32Array([0, 0, repeatsPerUnit, 0, 0, repeatsPerUnit]);
+        }
+
+        const v0 = faceVertices[0];
+        const v1 = faceVertices[1];
+        const v2 = faceVertices[2];
+        const edge1 = {
+            x: (Number(v1.x) || 0) - (Number(v0.x) || 0),
+            y: (Number(v1.y) || 0) - (Number(v0.y) || 0),
+            z: (Number(v1.z) || 0) - (Number(v0.z) || 0)
+        };
+        const edge2 = {
+            x: (Number(v2.x) || 0) - (Number(v0.x) || 0),
+            y: (Number(v2.y) || 0) - (Number(v0.y) || 0),
+            z: (Number(v2.z) || 0) - (Number(v0.z) || 0)
+        };
+        const normal = {
+            x: edge1.y * edge2.z - edge1.z * edge2.y,
+            y: edge1.z * edge2.x - edge1.x * edge2.z,
+            z: edge1.x * edge2.y - edge1.y * edge2.x
+        };
+        const normalLen = Math.hypot(normal.x, normal.y, normal.z);
+        const normalizedNormal = normalLen > 1e-6
+            ? { x: normal.x / normalLen, y: normal.y / normalLen, z: normal.z / normalLen }
+            : { x: 0, y: 0, z: 1 };
+
+        // Project gravity onto the triangle plane so V consistently runs downhill.
+        const gravityDotNormal = -normalizedNormal.z;
+        let vAxis = {
+            x: -gravityDotNormal * normalizedNormal.x,
+            y: -gravityDotNormal * normalizedNormal.y,
+            z: -1 - gravityDotNormal * normalizedNormal.z
+        };
+        let vAxisLen = Math.hypot(vAxis.x, vAxis.y, vAxis.z);
+        if (vAxisLen <= 1e-6) {
+            vAxis = {
+                x: normalizedNormal.y,
+                y: -normalizedNormal.x,
+                z: 0
+            };
+            vAxisLen = Math.hypot(vAxis.x, vAxis.y, vAxis.z);
+        }
+        if (vAxisLen <= 1e-6) {
+            vAxis = { x: 0, y: -1, z: 0 };
+            vAxisLen = 1;
+        }
+        vAxis.x /= vAxisLen;
+        vAxis.y /= vAxisLen;
+        vAxis.z /= vAxisLen;
+
+        let uAxis = {
+            x: vAxis.y * normalizedNormal.z - vAxis.z * normalizedNormal.y,
+            y: vAxis.z * normalizedNormal.x - vAxis.x * normalizedNormal.z,
+            z: vAxis.x * normalizedNormal.y - vAxis.y * normalizedNormal.x
+        };
+        let uAxisLen = Math.hypot(uAxis.x, uAxis.y, uAxis.z);
+        if (uAxisLen <= 1e-6) {
+            uAxis = { x: 1, y: 0, z: 0 };
+            uAxisLen = 1;
+        }
+        uAxis.x /= uAxisLen;
+        uAxis.y /= uAxisLen;
+        uAxis.z /= uAxisLen;
+
+        const rawVValues = faceVertices.map(vertex => {
+            const vx = Number(vertex.x) || 0;
+            const vy = Number(vertex.y) || 0;
+            const vz = Number(vertex.z) || 0;
+            return vx * vAxis.x + vy * vAxis.y + vz * vAxis.z;
+        });
+        const bottomEdgeV = Math.max(...rawVValues);
+
+        const faceUvData = new Float32Array(6);
+        for (let i = 0; i < 3; i++) {
+            const vertex = faceVertices[i];
+            const vx = Number(vertex.x) || 0;
+            const vy = Number(vertex.y) || 0;
+            const vz = Number(vertex.z) || 0;
+            faceUvData[i * 2] = (vx * uAxis.x + vy * uAxis.y + vz * uAxis.z) * repeatsPerUnit;
+            faceUvData[i * 2 + 1] = 1 - (bottomEdgeV - rawVValues[i]) * repeatsPerUnit;
+        }
+        return faceUvData;
+    }
+
+    static _barycentricAtPoint(px, py, ax, ay, bx, by, cx, cy) {
+        const v0x = bx - ax;
+        const v0y = by - ay;
+        const v1x = cx - ax;
+        const v1y = cy - ay;
+        const v2x = px - ax;
+        const v2y = py - ay;
+        const denom = (v0x * v1y - v1x * v0y);
+        if (Math.abs(denom) < 1e-8) return null;
+        const invDenom = 1 / denom;
+        const v = (v2x * v1y - v1x * v2y) * invDenom;
+        const w = (v0x * v2y - v2x * v0y) * invDenom;
+        const u = 1 - v - w;
+        return { u, v, w };
+    }
+
+    static _pointInQuad(p, q0, q1, q2, q3) {
+        const inTri = (pt, a, b, c) => {
+            const bc = Roof._barycentricAtPoint(pt.x, pt.y, a.x, a.y, b.x, b.y, c.x, c.y);
+            if (!bc) return false;
+            const eps = 1e-4;
+            return bc.u >= -eps && bc.v >= -eps && bc.w >= -eps;
+        };
+        return inTri(p, q0, q1, q2) || inTri(p, q0, q2, q3);
+    }
+
+    static _getSectionEndpointKeys(section, wallCtor) {
+        if (!section || !wallCtor || typeof wallCtor.endpointKey !== "function") return [];
+        const startKey = wallCtor.endpointKey(section.startPoint);
+        const endKey = wallCtor.endpointKey(section.endPoint);
+        const keys = [];
+        if (typeof startKey === "string" && startKey.length > 0) keys.push(startKey);
+        if (typeof endKey === "string" && endKey.length > 0 && endKey !== startKey) keys.push(endKey);
+        return keys;
+    }
+
+    static _getSectionEndpointByKey(section, endpointKey, wallCtor) {
+        if (!section || !wallCtor || typeof endpointKey !== "string" || endpointKey.length === 0) return null;
+        const startKey = wallCtor.endpointKey(section.startPoint);
+        if (startKey === endpointKey) return section.startPoint || null;
+        const endKey = wallCtor.endpointKey(section.endPoint);
+        if (endKey === endpointKey) return section.endPoint || null;
+        return null;
+    }
+
+    static _getOtherEndpointKey(section, endpointKey, wallCtor) {
+        if (!section || !wallCtor || typeof endpointKey !== "string" || endpointKey.length === 0) return null;
+        const startKey = wallCtor.endpointKey(section.startPoint);
+        const endKey = wallCtor.endpointKey(section.endPoint);
+        if (startKey === endpointKey) return endKey || null;
+        if (endKey === endpointKey) return startKey || null;
+        return null;
+    }
+
+    static _getSharedEndpointKey(a, b, wallCtor) {
+        if (!a || !b || !wallCtor || typeof wallCtor.endpointKey !== "function") return null;
+        const keysA = Roof._getSectionEndpointKeys(a, wallCtor);
+        const keySetB = new Set(Roof._getSectionEndpointKeys(b, wallCtor));
+        for (let i = 0; i < keysA.length; i++) {
+            if (keySetB.has(keysA[i])) return keysA[i];
+        }
+        return null;
+    }
+
+    static _getPlacementLayerBaseZ(wizardRef) {
+        if (wizardRef && Number.isFinite(wizardRef.currentLayerBaseZ)) {
+            return Number(wizardRef.currentLayerBaseZ);
+        }
+        const candidates = [
+            wizardRef && wizardRef.currentLayer,
+            wizardRef && wizardRef.selectedFloorEditLevel,
+            wizardRef && wizardRef.traversalLayer
+        ];
+        const layer = candidates.find(value => Number.isFinite(Number(value)));
+        throw new Error(`roof layer base Z requires wizard currentLayerBaseZ for layer ${Number.isFinite(Number(layer)) ? Math.round(Number(layer)) : "(unknown)"}`);
+    }
+
+    static _getWallSectionBottomZ(section) {
+        if (!section) return 0;
+        if (Number.isFinite(section.bottomZ)) return Number(section.bottomZ);
+        throw new Error(`roof wall section ${section.id || section.name || "(unknown)"} requires bottomZ`);
+    }
+
+    static getWallSectionTopZForLayer(section, layerBaseZ = null) {
+        const bottomZ = Roof._getWallSectionBottomZ(section);
+        const height = Math.max(0, Number(section && section.height) || 0);
+        const rawTopZ = bottomZ + height;
+        const hasLayerBaseZ = layerBaseZ !== null && layerBaseZ !== undefined && Number.isFinite(Number(layerBaseZ));
+        if (!hasLayerBaseZ) return rawTopZ;
+        const baseZ = Number(layerBaseZ);
+        if (bottomZ >= baseZ) return rawTopZ;
+        const heightAboveLayer = height - (baseZ - bottomZ);
+        return baseZ + heightAboveLayer;
+    }
+
+    static _wallSectionRisesAboveLayer(section, layerBaseZ, eps = 1e-6) {
+        if (!section || section.gone || section.vanishing) return false;
+        const topZ = Roof.getWallSectionTopZForLayer(section, layerBaseZ);
+        return Number.isFinite(topZ) && topZ > Number(layerBaseZ) + eps;
+    }
+
+    static _getConnectedSectionsAtEndpoint(section, endpointKey, wallCtor, sectionFilter = null) {
+        if (
+            !section ||
+            !(section.connections instanceof Map) ||
+            typeof endpointKey !== "string" ||
+            endpointKey.length === 0 ||
+            !wallCtor
+        ) {
+            return [];
+        }
+        const out = [];
+        for (const payload of section.connections.values()) {
+            const candidate = payload && payload.section;
+            if (!candidate || candidate.gone || candidate.vanishing || candidate === section) continue;
+            if (typeof sectionFilter === "function" && !sectionFilter(candidate)) continue;
+            const sharedKey = Roof._getSharedEndpointKey(section, candidate, wallCtor);
+            if (sharedKey !== endpointKey) continue;
+            out.push(candidate);
+        }
+        return out;
+    }
+
+    static _getVectorFromEndpointToOther(section, endpointKey, mapRef, wallCtor) {
+        if (!section || !wallCtor || typeof endpointKey !== "string" || endpointKey.length === 0) return null;
+        const from = Roof._getSectionEndpointByKey(section, endpointKey, wallCtor);
+        if (!from) return null;
+        const otherKey = Roof._getOtherEndpointKey(section, endpointKey, wallCtor);
+        const to = Roof._getSectionEndpointByKey(section, otherKey, wallCtor);
+        if (!to) return null;
+        const fromX = Number(from.x);
+        const fromY = Number(from.y);
+        const toX = Number(to.x);
+        const toY = Number(to.y);
+        if (!Number.isFinite(fromX) || !Number.isFinite(fromY) || !Number.isFinite(toX) || !Number.isFinite(toY)) return null;
+        const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+            ? mapRef.shortestDeltaX(fromX, toX)
+            : (toX - fromX);
+        const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+            ? mapRef.shortestDeltaY(fromY, toY)
+            : (toY - fromY);
+        if (!Number.isFinite(dx) || !Number.isFinite(dy)) return null;
+        return { x: dx, y: dy };
+    }
+
+    static _getBendSign(currentSection, nextSection, sharedEndpointKey, mapRef, wallCtor) {
+        const currentOut = Roof._getVectorFromEndpointToOther(currentSection, sharedEndpointKey, mapRef, wallCtor);
+        const nextOut = Roof._getVectorFromEndpointToOther(nextSection, sharedEndpointKey, mapRef, wallCtor);
+        if (!currentOut || !nextOut) return null;
+        const incomingX = -currentOut.x;
+        const incomingY = -currentOut.y;
+        const cross = incomingX * nextOut.y - incomingY * nextOut.x;
+        if (!Number.isFinite(cross) || Math.abs(cross) <= 1e-6) return 0;
+        return cross > 0 ? 1 : -1;
+    }
+
+    static _getWallSectionVisiblePolygonsAtMouse(section, mouseScreen, worldToScreenFn, viewScale, xyRatio, options = {}) {
+        if (!section || !mouseScreen || typeof worldToScreenFn !== "function") return null;
+        const profile = (typeof section.getWallProfile === "function") ? section.getWallProfile() : null;
+        if (!profile) return null;
+        const clipMinZ = Number.isFinite(options.clipMinZ) ? Number(options.clipMinZ) : null;
+        const sectionBottomZ = Roof._getWallSectionBottomZ(section);
+        const wallTopZ = Roof.getWallSectionTopZForLayer(section, clipMinZ);
+        const wallBaseZ = Number.isFinite(clipMinZ) ? Math.max(sectionBottomZ, clipMinZ) : sectionBottomZ;
+        if (!(wallTopZ > wallBaseZ + 1e-6)) return null;
+        const toScreen = (pt, z) => {
+            const s = worldToScreenFn(pt);
+            return { x: s.x, y: s.y - z * viewScale * xyRatio };
+        };
+        const longFaceA = [toScreen(profile.aLeft, wallBaseZ), toScreen(profile.bLeft, wallBaseZ), toScreen(profile.bLeft, wallTopZ), toScreen(profile.aLeft, wallTopZ)];
+        const longFaceB = [toScreen(profile.aRight, wallBaseZ), toScreen(profile.bRight, wallBaseZ), toScreen(profile.bRight, wallTopZ), toScreen(profile.aRight, wallTopZ)];
+        const capBaseA = Number.isFinite(section.getAdjacentCollinearWallHeightAtEndpoint && section.getAdjacentCollinearWallHeightAtEndpoint("a"))
+            ? Math.max(wallBaseZ, Math.min(wallTopZ, sectionBottomZ + Number(section.getAdjacentCollinearWallHeightAtEndpoint("a"))))
+            : wallBaseZ;
+        const capBaseB = Number.isFinite(section.getAdjacentCollinearWallHeightAtEndpoint && section.getAdjacentCollinearWallHeightAtEndpoint("b"))
+            ? Math.max(wallBaseZ, Math.min(wallTopZ, sectionBottomZ + Number(section.getAdjacentCollinearWallHeightAtEndpoint("b"))))
+            : wallBaseZ;
+        const capFaceStart = [toScreen(profile.aRight, capBaseA), toScreen(profile.aLeft, capBaseA), toScreen(profile.aLeft, wallTopZ), toScreen(profile.aRight, wallTopZ)];
+        const capFaceEnd = [toScreen(profile.bLeft, capBaseB), toScreen(profile.bRight, capBaseB), toScreen(profile.bRight, wallTopZ), toScreen(profile.bLeft, wallTopZ)];
+        const topFace = [toScreen(profile.aLeft, wallTopZ), toScreen(profile.bLeft, wallTopZ), toScreen(profile.bRight, wallTopZ), toScreen(profile.aRight, wallTopZ)];
+        const faceDepth = pts => pts.reduce((sum, p) => sum + p.y, 0) / Math.max(1, pts.length);
+        const longAFront = faceDepth(longFaceA) >= faceDepth(longFaceB);
+        const startCapFront = faceDepth(capFaceStart) >= faceDepth(capFaceEnd);
+        const showStartCap = capBaseA < wallTopZ - 1e-5;
+        const showEndCap = capBaseB < wallTopZ - 1e-5;
+        const visiblePolygons = [];
+        visiblePolygons.push(longAFront ? longFaceA : longFaceB);
+        visiblePolygons.push(topFace);
+        if (startCapFront && showStartCap) visiblePolygons.push(capFaceStart);
+        if (!startCapFront && showEndCap) visiblePolygons.push(capFaceEnd);
+        const containsMouse = visiblePolygons.some(poly =>
+            Roof._pointInQuad(mouseScreen, poly[0], poly[1], poly[2], poly[3])
+        );
+        if (!containsMouse) return null;
+        return { profile };
+    }
+
+    static getHoveredWallSectionAtPoint(wizardRef, worldX, worldY, options = {}) {
+        if (!wizardRef || !wizardRef.map || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        const worldToScreenFn = (typeof globalThis.worldToScreen === "function") ? globalThis.worldToScreen : null;
+        if (!worldToScreenFn) return null;
+        const mouseScreen = (
+            globalThis.mousePos &&
+            Number.isFinite(globalThis.mousePos.screenX) &&
+            Number.isFinite(globalThis.mousePos.screenY)
+        ) ? { x: globalThis.mousePos.screenX, y: globalThis.mousePos.screenY } : worldToScreenFn({ x: worldX, y: worldY });
+        const wallCtor = globalThis.WallSectionUnit || null;
+        if (!wallCtor || !wallCtor._allSections || wallCtor._allSections.size === 0) return null;
+        const viewScale = Number.isFinite(globalThis.viewscale) ? globalThis.viewscale : 1;
+        const xyRatio = Number.isFinite(globalThis.xyratio) ? globalThis.xyratio : 0.66;
+        const sectionFilter = typeof options.sectionFilter === "function" ? options.sectionFilter : null;
+        for (const section of wallCtor._allSections.values()) {
+            if (!section || section.gone || section.vanishing || !section.startPoint || !section.endPoint) continue;
+            if (sectionFilter && !sectionFilter(section)) continue;
+            if (Roof._getWallSectionVisiblePolygonsAtMouse(section, mouseScreen, worldToScreenFn, viewScale, xyRatio, options)) {
+                return section;
+            }
+        }
+        return null;
+    }
+
+    static _pickRightmostCandidate(candidates, exitKey, inDir, mapRef, wallCtor) {
+        if (candidates.length === 1) return candidates[0];
+        let bestCandidate = null;
+        let bestAngle = Infinity;
+        for (let i = 0; i < candidates.length; i++) {
+            const candidate = candidates[i];
+            const outDir = Roof._getVectorFromEndpointToOther(candidate, exitKey, mapRef, wallCtor);
+            if (!outDir) continue;
+            // atan2(cross, dot): positive = CCW (left), negative = CW (right).
+            // Smallest angle = most clockwise = rightmost turn, tracing outer boundary.
+            const dot = inDir.x * outDir.x + inDir.y * outDir.y;
+            const cross = inDir.x * outDir.y - inDir.y * outDir.x;
+            const angle = Math.atan2(cross, dot);
+            if (angle < bestAngle) {
+                bestAngle = angle;
+                bestCandidate = candidate;
+            }
+        }
+        return bestCandidate;
+    }
+
+    static _greedyOuterWallLoopTraversal(startSection, entryKey, mapRef, wallCtor, maxDepth, sectionFilter = null) {
+        let current = startSection;
+        let entryEndpointKey = entryKey;
+        const path = [startSection];
+        const visitedIds = new Set([startSection.id]);
+        for (let step = 0; step < maxDepth; step++) {
+            const exitKey = Roof._getOtherEndpointKey(current, entryEndpointKey, wallCtor);
+            if (!exitKey) return null;
+            const allCandidates = Roof._getConnectedSectionsAtEndpoint(current, exitKey, wallCtor, sectionFilter)
+                .filter(c => c && c !== current);
+            if (allCandidates.length === 0) return null;
+            const inDir = Roof._getVectorFromEndpointToOther(current, entryEndpointKey, mapRef, wallCtor);
+            if (!inDir) return null;
+            const closingCandidates = allCandidates.filter(c => c === startSection);
+            const forwardCandidates = allCandidates.filter(c => c !== startSection && !visitedIds.has(c.id));
+            // If we can close the loop and have at least 3 sections total, check if rightmost leads back.
+            if (closingCandidates.length > 0 && path.length >= 3) {
+                const best = Roof._pickRightmostCandidate(
+                    allCandidates.filter(c => c === startSection || (!visitedIds.has(c.id) && c !== startSection)),
+                    exitKey, inDir, mapRef, wallCtor
+                );
+                if (best === startSection) return path.slice();
+                if (best && !visitedIds.has(best.id)) {
+                    path.push(best);
+                    visitedIds.add(best.id);
+                    entryEndpointKey = exitKey;
+                    current = best;
+                    continue;
+                }
+                // Closing is the only option
+                return path.slice();
+            }
+            if (forwardCandidates.length === 0) return null;
+            const best = Roof._pickRightmostCandidate(forwardCandidates, exitKey, inDir, mapRef, wallCtor);
+            if (!best) return null;
+            path.push(best);
+            visitedIds.add(best.id);
+            entryEndpointKey = exitKey;
+            current = best;
+        }
+        return null;
+    }
+
+    // Like findConvexWallLoopFromStartSection but allows non-convex (mixed turn-sign) loops.
+    // Uses a greedy rightmost-turn traversal to trace one enclosed face of the wall graph.
+    static findWallLoopFromStartSection(startSection, mapRef, wallCtor, maxDepth = null, sectionFilter = null) {
+        const resolvedMaxDepth = (maxDepth != null) ? maxDepth : 64;
+        if (!startSection || !wallCtor || typeof wallCtor.endpointKey !== "function") return null;
+        if (typeof sectionFilter === "function" && !sectionFilter(startSection)) return null;
+        const startKeys = Roof._getSectionEndpointKeys(startSection, wallCtor);
+        for (let ki = 0; ki < startKeys.length; ki++) {
+            const result = Roof._greedyOuterWallLoopTraversal(
+                startSection, startKeys[ki], mapRef, wallCtor, resolvedMaxDepth, sectionFilter
+            );
+            if (Array.isArray(result) && result.length >= 3) return result;
+        }
+        return null;
+    }
+
+    // Given an ordered list of wall sections forming a closed loop, return the
+    // ordered polygon vertices tracing the OUTER edge of the wall (not the centerline).
+    // Emits 2 outer-face corners per section (entry + exit), capturing miter geometry at
+    // junctions. Deduplicates collinear/identical consecutive points. Picks the orientation
+    // (left vs right face) that yields the larger area polygon, making the result independent
+    // of coordinate-system winding conventions.
+    static extractWallLoopPolygonPoints(loopSections, mapRef, wallCtor) {
+        if (!Array.isArray(loopSections) || loopSections.length < 3 || !wallCtor) return null;
+        const N = loopSections.length;
+
+        // junction[i] = shared endpoint between loopSections[i] and loopSections[(i+1)%N]
+        const junctionKeys = [];
+        const junctionPts = [];
+        let refPoint = null;
+        for (let i = 0; i < N; i++) {
+            const curr = loopSections[i];
+            const next = loopSections[(i + 1) % N];
+            const sharedKey = Roof._getSharedEndpointKey(curr, next, wallCtor);
+            if (!sharedKey) return null;
+            const pt = Roof._getSectionEndpointByKey(curr, sharedKey, wallCtor);
+            if (!pt) return null;
+            const ptX = Number(pt.x), ptY = Number(pt.y);
+            if (!Number.isFinite(ptX) || !Number.isFinite(ptY)) return null;
+            junctionKeys.push(sharedKey);
+            if (!refPoint) {
+                refPoint = { x: ptX, y: ptY };
+                junctionPts.push({ x: ptX, y: ptY });
+            } else {
+                const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                    ? mapRef.shortestDeltaX(refPoint.x, ptX) : (ptX - refPoint.x);
+                const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                    ? mapRef.shortestDeltaY(refPoint.y, ptY) : (ptY - refPoint.y);
+                junctionPts.push({ x: refPoint.x + dx, y: refPoint.y + dy });
+            }
+        }
+
+        // Signed area (shoelace) of the centerline polygon — sign encodes winding.
+        let signedArea = 0;
+        for (let i = 0; i < N; i++) {
+            const a = junctionPts[i], b = junctionPts[(i + 1) % N];
+            signedArea += a.x * b.y - b.x * a.y;
+        }
+        const isCW = signedArea > 0; // CW in Y-down screen coords
+
+        const anchor = junctionPts[0];
+        const wrapPt = (pt) => {
+            if (!pt || !Number.isFinite(Number(pt.x)) || !Number.isFinite(Number(pt.y))) return null;
+            const px = Number(pt.x), py = Number(pt.y);
+            const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(anchor.x, px) : (px - anchor.x);
+            const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(anchor.y, py) : (py - anchor.y);
+            return { x: anchor.x + dx, y: anchor.y + dy };
+        };
+
+        // Build outer polygon. outerIsLeftForCW: when the loop is CW, is outer the Left face?
+        // We try both values and pick the polygon with larger area.
+        const buildOuterPolygon = (outerIsLeftForCW) => {
+            const pts = [];
+            for (let i = 0; i < N; i++) {
+                const section = loopSections[i];
+                // entryKey: junction between section[i-1] and section[i]
+                const entryKey = junctionKeys[(i - 1 + N) % N];
+                const isForward = (entryKey === wallCtor.endpointKey(section.startPoint));
+                const profile = (typeof section.getWallProfile === "function") ? section.getWallProfile() : null;
+                if (!profile) return null;
+
+                // Outer face relative to the loop's winding:
+                // CW loop → outer = (outerIsLeftForCW ? Left : Right) of traversal
+                // CCW loop → outer = (!outerIsLeftForCW ? Left : Right) of traversal
+                const outerIsLeft = isCW ? outerIsLeftForCW : !outerIsLeftForCW;
+
+                // Per-section traversal direction flips Left/Right relative to the section's own coordinates.
+                // Forward (start→end): Left of traversal = profile.aLeft/bLeft; Right = aRight/bRight
+                // Backward (end→start): Left of traversal = profile.bRight/aRight; Right = bLeft/aLeft
+                let entryCorner, exitCorner;
+                if (isForward) {
+                    entryCorner = outerIsLeft ? profile.aLeft : profile.aRight;
+                    exitCorner  = outerIsLeft ? profile.bLeft : profile.bRight;
+                } else {
+                    entryCorner = outerIsLeft ? profile.bRight : profile.bLeft;
+                    exitCorner  = outerIsLeft ? profile.aRight : profile.aLeft;
+                }
+
+                const p1 = wrapPt(entryCorner);
+                const p2 = wrapPt(exitCorner);
+                if (!p1 || !p2) return null;
+                pts.push(p1, p2);
+            }
+            // Deduplicate consecutive near-identical points.
+            const EPS = 1e-4;
+            const deduped = [];
+            for (let j = 0; j < pts.length; j++) {
+                const p = pts[j];
+                if (!deduped.length) { deduped.push(p); continue; }
+                const prev = deduped[deduped.length - 1];
+                if (Math.abs(p.x - prev.x) < EPS && Math.abs(p.y - prev.y) < EPS) continue;
+                deduped.push(p);
+            }
+            if (deduped.length > 1) {
+                const f = deduped[0], l = deduped[deduped.length - 1];
+                if (Math.abs(f.x - l.x) < EPS && Math.abs(f.y - l.y) < EPS) deduped.pop();
+            }
+            return deduped.length >= 3 ? deduped : null;
+        };
+
+        const polygonAbsArea = (pts) => {
+            if (!pts) return -Infinity;
+            let a = 0;
+            for (let i = 0; i < pts.length; i++) {
+                const p = pts[i], q = pts[(i + 1) % pts.length];
+                a += p.x * q.y - q.x * p.y;
+            }
+            return Math.abs(a) * 0.5;
+        };
+
+        // Try both orientations — the outer boundary is always larger than the centerline.
+        const poly0 = buildOuterPolygon(true);
+        const poly1 = buildOuterPolygon(false);
+        const area0 = polygonAbsArea(poly0);
+        const area1 = polygonAbsArea(poly1);
+        return area0 >= area1 ? (poly0 || poly1) : (poly1 || poly0);
+    }
+
+    static findConvexWallLoopFromStartSection(startSection, mapRef, wallCtor, maxDepth = null, sectionFilter = null) {
+        const resolvedMaxDepth = (maxDepth != null) ? maxDepth : 64;
+        if (!startSection || !wallCtor) return null;
+        if (typeof sectionFilter === "function" && !sectionFilter(startSection)) return null;
+        const startNeighbors = Roof._getConnectedSectionsAtEndpoint(startSection, wallCtor.endpointKey(startSection.startPoint), wallCtor, sectionFilter)
+            .concat(Roof._getConnectedSectionsAtEndpoint(startSection, wallCtor.endpointKey(startSection.endPoint), wallCtor, sectionFilter));
+        const dedupNeighbors = [];
+        const neighborIds = new Set();
+        for (let i = 0; i < startNeighbors.length; i++) {
+            const section = startNeighbors[i];
+            if (!section || !Number.isInteger(section.id) || neighborIds.has(section.id)) continue;
+            neighborIds.add(section.id);
+            dedupNeighbors.push(section);
+        }
+
+        const dfs = (currentSection, entryEndpointKey, turnSign, pathSections, depth) => {
+            if (!currentSection || depth > resolvedMaxDepth) return null;
+            const exitEndpointKey = Roof._getOtherEndpointKey(currentSection, entryEndpointKey, wallCtor);
+            if (!exitEndpointKey) return null;
+            const candidates = Roof._getConnectedSectionsAtEndpoint(currentSection, exitEndpointKey, wallCtor, sectionFilter);
+            for (let i = 0; i < candidates.length; i++) {
+                const next = candidates[i];
+                if (!next || next === currentSection) continue;
+                const bendSign = Roof._getBendSign(currentSection, next, exitEndpointKey, mapRef, wallCtor);
+                if (bendSign === null) continue;
+                let nextTurnSign = turnSign;
+                if (bendSign !== 0) {
+                    if (nextTurnSign === 0) nextTurnSign = bendSign;
+                    else if (bendSign !== nextTurnSign) continue;
+                }
+                if (next === startSection) {
+                    if (pathSections.length >= 3) return pathSections.slice();
+                    continue;
+                }
+                if (pathSections.includes(next)) continue;
+                const nextPath = pathSections.concat(next);
+                const found = dfs(next, exitEndpointKey, nextTurnSign, nextPath, depth + 1);
+                if (found) return found;
+            }
+            return null;
+        };
+
+        for (let i = 0; i < dedupNeighbors.length; i++) {
+            const neighbor = dedupNeighbors[i];
+            const sharedEndpointKey = Roof._getSharedEndpointKey(startSection, neighbor, wallCtor);
+            if (!sharedEndpointKey) continue;
+            const found = dfs(neighbor, sharedEndpointKey, 0, [startSection, neighbor], 1);
+            if (Array.isArray(found) && found.length >= 3) return found;
+        }
+        return null;
+    }
+
+    static getPlacementCandidate(wizardRef, worldX, worldY, options = {}) {
+        if (!wizardRef || !wizardRef.map || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        const mapRef = wizardRef.map;
+        const wallCtor = globalThis.WallSectionUnit || null;
+        if (!wallCtor || !wallCtor._allSections || wallCtor._allSections.size === 0) return null;
+        const layerBaseZ = Roof._getPlacementLayerBaseZ(wizardRef);
+        const sectionFilter = section => Roof._wallSectionRisesAboveLayer(section, layerBaseZ);
+        const hoveredSection = Roof.getHoveredWallSectionAtPoint(wizardRef, worldX, worldY, {
+            clipMinZ: layerBaseZ,
+            sectionFilter
+        });
+        if (!hoveredSection) return null;
+        if (!sectionFilter(hoveredSection)) return null;
+
+        const maxDepth = Number.isFinite(options.maxDepth) ? Math.max(1, Number(options.maxDepth)) : null;
+        const loopSections = Roof.findConvexWallLoopFromStartSection(hoveredSection, mapRef, wallCtor, maxDepth, sectionFilter);
+        if (!Array.isArray(loopSections) || loopSections.length < 3) return null;
+
+        let baseCenter = null;
+        let sumX = 0;
+        let sumY = 0;
+        let maxZ = 0;
+        let count = 0;
+        for (let i = 0; i < loopSections.length; i++) {
+            const section = loopSections[i];
+            if (!section || typeof section.getWallProfile !== "function") continue;
+            const profile = section.getWallProfile();
+            if (!profile) continue;
+            const cx = (
+                Number(profile.aLeft.x) +
+                Number(profile.aRight.x) +
+                Number(profile.bLeft.x) +
+                Number(profile.bRight.x)
+            ) * 0.25;
+            const cy = (
+                Number(profile.aLeft.y) +
+                Number(profile.aRight.y) +
+                Number(profile.bLeft.y) +
+                Number(profile.bRight.y)
+            ) * 0.25;
+            if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+            const topZ = Roof.getWallSectionTopZForLayer(section, layerBaseZ);
+            if (!baseCenter) {
+                baseCenter = { x: cx, y: cy };
+                sumX += cx;
+                sumY += cy;
+            } else {
+                const relX = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                    ? (baseCenter.x + mapRef.shortestDeltaX(baseCenter.x, cx))
+                    : cx;
+                const relY = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                    ? (baseCenter.y + mapRef.shortestDeltaY(baseCenter.y, cy))
+                    : cy;
+                sumX += relX;
+                sumY += relY;
+            }
+            if (topZ > maxZ) maxZ = topZ;
+            count += 1;
+        }
+        if (count <= 0) return null;
+
+        let previewX = sumX / count;
+        let previewY = sumY / count;
+        const previewZ = maxZ;
+        if (mapRef && typeof mapRef.wrapWorldX === "function") previewX = mapRef.wrapWorldX(previewX);
+        if (mapRef && typeof mapRef.wrapWorldY === "function") previewY = mapRef.wrapWorldY(previewY);
+
+        return {
+            valid: true,
+            targetWall: hoveredSection,
+            wallSections: loopSections.slice(),
+            layerBaseZ,
+            previewX,
+            previewY,
+            previewZ
+        };
+    }
+
+    static getPlacementDiagnostics(wizardRef, worldX, worldY, options = {}) {
+        const candidate = Roof.getPlacementCandidate(wizardRef, worldX, worldY, options);
+        if (candidate) {
+            return {
+                active: true,
+                valid: true,
+                hoveredSection: candidate.targetWall || null,
+                wallSections: Array.isArray(candidate.wallSections) ? candidate.wallSections.slice() : [],
+                candidate
+            };
+        }
+        const layerBaseZ = Roof._getPlacementLayerBaseZ(wizardRef);
+        const sectionFilter = section => Roof._wallSectionRisesAboveLayer(section, layerBaseZ);
+        const hoveredSection = Roof.getHoveredWallSectionAtPoint(wizardRef, worldX, worldY, {
+            clipMinZ: layerBaseZ,
+            sectionFilter
+        });
+        return {
+            active: !!hoveredSection,
+            valid: false,
+            hoveredSection: hoveredSection || null,
+            wallSections: hoveredSection ? [hoveredSection] : [],
+            candidate: null
+        };
+    }
+
+    static buildWallLoopMeshData(wallSections, mapRef, options = {}) {
+        if (!Array.isArray(wallSections) || wallSections.length === 0) return null;
+        const wallCtor = globalThis.WallSectionUnit || null;
+        if (!wallCtor || typeof wallCtor.endpointKey !== "function") return null;
+        const peakOffsetZ = Number.isFinite(options.peakOffsetZ) ? Number(options.peakOffsetZ) : 2;
+        const overhang = Number.isFinite(options.overhang) ? Math.max(0, Number(options.overhang)) : 0.25;
+
+        const unwrapPointAround = (origin, point) => {
+            if (!origin || !point) return null;
+            const px = Number(point.x);
+            const py = Number(point.y);
+            if (!Number.isFinite(px) || !Number.isFinite(py)) return null;
+            const ox = Number(origin.x);
+            const oy = Number(origin.y);
+            const x = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? (ox + mapRef.shortestDeltaX(ox, px))
+                : px;
+            const y = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? (oy + mapRef.shortestDeltaY(oy, py))
+                : py;
+            return { x, y };
+        };
+
+        let baseMid = null;
+        let sumMidX = 0;
+        let sumMidY = 0;
+        let maxMidZ = 0;
+        let midCount = 0;
+        const endpointAggByKey = new Map();
+
+        for (let i = 0; i < wallSections.length; i++) {
+            const section = wallSections[i];
+            if (!section || !section.startPoint || !section.endPoint) continue;
+            const sx = Number(section.startPoint.x);
+            const sy = Number(section.startPoint.y);
+            const ex = Number(section.endPoint.x);
+            const ey = Number(section.endPoint.y);
+            if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) continue;
+
+            const dx = (mapRef && typeof mapRef.shortestDeltaX === "function")
+                ? mapRef.shortestDeltaX(sx, ex)
+                : (ex - sx);
+            const dy = (mapRef && typeof mapRef.shortestDeltaY === "function")
+                ? mapRef.shortestDeltaY(sy, ey)
+                : (ey - sy);
+            const midpoint = { x: sx + dx * 0.5, y: sy + dy * 0.5 };
+            const topZ = Roof.getWallSectionTopZForLayer(
+                section,
+                Number.isFinite(options.layerBaseZ) ? Number(options.layerBaseZ) : null
+            );
+
+            if (!baseMid) {
+                baseMid = { x: midpoint.x, y: midpoint.y };
+            }
+            const unwrappedMid = unwrapPointAround(baseMid, midpoint);
+            if (unwrappedMid) {
+                sumMidX += unwrappedMid.x;
+                sumMidY += unwrappedMid.y;
+                if (topZ > maxMidZ) maxMidZ = topZ;
+                midCount += 1;
+            }
+
+            const startKey = wallCtor.endpointKey(section.startPoint);
+            const endKey = wallCtor.endpointKey(section.endPoint);
+            if (typeof startKey === "string" && startKey.length > 0) {
+                const startPt = unwrapPointAround(baseMid, section.startPoint);
+                if (startPt) {
+                    const agg = endpointAggByKey.get(startKey) || { x: 0, y: 0, z: 0, count: 0 };
+                    agg.x += startPt.x;
+                    agg.y += startPt.y;
+                    if (topZ > agg.z) agg.z = topZ;
+                    agg.count += 1;
+                    endpointAggByKey.set(startKey, agg);
+                }
+            }
+            if (typeof endKey === "string" && endKey.length > 0) {
+                const endPt = unwrapPointAround(baseMid, section.endPoint);
+                if (endPt) {
+                    const agg = endpointAggByKey.get(endKey) || { x: 0, y: 0, z: 0, count: 0 };
+                    agg.x += endPt.x;
+                    agg.y += endPt.y;
+                    if (topZ > agg.z) agg.z = topZ;
+                    agg.count += 1;
+                    endpointAggByKey.set(endKey, agg);
+                }
+            }
+        }
+
+        if (midCount <= 0 || endpointAggByKey.size < 2) return null;
+        const meanMidX = sumMidX / midCount;
+        const meanMidY = sumMidY / midCount;
+        const peakWorldZ = maxMidZ + peakOffsetZ;
+
+        // Build loop corner order from pairwise shared endpoints between adjacent
+        // loop sections. Stable ordering avoids self-intersecting roof footprints.
+        const orderedEndpointKeys = [];
+        for (let i = 0; i < wallSections.length; i++) {
+            const section = wallSections[i];
+            const nextSection = wallSections[(i + 1) % wallSections.length];
+            const sharedKey = Roof._getSharedEndpointKey(section, nextSection, wallCtor);
+            if (!sharedKey || !endpointAggByKey.has(sharedKey)) return null;
+            orderedEndpointKeys.push(sharedKey);
+        }
+
+        // Require a simple closed polygon: at least 3 unique corners.
+        const uniqueOrderedKeys = [];
+        const seenOrderedKeys = new Set();
+        for (let i = 0; i < orderedEndpointKeys.length; i++) {
+            const key = orderedEndpointKeys[i];
+            if (!seenOrderedKeys.has(key)) {
+                seenOrderedKeys.add(key);
+                uniqueOrderedKeys.push(key);
+            }
+        }
+        if (uniqueOrderedKeys.length < 3) return null;
+
+        const vertices = [];
+        const endpointIndexByKey = new Map();
+        for (let i = 0; i < uniqueOrderedKeys.length; i++) {
+            const key = uniqueOrderedKeys[i];
+            const agg = endpointAggByKey.get(key);
+            if (!agg || !agg.count) continue;
+            endpointIndexByKey.set(key, vertices.length);
+            vertices.push({
+                x: (agg.x / agg.count) - meanMidX,
+                y: (agg.y / agg.count) - meanMidY,
+                // Keep the full eave at the highest wall top in the loop.
+                z: 0
+            });
+        }
+        if (vertices.length < 2) return null;
+
+        const interiorLocalPoints = vertices.map(v => ({ x: Number(v.x) || 0, y: Number(v.y) || 0 }));
+
+        if (overhang > 1e-6 && vertices.length >= 3) {
+            const signedArea = (() => {
+                let area = 0;
+                for (let i = 0; i < vertices.length; i++) {
+                    const a = vertices[i];
+                    const b = vertices[(i + 1) % vertices.length];
+                    area += a.x * b.y - b.x * a.y;
+                }
+                return area * 0.5;
+            })();
+            const ccw = signedArea >= 0;
+            const getOutwardNormal = (edgeX, edgeY) => {
+                const len = Math.hypot(edgeX, edgeY);
+                if (len <= 1e-7) return null;
+                const ex = edgeX / len;
+                const ey = edgeY / len;
+                return ccw ? { x: ey, y: -ex } : { x: -ey, y: ex };
+            };
+            const cross2d = (ax, ay, bx, by) => ax * by - ay * bx;
+
+            const offsetVertices = [];
+            for (let i = 0; i < vertices.length; i++) {
+                const prev = vertices[(i - 1 + vertices.length) % vertices.length];
+                const curr = vertices[i];
+                const next = vertices[(i + 1) % vertices.length];
+                const ePrev = { x: curr.x - prev.x, y: curr.y - prev.y };
+                const eNext = { x: next.x - curr.x, y: next.y - curr.y };
+                const nPrev = getOutwardNormal(ePrev.x, ePrev.y);
+                const nNext = getOutwardNormal(eNext.x, eNext.y);
+                if (!nPrev || !nNext) {
+                    offsetVertices.push({ x: curr.x, y: curr.y, z: curr.z });
+                    continue;
+                }
+
+                const p1 = { x: curr.x + nPrev.x * overhang, y: curr.y + nPrev.y * overhang };
+                const p2 = { x: curr.x + nNext.x * overhang, y: curr.y + nNext.y * overhang };
+                const denom = cross2d(ePrev.x, ePrev.y, eNext.x, eNext.y);
+                if (Math.abs(denom) <= 1e-7) {
+                    const nx = nPrev.x + nNext.x;
+                    const ny = nPrev.y + nNext.y;
+                    const nLen = Math.hypot(nx, ny);
+                    if (nLen <= 1e-7) {
+                        offsetVertices.push({ x: curr.x, y: curr.y, z: curr.z });
+                    } else {
+                        offsetVertices.push({
+                            x: curr.x + (nx / nLen) * overhang,
+                            y: curr.y + (ny / nLen) * overhang,
+                            z: curr.z
+                        });
+                    }
+                    continue;
+                }
+                const dx = p2.x - p1.x;
+                const dy = p2.y - p1.y;
+                const t = cross2d(dx, dy, eNext.x, eNext.y) / denom;
+                offsetVertices.push({
+                    x: p1.x + ePrev.x * t,
+                    y: p1.y + ePrev.y * t,
+                    z: curr.z
+                });
+            }
+
+            if (offsetVertices.length === vertices.length) {
+                for (let i = 0; i < vertices.length; i++) {
+                    vertices[i].x = offsetVertices[i].x;
+                    vertices[i].y = offsetVertices[i].y;
+                }
+            }
+        }
+
+        const peakIndex = vertices.length;
+        vertices.push({ x: 0, y: 0, z: peakWorldZ - maxMidZ });
+
+        const faces = [];
+        for (let i = 0; i < wallSections.length; i++) {
+            const prevKey = orderedEndpointKeys[(i - 1 + orderedEndpointKeys.length) % orderedEndpointKeys.length];
+            const nextKey = orderedEndpointKeys[i];
+            const startIdx = endpointIndexByKey.get(prevKey);
+            const endIdx = endpointIndexByKey.get(nextKey);
+            if (!Number.isInteger(startIdx) || !Number.isInteger(endIdx) || startIdx === endIdx) continue;
+            faces.push([startIdx, endIdx, peakIndex]);
+        }
+        if (faces.length === 0) return null;
+
+        let centerX = meanMidX;
+        let centerY = meanMidY;
+        if (mapRef && typeof mapRef.wrapWorldX === "function") centerX = mapRef.wrapWorldX(centerX);
+        if (mapRef && typeof mapRef.wrapWorldY === "function") centerY = mapRef.wrapWorldY(centerY);
+
+        return {
+            centerX,
+            centerY,
+            baseZ: maxMidZ,
+            peakZ: peakWorldZ,
+            vertices,
+            faces,
+            interiorLocalPoints,
+            numEaves: endpointIndexByKey.size,
+            numHexRing: 0
+        };
+    }
+
+    static buildLegacyFaces(numEaves, numHexRing) {
+        const faces = [];
+        const eaveStartIdx = 0;
+        const hexRingStartIdx = numEaves;
+        const hexRingOuterStartIdx = numEaves + numHexRing;
+        const peakIdx = numEaves + numHexRing + numHexRing;
+
+        for (let i = 0; i < numHexRing; i++) {
+            const eaveIdx1 = eaveStartIdx + (2 * i);
+            const eaveIdx2 = eaveStartIdx + ((2 * i + 1) % numEaves);
+            const eaveIdx3 = eaveStartIdx + ((2 * i + 2) % numEaves);
+            const hexIdx1 = hexRingStartIdx + i;
+            const hexIdx2 = hexRingStartIdx + (i + 1) % numHexRing;
+
+            faces.push([eaveIdx1, eaveIdx2, hexIdx1]);
+            faces.push([eaveIdx2, eaveIdx3, hexIdx1]);
+            faces.push([eaveIdx3, hexIdx2, hexIdx1]);
+        }
+
+        for (let i = 0; i < numHexRing; i++) {
+            const hexIdx1 = hexRingOuterStartIdx + i;
+            const hexIdx2 = hexRingOuterStartIdx + (i + 1) % numHexRing;
+            faces.push([hexIdx1, hexIdx2, peakIdx]);
+        }
+
+        return faces;
+    }
+
+    static buildLegacyMeshDataFromWallLoopMesh(meshData) {
+        if (!meshData || !Array.isArray(meshData.vertices)) return null;
+        const numEaves = Number(meshData.numEaves);
+        if (numEaves !== 12) return null;
+
+        const eaveVerts = meshData.vertices.slice(0, 12);
+        if (eaveVerts.length !== 12) return null;
+
+        let radiusSum = 0;
+        let radiusCount = 0;
+        for (let i = 0; i < eaveVerts.length; i++) {
+            const v = eaveVerts[i];
+            const vx = Number(v && v.x);
+            const vy = Number(v && v.y);
+            if (!Number.isFinite(vx) || !Number.isFinite(vy)) continue;
+            const r = Math.hypot(vx, vy);
+            if (!Number.isFinite(r) || r <= 1e-6) continue;
+            radiusSum += r;
+            radiusCount += 1;
+        }
+        if (radiusCount <= 0) return null;
+
+        const radius = radiusSum / radiusCount;
+        const peakLocalZ = Math.max(0, Number(meshData.peakZ) - Number(meshData.baseZ));
+        const innerLocalZ = peakLocalZ * (4 / 7);
+        const outerLocalZ = peakLocalZ * (3.5 / 7);
+
+        const legacyVertices = [];
+        for (let i = 0; i < 12; i++) {
+            const angle = (30 * i - 15) * (Math.PI / 180);
+            legacyVertices.push({
+                x: Math.cos(angle) * radius,
+                y: Math.sin(angle) * radius,
+                z: 0
+            });
+        }
+        for (let i = 0; i < 6; i++) {
+            const angle = (60 * i) * (Math.PI / 180);
+            legacyVertices.push({
+                x: Math.cos(angle) * radius * 0.5,
+                y: Math.sin(angle) * radius * 0.5,
+                z: innerLocalZ
+            });
+        }
+        for (let i = 0; i < 6; i++) {
+            const angle = (60 * i) * (Math.PI / 180);
+            legacyVertices.push({
+                x: Math.cos(angle) * radius * 0.625,
+                y: Math.sin(angle) * radius * 0.625,
+                z: outerLocalZ
+            });
+        }
+        legacyVertices.push({ x: 0, y: 0, z: peakLocalZ });
+
+        return {
+            centerX: Number(meshData.centerX),
+            centerY: Number(meshData.centerY),
+            baseZ: Number(meshData.baseZ),
+            peakZ: Number(meshData.peakZ),
+            vertices: legacyVertices,
+            faces: Roof.buildLegacyFaces(12, 6),
+            interiorLocalPoints: Array.isArray(meshData.interiorLocalPoints)
+                ? meshData.interiorLocalPoints.map(p => ({ x: Number(p.x) || 0, y: Number(p.y) || 0 }))
+                : null,
+            numEaves: 12,
+            numHexRing: 6
+        };
+    }
+
+    static applyWallLoopCandidateToRoof(roofRef, candidate, mapRef, options = {}) {
+        if (!roofRef || !candidate || !Array.isArray(candidate.wallSections)) return false;
+        const meshOptions = Object.assign({}, options);
+        if (Number.isFinite(candidate.layerBaseZ) && !Number.isFinite(meshOptions.layerBaseZ)) {
+            meshOptions.layerBaseZ = Number(candidate.layerBaseZ);
+        }
+        let meshData = Roof.buildWallLoopMeshData(candidate.wallSections, mapRef, meshOptions);
+        if (!meshData) return false;
+        if (Number(meshData.numEaves) === 12) {
+            const legacyMeshData = Roof.buildLegacyMeshDataFromWallLoopMesh(meshData);
+            if (legacyMeshData) meshData = legacyMeshData;
+        }
+
+        roofRef.x = Number(meshData.centerX);
+        roofRef.y = Number(meshData.centerY);
+        roofRef.z = Number(meshData.baseZ);
+        roofRef.heightFromGround = Number(meshData.baseZ);
+        roofRef.peakHeight = Math.max(0, Number(meshData.peakZ) - Number(meshData.baseZ));
+        roofRef.midHeight = Math.max(0, roofRef.peakHeight * 0.5);
+        roofRef.vertices = Array.isArray(meshData.vertices) ? meshData.vertices.slice() : [];
+        roofRef.faces = Array.isArray(meshData.faces) ? meshData.faces.slice() : [];
+        roofRef.numEaves = Number.isFinite(meshData.numEaves) ? Number(meshData.numEaves) : Math.max(0, roofRef.vertices.length - 1);
+        roofRef.numHexRing = Number.isFinite(meshData.numHexRing) ? Number(meshData.numHexRing) : 0;
+        roofRef.placed = true;
+        roofRef.currentAlpha = 1;
+        roofRef.wallLoopSectionIds = candidate.wallSections
+            .map(s => (s && Number.isInteger(s.id)) ? s.id : null)
+            .filter(id => id !== null);
+        roofRef.setInteriorHideHitboxFromLocalPoints(meshData.interiorLocalPoints);
+        roofRef.updateGroundPlaneHitbox();
+        roofRef.createPixiMesh();
+        if (mapRef && typeof mapRef.markBuildingRenderCacheDirty === "function") {
+            mapRef.markBuildingRenderCacheDirty();
+        }
+        return true;
+    }
+
+    static buildConvexHull(points) {
+        if (!Array.isArray(points) || points.length < 3) return Array.isArray(points) ? points.slice() : [];
+
+        const sorted = points
+            .filter(p => p && Number.isFinite(p.x) && Number.isFinite(p.y))
+            .slice()
+            .sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+        if (sorted.length < 3) return sorted;
+
+        const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+        const lower = [];
+        for (let i = 0; i < sorted.length; i++) {
+            const p = sorted[i];
+            while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+                lower.pop();
+            }
+            lower.push(p);
+        }
+
+        const upper = [];
+        for (let i = sorted.length - 1; i >= 0; i--) {
+            const p = sorted[i];
+            while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+                upper.pop();
+            }
+            upper.push(p);
+        }
+
+        lower.pop();
+        upper.pop();
+        return lower.concat(upper);
+    }
+
+    constructor(x, y, heightFromGround, options = {}) {
+        this.type = "roof";
+        this.x = x;
+        this.y = y;
+        this.heightFromGround = heightFromGround;
+        this.z = heightFromGround;
+        this.peakHeight = heightFromGround + 7; // Peak is 3 units above base
+        this.midHeight = heightFromGround + 4; // Midpoint for hex ring
+        this.pixiMesh = null;
+        this.textureName = Roof.DEFAULT_TEXTURE;
+        this.textureRepeat = Roof.DEFAULT_TEXTURE_REPEAT;
+        this.placed = false;
+        this.interiorHideHitbox = null;
+        this.interiorHidePolygonPoints = null;
+
+        const radius = 10.5; // Distance from center to eave
+
+        const eaves = Array.from({ length: 12 }, (_, i) => {
+            const angle = 30 * i - 15; // Start at -15° to align with hex points
+            const rad = angle * (Math.PI / 180);
+
+            return {
+                x: Math.cos(rad) * radius,
+                y: Math.sin(rad) * radius,
+                z: this.heightFromGround
+            };
+        });
+        
+        const hexRingInner = Array.from({ length: 6 }, (_, i) => {
+            const angle = 60 * i;
+            const rad = angle * (Math.PI / 180);
+            return {
+                x: Math.cos(rad) * radius * 0.5,
+                y: Math.sin(rad) * radius * 0.5,
+                z: this.heightFromGround + this.midHeight
+            };
+        });
+
+        const hexRingOuter = Array.from({ length: 6 }, (_, i) => {
+            const angle = 60 * i;
+            const rad = angle * (Math.PI / 180);
+            return {
+                x: Math.cos(rad) * radius * 0.625,
+                y: Math.sin(rad) * radius * 0.625,
+                z: this.heightFromGround + this.midHeight - 0.5
+            };
+        });
+
+        const topPoint = { x: 0, y: 0, z: this.heightFromGround + this.peakHeight };
+
+        this.numEaves = eaves.length;
+        this.numHexRing = hexRingInner.length;
+        this.vertices = [...eaves, ...hexRingInner, ...hexRingOuter, topPoint];
+        this.faces = this.buildFaces(this.numEaves, this.numHexRing);
+        this.updateGroundPlaneHitbox();
+
+        const suppressAutoScriptingName = !!(options && options.suppressAutoScriptingName);
+        const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
+            ? globalThis.Scripting
+            : null;
+        if (!suppressAutoScriptingName && scriptingApi && typeof scriptingApi.ensureObjectScriptingName === "function") {
+            scriptingApi.ensureObjectScriptingName(this, { map: this.map || null });
+        }
+    }
+
+    buildFaces(numEaves, numHexRing) {
+        const faces = [];
+        const eaveStartIdx = 0;
+        const hexRingStartIdx = numEaves;
+        const hexRingOuterStartIdx = numEaves + numHexRing;
+        const peakIdx = numEaves + numHexRing + numHexRing;
+
+        // Connect eaves to hexring with 3 triangles per section
+        // Each section spans 2 adjacent eaves and 1 hexring, plus the next hexring
+        for (let i = 0; i < numHexRing; i++) {
+            const eaveIdx1 = eaveStartIdx + (2 * i);
+            const eaveIdx2 = eaveStartIdx + ((2 * i + 1) % numEaves);
+            const eaveIdx3 = eaveStartIdx + ((2 * i + 2) % numEaves);
+            const hexIdx1 = hexRingStartIdx + i;
+            const hexIdx2 = hexRingStartIdx + (i + 1) % numHexRing;
+
+            // Triangle 1: Two eaves + first hexring vertex
+            faces.push([eaveIdx1, eaveIdx2, hexIdx1]);
+
+            // Triangle 2: Second eave + both hexring vertices (forms trapezoid)
+            faces.push([eaveIdx2, eaveIdx3, hexIdx1]);
+
+            // Triangle 3: Second eave + hexring vertices (completes section)
+            faces.push([eaveIdx3, hexIdx2, hexIdx1]);
+        }
+
+        // Connect hexring vertices to peak (cone at top)
+        for (let i = 0; i < numHexRing; i++) {
+            const hexIdx1 = hexRingOuterStartIdx + i;
+            const hexIdx2 = hexRingOuterStartIdx + (i + 1) % numHexRing;
+
+            // Triangle from hexring edge up to peak
+            faces.push([hexIdx1, hexIdx2, peakIdx]);
+        }
+
+        return faces;
+    }
+
+    createPixiMesh() {
+        if (this.pixiMesh) {
+            this.pixiMesh.destroy();
+        }
+
+        // Calculate rotation angle for isometric view
+        const rotationRadians = Math.atan(1.15547);
+
+        // Light direction (from upper right, slightly in front)
+        const lightDir = { x: 0.5, y: -0.5, z: 0.7 };
+        const lightLen = Math.sqrt(lightDir.x * lightDir.x + lightDir.y * lightDir.y + lightDir.z * lightDir.z);
+        lightDir.x /= lightLen;
+        lightDir.y /= lightLen;
+        lightDir.z /= lightLen;
+
+        // Calculate lighting for each face
+        const faceLighting = new Array(this.faces.length);
+        for (let i = 0; i < this.faces.length; i++) {
+            const face = this.faces[i];
+            const v0 = this.vertices[face[0]];
+            const v1 = this.vertices[face[1]];
+            const v2 = this.vertices[face[2]];
+
+            // Calculate face normal (cross product)
+            const edge1 = { x: v1.x - v0.x, y: v1.y - v0.y, z: v1.z - v0.z };
+            const edge2 = { x: v2.x - v0.x, y: v2.y - v0.y, z: v2.z - v0.z };
+            const normal = {
+                x: edge1.y * edge2.z - edge1.z * edge2.y,
+                y: edge1.z * edge2.x - edge1.x * edge2.z,
+                z: edge1.x * edge2.y - edge1.y * edge2.x
+            };
+            const normalLen = Math.sqrt(normal.x * normal.x + normal.y * normal.y + normal.z * normal.z);
+            normal.x /= normalLen;
+            normal.y /= normalLen;
+            normal.z /= normalLen;
+
+            // Calculate lighting (dot product with light direction)
+            const dot = normal.x * lightDir.x + normal.y * lightDir.y + normal.z * lightDir.z;
+            faceLighting[i] = dot * 0.7 + 0.5;
+        }
+
+        // Normalize lighting to keep roof textures close to source brightness
+        // while preserving some directional shape.
+        let lightingSum = 0;
+        let lightingCount = 0;
+        for (let i = 0; i < faceLighting.length; i++) {
+            const value = faceLighting[i];
+            if (!Number.isFinite(value)) continue;
+            lightingSum += value;
+            lightingCount++;
+        }
+        const meanLighting = lightingCount > 0 ? (lightingSum / lightingCount) : 1;
+        for (let i = 0; i < faceLighting.length; i++) {
+            const value = Number.isFinite(faceLighting[i]) ? faceLighting[i] : meanLighting;
+            const normalized = value / Math.max(1e-6, meanLighting);
+            faceLighting[i] = Math.max(0.85, Math.min(1.15, normalized));
+        }
+
+        // Create vertex colors based on face lighting
+        const vertexColors = new Float32Array(this.vertices.length);
+        for (let i = 0; i < this.vertices.length; i++) {
+            // Find all faces that use this vertex and average their lighting
+            let totalBrightness = 0;
+            let faceCount = 0;
+            for (let f = 0; f < this.faces.length; f++) {
+                if (this.faces[f].includes(i)) {
+                    totalBrightness += faceLighting[f];
+                    faceCount++;
+                }
+            }
+            vertexColors[i] = faceCount > 0 ? totalBrightness / faceCount : 1.0;
+        }
+
+        // Flatten vertices for PIXI geometry with rotation applied
+        const vertexData = new Float32Array(this.vertices.length * 2);
+        for (let i = 0; i < this.vertices.length; i++) {
+            const v = this.vertices[i];
+            
+            // Apply rotation on X-axis (pitch the roof toward the viewer)
+            const cosR = Math.cos(rotationRadians);
+            const sinR = Math.sin(rotationRadians);
+            const rotatedY = v.y * cosR - v.z * sinR;
+            const rotatedZ = v.y * sinR + v.z * cosR;
+            
+            // Store rotated coordinates without scaling
+            vertexData[i * 2] = v.x;
+            vertexData[i * 2 + 1] = rotatedY;
+        }
+
+        // Flatten indices from faces
+        const indexData = new Uint16Array(this.faces.length * 3);
+        for (let i = 0; i < this.faces.length; i++) {
+            indexData[i * 3] = this.faces[i][0];
+            indexData[i * 3 + 1] = this.faces[i][1];
+            indexData[i * 3 + 2] = this.faces[i][2];
+        }
+
+        // Create a container to hold all face meshes
+        this.pixiMesh = new PIXI.Container();
+        this.pixiMesh.visible = false;
+        const depthState = Roof._depthShaderDisabled ? null : Roof._ensureDepthMeshState();
+        this.pixiMesh._roofDepthUniforms = [];
+        this.pixiMesh._usesRoofDepthShader = !!(depthState && PIXI.Shader);
+
+        // Load shingles texture
+        const texturePath = Roof.normalizeTexturePath(this.textureName);
+        this.textureName = texturePath;
+        const shinglesTexture = PIXI.Texture.from(texturePath);
+        const textureRepeat = Roof.normalizeTextureRepeat(this.textureRepeat);
+        this.textureRepeat = textureRepeat;
+        if (shinglesTexture && shinglesTexture.baseTexture && PIXI.WRAP_MODES) {
+            shinglesTexture.baseTexture.wrapMode = PIXI.WRAP_MODES.REPEAT;
+        }
+        
+        // Neutral base color so texture color stays true after normalization.
+        const baseColor = { r: 0xff, g: 0xff, b: 0xff };
+
+        // Create a separate mesh for each face with its own lighting
+        for (let f = 0; f < this.faces.length; f++) {
+            const face = this.faces[f];
+            const brightness = faceLighting[f];
+            
+            // Create vertex data for this face
+            const faceVertexData = new Float32Array(6); // 3 vertices * 2 projected coords
+            const faceDepthData = new Float32Array(9);  // 3 vertices * 3 world-local coords
+            const faceVertices = new Array(3);
+            for (let i = 0; i < 3; i++) {
+                const vertexIndex = face[i];
+                faceVertexData[i * 2] = vertexData[vertexIndex * 2];
+                faceVertexData[i * 2 + 1] = vertexData[vertexIndex * 2 + 1];
+                const v = this.vertices[vertexIndex];
+                faceVertices[i] = v;
+                faceDepthData[i * 3] = Number(v.x) || 0;
+                faceDepthData[i * 3 + 1] = Number(v.y) || 0;
+                faceDepthData[i * 3 + 2] = Number(v.z) || 0;
+            }
+
+            // Simple index data for single triangle
+            const faceIndexData = new Uint16Array([0, 1, 2]);
+
+            const faceUvData = Roof.computeFaceUvs(faceVertices, textureRepeat);
+
+            let faceMesh = null;
+            if (depthState && PIXI.Shader) {
+                const faceGeometry = new PIXI.Geometry()
+                    .addAttribute("aVertexPosition", faceVertexData, 2)
+                    .addAttribute("aDepthWorld", faceDepthData, 3)
+                    .addAttribute("aUvs", faceUvData, 2)
+                    .addIndex(faceIndexData);
+                const tintR = Math.floor(baseColor.r * brightness) / 255;
+                const tintG = Math.floor(baseColor.g * brightness) / 255;
+                const tintB = Math.floor(baseColor.b * brightness) / 255;
+                const uniforms = {
+                    uScreenSize: new Float32Array([1, 1]),
+                    uCameraWorld: new Float32Array([0, 0]),
+                    uCameraZ: 0,
+                    uViewScale: 1,
+                    uXyRatio: 1,
+                    uDepthRange: new Float32Array([0, 1]),
+                    uModelOrigin: new Float32Array([this.x || 0, this.y || 0, this.z || this.heightFromGround || 0]),
+                    uWorldSize: new Float32Array([0, 0]),
+                    uWrapEnabled: new Float32Array([0, 0]),
+                    uWrapAnchorWorld: new Float32Array([this.x || 0, this.y || 0]),
+                    uBuildingCutawayProjectionPass: 0,
+                    uBuildingCutawayPresentationXyRatio: 1,
+                    uTint: new Float32Array([tintR, tintG, tintB, 1]),
+                    uAlphaCutoff: 0.02,
+                    uBuildingCutawayDataPass: 0,
+                    uBuildingCutawayDataZRange: new Float32Array([-64, 1 / 256]),
+                    uSampler: shinglesTexture || PIXI.Texture.WHITE
+                };
+                try {
+                    const faceShader = PIXI.Shader.from(Roof._depthVs, Roof._depthFs, uniforms);
+                    faceMesh = new PIXI.Mesh(faceGeometry, faceShader, depthState, PIXI.DRAW_MODES.TRIANGLES);
+                    this.pixiMesh._roofDepthUniforms.push(uniforms);
+                } catch (error) {
+                    Roof._depthShaderDisabled = true;
+                    this.pixiMesh._usesRoofDepthShader = false;
+                    console.warn("Roof depth shader disabled after initialization failure; falling back to simple roof meshes.", error);
+                }
+            } else {
+                this.pixiMesh._usesRoofDepthShader = false;
+                const faceGeometry = new PIXI.Geometry()
+                    .addAttribute('aVertexPosition', faceVertexData, 2)
+                    .addAttribute('aUvs', faceUvData, 2)
+                    .addIndex(faceIndexData);
+                const faceMaterial = new PIXI.MeshMaterial(shinglesTexture);
+                faceMesh = new PIXI.Mesh(faceGeometry, faceMaterial);
+                const r = Math.floor(baseColor.r * brightness);
+                const g = Math.floor(baseColor.g * brightness);
+                const b = Math.floor(baseColor.b * brightness);
+                faceMesh.tint = (r << 16) | (g << 8) | b;
+            }
+
+            if (!faceMesh) {
+                const faceGeometry = new PIXI.Geometry()
+                    .addAttribute('aVertexPosition', faceVertexData, 2)
+                    .addAttribute('aUvs', faceUvData, 2)
+                    .addIndex(faceIndexData);
+                const faceMaterial = new PIXI.MeshMaterial(shinglesTexture);
+                faceMesh = new PIXI.Mesh(faceGeometry, faceMaterial);
+                const r = Math.floor(baseColor.r * brightness);
+                const g = Math.floor(baseColor.g * brightness);
+                const b = Math.floor(baseColor.b * brightness);
+                faceMesh.tint = (r << 16) | (g << 8) | b;
+            }
+
+            this.pixiMesh.addChild(faceMesh);
+        }
+
+        return this.pixiMesh;
+    }
+
+    updateGroundPlaneHitbox() {
+        // Ground-plane hitbox uses eave footprint, inset by 0.75 world units
+        // (0.5 original + 0.25 additional), at z=0 semantics.
+        // Wall depth ordering uses projected eaves-to-ground footprint.
+        const eaveCount = Math.max(0, this.numEaves || 0);
+        const eaves = Array.isArray(this.vertices) ? this.vertices.slice(0, eaveCount) : [];
+        if (!eaves.length || typeof PolygonHitbox === 'undefined') {
+            this.shadowBox = null;
+            this.wallDepthHitbox = null;
+            return;
+        }
+
+        const eavePoints = eaves.map(v => ({
+            x: this.x + v.x,
+            y: this.y + v.y
+        }));
+        const projectedPoints = eaves.map(v => {
+            // Project roof eaves to ground along the vertical draw axis used by
+            // tall objects (y decreases as height increases), so occlusion depth
+            // captures walls visually covered by roof slopes near the perimeter.
+            const projection = Math.max(0, Number(this.peakHeight) || 0);
+            return {
+                x: this.x + v.x,
+                y: this.y + v.y + projection
+            };
+        });
+        const wallDepthHull = Roof.buildConvexHull(eavePoints.concat(projectedPoints));
+        this.wallDepthHitbox = wallDepthHull.length >= 3 ? new PolygonHitbox(wallDepthHull) : null;
+
+        const shrunkPoints = eaves.map(v => {
+            const len = Math.hypot(v.x, v.y);
+            if (len <= 0.000001) {
+                return { x: this.x, y: this.y };
+            }
+            const targetLen = Math.max(0, len - 0.75);
+            const scale = targetLen / len;
+            return {
+                x: this.x + v.x * scale,
+                y: this.y + v.y * scale
+            };
+        });
+
+        this.shadowBox = new PolygonHitbox(shrunkPoints);
+    }
+
+    setInteriorHideHitboxFromLocalPoints(localPoints) {
+        if (
+            !Array.isArray(localPoints) ||
+            localPoints.length < 3 ||
+            typeof PolygonHitbox === "undefined"
+        ) {
+            this.interiorHideHitbox = null;
+            this.interiorHidePolygonPoints = null;
+            return;
+        }
+        const points = localPoints
+            .map(p => ({ x: this.x + (Number(p && p.x) || 0), y: this.y + (Number(p && p.y) || 0) }))
+            .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+        if (points.length < 3) {
+            this.interiorHideHitbox = null;
+            this.interiorHidePolygonPoints = null;
+            return;
+        }
+        this.interiorHidePolygonPoints = points.map(p => ({ x: p.x, y: p.y }));
+        this.interiorHideHitbox = new PolygonHitbox(this.interiorHidePolygonPoints);
+    }
+
+    saveJson() {
+        const data = {
+            type: 'roof',
+            x: this.x,
+            y: this.y,
+            z: Number.isFinite(this.z) ? this.z : this.heightFromGround,
+            heightFromGround: this.heightFromGround,
+            peakHeight: this.peakHeight,
+            midHeight: this.midHeight,
+            textureName: this.textureName,
+            textureRepeat: this.textureRepeat,
+            placed: !!this.placed,
+            numEaves: this.numEaves,
+            numHexRing: this.numHexRing,
+            vertices: Array.isArray(this.vertices)
+                ? this.vertices.map(v => ({ x: v.x, y: v.y, z: v.z }))
+                : [],
+            triangles: Array.isArray(this.faces)
+                ? this.faces.map(face => [face[0], face[1], face[2]])
+                : [],
+            shadowBox: this.shadowBox && Array.isArray(this.shadowBox.points)
+                ? { points: this.shadowBox.points.map(p => ({ x: p.x, y: p.y })) }
+                : null,
+            interiorHideHitbox: this.interiorHideHitbox && Array.isArray(this.interiorHideHitbox.points)
+                ? { points: this.interiorHideHitbox.points.map(p => ({ x: p.x, y: p.y })) }
+                : null,
+            wallLoopSectionIds: Array.isArray(this.wallLoopSectionIds)
+                ? this.wallLoopSectionIds.filter(id => Number.isInteger(id))
+                : []
+        };
+        if (typeof this.visible === "boolean") {
+            data.visible = this.visible;
+        }
+        if (Number.isFinite(this.brightness)) {
+            data.brightness = Number(this.brightness);
+        }
+        if (Number.isFinite(this.tint)) {
+            data.tint = Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(this.tint))));
+        }
+        if (typeof this.script !== "undefined") {
+            try {
+                data.script = JSON.parse(JSON.stringify(this.script));
+            } catch (_err) {
+                data.script = this.script;
+            }
+        }
+        if (Array.isArray(this._scriptMessages) && this._scriptMessages.length > 0) {
+            data._scriptMessages = this._scriptMessages.map(msg => ({
+                text: String((msg && msg.text) || ""),
+                x: Number.isFinite(msg && msg.x) ? Number(msg.x) : 0,
+                y: Number.isFinite(msg && msg.y) ? Number(msg.y) : 0,
+                color: (typeof (msg && msg.color) === "string" || Number.isFinite(msg && msg.color)) ? msg.color : undefined,
+                fontsize: Number.isFinite(Number(msg && msg.fontsize)) ? Number(msg.fontsize) : undefined
+            })).filter(msg => msg.text.length > 0);
+        }
+        if (typeof this.scriptingName === "string" && this.scriptingName.trim().length > 0) {
+            data.scriptingName = this.scriptingName.trim();
+        }
+        return data;
+    }
+
+    static loadJson(data, options = {}) {
+        if (!data || data.type !== 'roof') return null;
+        if (typeof globalThis.normalizeLegacyHitboxFieldsDeep === "function") {
+            globalThis.normalizeLegacyHitboxFieldsDeep(data);
+        }
+
+        const x = Number.isFinite(data.x) ? data.x : 0;
+        const y = Number.isFinite(data.y) ? data.y : 0;
+        const heightFromGround = Number.isFinite(data.heightFromGround) ? data.heightFromGround : 0;
+        const z = Number.isFinite(data.z) ? Number(data.z) : heightFromGround;
+        const suppressAutoScriptingName = !!(options && options.suppressAutoScriptingName);
+        const trustLoadedScriptingName = !!(options && options.trustLoadedScriptingName);
+        const targetSectionKey = (typeof options.targetSectionKey === "string" && options.targetSectionKey.length > 0)
+            ? options.targetSectionKey
+            : "";
+        const roof = new Roof(x, y, heightFromGround, {
+            suppressAutoScriptingName
+        });
+        roof.z = z;
+        roof.heightFromGround = z;
+
+        if (Number.isFinite(data.peakHeight)) roof.peakHeight = data.peakHeight;
+        if (Number.isFinite(data.midHeight)) roof.midHeight = data.midHeight;
+        if (typeof data.textureName === 'string' && data.textureName.length > 0) {
+            roof.textureName = Roof.normalizeTexturePath(data.textureName);
+        }
+        roof.textureRepeat = Roof.normalizeTextureRepeat(data.textureRepeat);
+        if (typeof data.visible === "boolean") {
+            roof.visible = data.visible;
+        }
+        if (Number.isFinite(data.brightness)) {
+            roof.brightness = Number(data.brightness);
+        }
+        if (Number.isFinite(data.tint)) {
+            roof.tint = Math.max(0, Math.min(0xFFFFFF, Math.floor(Number(data.tint))));
+        }
+        if (Object.prototype.hasOwnProperty.call(data, "script")) {
+            roof.script = data.script;
+        }
+        if (typeof data.scriptingName === "string") {
+            const scriptingApi = (typeof globalThis !== "undefined" && globalThis.Scripting)
+                ? globalThis.Scripting
+                : null;
+            const restoredName = data.scriptingName.trim();
+            if (scriptingApi && typeof scriptingApi.setObjectScriptingName === "function") {
+                scriptingApi.setObjectScriptingName(roof, restoredName, {
+                    map: roof.map || null,
+                    restoreFromSave: true,
+                    targetSectionKey,
+                    skipBubbleEnsureOnRestore: trustLoadedScriptingName
+                });
+            } else {
+                roof.scriptingName = restoredName;
+            }
+        }
+        if (Array.isArray(data._scriptMessages)) {
+            roof._scriptMessages = data._scriptMessages
+                .map(msg => ({
+                    text: String((msg && msg.text) || ""),
+                    x: Number.isFinite(msg && msg.x) ? Number(msg.x) : 0,
+                    y: Number.isFinite(msg && msg.y) ? Number(msg.y) : 0,
+                    color: (typeof (msg && msg.color) === "string" || Number.isFinite(msg && msg.color)) ? msg.color : undefined,
+                    fontsize: Number.isFinite(Number(msg && msg.fontsize)) ? Number(msg.fontsize) : undefined
+                }))
+                .filter(msg => msg.text.length > 0);
+            if (roof._scriptMessages.length > 0 && typeof globalThis !== "undefined") {
+                if (!(globalThis._scriptMessageTargets instanceof Set)) {
+                    globalThis._scriptMessageTargets = new Set();
+                }
+                globalThis._scriptMessageTargets.add(roof);
+            }
+        }
+        roof.placed = !!data.placed;
+        roof.wallLoopSectionIds = Array.isArray(data.wallLoopSectionIds)
+            ? data.wallLoopSectionIds
+                .map(id => Number(id))
+                .filter(id => Number.isInteger(id))
+            : [];
+
+        if (Array.isArray(data.vertices) && data.vertices.length >= 3) {
+            roof.vertices = data.vertices.map(v => ({
+                x: Number(v.x) || 0,
+                y: Number(v.y) || 0,
+                z: Number(v.z) || 0
+            }));
+        }
+        if (Array.isArray(data.triangles) && data.triangles.length > 0) {
+            roof.faces = data.triangles.map(t => [
+                Number(t[0]) || 0,
+                Number(t[1]) || 0,
+                Number(t[2]) || 0
+            ]);
+        }
+
+        // Keep ring metadata available for UV mapping fallback.
+        roof.numEaves = Number.isFinite(data.numEaves) ? data.numEaves : 12;
+        roof.numHexRing = Number.isFinite(data.numHexRing) ? data.numHexRing : 6;
+
+        // Always rebuild derived hitboxes from geometry for current logic.
+        roof.updateGroundPlaneHitbox();
+        // Preserve saved indoor mask when present for backward compatibility.
+        if (
+            data.interiorHideHitbox &&
+            Array.isArray(data.interiorHideHitbox.points) &&
+            data.interiorHideHitbox.points.length >= 3 &&
+            typeof PolygonHitbox !== 'undefined'
+        ) {
+            roof.interiorHidePolygonPoints = data.interiorHideHitbox.points.map(p => ({
+                x: Number(p.x) || 0,
+                y: Number(p.y) || 0
+            }));
+            roof.interiorHideHitbox = new PolygonHitbox(roof.interiorHidePolygonPoints);
+        } else {
+            // Backward-compatible fallback for old saves.
+            roof.interiorHidePolygonPoints = (
+                roof.shadowBox &&
+                Array.isArray(roof.shadowBox.points)
+            ) ? roof.shadowBox.points.map(p => ({ x: Number(p.x) || 0, y: Number(p.y) || 0 })) : null;
+            roof.interiorHideHitbox = roof.interiorHidePolygonPoints && roof.interiorHidePolygonPoints.length >= 3
+                ? new PolygonHitbox(roof.interiorHidePolygonPoints)
+                : null;
+        }
+
+        if (
+            data.shadowBox &&
+            Array.isArray(data.shadowBox.points) &&
+            data.shadowBox.points.length >= 3 &&
+            typeof PolygonHitbox !== 'undefined'
+        ) {
+            roof.shadowBox = new PolygonHitbox(
+                data.shadowBox.points.map(p => ({
+                    x: Number(p.x) || 0,
+                    y: Number(p.y) || 0
+                }))
+            );
+        }
+
+        return roof;
+    }
+}
+
+if (typeof globalThis !== "undefined") {
+    globalThis.Roof = Roof;
+}

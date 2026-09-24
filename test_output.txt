@@ -1,0 +1,153 @@
+[prototype bubble shift] {
+  from: '2,0',
+  to: '2,0',
+  frame: {
+    budgetMs: 10,
+    shiftFrameMs: 0,
+    maxSliceMs: 2.07,
+    sliceCount: 1,
+    workMs: 2,
+    totalMs: 2.19
+  },
+  tasks: {
+    max: { label: 'objects.plan', ms: 0.28, slice: 1 },
+    top: [ [Object], [Object], [Object], [Object], [Object], [Object] ]
+  },
+  layout: {
+    ms: 54.66,
+    loadedNodes: 1357,
+    activatedNodes: 0,
+    deactivatedNodes: 0,
+    keysToActivate: 6,
+    keysToDeactivate: 6,
+    timings: {}
+  },
+  walls: {
+    changed: true,
+    ms: 0.72,
+    active: 1,
+    desired: 1,
+    loaded: 1,
+    removed: 0,
+    timings: { clearance: 0.63, collect: 0.07 }
+  },
+  objects: {
+    changed: false,
+    ms: 0.03,
+    active: 0,
+    desired: 0,
+    loaded: 0,
+    removed: 0,
+    timings: {},
+    powerups: {
+      changed: false,
+      ms: 0,
+      active: 0,
+      desired: 0,
+      loaded: 0,
+      removed: 0
+    }
+  },
+  animals: {
+    changed: true,
+    ms: 0.04,
+    active: 1,
+    desired: 1,
+    loaded: 1,
+    removed: 0
+  },
+  hotspots: [ { label: 'walls.clearance', ms: 0.63, nodes: 2443 } ]
+}
+✔ prototype bubble object parking only keeps bounded high-cost static types (1.259833ms)
+✔ prototype bubble parked object reuse requires parked state, type match, and signature match (0.146875ms)
+✖ loadPrototypeSectionWorld canonicalizes section and tile draw order to y-then-x (20.418291ms)
+✔ prototype runtime state reset restores all reload-sensitive caches (0.155125ms)
+✔ loadPrototypeSectionWorld resets stale animal and powerup signatures so repeated loads repopulate runtimes (14.668958ms)
+✔ loadPrototypeSectionWorld clears prior prototype runtime animals and powerups before reloading (26.942833ms)
+✔ loadPrototypeSectionWorld rebuilds parked object caches before object unloads (24.233ms)
+✔ loadPrototypeSectionWorld synthesizes one implicit ground floor fragment per section (12.070625ms)
+✔ loadPrototypeSectionWorld materializes cross-seam floor fragments with a shared surface id (11.542834ms)
+✔ loadPrototypeSectionWorld attaches authored floor transitions as floor-node portal edges (9.849292ms)
+✔ direct prototype runtime sync settles pending layout before syncing walls and objects (13.926958ms)
+✔ schedulePrototypeRuntimeSync prunes animals from sections leaving the target bubble before async teardown completes (60.956334ms)
+✔ schedulePrototypeRuntimeSync loads walls before animals for newly active sections (69.974625ms)
+✖ syncPrototypeObjects persists dirty placed objects using indexed section ownership when point lookup misses (9.41325ms)
+✖ tests/sectionWorld.test.js (41099.468166ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 12
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 41106.72775
+
+✖ failing tests:
+
+test at tests/sectionWorld.test.js:407:1
+✖ loadPrototypeSectionWorld canonicalizes section and tile draw order to y-then-x (20.418291ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   '10,-23',
+  +   '8,-22',
+  +   '9,-22',
+  +   '10,-22',
+  +   '11,-22'
+  -   '0,-1',
+  -   '-1,0',
+  -   '1,0',
+  -   '0,1',
+  -   '2,1'
+    ]
+  
+      at TestContext.<anonymous> (/Users/peterallen/Code/survivor/tests/sectionWorld.test.js:473:12)
+      at Test.runInAsyncScope (node:async_hooks:212:14)
+      at Test.run (node:internal/test_runner/test:1109:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:786:18)
+      at Test.postRun (node:internal/test_runner/test:1238:19)
+      at Test.run (node:internal/test_runner/test:1166:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:786:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ '10,-23', '8,-22', '9,-22', '10,-22', '11,-22' ],
+    expected: [ '0,-1', '-1,0', '1,0', '0,1', '2,1' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/sectionWorld.test.js:1121:1
+✖ syncPrototypeObjects persists dirty placed objects using indexed section ownership when point lookup misses (9.41325ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  '0,-1' !== '0,0'
+  
+      at TestContext.<anonymous> (/Users/peterallen/Code/survivor/tests/sectionWorld.test.js:1133:12)
+      at Test.runInAsyncScope (node:async_hooks:212:14)
+      at Test.run (node:internal/test_runner/test:1109:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:786:18)
+      at Test.postRun (node:internal/test_runner/test:1238:19)
+      at Test.run (node:internal/test_runner/test:1166:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:786:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '0,-1',
+    expected: '0,0',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/sectionWorld.test.js:1:1
+✖ tests/sectionWorld.test.js (41099.468166ms)
+  RangeError: Maximum call stack size exceeded
+      at deserialize (node:v8:471:14)
+      at deserializeError (node:internal/error_serdes:168:43)
+      at deserializeError (node:internal/error_serdes:176:34)
+      at #handleReportItem (node:internal/test_runner/runner:255:33)
+      at FileTest.addToReport (node:internal/test_runner/runner:295:27)
+      at #processRawBuffer (node:internal/test_runner/runner:394:12)
+      at FileTest.parseMessage (node:internal/test_runner/runner:328:27)
+      at Socket.<anonymous> (node:internal/test_runner/runner:438:15)
+      at Socket.emit (node:events:508:20)
+      at addChunk (node:internal/streams/readable:564:12)
